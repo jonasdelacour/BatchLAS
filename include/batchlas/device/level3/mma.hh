@@ -17,9 +17,9 @@ namespace batchlas::device::l3 {
 
 // acc += a b^T on a TR x TC register tile. Full: the full-unroll pragmas; otherwise none (the
 // register-tiled kernel's own loops, unrolled as the compiler decides).
-template <bool Full = true, class Ops = arith::Native, class T, int TR, int TC>
-BATCHLAS_DEVICE_INLINE void outer_mac(Tile<T, TR, TC>& acc, const T (&a)[TR], const T (&b)[TC]) {
-    using A = arith_t<Ops, T>;
+template <bool Full = true, class Ops = arith::Native, class Scalar, int TR, int TC>
+BATCHLAS_DEVICE_INLINE void outer_mac(Tile<Scalar, TR, TC>& acc, const Scalar (&a)[TR], const Scalar (&b)[TC]) {
+    using A = arith_t<Ops, Scalar>;
     if constexpr (Full) {
 BATCHLAS_UNROLL_FULL
         for (int i = 0; i < TR; ++i) {
@@ -37,11 +37,11 @@ BATCHLAS_UNROLL_FULL
 // b(j) = b_at(t, j), acc += a b^T; UnrollK steps per outer iteration, no pragmas. k by
 // reference, like the tuned lambda's closure read: by value, SimplifyCFG merged the two exits
 // first and the TileK = 8 slab stayed rolled (32x32x8: 34 -> 6 FFMA).
-template <int TileK, int UnrollK, bool Exact, class Ops = arith::Native, class T, int TR, int TC, class FA, class FB>
-BATCHLAS_DEVICE_INLINE void mma_slab(Tile<T, TR, TC>& acc, int kk0, const int& k, FA&& a_at, FB&& b_at) {
+template <int TileK, int UnrollK, bool Exact, class Ops = arith::Native, class Scalar, int TR, int TC, class FA, class FB>
+BATCHLAS_DEVICE_INLINE void mma_slab(Tile<Scalar, TR, TC>& acc, int kk0, const int& k, FA&& a_at, FB&& b_at) {
     auto step = [&](int t) BATCHLAS_DEVICE_BODY {
-        T a_frag[TR];
-        T b_frag[TC];
+        Scalar a_frag[TR];
+        Scalar b_frag[TC];
         for (int i = 0; i < TR; ++i) a_frag[i] = a_at(t, i);
         for (int j = 0; j < TC; ++j) b_frag[j] = b_at(t, j);
         outer_mac<false, Ops>(acc, a_frag, b_frag);
@@ -59,8 +59,8 @@ BATCHLAS_DEVICE_INLINE void mma_slab(Tile<T, TR, TC>& acc, int kk0, const int& k
 }
 
 namespace detail {
-template <int L0, int Lc, class Ar, class T, int NA, int NC, class FB>
-BATCHLAS_DEVICE_INLINE void gemv_t_frag_chunk(Frag<T, NC>& acc, const Frag<T, NA>& a, FB& b_at, int k) {
+template <int L0, int Lc, class Ar, class Scalar, int NA, int NC, class FB>
+BATCHLAS_DEVICE_INLINE void gemv_t_frag_chunk(Frag<Scalar, NC>& acc, const Frag<Scalar, NA>& a, FB& b_at, int k) {
 BATCHLAS_UNROLL_FULL
     for (int l = L0; l < L0 + Lc; ++l) {
         if (l >= k) continue;  // uniform; `continue` keeps the unroll, so a[] stays in registers
@@ -73,9 +73,9 @@ BATCHLAS_UNROLL_FULL
 // acc(j) += sum_{l < k} a(l) B(l, j), l outermost: gemv^T with x and y in registers. Chunk = NA
 // is one unrolled loop; Chunk = NA / 4 is four sequential ones (one complex loop over 64 l passes
 // LLVM's unroll threshold and a[] spills; a lambda per chunk put 160-184 B on the stack).
-template <int Chunk, class Ops, class T, int NA, int NC, class FB>
-BATCHLAS_DEVICE_INLINE void gemv_t_frag(Frag<T, NC>& acc, const Frag<T, NA>& a, FB&& b_at, int k) {
-    using Ar = arith_t<Ops, T>;
+template <int Chunk, class Ops, class Scalar, int NA, int NC, class FB>
+BATCHLAS_DEVICE_INLINE void gemv_t_frag(Frag<Scalar, NC>& acc, const Frag<Scalar, NA>& a, FB&& b_at, int k) {
+    using Ar = arith_t<Ops, Scalar>;
     static_assert(Chunk == NA || Chunk * 4 == NA, "gemv_t_frag: one loop, or four");
     detail::gemv_t_frag_chunk<0, Chunk, Ar>(acc, a, b_at, k);
     if constexpr (NA / Chunk > 1) {

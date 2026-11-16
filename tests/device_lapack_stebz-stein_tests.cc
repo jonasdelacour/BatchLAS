@@ -50,8 +50,8 @@ using namespace batchlas;
 using batchlas::verify::Check;
 using Tier = device::tier::Blocked<1>;
 
-template <class T> struct UserStebz;
-template <class T> struct UserStein;
+template <class Real> struct UserStebz;
+template <class Real> struct UserStein;
 
 namespace {
 
@@ -67,12 +67,12 @@ std::uint64_t mix(std::uint64_t x) {
 }
 double uval(std::uint64_t i) { return static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0; }
 template <class T> bool same_bits(const T& a, const T& b) { return std::memcmp(&a, &b, sizeof(T)) == 0; }
-template <class T> T poison() { return std::numeric_limits<T>::max(); }  // wins every max an op that read it takes
+template <class Real> Real poison() { return std::numeric_limits<Real>::max(); }  // wins every max an op that read it takes
 
 // Representative r of an order-n tridiagonal: 0 the 1-D Laplacian (2, -1); 1 graded (d_i and
 // e_i fall by 10 every 4 rows); 2 split (e_i = 0 every fifth row) with d repeating in pairs, so
 // whole eigenvalues repeat exactly.
-template <class T> void rep(int r, int n, std::vector<double>& d, std::vector<double>& e) {
+template <class Real> void rep(int r, int n, std::vector<double>& d, std::vector<double>& e) {
     d.assign(n, 0.0);
     e.assign(std::max(n - 1, 0), 0.0);
     for (int i = 0; i < n; ++i) {
@@ -117,29 +117,29 @@ struct Dev {
 
 // The batch of one n: d, e at inc 2 and stride n * 2 + 3 (pads poisoned), item b a twin of
 // b % kPeriod; the representatives in double for the analytic check.
-template <class T> struct Problem {
+template <class Real> struct Problem {
     int n, sd, se;
-    std::vector<T> d, e;
+    std::vector<Real> d, e;
     std::vector<std::vector<double>> rd, re;
     explicit Problem(int n_) : n(n_), sd(n_ * kInc + 3), se(std::max(n_ - 1, 1) * kInc + 3) {
-        d.assign(std::size_t(kBatch) * sd, poison<T>());
-        e.assign(std::size_t(kBatch) * se, poison<T>());
+        d.assign(std::size_t(kBatch) * sd, poison<Real>());
+        e.assign(std::size_t(kBatch) * se, poison<Real>());
         rd.resize(kPeriod);
         re.resize(kPeriod);
-        for (int r = 0; r < kPeriod; ++r) rep<T>(r, n, rd[r], re[r]);
+        for (int r = 0; r < kPeriod; ++r) rep<Real>(r, n, rd[r], re[r]);
         for (int b = 0; b < kBatch; ++b) {
             const int r = b % kPeriod;
-            for (int i = 0; i < n; ++i) d[std::size_t(b) * sd + i * kInc] = static_cast<T>(rd[r][i]);
-            for (int i = 0; i + 1 < n; ++i) e[std::size_t(b) * se + i * kInc] = static_cast<T>(re[r][i]);
+            for (int i = 0; i < n; ++i) d[std::size_t(b) * sd + i * kInc] = static_cast<Real>(rd[r][i]);
+            for (int i = 0; i + 1 < n; ++i) e[std::size_t(b) * se + i * kInc] = static_cast<Real>(re[r][i]);
         }
     }
 };
 
-template <class T> class DeviceApiStebzStein : public ::testing::Test {
+template <class Real> class DeviceApiStebzStein : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx) GTEST_SKIP() << "no SYCL device visible";
-        if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
+        if (test_utils::lacks_fp64<Real>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
 };
@@ -154,8 +154,8 @@ struct Sel {
 // Host StebzParams for selection s on order n: Index takes [1, n - 2] (all when n < 3); Value
 // takes (vl, vu] with vl, vu the midpoints below the second and above the second-to-last
 // Laplacian eigenvalue, so the count straddles an eigenvalue of representative 0 at each end.
-template <class T> StebzParams<T> params_for(const Sel& s, int n) {
-    StebzParams<T> p;
+template <class Real> StebzParams<Real> params_for(const Sel& s, int n) {
+    StebzParams<Real> p;
     p.range = s.range;
     p.order = s.order;
     if (s.range == EigenRangeType::Index) {
@@ -163,12 +163,12 @@ template <class T> StebzParams<T> params_for(const Sel& s, int n) {
         p.iu = n < 3 ? n - 1 : n - 2;
     } else if (s.range == EigenRangeType::Value) {
         auto lap = [&](int k) { return 2.0 - 2.0 * std::cos(k * std::numbers::pi / (n + 1)); };
-        p.vl = static_cast<T>(n < 3 ? -1.0 : 0.5 * (lap(1) + lap(2)));
-        p.vu = static_cast<T>(n < 3 ? 5.0 : 0.5 * (lap(n - 1) + lap(n)));
+        p.vl = static_cast<Real>(n < 3 ? -1.0 : 0.5 * (lap(1) + lap(2)));
+        p.vu = static_cast<Real>(n < 3 ? 5.0 : 0.5 * (lap(n - 1) + lap(n)));
     }
     return p;
 }
-template <class T> device::StebzOptions<T> device_params(const StebzParams<T>& p, int n) {
+template <class Real> device::StebzOptions<Real> device_params(const StebzParams<Real>& p, int n) {
     const bool index = p.range == EigenRangeType::Index;
     return {p.range == EigenRangeType::Value,
             index ? p.il : 0,
@@ -181,31 +181,31 @@ template <class T> device::StebzOptions<T> device_params(const StebzParams<T>& p
 }
 
 // w at inc 1, stride n + 3 (pads and unused slots poisoned).
-template <class T> struct WOut {
+template <class Real> struct WOut {
     int sw;
-    T* p;
+    Real* p;
 };
 
 // The device op from a user kernel: WorkGroup<256, 32>, one matrix per work-group.
-template <class T>
-void user_stebz(Dev& dev, const VectorView<T>& d, const VectorView<T>& e, const VectorView<T>& w, std::int32_t* m, std::int32_t* info,
-                const device::StebzOptions<T>& p, int n) {
+template <class Real>
+void user_stebz(Dev& dev, const VectorView<Real>& d, const VectorView<Real>& e, const VectorView<Real>& w, std::int32_t* m, std::int32_t* info,
+                const device::StebzOptions<Real>& p, int n) {
     constexpr int WG = 256;
-    const device::WorkspaceSize sz = device::buffer_size<device::routine::stebz, Tier, T>(n);
+    const device::WorkspaceSize sz = device::buffer_size<device::routine::stebz, Tier, Real>(n);
     dev.q().submit([&](sycl::handler& h) {
            sycl::local_accessor<std::byte, 1> slm(sycl::range<1>(sz.local_bytes), h);
-           h.parallel_for<UserStebz<T>>(sycl::nd_range<1>(std::size_t(kBatch) * WG, WG),
-                                        [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-                                            const device::WorkGroup<WG, 32> ex{it};
-                                            const int b = static_cast<int>(it.get_group_linear_id());
-                                            int mb = -1;
-                                            const int ib = device::stebz<Tier>(ex, device::item(d, b), device::item(e, b), device::item(w, b), mb,
-                                                                           device::Workspace{slm.template get_multi_ptr<sycl::access::decorated::yes>(), nullptr}, p);
-                                            if (ex.leader()) {
-                                                m[b] = mb;
-                                                info[b] = ib;
-                                            }
-                                        });
+           h.parallel_for<UserStebz<Real>>(sycl::nd_range<1>(std::size_t(kBatch) * WG, WG),
+                                           [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
+                                               const device::WorkGroup<WG, 32> ex{it};
+                                               const int b = static_cast<int>(it.get_group_linear_id());
+                                               int mb = -1;
+                                               const int ib = device::stebz<Tier>(ex, device::item(d, b), device::item(e, b), device::item(w, b), mb,
+                                                                              device::Workspace{slm.template get_multi_ptr<sycl::access::decorated::yes>(), nullptr}, p);
+                                               if (ex.leader()) {
+                                                   m[b] = mb;
+                                                   info[b] = ib;
+                                               }
+                                           });
        }).wait_and_throw();
 }
 
@@ -303,22 +303,23 @@ TYPED_TEST(DeviceApiStebzStein, StebzTierQueries) {
 
 // The device op from a user kernel at the host's phase-2 width (RtGroup), one matrix per group,
 // both phases in one kernel; counts may be null (all k).
-template <class T>
-void user_stein(Dev& dev, int wg, const VectorView<T>& d, const VectorView<T>& e, const VectorView<T>& w, const std::int32_t* counts,
-                const MatrixView<T, MatrixFormat::Dense>& Z, std::byte* gws, std::int32_t* info, std::uint32_t seed) {
+template <class Real>
+void user_stein(Dev& dev, int wg, const VectorView<Real>& d, const VectorView<Real>& e, const VectorView<Real>& w, const std::int32_t* counts,
+                const MatrixView<Real, MatrixFormat::Dense>& Z, std::byte* gws, std::int32_t* info,
+                std::uint32_t seed) {
     const int n = d.size(), k = Z.cols();
-    const device::WorkspaceSize sz = device::buffer_size<device::routine::stein, Tier, T>(n, k);
+    const device::WorkspaceSize sz = device::buffer_size<device::routine::stein, Tier, Real>(n, k);
     const auto Zk = Z.kernel_view();
-    const SteinParams<T> hp;
+    const SteinParams<Real> hp;
     const std::int32_t max_iter = std::max<std::int32_t>(1, hp.max_iterations);
-    const T thr = hp.ortho_threshold;
+    const Real thr = hp.ortho_threshold;
     dev.q().submit([&](sycl::handler& h) {
            sycl::local_accessor<std::byte, 1> slm(sycl::range<1>(sz.local_bytes), h);
-           h.parallel_for<UserStein<T>>(sycl::nd_range<1>(std::size_t(kBatch) * wg, wg), [=](sycl::nd_item<1> it) {
+           h.parallel_for<UserStein<Real>>(sycl::nd_range<1>(std::size_t(kBatch) * wg, wg), [=](sycl::nd_item<1> it) {
                const device::RtGroup<> ex{it};
                const int b = static_cast<int>(it.get_group_linear_id());
                const int kb = counts ? std::clamp<int>(counts[b], 0, k) : k;
-               const device::SteinOptions<T> p{max_iter, thr, seed + static_cast<std::uint32_t>(std::int64_t(b) * 7919)};
+               const device::SteinOptions<Real> p{max_iter, thr, seed + static_cast<std::uint32_t>(std::int64_t(b) * 7919)};
                const auto dvec = device::vec(d.data_ptr() + std::int64_t(b) * d.stride(), n, d.inc());
                const auto evec = device::vec(e.data_ptr() + std::int64_t(b) * e.stride(), n - 1, e.inc());
                const auto Zb = device::mat(Zk.data() + std::int64_t(b) * Zk.stride(), n, k, Zk.ld());

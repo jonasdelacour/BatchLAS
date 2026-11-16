@@ -56,10 +56,10 @@ template <class T> BATCHLAS_DEVICE_INLINE Global<T> global_of(const ItemMat<T>& 
 }
 
 // The value of a scalar argument (a MaybeZero with its flag set is 0).
-template <class T, class S> BATCHLAS_DEVICE_INLINE T scalar_of(const S& s_) {
+template <class Scalar, class S> BATCHLAS_DEVICE_INLINE Scalar scalar_of(const S& s_) {
     const auto s = as_tag(s_);
-    if constexpr (::batchlas::device::detail::is_maybe_zero_v<std::remove_cv_t<decltype(s)>>) return s.zero ? Arith<T>::zero() : static_cast<T>(s.v);
-    else return ::batchlas::device::detail::tag_value<T>(s);
+    if constexpr (::batchlas::device::detail::is_maybe_zero_v<std::remove_cv_t<decltype(s)>>) return s.zero ? Arith<Scalar>::zero() : static_cast<Scalar>(s.v);
+    else return ::batchlas::device::detail::tag_value<Scalar>(s);
 }
 
 // One k pass of a tile: a(row, kk) = op(A)(row, k_lo + kk), b(kk, col) = op(B)(k_lo + kk, col)
@@ -79,9 +79,9 @@ template <class PS> inline constexpr bool pass_b_rows = false;
 template <bool AR, bool BR, class RA, class RB> inline constexpr bool pass_b_rows<Pass<AR, BR, RA, RB>> = BR;
 
 // C(m0 :, n0 :) := alpha (sum of the passes) + beta C over one Cfg tile; c is m x n (ldc).
-template <class C, class Ex, class T, class Mask, class... P>
-BATCHLAS_DEVICE_INLINE void run_tile(const Ex& ex, const device::detail::Smem<C>& sm, T* c, int ldc, int m0, int n0, const int& m, const int& n, T alpha,
-                                  T beta, Mask mask, const P&... passes) {
+template <class C, class Ex, class Scalar, class Mask, class... P>
+BATCHLAS_DEVICE_INLINE void run_tile(const Ex& ex, const device::detail::Smem<C>& sm, Scalar* c, int ldc, int m0, int n0, const int& m, const int& n, Scalar alpha,
+                                  Scalar beta, Mask mask, const P&... passes) {
     using G = typename C::geom;
     using Ops = typename C::ops;
     constexpr int Thr = C::threads;
@@ -89,13 +89,13 @@ BATCHLAS_DEVICE_INLINE void run_tile(const Ex& ex, const device::detail::Smem<C>
     const int local_row = lid / G::LocalCols, local_col = lid % G::LocalCols;
     const auto tile_a = sm.p.get_decorated();
     const auto tile_b = tile_a + G::Stages * G::StageASize;
-    Tile<T, G::ThreadTileRows, G::ThreadTileCols> accum;
-    fill(accum, Arith<T>::zero());
+    Tile<Scalar, G::ThreadTileRows, G::ThreadTileCols> accum;
+    fill(accum, Arith<Scalar>::zero());
     auto one_pass = [&](const auto& ps) BATCHLAS_DEVICE_BODY {
         using PS = std::remove_cvref_t<decltype(ps)>;
         auto stage = [&](int kk0, auto& dst_a, auto& dst_b) BATCHLAS_DEVICE_BODY {
-            stage_block_read<pass_a_rows<PS>, G::TileM, G::TileK, Thr, T>(lid, m0, kk0, m, ps.k, ps.a, dst_a);
-            stage_block_read<pass_b_rows<PS>, G::TileK, G::TileN, Thr, T>(lid, kk0, n0, ps.k, n, ps.b, dst_b);
+            stage_block_read<pass_a_rows<PS>, G::TileM, G::TileK, Thr, Scalar>(lid, m0, kk0, m, ps.k, ps.a, dst_a);
+            stage_block_read<pass_b_rows<PS>, G::TileK, G::TileN, Thr, Scalar>(lid, kk0, n0, ps.k, n, ps.b, dst_b);
         };
         reg_tile_mma<G, false, Ops>(ex, local_row, local_col, tile_a, tile_b, stage, ps.k, accum);
     };
@@ -105,8 +105,8 @@ BATCHLAS_DEVICE_INLINE void run_tile(const Ex& ex, const device::detail::Smem<C>
 }
 
 // A(i, j) of a symmetric (Herm: Hermitian, real diagonal) A from its UL triangle.
-template <Uplo UL, bool Herm, class T> BATCHLAS_DEVICE_INLINE std::remove_cv_t<T> sym_at(const Global<T>& a, int i, int j) {
-    using V = std::remove_cv_t<T>;
+template <Uplo UL, bool Herm, class Scalar> BATCHLAS_DEVICE_INLINE std::remove_cv_t<Scalar> sym_at(const Global<Scalar>& a, int i, int j) {
+    using V = std::remove_cv_t<Scalar>;
     using A = Arith<V>;
     if constexpr (Herm && A::is_complex) {
         if (i == j) return A::make(A::re(a(i, i)), typename A::real_t(0));
@@ -118,8 +118,8 @@ template <Uplo UL, bool Herm, class T> BATCHLAS_DEVICE_INLINE std::remove_cv_t<T
 }
 
 // op(A)(i, j) of a triangular A (UL stored triangle, DG = Unit: an implied unit diagonal).
-template <Uplo UL, Transpose TR, Diag DG, class T> BATCHLAS_DEVICE_INLINE std::remove_cv_t<T> tri_at(const Global<T>& a, int i, int j) {
-    using V = std::remove_cv_t<T>;
+template <Uplo UL, Transpose TR, Diag DG, class Scalar> BATCHLAS_DEVICE_INLINE std::remove_cv_t<Scalar> tri_at(const Global<Scalar>& a, int i, int j) {
+    using V = std::remove_cv_t<Scalar>;
     constexpr bool op_lower = (UL == Uplo::Lower) == (TR == Transpose::NoTrans);
     if (i == j) {
         if constexpr (DG == Diag::Unit) return Arith<V>::one();
@@ -141,8 +141,8 @@ template <class C, class Ex, class F> BATCHLAS_DEVICE_INLINE void for_each_c_til
 }
 
 // The rank-k family (syrk, herk, syr2k, her2k) over the tiles that meet C's UL triangle.
-template <class C, Uplo UL, bool Herm, class Ex, class T, class... P>
-BATCHLAS_DEVICE_INLINE void rank_update(const Ex& ex, const Workspace& ws, const Global<T>& c, T alpha, T beta, const P&... passes) {
+template <class C, Uplo UL, bool Herm, class Ex, class Scalar, class... P>
+BATCHLAS_DEVICE_INLINE void rank_update(const Ex& ex, const Workspace& ws, const Global<Scalar>& c, Scalar alpha, Scalar beta, const P&... passes) {
     const int n = c.m;
     const auto sm = device::detail::smem_of<C>(ws);
     for_each_c_tile<C>(ex, n, n, [&](int m0, int n0) BATCHLAS_DEVICE_BODY {

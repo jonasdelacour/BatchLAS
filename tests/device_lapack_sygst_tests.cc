@@ -57,9 +57,9 @@ using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename device::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
-template <class T> using LD = std::conditional_t<is_cplx<T>, std::complex<long double>, long double>;
+template <class Scalar> using real_of = typename device::Arith<Scalar>::real_t;
+template <class Scalar> constexpr bool is_cplx = device::Arith<Scalar>::is_complex;
+template <class Scalar> using LD = std::conditional_t<is_cplx<Scalar>, std::complex<long double>, long double>;
 
 constexpr int kBatch = 1024;
 constexpr int kPeriod = 3;
@@ -70,18 +70,18 @@ std::uint64_t mix(std::uint64_t x) {
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
     return x ^ (x >> 31);
 }
-template <class R> R uval(std::uint64_t i) { return static_cast<R>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
-template <class T> T val(std::uint64_t i) {
-    if constexpr (is_cplx<T>) return T(uval<real_of<T>>(2 * i), uval<real_of<T>>(2 * i + 1));
-    else return uval<T>(i);
+template <class Real> Real uval(std::uint64_t i) { return static_cast<Real>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
+template <class Scalar> Scalar val(std::uint64_t i) {
+    if constexpr (is_cplx<Scalar>) return Scalar(uval<real_of<Scalar>>(2 * i), uval<real_of<Scalar>>(2 * i + 1));
+    else return uval<Scalar>(i);
 }
-template <class T> T nan_of() {
-    const real_of<T> q = std::numeric_limits<real_of<T>>::quiet_NaN();
-    if constexpr (is_cplx<T>) return T(q, q);
+template <class Scalar> Scalar nan_of() {
+    const real_of<Scalar> q = std::numeric_limits<real_of<Scalar>>::quiet_NaN();
+    if constexpr (is_cplx<Scalar>) return Scalar(q, q);
     else return q;
 }
-template <class T> T with_imag(real_of<T> re, real_of<T> im) {
-    if constexpr (is_cplx<T>) return T(re, im);
+template <class Scalar> Scalar with_imag(real_of<Scalar> re, real_of<Scalar> im) {
+    if constexpr (is_cplx<Scalar>) return Scalar(re, im);
     else return re;
 }
 template <class V> V conj_h(V v) {
@@ -93,25 +93,25 @@ bool in_tri(Uplo ul, int i, int j) { return ul == Uplo::Lower ? i >= j : i <= j;
 
 // One problem: A and B with ld, batch stride and poison as the header says; kPeriod representatives
 // copied to every item b from b % kPeriod. b_im: Im of B's diagonal (0 for the Blocked tier).
-template <class T> struct Problem {
+template <class Scalar> struct Problem {
     int n, lda, ldb;
     std::ptrdiff_t sa, sb;
     Uplo ul;
-    std::vector<T> a, b;
-    Problem(int n_, Uplo ul_, real_of<T> b_im = real_of<T>(1e3))
+    std::vector<Scalar> a, b;
+    Problem(int n_, Uplo ul_, real_of<Scalar> b_im = real_of<Scalar>(1e3))
         : n(n_), lda(n_ + 3), ldb(n_ + 2), sa(std::ptrdiff_t(lda) * n_ + 5), sb(std::ptrdiff_t(ldb) * n_ + 1), ul(ul_) {
-        a.assign(std::size_t(sa) * kBatch, nan_of<T>());
-        b.assign(std::size_t(sb) * kBatch, nan_of<T>());
+        a.assign(std::size_t(sa) * kBatch, nan_of<Scalar>());
+        b.assign(std::size_t(sb) * kBatch, nan_of<Scalar>());
         for (int r = 0; r < kPeriod; ++r)
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < n; ++i) {
                     if (!in_tri(ul, i, j)) continue;
                     const std::uint64_t s = std::uint64_t(r) * 100003u + std::uint64_t(i + j * n);
-                    T& ea = a[std::size_t(r) * sa + i + std::size_t(j) * lda];
-                    T& eb = b[std::size_t(r) * sb + i + std::size_t(j) * ldb];
-                    ea = i == j ? with_imag<T>(std::real(val<T>(s)), real_of<T>(1e3)) : val<T>(s);
-                    eb = i == j ? with_imag<T>(real_of<T>(1.5) + real_of<T>(0.5) * std::real(val<T>(s + 7)), b_im)
-                                : val<T>(s + 7) * real_of<T>(0.5 / n);
+                    Scalar& ea = a[std::size_t(r) * sa + i + std::size_t(j) * lda];
+                    Scalar& eb = b[std::size_t(r) * sb + i + std::size_t(j) * ldb];
+                    ea = i == j ? with_imag<Scalar>(std::real(val<Scalar>(s)), real_of<Scalar>(1e3)) : val<Scalar>(s);
+                    eb = i == j ? with_imag<Scalar>(real_of<Scalar>(1.5) + real_of<Scalar>(0.5) * std::real(val<Scalar>(s + 7)), b_im)
+                                : val<Scalar>(s + 7) * real_of<Scalar>(0.5 / n);
                 }
         for (int r = kPeriod; r < kBatch; ++r) {
             std::copy_n(a.data() + std::size_t(r % kPeriod) * sa, sa, a.data() + std::size_t(r) * sa);
@@ -144,11 +144,11 @@ struct Dev {
 // The user's kernel: one matrix per work-group of the tier's wg_size, the op's info per item; the
 // global workspace (Blocked) is batch slices of global_bytes, poisoned with NaN bytes. Wg > 0
 // launches a wider group than the tier's wg_size (Cta: any group of at least N items).
-template <device::Itype IT, Uplo UL, class Tier, int Wg = 0, class T>
-void device_call(Dev& dev, T* A, const T* B, const Problem<T>& p, int* info) {
-    using Tr = device::resolve_tier_t<device::routine::sygst<IT, UL>, T, Tier>;  // Tier may be tier::upto
-    constexpr int WG = Wg > 0 ? Wg : device::tier_info<device::routine::sygst<IT, UL>, Tr, T>::wg_size;
-    const device::WorkspaceSize ws = device::buffer_size<device::routine::sygst<IT, UL>, Tier, T>(p.n);
+template <device::Itype IT, Uplo UL, class Tier, int Wg = 0, class Scalar>
+void device_call(Dev& dev, Scalar* A, const Scalar* B, const Problem<Scalar>& p, int* info) {
+    using Tr = device::resolve_tier_t<device::routine::sygst<IT, UL>, Scalar, Tier>;  // Tier may be tier::upto
+    constexpr int WG = Wg > 0 ? Wg : device::tier_info<device::routine::sygst<IT, UL>, Tr, Scalar>::wg_size;
+    const device::WorkspaceSize ws = device::buffer_size<device::routine::sygst<IT, UL>, Tier, Scalar>(p.n);
     std::byte* gws = nullptr;
     if (ws.global_bytes) {
         gws = sycl::malloc_device<std::byte>(ws.global_bytes * kBatch, dev.q());
@@ -177,13 +177,13 @@ template <class Tier> std::string tier_name() {
 using CtaTiers = device::tier::list<device::tier::Cta<8>, device::tier::Cta<16>, device::tier::Cta<32>>;
 
 // C = F^-1 A F^-H (itype 1) or F^H A F (2, 3) in long double, F = L or U^H from B's ul triangle.
-template <class T> std::vector<LD<T>> reference(const Problem<T>& p, int r, int itype) {
+template <class Scalar> std::vector<LD<Scalar>> reference(const Problem<Scalar>& p, int r, int itype) {
     const int n = p.n;
-    using W = LD<T>;
+    using W = LD<Scalar>;
     std::vector<W> a(std::size_t(n) * n), f(std::size_t(n) * n, W(0));
     auto at = [&](std::vector<W>& m, int i, int j) -> W& { return m[std::size_t(i) + std::size_t(j) * n]; };
-    const T* pa = p.a.data() + std::size_t(r) * p.sa;
-    const T* pb = p.b.data() + std::size_t(r) * p.sb;
+    const Scalar* pa = p.a.data() + std::size_t(r) * p.sa;
+    const Scalar* pb = p.b.data() + std::size_t(r) * p.sb;
     for (int j = 0; j < n; ++j)
         for (int i = 0; i < n; ++i) {
             const bool own = in_tri(p.ul, i, j);

@@ -29,12 +29,12 @@ namespace ops::spmm {
 
 using select::overloaded;
 
-template <typename T>
-using Dense = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using Dense = MatrixView<Scalar, MatrixFormat::Dense>;
 
 // ConjTrans folds to T on both operands: the bodies differ from Trans only by a conjugation.
-template <typename T, MatrixFormat MF>
-select::Key key_of(const MatrixView<T, MF>& A, const Dense<T>& C, Transpose transA, Transpose transB) {
+template <typename Scalar, MatrixFormat MF>
+select::Key key_of(const MatrixView<Scalar, MF>& A, const Dense<Scalar>& C, Transpose transA, Transpose transB) {
     return {{"transA", transA == Transpose::NoTrans ? "N" : "T"},
             {"transB", transB == Transpose::NoTrans ? "N" : "T"},
             {"m", A.rows()}, {"nrhs", C.cols()}, {"batch", A.batch_size()}};
@@ -43,8 +43,8 @@ select::Key key_of(const MatrixView<T, MF>& A, const Dense<T>& C, Transpose tran
 // Do the views describe one C = alpha op(A) op(B) + beta C? Checks
 // (the only validation in the tree): extents agree, batch
 // sizes agree, positive lds, and a CSR offset stride of at least m + 1 (the bodies read ro[i + 1]).
-template <typename T, MatrixFormat MF>
-bool one_spmm(const MatrixView<T, MF>& A, const Dense<T>& Bm, const Dense<T>& C, Transpose transA,
+template <typename Scalar, MatrixFormat MF>
+bool one_spmm(const MatrixView<Scalar, MF>& A, const Dense<Scalar>& Bm, const Dense<Scalar>& C, Transpose transA,
               Transpose transB) {
     const std::int64_t m = A.rows(), ka = A.cols();
     if (m < 0 || ka < 0) return false;
@@ -70,9 +70,9 @@ bool one_spmm(const MatrixView<T, MF>& A, const Dense<T>& Bm, const Dense<T>& C,
 // defect 13's aligned scalars landed, so it is no longer refused (known-defects #17).
 // netlib's spmm throws `unsupported` per item for any transpose (netlib_lapack.cc), so Auto there
 // falls to Direct. No vendor reads per-item dense extents: no heterogeneous B or C.
-template <Backend B, typename T, MatrixFormat MF>
-bool can_run(const SpmmChoice& c, const select::Device& d, const MatrixView<T, MF>& A, const Dense<T>& Bm,
-             const Dense<T>& C, Transpose transA, Transpose transB) {
+template <Backend B, typename Scalar, MatrixFormat MF>
+bool can_run(const SpmmChoice& c, const select::Device& d, const MatrixView<Scalar, MF>& A, const Dense<Scalar>& Bm,
+             const Dense<Scalar>& C, Transpose transA, Transpose transB) {
     // Direct honours a batch mask; no vendor call can skip an item.
     const bool masked = batchlas::detail::any_batch_mask(A, Bm, C);
     return std::visit(overloaded{
@@ -85,7 +85,7 @@ bool can_run(const SpmmChoice& c, const select::Device& d, const MatrixView<T, M
             }
         },
         [&](Vendor) {
-            constexpr bool cx = !std::is_same_v<T, typename base_type<T>::type>;
+            constexpr bool cx = !std::is_same_v<Scalar, typename base_type<Scalar>::type>;
             const bool nn = transA == Transpose::NoTrans && transB == Transpose::NoTrans;
             return d.has_vendor && !masked && !Bm.is_heterogeneous() && !C.is_heterogeneous() &&
                    !(B == Backend::NETLIB && !nn) &&
@@ -94,35 +94,36 @@ bool can_run(const SpmmChoice& c, const select::Device& d, const MatrixView<T, M
     }, c);
 }
 
-template <Backend B, typename T, MatrixFormat MF>
-Event launch(Queue& q, const SpmmChoice& c, const MatrixView<T, MF>& A, const Dense<T>& Bm, const Dense<T>& C,
-             T alpha, T beta, Transpose transA, Transpose transB, Span<std::byte> ws) {
+template <Backend B, typename Scalar, MatrixFormat MF>
+Event launch(Queue& q, const SpmmChoice& c, const MatrixView<Scalar, MF>& A, const Dense<Scalar>& Bm,
+             const Dense<Scalar>& C,
+             Scalar alpha, Scalar beta, Transpose transA, Transpose transB, Span<std::byte> ws) {
     return std::visit(overloaded{
         [&](Direct) -> Event {
             if constexpr (MF == MatrixFormat::CSR)
-                return ops::spmm::spmm_native_csr<T>(q, A, Bm, C, alpha, beta, transA, transB);
+                return ops::spmm::spmm_native_csr<Scalar>(q, A, Bm, C, alpha, beta, transA, transB);
             else
                 throw batchlas::internal_error("spmm: direct chosen for a non-CSR view");  // can_run refuses
         },
         [&](Vendor) -> Event {
             if constexpr (select::has_library<B>(spec.vendor))
-                return backend::spmm_vendor<B, T, MF>(q, A, Bm, C, alpha, beta, transA, transB, ws);
-            else select::no_vendor<B, T>(spec);
+                return backend::spmm_vendor<B, Scalar, MF>(q, A, Bm, C, alpha, beta, transA, transB, ws);
+            else select::no_vendor<B, Scalar>(spec);
         },
     }, c);
 }
 
 // Exactly the chosen family's need (R5). Direct takes none. A Direct-routed call never asks the
 // vendor sizer: it builds a plan that walks the CSR row offsets from the host.
-template <Backend B, typename T, MatrixFormat MF>
-std::size_t workspace(Queue& q, const SpmmChoice& c, const MatrixView<T, MF>& A, const Dense<T>& Bm,
-                      const Dense<T>& C, T alpha, T beta, Transpose transA, Transpose transB) {
+template <Backend B, typename Scalar, MatrixFormat MF>
+std::size_t workspace(Queue& q, const SpmmChoice& c, const MatrixView<Scalar, MF>& A, const Dense<Scalar>& Bm,
+                      const Dense<Scalar>& C, Scalar alpha, Scalar beta, Transpose transA, Transpose transB) {
     return std::visit(overloaded{
         [&](Direct) -> std::size_t { return 0; },
         [&](Vendor) -> std::size_t {
             if constexpr (select::has_library<B>(spec.vendor))
-                return backend::spmm_vendor_buffer_size<B, T, MF>(q, A, Bm, C, alpha, beta, transA, transB);
-            else select::no_vendor<B, T>(spec);
+                return backend::spmm_vendor_buffer_size<B, Scalar, MF>(q, A, Bm, C, alpha, beta, transA, transB);
+            else select::no_vendor<B, Scalar>(spec);
         },
     }, c);
 }
@@ -131,9 +132,10 @@ std::size_t workspace(Queue& q, const SpmmChoice& c, const MatrixView<T, MF>& A,
 
 // Deliberately no validate_params: a shape the native driver cannot take resolves to the vendor,
 // as before, which then reports it (or, vendor-free, there is no route).
-template <Backend Back, typename T, MatrixFormat MFormat>
-Event spmm(Queue& ctx, const MatrixView<T, MFormat>& A, const MatrixView<T, MatrixFormat::Dense>& B_mat,
-           const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Transpose transA, Transpose transB,
+template <Backend Back, typename Scalar, MatrixFormat MFormat>
+Event spmm(Queue& ctx, const MatrixView<Scalar, MFormat>& A, const MatrixView<Scalar, MatrixFormat::Dense>& B_mat,
+           const MatrixView<Scalar, MatrixFormat::Dense>& C, Scalar alpha, Scalar beta, Transpose transA,
+           Transpose transB,
            Span<std::byte> workspace) {
     (void)batchlas::detail::call_mask("spmm", A, B_mat, C);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
@@ -141,29 +143,31 @@ Event spmm(Queue& ctx, const MatrixView<T, MFormat>& A, const MatrixView<T, Matr
     // The coverage row's key: m, k = A as stored, n = nrhs.
     const coverage::Shape shape{.m = A.rows(), .n = C.cols(), .k = A.cols(), .batch = A.batch_size(),
                                 .transA = transA, .transB = transB};
-    const select::Key key = ops::spmm::key_of<T, MFormat>(A, C, transA, transB);
-    return select::run<Back, T>(
-        ops::spmm::spec, ctx, key, ops::spmm::candidates<T>(),
+    const select::Key key = ops::spmm::key_of<Scalar, MFormat>(A, C, transA, transB);
+    return select::run<Back, Scalar>(
+        ops::spmm::spec, ctx, key, ops::spmm::candidates<Scalar>(),
         [&](const auto& c, const auto& d) {
-            return ops::spmm::can_run<Back, T, MFormat>(c, d, A, B_mat, C, transA, transB);
+            return ops::spmm::can_run<Back, Scalar, MFormat>(c, d, A, B_mat, C, transA, transB);
         },
         shape, key, [&](const auto& c) {
-            return ops::spmm::launch<Back, T, MFormat>(ctx, c, A, B_mat, C, alpha, beta, transA, transB, workspace);
+            return ops::spmm::launch<Back, Scalar, MFormat>(ctx, c, A, B_mat, C, alpha, beta, transA, transB,
+                                                            workspace);
         });
 }
 
-template <Backend Back, typename T, MatrixFormat MFormat>
-size_t spmm_buffer_size(Queue& ctx, const MatrixView<T, MFormat>& A, const MatrixView<T, MatrixFormat::Dense>& B_mat,
-                        const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Transpose transA,
+template <Backend Back, typename Scalar, MatrixFormat MFormat>
+size_t spmm_buffer_size(Queue& ctx, const MatrixView<Scalar, MFormat>& A, const MatrixView<Scalar,
+                        MatrixFormat::Dense>& B_mat,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& C, Scalar alpha, Scalar beta, Transpose transA,
                         Transpose transB) {
     (void)batchlas::detail::call_mask("spmm", A, B_mat, C);
     if (A.batch_size() == 0) return 0;
-    const auto c = select::pick<Back, T>(
-        ops::spmm::spec, ctx, ops::spmm::key_of<T, MFormat>(A, C, transA, transB), ops::spmm::candidates<T>(),
+    const auto c = select::pick<Back, Scalar>(
+        ops::spmm::spec, ctx, ops::spmm::key_of<Scalar, MFormat>(A, C, transA, transB), ops::spmm::candidates<Scalar>(),
         [&](const auto& k, const auto& d) {
-            return ops::spmm::can_run<Back, T, MFormat>(k, d, A, B_mat, C, transA, transB);
+            return ops::spmm::can_run<Back, Scalar, MFormat>(k, d, A, B_mat, C, transA, transB);
         });
-    return ops::spmm::workspace<Back, T, MFormat>(ctx, c, A, B_mat, C, alpha, beta, transA, transB);
+    return ops::spmm::workspace<Back, Scalar, MFormat>(ctx, c, A, B_mat, C, alpha, beta, transA, transB);
 }
 
 #define SPMM_INSTANTIATE(B_, fp)                                    \

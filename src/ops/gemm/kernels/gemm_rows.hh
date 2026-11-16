@@ -11,14 +11,16 @@
 
 namespace batchlas::ops::gemm {
 
-template <typename T, int I, bool Split, int Half>
-void gemm_wide_row(std::optional<Event>& out, Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                   const MatrixView<T, MatrixFormat::Dense>& B,
-                   const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Transpose transA, Transpose transB,
+template <typename Scalar, int I, bool Split, int Half>
+void gemm_wide_row(std::optional<Event>& out, Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                   const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                   const MatrixView<Scalar, MatrixFormat::Dense>& C, Scalar alpha, Scalar beta, Transpose transA,
+                   Transpose transB,
                    WideSplit split) {
     static_for<9>([&](auto F) {
         if constexpr ((decltype(F)::value < 5) == (Half == 0))
-            launch_wide_form<T, I, decltype(F)::value, Split>(out, ctx, A, B, C, alpha, beta, transA, transB, split);
+            launch_wide_form<Scalar, I, decltype(F)::value, Split>(out, ctx, A, B, C, alpha, beta, transA, transB,
+                                                                   split);
     });
 }
 

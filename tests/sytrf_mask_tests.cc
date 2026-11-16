@@ -50,18 +50,18 @@ std::string label(const Shape& s) {
            std::to_string(s.batch) + (s.uplo == Uplo::Lower ? " L" : " U") + (s.identical ? " identical" : "");
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Problem {
     Queue& q;
     Op op;
     Shape s;
-    Matrix<T> A, Bm;
+    Matrix<Scalar> A, Bm;
     UnifiedVector<int64_t> piv;
     UnifiedVector<int32_t> info;
 
     Problem(Queue& queue, Op o, const Shape& shape)
-        : q(queue), op(o), s(shape), A(test_support::padded<T>(s.n, s.n, s.batch)),
-          Bm(test_support::padded<T>(s.n, std::max(s.nrhs, 1), s.batch, 2, 7)),
+        : q(queue), op(o), s(shape), A(test_support::padded<Scalar>(s.n, s.n, s.batch)),
+          Bm(test_support::padded<Scalar>(s.n, std::max(s.nrhs, 1), s.batch, 2, 7)),
           piv(static_cast<std::size_t>(s.n) * s.batch), info(static_cast<std::size_t>(s.batch)) {}
 
     bool singular(int item) const { return !s.identical && s.batch > 2 && item == 1; }
@@ -69,30 +69,31 @@ struct Problem {
     // Complex symmetric, indefinite: every third diagonal zero, so Bunch-Kaufman takes 2 x 2 blocks
     // and interchanges. Item 1 is all zero (singular, info = 1). The pads keep the poison.
     void fill_a() {
-        std::fill_n(A.data_ptr(), std::size_t(A.stride()) * s.batch, test_support::poison<T>());
+        std::fill_n(A.data_ptr(), std::size_t(A.stride()) * s.batch, test_support::poison<Scalar>());
         for (int b = 0; b < s.batch; ++b) {
             const int item = s.identical ? 0 : b;
-            T* a = A.data_ptr() + std::size_t(A.stride()) * b;
+            Scalar* a = A.data_ptr() + std::size_t(A.stride()) * b;
             for (int j = 0; j < s.n; ++j)
                 for (int i = 0; i < s.n; ++i) {
                     const int lo = std::min(i, j), hi = std::max(i, j);
                     const double re = double(int((lo * 7 + hi * 3 + item * 5) % 17) - 8) / 8;
                     const double im = double(int((lo * 5 + hi + item * 3) % 11) - 5) / 8;
-                    T v = MatrixView<T>::make(re, im);
-                    if (i == j) v = (i % 3 == 0) ? T(0) : MatrixView<T>::make(re / 4, im / 4);
-                    a[i + std::size_t(A.ld()) * j] = singular(b) ? T(0) : v;
+                    Scalar v = MatrixView<Scalar>::make(re, im);
+                    if (i == j) v = (i % 3 == 0) ? Scalar(0) : MatrixView<Scalar>::make(re / 4, im / 4);
+                    a[i + std::size_t(A.ld()) * j] = singular(b) ? Scalar(0) : v;
                 }
         }
     }
     void fill_b() {
-        std::fill_n(Bm.data_ptr(), std::size_t(Bm.stride()) * s.batch, test_support::poison<T>());
+        std::fill_n(Bm.data_ptr(), std::size_t(Bm.stride()) * s.batch, test_support::poison<Scalar>());
         for (int b = 0; b < s.batch; ++b) {
             const int item = s.identical ? 0 : b;
-            T* p = Bm.data_ptr() + std::size_t(Bm.stride()) * b;
+            Scalar* p = Bm.data_ptr() + std::size_t(Bm.stride()) * b;
             for (int c = 0; c < s.nrhs; ++c)
                 for (int i = 0; i < s.n; ++i)
                     p[i + std::size_t(Bm.ld()) * c] =
-                        MatrixView<T>::make(double(int((i * 3 + c * 7 + item) % 13) - 6) / 4, double((i + c) % 5) / 8);
+                        MatrixView<Scalar>::make(double(int((i * 3 + c * 7 + item) % 13) - 6) / 4,
+                                                 double((i + c) % 5) / 8);
         }
     }
     void poison_outputs() {
@@ -101,8 +102,8 @@ struct Problem {
         // an inactive item the solve wrote.
         std::fill_n(info.data(), info.size(), op == Op::sysv ? int32_t(0) : int32_t(-77));
     }
-    MatrixView<T> a(Span<const std::uint8_t> m) { return A.view().with_batch_mask(m); }
-    MatrixView<T> b(Span<const std::uint8_t> m) { return Bm.view().with_batch_mask(m); }
+    MatrixView<Scalar> a(Span<const std::uint8_t> m) { return A.view().with_batch_mask(m); }
+    MatrixView<Scalar> b(Span<const std::uint8_t> m) { return Bm.view().with_batch_mask(m); }
     Span<std::byte> sized(Span<std::byte> ws, std::size_t need) { return {ws.data(), need}; }
 
     mc::Case make_case() {
@@ -117,24 +118,24 @@ struct Problem {
             fill_b();
             poison_outputs();
             if (op == Op::sytrs) {  // the factor every pattern solves with: unmasked, on Auto
-                const std::size_t need = sytrf_buffer_size<B, T>(q, A.view(), s.uplo);
+                const std::size_t need = sytrf_buffer_size<B, Scalar>(q, A.view(), s.uplo);
                 UnifiedVector<std::byte> ws(std::max<std::size_t>(need, 1));
-                (void)sytrf<B, T>(q, A.view(), s.uplo, piv.to_span(), sized(ws.to_span(), need), info.to_span());
+                (void)sytrf<B, Scalar>(q, A.view(), s.uplo, piv.to_span(), sized(ws.to_span(), need), info.to_span());
                 q.wait();
             }
         };
         c.call = [this](Span<const std::uint8_t> m, Span<std::byte> ws) {
             switch (op) {
-                case Op::sytrf: (void)sytrf<B, T>(q, a(m), s.uplo, piv.to_span(), ws, info.to_span()); break;
-                case Op::sytrs: (void)sytrs<B, T>(q, a(m), b(m), s.uplo, piv.to_span(), ws); break;
-                case Op::sysv: (void)sysv<B, T>(q, a(m), b(m), s.uplo, piv.to_span(), ws, info.to_span()); break;
+                case Op::sytrf: (void)sytrf<B, Scalar>(q, a(m), s.uplo, piv.to_span(), ws, info.to_span()); break;
+                case Op::sytrs: (void)sytrs<B, Scalar>(q, a(m), b(m), s.uplo, piv.to_span(), ws); break;
+                case Op::sysv: (void)sysv<B, Scalar>(q, a(m), b(m), s.uplo, piv.to_span(), ws, info.to_span()); break;
             }
         };
         c.buffer_size = [this](Span<const std::uint8_t> m) -> std::size_t {
             switch (op) {
-                case Op::sytrf: return sytrf_buffer_size<B, T>(q, a(m), s.uplo);
-                case Op::sytrs: return sytrs_buffer_size<B, T>(q, a(m), b(m), s.uplo);
-                case Op::sysv: return sysv_buffer_size<B, T>(q, a(m), b(m), s.uplo);
+                case Op::sytrf: return sytrf_buffer_size<B, Scalar>(q, a(m), s.uplo);
+                case Op::sytrs: return sytrs_buffer_size<B, Scalar>(q, a(m), b(m), s.uplo);
+                case Op::sysv: return sysv_buffer_size<B, Scalar>(q, a(m), b(m), s.uplo);
             }
             return 0;
         };
@@ -149,9 +150,9 @@ struct Problem {
     }
 };
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;

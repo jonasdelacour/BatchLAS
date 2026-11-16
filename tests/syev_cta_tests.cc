@@ -25,9 +25,9 @@ using namespace batchlas;
 
 namespace {
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct SyevCtaConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 

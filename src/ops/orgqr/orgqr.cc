@@ -26,11 +26,11 @@ namespace ops::orgqr {
 
 using select::overloaded;
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
-template <typename T>
-select::Key key_of(const MV<T>& A) {
+template <typename Scalar>
+select::Key key_of(const MV<Scalar>& A) {
     return {{"m", A.rows()}, {"n", A.cols()}};
 }
 
@@ -38,8 +38,8 @@ select::Key key_of(const MV<T>& A) {
 // orgqr_blocked_dispatch's own checks (one identity and one apply serve the whole batch, and
 // Q's columns live in C^m, so n <= m); its tau-length check is an argument error, left to the
 // driver. The vendor runs each item at the top-level (m, n): no heterogeneous batch.
-template <Backend B, typename T>
-bool can_run(const OrgqrChoice& c, const select::Device& d, const MV<T>& A) {
+template <Backend B, typename Scalar>
+bool can_run(const OrgqrChoice& c, const select::Device& d, const MV<Scalar>& A) {
     const bool masked = detail::any_batch_mask(A);
     return std::visit(overloaded{
         // Masked: the identity and copy-back kernels skip an inactive item, and the apply is the
@@ -55,27 +55,28 @@ bool can_run(const OrgqrChoice& c, const select::Device& d, const MV<T>& A) {
 
 // The apply seams: the public ormqr and its sizing, so the apply picks its own kernel and its
 // workspace comes from the same routed query as the call.
-template <Backend B, typename T>
-Event apply_q(Queue& c, const MV<T>& oa, const MV<T>& oc, Side os, Transpose ot, Span<T> otau,
+template <Backend B, typename Scalar>
+Event apply_q(Queue& c, const MV<Scalar>& oa, const MV<Scalar>& oc, Side os, Transpose ot, Span<Scalar> otau,
               Span<std::byte> ows, int32_t obs) {
-    return ::batchlas::ormqr<B, T>(c, oa, oc, os, ot, otau, ows, obs);
+    return ::batchlas::ormqr<B, Scalar>(c, oa, oc, os, ot, otau, ows, obs);
 }
-template <Backend B, typename T>
-std::size_t apply_q_size(Queue& c, const MV<T>& oa, const MV<T>& oc, Side os, Transpose ot, Span<T> otau,
+template <Backend B, typename Scalar>
+std::size_t apply_q_size(Queue& c, const MV<Scalar>& oa, const MV<Scalar>& oc, Side os, Transpose ot, Span<Scalar> otau,
                          int32_t obs) {
-    return ormqr_buffer_size<B, T>(c, oa, oc, os, ot, otau, obs);
+    return ormqr_buffer_size<B, Scalar>(c, oa, oc, os, ot, otau, obs);
 }
 
-template <Backend B, typename T>
-Event launch(Queue& q, const OrgqrChoice& c, const MV<T>& A, Span<T> tau, Span<std::byte> ws) {
+template <Backend B, typename Scalar>
+Event launch(Queue& q, const OrgqrChoice& c, const MV<Scalar>& A, Span<Scalar> tau, Span<std::byte> ws) {
     return std::visit(overloaded{
         [&](Blocked) {
-            return ops::orgqr::orgqr_blocked_dispatch<T>(q, A, tau, ws, apply_q<B, T>, apply_q_size<B, T>);
+            return ops::orgqr::orgqr_blocked_dispatch<Scalar>(q, A, tau, ws, apply_q<B, Scalar>, apply_q_size<B,
+                                                              Scalar>);
         },
         [&](Vendor) -> Event {
             if constexpr (select::has_library<B>(spec.vendor))
-                return backend::orgqr_vendor<B, T>(q, A, tau, ws);
-            else select::no_vendor<B, T>(spec);
+                return backend::orgqr_vendor<B, Scalar>(q, A, tau, ws);
+            else select::no_vendor<B, Scalar>(spec);
         },
     }, c);
 }
@@ -83,46 +84,46 @@ Event launch(Queue& q, const OrgqrChoice& c, const MV<T>& A, Span<T> tau, Span<s
 // Exactly the chosen family's need (R5). The vendor's is batch-linear (a per-item loop), so a
 // native call must never be sized by it (gigabytes at saturating batch).
 // evidence: docs/perf/qr.md#the-orgqr_buffer_size-latent-defect
-template <Backend B, typename T>
-std::size_t workspace(Queue& q, const OrgqrChoice& c, const MV<T>& A, Span<T> tau) {
+template <Backend B, typename Scalar>
+std::size_t workspace(Queue& q, const OrgqrChoice& c, const MV<Scalar>& A, Span<Scalar> tau) {
     return std::visit(overloaded{
-        [&](Blocked) { return ops::orgqr::orgqr_blocked_buffer_size<T>(q, A, tau, apply_q_size<B, T>); },
+        [&](Blocked) { return ops::orgqr::orgqr_blocked_buffer_size<Scalar>(q, A, tau, apply_q_size<B, Scalar>); },
         [&](Vendor) -> std::size_t {
             if constexpr (select::has_library<B>(spec.vendor))
-                return backend::orgqr_vendor_buffer_size<B, T>(q, A, tau);
-            else select::no_vendor<B, T>(spec);
+                return backend::orgqr_vendor_buffer_size<B, Scalar>(q, A, tau);
+            else select::no_vendor<B, Scalar>(spec);
         },
     }, c);
 }
 
 }  // namespace ops::orgqr
 
-template <Backend Back, typename T>
-Event orgqr(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau, Span<std::byte> workspace) {
-    orgqr_validate_params<T>(A);
+template <Backend Back, typename Scalar>
+Event orgqr(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, Span<Scalar> tau, Span<std::byte> workspace) {
+    orgqr_validate_params<Scalar>(A);
     (void)detail::call_mask("orgqr", A);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key: k = min(m, n) reflectors, (Left, NoTrans).
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = std::min(A.rows(), A.cols()),
                                 .batch = A.batch_size(), .transA = Transpose::NoTrans, .side = Side::Left};
-    select::Key trace_key = ops::orgqr::key_of<T>(A);
+    select::Key trace_key = ops::orgqr::key_of<Scalar>(A);
     trace_key.emplace_back("batch", A.batch_size());
-    return select::run<Back, T>(
-        ops::orgqr::spec, ctx, ops::orgqr::key_of<T>(A), ops::orgqr::candidates<T>(),
-        [&](const auto& c, const auto& d) { return ops::orgqr::can_run<Back, T>(c, d, A); }, shape, trace_key,
-        [&](const auto& c) { return ops::orgqr::launch<Back, T>(ctx, c, A, tau, workspace); });
+    return select::run<Back, Scalar>(
+        ops::orgqr::spec, ctx, ops::orgqr::key_of<Scalar>(A), ops::orgqr::candidates<Scalar>(),
+        [&](const auto& c, const auto& d) { return ops::orgqr::can_run<Back, Scalar>(c, d, A); }, shape, trace_key,
+        [&](const auto& c) { return ops::orgqr::launch<Back, Scalar>(ctx, c, A, tau, workspace); });
 }
 
-template <Backend Back, typename T>
-size_t orgqr_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau) {
-    orgqr_validate_params<T>(A);
+template <Backend Back, typename Scalar>
+size_t orgqr_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, Span<Scalar> tau) {
+    orgqr_validate_params<Scalar>(A);
     (void)detail::call_mask("orgqr_buffer_size", A);
     if (A.batch_size() == 0) return 0;
-    const auto c = select::pick<Back, T>(
-        ops::orgqr::spec, ctx, ops::orgqr::key_of<T>(A), ops::orgqr::candidates<T>(),
-        [&](const auto& k, const auto& d) { return ops::orgqr::can_run<Back, T>(k, d, A); });
-    return ops::orgqr::workspace<Back, T>(ctx, c, A, tau);
+    const auto c = select::pick<Back, Scalar>(
+        ops::orgqr::spec, ctx, ops::orgqr::key_of<Scalar>(A), ops::orgqr::candidates<Scalar>(),
+        [&](const auto& k, const auto& d) { return ops::orgqr::can_run<Back, Scalar>(k, d, A); });
+    return ops::orgqr::workspace<Back, Scalar>(ctx, c, A, tau);
 }
 
 #define ORGQR_INSTANTIATE(B_, fp) \

@@ -45,27 +45,29 @@ using namespace batchlas;
 
 namespace {
 
-template <typename T>
-using RealOf = typename batchlas::base_type<T>::type;
-template <typename T>
-using MVof = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using RealOf = typename batchlas::base_type<Scalar>::type;
+template <typename Scalar>
+using MVof = MatrixView<Scalar, MatrixFormat::Dense>;
 
 // Q = H_0 ... H_{k-1} of one geqrf factor (m x n at ld, tau at stride k), formed by MatrixView::form_q.
-template <typename T>
-Matrix<typename MVof<T>::promoted_type> reflector_q(Queue& ctx, const T* F, const T* tau, int m, int n, int ld) {
+template <typename Scalar>
+Matrix<typename MVof<Scalar>::promoted_type> reflector_q(Queue& ctx, const Scalar* F, const Scalar* tau, int m, int n,
+                                                         int ld) {
     const int k = std::min(m, n);
-    return MVof<T>::form_q(ctx, MVof<T>(const_cast<T*>(F), m, n, ld), VectorView<T>(const_cast<T*>(tau), k, 1, 1, k), 0, k);
+    return MVof<Scalar>::form_q(ctx, MVof<Scalar>(const_cast<Scalar*>(F), m, n, ld), VectorView<Scalar>(const_cast<Scalar*>(tau), k, 1, 1, k), 0, k);
 }
 
 // ||A0 - QR||_F / ||A0||_F over @p items of a batch laid out as in Problem, R and the reflectors read
 // from F and tau through ld and stride.
-template <typename T>
-double qr_error(Queue& ctx, const T* F, const T* A0, const T* tau, int m, int n, int ld, int stride, int batch,
+template <typename Scalar>
+double qr_error(Queue& ctx, const Scalar* F, const Scalar* A0, const Scalar* tau, int m, int n, int ld, int stride,
+                int batch,
                 std::span<const int> items) {
     const int k = std::min(m, n);
-    const VectorView<T> tv(const_cast<T*>(tau), k, batch, 1, k);
-    return MVof<T>::qr_residual(ctx, MVof<T>(const_cast<T*>(A0), m, n, ld, stride, batch),
-                                MVof<T>(const_cast<T*>(F), m, n, ld, stride, batch), tv, items);
+    const VectorView<Scalar> tv(const_cast<Scalar*>(tau), k, batch, 1, k);
+    return MVof<Scalar>::qr_residual(ctx, MVof<Scalar>(const_cast<Scalar*>(A0), m, n, ld, stride, batch),
+                                     MVof<Scalar>(const_cast<Scalar*>(F), m, n, ld, stride, batch), tv, items);
 }
 
 // ||Q^H Q - I||_F / sqrt(k), for a Q held tight in double.
@@ -75,29 +77,31 @@ double orth_of_promoted(Queue& ctx, const Matrix<D>& Q, int k) {
 }
 
 // ||Q^H Q - I||_F / sqrt(n) over every item of a Q the code under test PRODUCED (m x n at ldq, qstride).
-template <typename T>
-double orth_of_produced(Queue& ctx, const T* Q, int ldq, int qstride, int m, int n, int batch) {
-    const MVof<T> Qv(const_cast<T*>(Q), m, n, ldq, qstride, batch);
-    return MVof<T>::orthogonality(ctx, Qv, Qv.all_items()) / std::sqrt(double(n));
+template <typename Scalar>
+double orth_of_produced(Queue& ctx, const Scalar* Q, int ldq, int qstride, int m, int n, int batch) {
+    const MVof<Scalar> Qv(const_cast<Scalar*>(Q), m, n, ldq, qstride, batch);
+    return MVof<Scalar>::orthogonality(ctx, Qv, Qv.all_items()) / std::sqrt(double(n));
 }
 
 // ||A0 - Q triu(F)||_F / ||A0||_F over every item for a Q the code under test PRODUCED (orgqr, ormqr);
 // Q has its own ldq and qstride.
-template <typename T>
-double product_error(Queue& ctx, const T* Q, int ldq, int qstride, const T* F, const T* A0, int m, int n, int ld,
+template <typename Scalar>
+double product_error(Queue& ctx, const Scalar* Q, int ldq, int qstride, const Scalar* F, const Scalar* A0, int m, int n,
+                     int ld,
                      int stride, int batch) {
-    const MVof<T> Qv(const_cast<T*>(Q), m, n, ldq, qstride, batch);
-    return MVof<T>::qr_reconstruction(ctx, MVof<T>(const_cast<T*>(A0), m, n, ld, stride, batch), Qv,
-                                      MVof<T>(const_cast<T*>(F), m, n, ld, stride, batch), Qv.all_items());
+    const MVof<Scalar> Qv(const_cast<Scalar*>(Q), m, n, ldq, qstride, batch);
+    return MVof<Scalar>::qr_reconstruction(ctx, MVof<Scalar>(const_cast<Scalar*>(A0), m, n, ld, stride, batch), Qv,
+                                           MVof<Scalar>(const_cast<Scalar*>(F), m, n, ld, stride, batch),
+                                           Qv.all_items());
 }
 
 // Exact equality, or both NaN. The NaN half exists because the tiny tier's poison test
 // deliberately fills the pad with NaN and NaN != NaN; without it that test would report
 // the pad as changed whether or not anything wrote to it.
-template <typename T>
-bool same_or_both_nan(T a, T b) {
-    const auto x = MVof<T>::up(a);
-    const auto y = MVof<T>::up(b);
+template <typename Scalar>
+bool same_or_both_nan(Scalar a, Scalar b) {
+    const auto x = MVof<Scalar>::up(a);
+    const auto y = MVof<Scalar>::up(b);
     const bool nx = std::isnan(std::real(x)) || std::isnan(std::imag(x));
     const bool ny = std::isnan(std::real(y)) || std::isnan(std::imag(y));
     if (nx || ny) return nx && ny;
@@ -112,14 +116,14 @@ bool same_or_both_nan(T a, T b) {
 // The pre-migration bounds, as factors on the kind's c m eps (factorization c = 16, orthogonality
 // c = 32). The Frobenius norm of Q^H Q - I is sqrt(k) times the normalised value the old tolerance
 // judged; the orthogonality factor is clamped at 1.
-template <typename T>
+template <typename Scalar>
 verify::Slack residual_slack(int m, int k) {
     return {std::max(double(m + k), 16.0) / (16.0 * std::max(m, 1)),
             "kept from this file's 0.5 (m+k) eps tolerance with its 16 eps tiny-order floor "
             "(docs/perf/qr.md#the-fixtures-tolerance-floor-and-why-it-is-new)"};
 }
 
-template <typename T>
+template <typename Scalar>
 verify::Slack orth_slack(int m, int k) {
     return {std::min(1.0, std::max(double(m + k), 16.0) * std::sqrt(double(k)) / (32.0 * std::max(m, 1))),
             "kept from this file's 0.5 (m+k) eps / sqrt(k) orthonormality tolerance, clamped at the library bound"};
@@ -127,38 +131,38 @@ verify::Slack orth_slack(int m, int k) {
 
 inline bool verbose() { return std::getenv("GEQRF_TESTS_VERBOSE") != nullptr; }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct GeqrfConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 
 // DISTINCT matrices per item at ld != rows and stride != ld*cols, so a view built on the
 // stride-defaulting constructor is falsifiable by DEFAULT. The pad carries a large POISON,
 // so an out-of-window read is a wrong answer rather than a near one.
-template <typename T>
+template <typename Scalar>
 struct Problem {
     int m = 0, n = 0, k = 0, batch = 0, ld = 0, stride = 0;
-    UnifiedVector<T> buf;      // the working copy, overwritten by geqrf
-    std::vector<T> a0;         // the pristine input, same ld/stride
-    UnifiedVector<T> tau;
+    UnifiedVector<Scalar> buf;      // the working copy, overwritten by geqrf
+    std::vector<Scalar> a0;         // the pristine input, same ld/stride
+    UnifiedVector<Scalar> tau;
     // Required, not decoration: the vendor geqrf/orgqr are pointer-array APIs, and a
     // view built without one throws "data_ptrs target is null" at the vendor boundary.
-    UnifiedVector<T*> ptrs;
+    UnifiedVector<Scalar*> ptrs;
 };
 
-template <typename T>
-Problem<T> make_problem(int m, int n, int batch, unsigned seed,
-                        int ld_pad = 5, int stride_pad = 11) {
-    Problem<T> p;
+template <typename Scalar>
+Problem<Scalar> make_problem(int m, int n, int batch, unsigned seed,
+                             int ld_pad = 5, int stride_pad = 11) {
+    Problem<Scalar> p;
     p.m = m; p.n = n; p.k = std::min(m, n); p.batch = batch;
     p.ld = m + ld_pad;
     p.stride = p.ld * n + stride_pad;
-    p.buf = UnifiedVector<T>(static_cast<size_t>(p.stride) * batch, MVof<T>::make(-9.75e3, 4.5e3));
-    p.tau = UnifiedVector<T>(static_cast<size_t>(p.k) * batch, MVof<T>::make(-12345.0, -12345.0));
-    p.ptrs = UnifiedVector<T*>(static_cast<size_t>(batch), nullptr);
+    p.buf = UnifiedVector<Scalar>(static_cast<size_t>(p.stride) * batch, MVof<Scalar>::make(-9.75e3, 4.5e3));
+    p.tau = UnifiedVector<Scalar>(static_cast<size_t>(p.k) * batch, MVof<Scalar>::make(-12345.0, -12345.0));
+    p.ptrs = UnifiedVector<Scalar*>(static_cast<size_t>(batch), nullptr);
     if (m > 0 && n > 0 && batch > 0) {
-        const auto R = Matrix<T>::Random(m, n, false, batch, seed);
+        const auto R = Matrix<Scalar>::Random(m, n, false, batch, seed);
         for (int b = 0; b < batch; ++b)
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < m; ++i)
@@ -168,18 +172,18 @@ Problem<T> make_problem(int m, int n, int batch, unsigned seed,
     return p;
 }
 
-template <typename T>
-MatrixView<T, MatrixFormat::Dense> view_of(Problem<T>& p) {
-    return MatrixView<T, MatrixFormat::Dense>(p.buf.data(), p.m, p.n, p.ld, p.stride, p.batch,
-                                             p.ptrs.data());
+template <typename Scalar>
+MatrixView<Scalar, MatrixFormat::Dense> view_of(Problem<Scalar>& p) {
+    return MatrixView<Scalar, MatrixFormat::Dense>(p.buf.data(), p.m, p.n, p.ld, p.stride, p.batch,
+                                                   p.ptrs.data());
 }
 
 // Restore the pristine input, poison and all, and re-poison tau so a slot the
 // kernel never writes is visible as -12345 rather than as a plausible leftover.
-template <typename T>
-void reset(Problem<T>& p) {
+template <typename Scalar>
+void reset(Problem<Scalar>& p) {
     std::copy(p.a0.begin(), p.a0.end(), p.buf.begin());
-    std::fill(p.tau.begin(), p.tau.end(), MVof<T>::make(-12345.0, -12345.0));
+    std::fill(p.tau.begin(), p.tau.end(), MVof<Scalar>::make(-12345.0, -12345.0));
 }
 
 template <typename Config>

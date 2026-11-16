@@ -279,8 +279,8 @@ template <class Ops = arith::Explicit, class Ex, class A, class X> BATCHLAS_DEVI
     });
 }
 // LaneVec form (operand.hh): only the window [x.lo, x.hi) is scaled.
-template <class Ops = arith::Explicit, class Ex, class A, class T> BATCHLAS_DEVICE_INLINE void scal(const Ex& ex, A a_, const LaneVec<T>& x) {
-    using V = std::remove_cv_t<T>;
+template <class Ops = arith::Explicit, class Ex, class A, class Scalar> BATCHLAS_DEVICE_INLINE void scal(const Ex& ex, A a_, const LaneVec<Scalar>& x) {
+    using V = std::remove_cv_t<Scalar>;
     using S = tag_t<A>;
     const S a = as_tag(a_);
     constexpr bool native_value = std::is_same_v<Ops, arith::Native> && !std::is_same_v<S, One> &&
@@ -466,8 +466,8 @@ template <int K, Transpose TR, class Ex, class Xs, class Y> BATCHLAS_DEVICE_INLI
 
 // {op(xs[k]) y} (TR: Trans xs[k]^T y, ConjTrans xs[k]^H y) for k < K. With Scratch on a
 // WorkGroup: one packed exchange.
-template <int K, Transpose TR = Transpose::Trans, class Ex, class T, int Slots, class X, class Y>
-BATCHLAS_DEVICE_INLINE std::array<T, K> dotN(const Ex& ex, Scratch<T, Slots> scr, const std::array<X, K>& xs, const Y& y) {
+template <int K, Transpose TR = Transpose::Trans, class Ex, class Scalar, int Slots, class X, class Y>
+BATCHLAS_DEVICE_INLINE std::array<Scalar, K> dotN(const Ex& ex, Scratch<Scalar, Slots> scr, const std::array<X, K>& xs, const Y& y) {
     return detail::packed_reduce<K>(ex, scr, detail::dotn_partial<K, TR>(ex, xs, y));
 }
 namespace detail {
@@ -490,8 +490,8 @@ template <Transpose TR, class Ops, class Ex, class Y, class... Xs> BATCHLAS_DEVI
 
 // {op(xs) y...} (TR: Trans xs^T y, ConjTrans xs^H y) for operands of different types (e.g. a
 // column and its unit_head), one loop over y and one packed exchange: latrd's gamma/delta pair.
-template <Transpose TR = Transpose::Trans, class Ops = arith::Explicit, class Ex, class T, int Slots, class Y, class... Xs>
-BATCHLAS_DEVICE_INLINE std::array<T, sizeof...(Xs)> dot_many(const Ex& ex, Scratch<T, Slots> scr, const Y& y, const Xs&... xs) {
+template <Transpose TR = Transpose::Trans, class Ops = arith::Explicit, class Ex, class Scalar, int Slots, class Y, class... Xs>
+BATCHLAS_DEVICE_INLINE std::array<Scalar, sizeof...(Xs)> dot_many(const Ex& ex, Scratch<Scalar, Slots> scr, const Y& y, const Xs&... xs) {
     static_assert(TR != Transpose::NoTrans, "dot_many: TR is Trans or ConjTrans");
     return detail::packed_reduce<sizeof...(Xs)>(ex, scr, detail::dot_many_partial<TR, Ops>(ex, y, xs...));
 }
@@ -571,46 +571,46 @@ template <Scope S = Scope::Own, class Ex, class X> BATCHLAS_DEVICE_INLINE auto l
 // leave in one exchange: a sycl::vec<R, 3> group reduction on a work-group (stedc's
 // detail::nrm2), three butterflies on a team executor.
 namespace detail {
-template <class R> struct BlueConst {
-    static constexpr int radix = std::numeric_limits<R>::radix, p = std::numeric_limits<R>::digits;
-    static constexpr int emin = std::numeric_limits<R>::min_exponent, emax = std::numeric_limits<R>::max_exponent;
+template <class Real> struct BlueConst {
+    static constexpr int radix = std::numeric_limits<Real>::radix, p = std::numeric_limits<Real>::digits;
+    static constexpr int emin = std::numeric_limits<Real>::min_exponent, emax = std::numeric_limits<Real>::max_exponent;
     static constexpr int fdiv(int a, int b) { return a / b - (((a ^ b) < 0) && (a % b) ? 1 : 0); }
     static constexpr int cdiv(int a, int b) { return a / b + (((a ^ b) >= 0) && (a % b) ? 1 : 0); }
-    static constexpr R pw(int e) {
-        R r = R(1);
-        for (int i = 0; i < (e < 0 ? -e : e); ++i) r *= R(radix);
-        return e < 0 ? R(1) / r : r;
+    static constexpr Real pw(int e) {
+        Real r = Real(1);
+        for (int i = 0; i < (e < 0 ? -e : e); ++i) r *= Real(radix);
+        return e < 0 ? Real(1) / r : r;
     }
-    static constexpr R tsml = pw(cdiv(emin - 1, 2)), tbig = pw(fdiv(emax - p + 1, 2));
-    static constexpr R ssml = pw(-fdiv(emin - p, 2)), sbig = pw(-cdiv(emax + p - 1, 2));
+    static constexpr Real tsml = pw(cdiv(emin - 1, 2)), tbig = pw(fdiv(emax - p + 1, 2));
+    static constexpr Real ssml = pw(-fdiv(emin - p, 2)), sbig = pw(-cdiv(emax + p - 1, 2));
 };
-template <class R> BATCHLAS_DEVICE_INLINE void blue_acc(R ax, R& abig, R& amed, R& asml) {
-    using C = BlueConst<R>;
+template <class Real> BATCHLAS_DEVICE_INLINE void blue_acc(Real ax, Real& abig, Real& amed, Real& asml) {
+    using C = BlueConst<Real>;
     if (ax > C::tbig) {
-        const R t = ax * C::sbig;
+        const Real t = ax * C::sbig;
         abig += t * t;
     } else if (ax < C::tsml) {
-        const R t = ax * C::ssml;
+        const Real t = ax * C::ssml;
         asml += t * t;
     } else {
         amed += ax * ax;
     }
 }
-template <class R> BATCHLAS_DEVICE_INLINE R blue_finish(R abig, R amed, R asml) {
-    using C = BlueConst<R>;
-    const R maxN = std::numeric_limits<R>::max();
-    R scl = R(1), ss = R(0);
-    if (abig > R(0)) {
-        if ((amed > R(0)) || (amed > maxN) || (amed != amed)) abig += (amed * C::sbig) * C::sbig;
-        scl = R(1) / C::sbig;
+template <class Real> BATCHLAS_DEVICE_INLINE Real blue_finish(Real abig, Real amed, Real asml) {
+    using C = BlueConst<Real>;
+    const Real maxN = std::numeric_limits<Real>::max();
+    Real scl = Real(1), ss = Real(0);
+    if (abig > Real(0)) {
+        if ((amed > Real(0)) || (amed > maxN) || (amed != amed)) abig += (amed * C::sbig) * C::sbig;
+        scl = Real(1) / C::sbig;
         ss = abig;
-    } else if (asml > R(0)) {
-        if ((amed > R(0)) || (amed > maxN) || (amed != amed)) {
-            const R am = sycl::sqrt(amed), as = sycl::sqrt(asml) / C::ssml;
-            const R ymin = sycl::fmin(am, as), ymax = sycl::fmax(am, as);
-            ss = ymax * ymax * (R(1) + (ymin / ymax) * (ymin / ymax));
+    } else if (asml > Real(0)) {
+        if ((amed > Real(0)) || (amed > maxN) || (amed != amed)) {
+            const Real am = sycl::sqrt(amed), as = sycl::sqrt(asml) / C::ssml;
+            const Real ymin = sycl::fmin(am, as), ymax = sycl::fmax(am, as);
+            ss = ymax * ymax * (Real(1) + (ymin / ymax) * (ymin / ymax));
         } else {
-            scl = R(1) / C::ssml;
+            scl = Real(1) / C::ssml;
             ss = asml;
         }
     } else {
@@ -688,16 +688,16 @@ BATCHLAS_DEVICE_INLINE T allreduce(const Ex& ex, Scratch<T, Slots> scr, T v, Op 
 // contractible a*a + acc: 2 FMA per complex element); alg::Unfused adds abs2(x) (its own
 // rounding: FMUL + FFMA + FADD), the spelling of the hand kernels that call abs2.
 namespace detail {
-template <class Alg, class R, class T> BATCHLAS_DEVICE_INLINE void acc_abs2(R& acc, const T& x) {
-    using A = Arith<std::remove_cv_t<T>>;
+template <class Alg, class Real, class Scalar> BATCHLAS_DEVICE_INLINE void acc_abs2(Real& acc, const Scalar& x) {
+    using A = Arith<std::remove_cv_t<Scalar>>;
     if constexpr (std::is_same_v<Alg, alg::Unfused>) {
         acc += abs2(x);
     } else {
         static_assert(std::is_same_v<Alg, alg::Fused>, "sumsq: alg::Fused or alg::Unfused");
-        const R re = A::re(x);
+        const Real re = A::re(x);
         acc = acc + re * re;
         if constexpr (A::is_complex) {
-            const R im = A::im(x);
+            const Real im = A::im(x);
             acc = acc + im * im;
         }
     }
@@ -857,7 +857,7 @@ template <class Ex, class T> BATCHLAS_DEVICE_INLINE void reverse(const Ex& ex, c
 }
 
 // The number of x(i) <= v on an ascending x (C++ upper_bound's offset), by bisection on one item.
-template <class X, class R> BATCHLAS_DEVICE_INLINE int upper_bound(const Thread&, const X& x, R v) {
+template <class X, class Real> BATCHLAS_DEVICE_INLINE int upper_bound(const Thread&, const X& x, Real v) {
     int lo = 0, hi = x.size();
     while (lo < hi) {
         const int mid = lo + (hi - lo) / 2;
@@ -869,7 +869,7 @@ template <class X, class R> BATCHLAS_DEVICE_INLINE int upper_bound(const Thread&
 
 // x := x / d (LAPACK ?RSCL): one reciprocal and a multiply when 1/d is finite and nonzero, else a
 // division per element (SafeRecip, scalar.hh); d == 0 divides (Inf / NaN, as LAPACK).
-template <class Ops = arith::Fma, class Ex, class T, class X> BATCHLAS_DEVICE_INLINE void rscl(const Ex& ex, const T& d, const X& x) {
+template <class Ops = arith::Fma, class Ex, class Scalar, class X> BATCHLAS_DEVICE_INLINE void rscl(const Ex& ex, const Scalar& d, const X& x) {
     using E = elem_t<X>;
     const auto s = SafeRecip<E, Ops>::make(static_cast<E>(d));
     for_each_owned(ex, x.size(), [&](int i) {
@@ -886,17 +886,17 @@ BATCHLAS_DEVICE_INLINE auto dot_partial(const Ex& ex, const X& x, const Y& y) {
 }
 
 // acc += x(t) y(t) for t < N with kk0 + t < k, in index order: one item's dot over a staged slab.
-template <int N, class Ops = arith::Native, class T, class VX, class VY>
-BATCHLAS_DEVICE_INLINE void dot_slab(T& acc, const VX& x, const VY& y, int kk0, int k) {
-    using A = arith_t<Ops, T>;
+template <int N, class Ops = arith::Native, class Scalar, class VX, class VY>
+BATCHLAS_DEVICE_INLINE void dot_slab(Scalar& acc, const VX& x, const VY& y, int kk0, int k) {
+    using A = arith_t<Ops, Scalar>;
     for (int t = 0; t < N && kk0 + t < k; ++t) A::mac(acc, x(t), y(t));
 }
 
 // prod_i f(i) as mant * 2^expo (mant in [0.5, 1) unless the product is 0, Inf or NaN), free of
 // over/underflow: each item renormalises its running product by frexp, then the mantissas
 // combine 32 items at a time (2^-32 <= a product of 32 mantissas <= 1) with renormalisation.
-template <class R> struct ScaledProd {
-    R mant;
+template <class Real> struct ScaledProd {
+    Real mant;
     std::int32_t expo;
 };
 template <class Ex, class F> BATCHLAS_DEVICE_INLINE auto prod_scaled(const Ex& ex, int n, F&& f) {
@@ -927,10 +927,10 @@ template <class Ex, class F> BATCHLAS_DEVICE_INLINE auto prod_scaled(const Ex& e
     return ScaledProd<R>{mant_all, expo_all};
 }
 // sqrt(|mant| 2^expo) without forming the power.
-template <class R> BATCHLAS_DEVICE_INLINE R sqrt_scaled(ScaledProd<R> q) {
+template <class Real> BATCHLAS_DEVICE_INLINE Real sqrt_scaled(ScaledProd<Real> q) {
     const std::int32_t half = q.expo >> 1;  // floor(expo / 2)
     const std::int32_t rem = q.expo - 2 * half;
-    const R mag = sycl::sqrt(sycl::fabs(q.mant) * (rem ? R(2) : R(1)));
+    const Real mag = sycl::sqrt(sycl::fabs(q.mant) * (rem ? Real(2) : Real(1)));
     return sycl::ldexp(mag, half);
 }
 
@@ -967,12 +967,12 @@ template <class Ex, class T, int K> BATCHLAS_DEVICE_INLINE void set_unit_owned(c
     for_each_owned_frag<K * Ex::size>(ex, [&](int k, int r) { x[k] = (r == j) ? T(1) : T(0); });
 }
 // sum_k conj(x[k]) y[k] over the item's fragment (a partial dotc; reduce it with allreduce).
-template <class Ops = arith::Native, class T, int K> BATCHLAS_DEVICE_INLINE T dotc_owned(const Frag<T, K>& x, const Frag<T, K>& y) {
-    T acc = T(0);
+template <class Ops = arith::Native, class Scalar, int K> BATCHLAS_DEVICE_INLINE Scalar dotc_owned(const Frag<Scalar, K>& x, const Frag<Scalar, K>& y) {
+    Scalar acc = Scalar(0);
 #pragma unroll
     for (int k = 0; k < K; ++k) {
         if constexpr (detail::is_native_v<Ops>) acc = acc + conj(x[k]) * y[k];
-        else arith_t<Ops, T>::mac_conj(acc, x[k], y[k]);
+        else arith_t<Ops, Scalar>::mac_conj(acc, x[k], y[k]);
     }
     return acc;
 }
@@ -993,16 +993,16 @@ BATCHLAS_DEVICE_INLINE auto load_dotc_owned(const Ex& ex, const U& u, const V& v
     return acc;
 }
 // y[k] := y[k] - x[k] a (one classical Gram-Schmidt projection step).
-template <class Ops = arith::Native, class T, int K> BATCHLAS_DEVICE_INLINE void sub_mul(Frag<T, K>& y, const Frag<T, K>& x, T a) {
+template <class Ops = arith::Native, class Scalar, int K> BATCHLAS_DEVICE_INLINE void sub_mul(Frag<Scalar, K>& y, const Frag<Scalar, K>& x, Scalar a) {
 #pragma unroll
     for (int k = 0; k < K; ++k) {
         if constexpr (detail::is_native_v<Ops>) y[k] = y[k] - x[k] * a;
-        else arith_t<Ops, T>::msub(y[k], x[k], a);
+        else arith_t<Ops, Scalar>::msub(y[k], x[k], a);
     }
 }
 // sum of |x[k]|^2 over the item's rows < n (each abs2 its own rounding, as the hand loop).
-template <class Ex, class T, int K> BATCHLAS_DEVICE_INLINE real_t<T> sumsq_owned(const Ex& ex, const Frag<T, K>& x, int n) {
-    real_t<T> acc = real_t<T>(0);
+template <class Ex, class Scalar, int K> BATCHLAS_DEVICE_INLINE real_t<Scalar> sumsq_owned(const Ex& ex, const Frag<Scalar, K>& x, int n) {
+    real_t<Scalar> acc = real_t<Scalar>(0);
     for_each_owned_frag<K * Ex::size>(ex, [&](int k, int r) {
         if (r < n) acc += abs2(x[k]);
     });
@@ -1011,9 +1011,9 @@ template <class Ex, class T, int K> BATCHLAS_DEVICE_INLINE real_t<T> sumsq_owned
 // sumsq of a Cyclic register vector: x[k] is row l + k*size of the item's share, rows >= n
 // skipped (read nothing); Alg as sumsq (alg::Unfused: each abs2 its own rounding), reduced
 // over scope S.
-template <class Alg = alg::Fused, Scope S = Scope::Own, class Ex, class T, int N>
-BATCHLAS_DEVICE_INLINE real_t<T> sumsq(const Ex& ex, const Frag<T, N, Cyclic>& x, int n) {
-    real_t<T> acc = real_t<T>(0);
+template <class Alg = alg::Fused, Scope S = Scope::Own, class Ex, class Scalar, int N>
+BATCHLAS_DEVICE_INLINE real_t<Scalar> sumsq(const Ex& ex, const Frag<Scalar, N, Cyclic>& x, int n) {
+    real_t<Scalar> acc = real_t<Scalar>(0);
     for_each_owned_frag<N * Ex::size>(ex, [&](int k, int r) {
         if (r < n) detail::acc_abs2<Alg>(acc, x[k]);
     });

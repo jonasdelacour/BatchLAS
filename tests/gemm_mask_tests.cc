@@ -51,31 +51,31 @@ std::string label(const Shape& s) {
            "x" + std::to_string(s.k) + " batch " + std::to_string(s.batch) + (s.aligned ? " aligned" : "");
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Problem {
     Queue& q;
     Shape s;
-    T alpha, beta;
-    Matrix<T> A, Bm, C;
+    Scalar alpha, beta;
+    Matrix<Scalar> A, Bm, C;
 
-    static Matrix<T> make(const Shape& s, int rows, int cols) {
-        return s.aligned ? test_support::padded<T>(rows, cols, s.batch, 4, 8) : test_support::padded<T>(rows, cols, s.batch);
+    static Matrix<Scalar> make(const Shape& s, int rows, int cols) {
+        return s.aligned ? test_support::padded<Scalar>(rows, cols, s.batch, 4, 8) : test_support::padded<Scalar>(rows, cols, s.batch);
     }
-    Problem(Queue& queue, const Shape& shape, T beta_)
-        : q(queue), s(shape), alpha(MatrixView<T>::make(0.75, -0.5)), beta(beta_),
+    Problem(Queue& queue, const Shape& shape, Scalar beta_)
+        : q(queue), s(shape), alpha(MatrixView<Scalar>::make(0.75, -0.5)), beta(beta_),
           A(make(s, s.ta == Transpose::NoTrans ? s.m : s.k, s.ta == Transpose::NoTrans ? s.k : s.m)),
           Bm(make(s, s.tb == Transpose::NoTrans ? s.k : s.n, s.tb == Transpose::NoTrans ? s.n : s.k)),
           C(make(s, s.m, s.n)) {}
 
     // Small integers over 8: exact products, so the bit comparison is about the mask alone.
-    void fill(Matrix<T>& M, int salt) {
-        T* p = M.data_ptr();
+    void fill(Matrix<Scalar>& M, int salt) {
+        Scalar* p = M.data_ptr();
         const std::size_t per = std::size_t(M.stride());
         for (std::size_t e = 0; e < per * std::size_t(s.batch); ++e) {
             const std::size_t item = s.identical ? 0 : e / per, off = e % per;
             const double re = double(int((off * 7 + item * 3 + salt) % 23) - 11) / 8;
             const double im = double(int((off * 5 + item + salt) % 13) - 6) / 8;
-            p[e] = MatrixView<T>::make(re, im);
+            p[e] = MatrixView<Scalar>::make(re, im);
         }
     }
     mc::Case make_case() {
@@ -87,21 +87,21 @@ struct Problem {
         c.prepare = [this] {
             fill(A, 1);
             fill(Bm, 5);
-            std::fill_n(C.data_ptr(), std::size_t(C.stride()) * s.batch, test_support::poison<T>());
-            if (beta != T(0)) fill(C, 9);
+            std::fill_n(C.data_ptr(), std::size_t(C.stride()) * s.batch, test_support::poison<Scalar>());
+            if (beta != Scalar(0)) fill(C, 9);
         };
         c.call = [this](Span<const std::uint8_t> mask, Span<std::byte>) {
-            gemm<B, T>(q, A.view().with_batch_mask(mask), Bm.view().with_batch_mask(mask), C.view().with_batch_mask(mask),
-                       alpha, beta, s.ta, s.tb);
+            gemm<B, Scalar>(q, A.view().with_batch_mask(mask), Bm.view().with_batch_mask(mask), C.view().with_batch_mask(mask),
+                            alpha, beta, s.ta, s.tb);
         };
         c.outputs = [this] { return std::vector<mc::Output>{mc::Output::matrix("C", C.view())}; };
         return c;
     }
 };
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;

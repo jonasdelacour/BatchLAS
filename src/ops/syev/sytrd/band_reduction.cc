@@ -34,11 +34,11 @@ namespace batchlas {
 
 namespace {
 
-template <typename T>
-inline void enforce_real_diagonal(T& x) {
-    if constexpr (detail::is_complex<T>::value) {
-        using Real = typename base_type<T>::type;
-        x = T(static_cast<Real>(x.real()), Real(0));
+template <typename Scalar>
+inline void enforce_real_diagonal(Scalar& x) {
+    if constexpr (detail::is_complex<Scalar>::value) {
+        using Real = typename base_type<Scalar>::type;
+        x = Scalar(static_cast<Real>(x.real()), Real(0));
     }
 }
 
@@ -63,9 +63,9 @@ inline std::string bandr1_dump_dir_for(int32_t sweep_index, int32_t step_in_swee
     return os.str();
 }
 
-template <typename T>
+template <typename Scalar>
 inline void dump_dense_matrix_csv(Queue& ctx,
-                                  const MatrixView<T, MatrixFormat::Dense>& mat,
+                                  const MatrixView<Scalar, MatrixFormat::Dense>& mat,
                                   const std::string& tag,
                                   int32_t sweep_index,
                                   int32_t step_in_sweep,
@@ -84,13 +84,13 @@ inline void dump_dense_matrix_csv(Queue& ctx,
     std::filesystem::create_directories(dir);
 
     auto src = mat[batch_index];
-    T* host = sycl::malloc_host<T>(static_cast<size_t>(rows) * static_cast<size_t>(cols), ctx->get_context());
+    Scalar* host = sycl::malloc_host<Scalar>(static_cast<size_t>(rows) * static_cast<size_t>(cols), ctx->get_context());
     if (!host) {
         throw batchlas::device_error("bandr1 dump: sycl::malloc_host failed");
     }
 
-    MatrixView<T, MatrixFormat::Dense> host_view(host, rows, cols, rows, rows * cols, /*batch_size=*/1);
-    MatrixView<T, MatrixFormat::Dense>::copy(ctx, host_view, src).wait();
+    MatrixView<Scalar, MatrixFormat::Dense> host_view(host, rows, cols, rows, rows * cols, /*batch_size=*/1);
+    MatrixView<Scalar, MatrixFormat::Dense>::copy(ctx, host_view, src).wait();
 
     std::ostringstream fname;
     fname << dir << "/" << tag;
@@ -117,8 +117,8 @@ inline void dump_dense_matrix_csv(Queue& ctx,
 
     for (int j = 0; j < cols; ++j) {
         for (int i = 0; i < rows; ++i) {
-            const T v = host_view(i, j, 0);
-            if constexpr (detail::is_complex<T>::value) {
+            const Scalar v = host_view(i, j, 0);
+            if constexpr (detail::is_complex<Scalar>::value) {
                 os << i << "," << j << "," << std::real(v) << "," << std::imag(v) << "\n";
             } else {
                 os << i << "," << j << "," << v << "," << 0 << "\n";
@@ -130,11 +130,11 @@ inline void dump_dense_matrix_csv(Queue& ctx,
     sycl::free(host, ctx->get_context());
 }
 
-template <typename T>
+template <typename Scalar>
 inline void band_extract_block(Queue& ctx,
-                               const MatrixView<T, MatrixFormat::Dense>& ab,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& ab,
                                int32_t kd,
-                               const MatrixView<T, MatrixFormat::Dense>& out,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& out,
                                int32_t r0,
                                int32_t c0,
                                const std::uint8_t* mask) {
@@ -151,21 +151,21 @@ inline void band_extract_block(Queue& ctx,
                                        static_cast<size_t>(rows),
                                        static_cast<size_t>(cols)),
                          [=](sycl::id<3> idx) {
-                             auto safe_get = [](const auto& M, int row, int col, int b) -> T {
-                                 if (b < 0 || b >= M.batch_size_) return T(0);
-                                 if (row < 0 || row >= M.rows_) return T(0);
-                                 if (col < 0 || col >= M.cols_) return T(0);
+                             auto safe_get = [](const auto& M, int row, int col, int b) -> Scalar {
+                                 if (b < 0 || b >= M.batch_size_) return Scalar(0);
+                                 if (row < 0 || row >= M.rows_) return Scalar(0);
+                                 if (col < 0 || col >= M.cols_) return Scalar(0);
 
                                  const size_t stride = static_cast<size_t>(M.stride_);
                                  const size_t base = static_cast<size_t>(b) * stride;
                                  const size_t off = static_cast<size_t>(col) * static_cast<size_t>(M.ld_) + static_cast<size_t>(row);
                                  const size_t lin = base + off;
                                  const size_t max = static_cast<size_t>(M.batch_size_) * stride;
-                                 if (lin >= max) return T(0);
+                                 if (lin >= max) return Scalar(0);
                                  return M.data_[lin];
                              };
 
-                             auto safe_set = [](auto& M, int row, int col, int b, const T& value) {
+                             auto safe_set = [](auto& M, int row, int col, int b, const Scalar& value) {
                                  if (b < 0 || b >= M.batch_size_) return;
                                  if (row < 0 || row >= M.rows_) return;
                                  if (col < 0 || col >= M.cols_) return;
@@ -186,7 +186,7 @@ inline void band_extract_block(Queue& ctx,
                              const int i = r0 + ii;
                              const int j = c0 + jj;
 
-                             T val = T(0);
+                             Scalar val = Scalar(0);
                              if (i >= j) {
                                  const int r = i - j;
                                  if (r <= kd) {
@@ -206,10 +206,10 @@ inline void band_extract_block(Queue& ctx,
     });
 }
 
-template <typename T>
+template <typename Scalar>
 inline void band_scatter_block_lower(Queue& ctx,
-                                     const MatrixView<T, MatrixFormat::Dense>& in,
-                                     const MatrixView<T, MatrixFormat::Dense>& ab,
+                                     const MatrixView<Scalar, MatrixFormat::Dense>& in,
+                                     const MatrixView<Scalar, MatrixFormat::Dense>& ab,
                                      int32_t kd,
                                      int32_t r0,
                                      int32_t c0,
@@ -236,7 +236,7 @@ inline void band_scatter_block_lower(Queue& ctx,
                              if (i < j || (mask != nullptr && mask[b] == 0)) return;  // I3
                              const int r = i - j;
                              if (r > kd) return;
-                             T val = I(ii, jj, b);
+                             Scalar val = I(ii, jj, b);
                              if (i == j) {
                                  enforce_real_diagonal(val);
                              }
@@ -245,10 +245,10 @@ inline void band_scatter_block_lower(Queue& ctx,
     });
 }
 
-template <typename T>
+template <typename Scalar>
 inline void band_scatter_block(Queue& ctx,
-                               const MatrixView<T, MatrixFormat::Dense>& in,
-                               const MatrixView<T, MatrixFormat::Dense>& ab,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& in,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& ab,
                                int32_t kd,
                                int32_t r0,
                                int32_t c0,
@@ -272,17 +272,17 @@ inline void band_scatter_block(Queue& ctx,
                              const int jj = static_cast<int>(idx[2]);
                              if (mask != nullptr && mask[b] == 0) return;  // I3
 
-                             auto safe_get = [](const auto& M, int row, int col, int bb) -> T {
-                                 if (bb < 0 || bb >= M.batch_size()) return T(0);
-                                 if (row < 0 || row >= M.rows()) return T(0);
-                                 if (col < 0 || col >= M.cols()) return T(0);
+                             auto safe_get = [](const auto& M, int row, int col, int bb) -> Scalar {
+                                 if (bb < 0 || bb >= M.batch_size()) return Scalar(0);
+                                 if (row < 0 || row >= M.rows()) return Scalar(0);
+                                 if (col < 0 || col >= M.cols()) return Scalar(0);
                                  const int64_t lin = int64_t(bb) * int64_t(M.stride()) + int64_t(col) * int64_t(M.ld()) + int64_t(row);
                                  const int64_t max_lin = int64_t(M.batch_size()) * int64_t(M.stride());
-                                 if (lin < 0 || lin >= max_lin) return T(0);
+                                 if (lin < 0 || lin >= max_lin) return Scalar(0);
                                  return M.data()[lin];
                              };
 
-                             auto safe_set = [](const auto& M, int row, int col, int bb, T value) {
+                             auto safe_set = [](const auto& M, int row, int col, int bb, Scalar value) {
                                  if (bb < 0 || bb >= M.batch_size()) return;
                                  if (row < 0 || row >= M.rows()) return;
                                  if (col < 0 || col >= M.cols()) return;
@@ -297,7 +297,7 @@ inline void band_scatter_block(Queue& ctx,
                              const int diff = i - j;
                              if (diff >= 0) {
                                  if (diff > kd) return;
-                                 T val = safe_get(I, ii, jj, b);
+                                 Scalar val = safe_get(I, ii, jj, b);
                                  if (diff == 0) {
                                      enforce_real_diagonal(val);
                                  }
@@ -306,7 +306,7 @@ inline void band_scatter_block(Queue& ctx,
                                  const int r = -diff;
                                  if (r > kd) return;
                                  // Store A(j,i) in the lower band.
-                                 T val = batchlas::device::conj(safe_get(I, ii, jj, b));
+                                 Scalar val = batchlas::device::conj(safe_get(I, ii, jj, b));
                                  if (r == 0) {
                                      enforce_real_diagonal(val);
                                  }
@@ -316,9 +316,9 @@ inline void band_scatter_block(Queue& ctx,
     });
 }
 
-template <typename T>
+template <typename Scalar>
 inline void band_zero_rows_from(Queue& ctx,
-                                const MatrixView<T, MatrixFormat::Dense>& ab,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& ab,
                                 int32_t r0,
                                 const std::uint8_t* mask) {
     const int rows = ab.rows();
@@ -336,14 +336,14 @@ inline void band_zero_rows_from(Queue& ctx,
                              const int rr = static_cast<int>(idx[1]) + r0;
                              const int j = static_cast<int>(idx[2]);
                              if (mask != nullptr && mask[b] == 0) return;  // I3
-                             AB(rr, j, b) = T(0);
+                             AB(rr, j, b) = Scalar(0);
                          });
     });
 }
 
-template <typename T>
+template <typename Scalar>
 inline void dense_keep_qr_R_only(Queue& ctx,
-                                const MatrixView<T, MatrixFormat::Dense>& a,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& a,
                                 int32_t r,
                                 const std::uint8_t* mask) {
     // After GEQRF, `a` contains Householder vectors below the diagonal.
@@ -365,17 +365,17 @@ inline void dense_keep_qr_R_only(Queue& ctx,
                              const int j = static_cast<int>(idx[2]);
                              if (mask != nullptr && mask[b] == 0) return;  // I3
                              if (i >= r || i > j) {
-                                 A(i, j, b) = T(0);
+                                 A(i, j, b) = Scalar(0);
                              }
                          });
     });
 }
 
-template <typename T>
-inline void validate_band_reduction_dims(const MatrixView<T, MatrixFormat::Dense>& ab,
-                                        const VectorView<typename base_type<T>::type>& d,
-                                        const VectorView<typename base_type<T>::type>& e,
-                                        const VectorView<T>& tau,
+template <typename Scalar>
+inline void validate_band_reduction_dims(const MatrixView<Scalar, MatrixFormat::Dense>& ab,
+                                        const VectorView<typename base_type<Scalar>::type>& d,
+                                        const VectorView<typename base_type<Scalar>::type>& e,
+                                        const VectorView<Scalar>& tau,
                                         int32_t kd) {
     const int rows = ab.rows();
     const int n = ab.cols();
@@ -467,14 +467,14 @@ inline Span<T> alloc_from_ws(Queue& ctx,
 }
 
 // Helper struct to hold initialized buffers for band reduction
-template <typename T>
+template <typename Scalar>
 struct BandrBuffers {
-    MatrixView<T, MatrixFormat::Dense> Bmat;
-    MatrixView<T, MatrixFormat::Dense> Symmat;
-    MatrixView<T, MatrixFormat::Dense> Postmat;
-    MatrixView<T, MatrixFormat::Dense> Premat;
-    MatrixView<T, MatrixFormat::Dense> Rightmat;
-    Span<T> tau_buf;
+    MatrixView<Scalar, MatrixFormat::Dense> Bmat;
+    MatrixView<Scalar, MatrixFormat::Dense> Symmat;
+    MatrixView<Scalar, MatrixFormat::Dense> Postmat;
+    MatrixView<Scalar, MatrixFormat::Dense> Premat;
+    MatrixView<Scalar, MatrixFormat::Dense> Rightmat;
+    Span<Scalar> tau_buf;
     Span<std::byte> ws_backend;
     const std::uint8_t* mask;
 };
@@ -483,9 +483,9 @@ struct BandrBuffers {
 
 namespace {
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 inline void bandr1_one_qr_step(Queue& ctx,
-                               const MatrixView<T, MatrixFormat::Dense>& ABw,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& ABw,
                                int32_t kd_work,
                                int32_t b_current,
                                int32_t sweep_index,
@@ -495,12 +495,12 @@ inline void bandr1_one_qr_step(Queue& ctx,
                                int32_t i2,
                                int32_t j1,
                                int32_t j2,
-                               const MatrixView<T, MatrixFormat::Dense>& Bmat,
-                               const MatrixView<T, MatrixFormat::Dense>& Symmat,
-                               const MatrixView<T, MatrixFormat::Dense>& Postmat,
-                               const MatrixView<T, MatrixFormat::Dense>& Premat,
-                               const MatrixView<T, MatrixFormat::Dense>& Rightmat,
-                               Span<T> tau_buf,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& Bmat,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& Symmat,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& Postmat,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& Premat,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& Rightmat,
+                               Span<Scalar> tau_buf,
                                Span<std::byte> ws_backend,
                                const std::uint8_t* mask) {
     const int n = ABw.cols();
@@ -527,7 +527,7 @@ inline void bandr1_one_qr_step(Queue& ctx,
     }
     const int dump_batch = dump.batch;
 
-    const Transpose trans_left = detail::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
+    const Transpose trans_left = detail::is_complex<Scalar>::value ? Transpose::ConjTrans : Transpose::Trans;
 
     const int m = i2 - i1 + 1;
     const int r = j2 - j1 + 1;
@@ -535,10 +535,10 @@ inline void bandr1_one_qr_step(Queue& ctx,
 
     if (dump_enabled) {
         if (dump_batch >= 0) {
-            dump_dense_matrix_csv<T>(ctx, ABw, "ABw_band_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
+            dump_dense_matrix_csv<Scalar>(ctx, ABw, "ABw_band_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
         } else {
             for (int b = 0; b < ABw.batch_size(); ++b) {
-                dump_dense_matrix_csv<T>(ctx, ABw, "ABw_band_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
+                dump_dense_matrix_csv<Scalar>(ctx, ABw, "ABw_band_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
             }
         }
     }
@@ -582,30 +582,30 @@ inline void bandr1_one_qr_step(Queue& ctx,
     const int mid_c0 = std::max(mid_c0_full, i1 - kd_work);
     const int mid_cols = std::max(0, mid_c1 - mid_c0);
 
-    band_extract_block<T>(ctx, ABw, kd_work, Bsub, i1, j1, mask);
+    band_extract_block<Scalar>(ctx, ABw, kd_work, Bsub, i1, j1, mask);
 
     if (dump_enabled && !dump_abw_only) {
         if (dump_batch >= 0) {
-            dump_dense_matrix_csv<T>(ctx, Bsub, "B_before_geqrf", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
+            dump_dense_matrix_csv<Scalar>(ctx, Bsub, "B_before_geqrf", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
         } else {
             for (int b = 0; b < ABw.batch_size(); ++b) {
-                dump_dense_matrix_csv<T>(ctx, Bsub, "B_before_geqrf", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
+                dump_dense_matrix_csv<Scalar>(ctx, Bsub, "B_before_geqrf", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
             }
         }
     }
 
     const int k = std::min(m, r);
-    Span<T> tau_span(tau_buf.data(), static_cast<size_t>(k) * static_cast<size_t>(ABw.batch_size()));
+    Span<Scalar> tau_span(tau_buf.data(), static_cast<size_t>(k) * static_cast<size_t>(ABw.batch_size()));
     if (B != Backend::SYCL || m >= r) {
-        geqrf<B, T>(ctx, Bsub, tau_span, ws_backend).wait();
+        geqrf<B, Scalar>(ctx, Bsub, tau_span, ws_backend).wait();
     } else {
         // Wide panel: the chase's last steps clamp i2 at n-1. No native geqrf takes m < r (other backends
         // keep the one call; their vendor does), but reflector j depends only on columns <= j, so QR of
         // the square head plus Q^H on the tail is the same R and V.
         auto Bhead = Bsub({0, m}, {0, m});
         auto Btail = Bsub({0, m}, {m, r});
-        geqrf<B, T>(ctx, Bhead, tau_span, ws_backend).wait();
-        ormqr<B, T>(ctx, Bhead, Btail, Side::Left, trans_left, tau_span, ws_backend).wait();
+        geqrf<B, Scalar>(ctx, Bhead, tau_span, ws_backend).wait();
+        ormqr<B, Scalar>(ctx, Bhead, Btail, Side::Left, trans_left, tau_span, ws_backend).wait();
         // Btail shares Bmat's pointer array and may have refilled it with offset bases: restore Bsub's.
         // evidence: docs/design/matrix-model.md#matrix-model-the-pointer-array-and-sliced-views
         (void)Bsub.data_ptrs(ctx);
@@ -613,103 +613,103 @@ inline void bandr1_one_qr_step(Queue& ctx,
 
     if (dump_enabled && !dump_abw_only) {
         if (dump_batch >= 0) {
-            dump_dense_matrix_csv<T>(ctx, Bsub, "B_after_geqrf", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
+            dump_dense_matrix_csv<Scalar>(ctx, Bsub, "B_after_geqrf", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
         } else {
             for (int b = 0; b < ABw.batch_size(); ++b) {
-                dump_dense_matrix_csv<T>(ctx, Bsub, "B_after_geqrf", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
+                dump_dense_matrix_csv<Scalar>(ctx, Bsub, "B_after_geqrf", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
             }
         }
     }
 
-    band_extract_block<T>(ctx, ABw, kd_work, Symsub, i1, i1, mask);
+    band_extract_block<Scalar>(ctx, ABw, kd_work, Symsub, i1, i1, mask);
 
     if (dump_enabled && !dump_abw_only) {
         if (dump_batch >= 0) {
-            dump_dense_matrix_csv<T>(ctx, Symsub, "Sym_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
+            dump_dense_matrix_csv<Scalar>(ctx, Symsub, "Sym_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
         } else {
             for (int b = 0; b < ABw.batch_size(); ++b) {
-                dump_dense_matrix_csv<T>(ctx, Symsub, "Sym_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
+                dump_dense_matrix_csv<Scalar>(ctx, Symsub, "Sym_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
             }
         }
     }
 
-    ormqr<B, T>(ctx, Bsub, Symsub, Side::Left, trans_left, tau_span, ws_backend).wait();
-    ormqr<B, T>(ctx, Bsub, Symsub, Side::Right, Transpose::NoTrans, tau_span, ws_backend).wait();
+    ormqr<B, Scalar>(ctx, Bsub, Symsub, Side::Left, trans_left, tau_span, ws_backend).wait();
+    ormqr<B, Scalar>(ctx, Bsub, Symsub, Side::Right, Transpose::NoTrans, tau_span, ws_backend).wait();
 
     if (dump_enabled && !dump_abw_only) {
         if (dump_batch >= 0) {
-            dump_dense_matrix_csv<T>(ctx, Symsub, "Sym_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
+            dump_dense_matrix_csv<Scalar>(ctx, Symsub, "Sym_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
         } else {
             for (int b = 0; b < ABw.batch_size(); ++b) {
-                dump_dense_matrix_csv<T>(ctx, Symsub, "Sym_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
+                dump_dense_matrix_csv<Scalar>(ctx, Symsub, "Sym_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
             }
         }
     }
 
-    band_scatter_block<T>(ctx, Symsub, ABw, kd_work, i1, i1, mask);
+    band_scatter_block<Scalar>(ctx, Symsub, ABw, kd_work, i1, i1, mask);
 
     if (left_cols > 0) {
         auto Leftsub = Rightmat({0, m}, {0, left_cols});
-        band_extract_block<T>(ctx, ABw, kd_work, Leftsub, i1, left_c0, mask);
+        band_extract_block<Scalar>(ctx, ABw, kd_work, Leftsub, i1, left_c0, mask);
 
-        ormqr<B, T>(ctx, Bsub, Leftsub, Side::Left, trans_left, tau_span, ws_backend).wait();
+        ormqr<B, Scalar>(ctx, Bsub, Leftsub, Side::Left, trans_left, tau_span, ws_backend).wait();
 
-        band_scatter_block<T>(ctx, Leftsub, ABw, kd_work, i1, left_c0, mask);
+        band_scatter_block<Scalar>(ctx, Leftsub, ABw, kd_work, i1, left_c0, mask);
     }
 
     // Apply the left-side update to the in-band block between B (cols j1..j2) and Sym (cols i1..i2).
     // This corresponds to the Python reference's `Pre` update: A(i1:i2, j2+1:i1-1) <- Q^H * A.
     if (mid_cols > 0) {
         auto Midsub = Rightmat({0, m}, {0, mid_cols});
-        band_extract_block<T>(ctx, ABw, kd_work, Midsub, i1, mid_c0, mask);
+        band_extract_block<Scalar>(ctx, ABw, kd_work, Midsub, i1, mid_c0, mask);
 
         if (dump_enabled && !dump_abw_only) {
             if (dump_batch >= 0) {
-                dump_dense_matrix_csv<T>(ctx, Midsub, "Mid_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
+                dump_dense_matrix_csv<Scalar>(ctx, Midsub, "Mid_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
             } else {
                 for (int b = 0; b < ABw.batch_size(); ++b) {
-                    dump_dense_matrix_csv<T>(ctx, Midsub, "Mid_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
+                    dump_dense_matrix_csv<Scalar>(ctx, Midsub, "Mid_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
                 }
             }
         }
 
-        ormqr<B, T>(ctx, Bsub, Midsub, Side::Left, trans_left, tau_span, ws_backend).wait();
+        ormqr<B, Scalar>(ctx, Bsub, Midsub, Side::Left, trans_left, tau_span, ws_backend).wait();
 
         if (dump_enabled && !dump_abw_only) {
             if (dump_batch >= 0) {
-                dump_dense_matrix_csv<T>(ctx, Midsub, "Mid_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
+                dump_dense_matrix_csv<Scalar>(ctx, Midsub, "Mid_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
             } else {
                 for (int b = 0; b < ABw.batch_size(); ++b) {
-                    dump_dense_matrix_csv<T>(ctx, Midsub, "Mid_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
+                    dump_dense_matrix_csv<Scalar>(ctx, Midsub, "Mid_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
                 }
             }
         }
 
-        band_scatter_block<T>(ctx, Midsub, ABw, kd_work, i1, mid_c0, mask);
+        band_scatter_block<Scalar>(ctx, Midsub, ABw, kd_work, i1, mid_c0, mask);
     }
 
     if (right_cols > 0) {
         auto Rightsub = Rightmat({0, m}, {0, right_cols});
-        band_extract_block<T>(ctx, ABw, kd_work, Rightsub, i1, right_c0, mask);
+        band_extract_block<Scalar>(ctx, ABw, kd_work, Rightsub, i1, right_c0, mask);
 
         if (dump_enabled && !dump_abw_only) {
             if (dump_batch >= 0) {
-                dump_dense_matrix_csv<T>(ctx, Rightsub, "Right_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
+                dump_dense_matrix_csv<Scalar>(ctx, Rightsub, "Right_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
             } else {
                 for (int b = 0; b < ABw.batch_size(); ++b) {
-                    dump_dense_matrix_csv<T>(ctx, Rightsub, "Right_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
+                    dump_dense_matrix_csv<Scalar>(ctx, Rightsub, "Right_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
                 }
             }
         }
 
-        ormqr<B, T>(ctx, Bsub, Rightsub, Side::Left, trans_left, tau_span, ws_backend).wait();
+        ormqr<B, Scalar>(ctx, Bsub, Rightsub, Side::Left, trans_left, tau_span, ws_backend).wait();
 
         if (dump_enabled && !dump_abw_only) {
             if (dump_batch >= 0) {
-                dump_dense_matrix_csv<T>(ctx, Rightsub, "Right_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
+                dump_dense_matrix_csv<Scalar>(ctx, Rightsub, "Right_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
             } else {
                 for (int b = 0; b < ABw.batch_size(); ++b) {
-                    dump_dense_matrix_csv<T>(ctx, Rightsub, "Right_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
+                    dump_dense_matrix_csv<Scalar>(ctx, Rightsub, "Right_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
                 }
             }
         }
@@ -717,90 +717,90 @@ inline void bandr1_one_qr_step(Queue& ctx,
         // Rightsub is above the diagonal (rows i1..i2, cols i2+1..), so it is not
         // stored in our lower-band representation. Do NOT hermitian-scatter it into
         // the lower band (that would overwrite the Post block which we update explicitly).
-        band_scatter_block_lower<T>(ctx, Rightsub, ABw, kd_work, i1, right_c0, mask);
+        band_scatter_block_lower<Scalar>(ctx, Rightsub, ABw, kd_work, i1, right_c0, mask);
     }
 
     if (post_rows > 0) {
         // Use Premat as scratch (it is sized kd_work×m_max).
         auto Postsub = Premat({0, post_rows}, {0, m});
-        band_extract_block<T>(ctx, ABw, kd_work, Postsub, post_r0, i1, mask);
+        band_extract_block<Scalar>(ctx, ABw, kd_work, Postsub, post_r0, i1, mask);
 
         if (dump_enabled && !dump_abw_only) {
             if (dump_batch >= 0) {
-                dump_dense_matrix_csv<T>(ctx, Postsub, "Post_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
+                dump_dense_matrix_csv<Scalar>(ctx, Postsub, "Post_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
             } else {
                 for (int b = 0; b < ABw.batch_size(); ++b) {
-                    dump_dense_matrix_csv<T>(ctx, Postsub, "Post_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
+                    dump_dense_matrix_csv<Scalar>(ctx, Postsub, "Post_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
                 }
             }
         }
 
-        ormqr<B, T>(ctx, Bsub, Postsub, Side::Right, Transpose::NoTrans, tau_span, ws_backend).wait();
+        ormqr<B, Scalar>(ctx, Bsub, Postsub, Side::Right, Transpose::NoTrans, tau_span, ws_backend).wait();
 
         if (dump_enabled && !dump_abw_only) {
             if (dump_batch >= 0) {
-                dump_dense_matrix_csv<T>(ctx, Postsub, "Post_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
+                dump_dense_matrix_csv<Scalar>(ctx, Postsub, "Post_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
             } else {
                 for (int b = 0; b < ABw.batch_size(); ++b) {
-                    dump_dense_matrix_csv<T>(ctx, Postsub, "Post_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
+                    dump_dense_matrix_csv<Scalar>(ctx, Postsub, "Post_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
                 }
             }
         }
 
-        band_scatter_block<T>(ctx, Postsub, ABw, kd_work, post_r0, i1, mask);
+        band_scatter_block<Scalar>(ctx, Postsub, ABw, kd_work, post_r0, i1, mask);
     }
 
     if (pre_rows > 0) {
         auto Presub = Premat({0, pre_rows}, {0, m});
-        band_extract_block<T>(ctx, ABw, kd_work, Presub, pre_r0, i1, mask);
+        band_extract_block<Scalar>(ctx, ABw, kd_work, Presub, pre_r0, i1, mask);
 
         if (dump_enabled && !dump_abw_only) {
             if (dump_batch >= 0) {
-                dump_dense_matrix_csv<T>(ctx, Presub, "Pre_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
+                dump_dense_matrix_csv<Scalar>(ctx, Presub, "Pre_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
             } else {
                 for (int b = 0; b < ABw.batch_size(); ++b) {
-                    dump_dense_matrix_csv<T>(ctx, Presub, "Pre_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
+                    dump_dense_matrix_csv<Scalar>(ctx, Presub, "Pre_before", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
                 }
             }
         }
 
-        ormqr<B, T>(ctx, Bsub, Presub, Side::Right, Transpose::NoTrans, tau_span, ws_backend).wait();
+        ormqr<B, Scalar>(ctx, Bsub, Presub, Side::Right, Transpose::NoTrans, tau_span, ws_backend).wait();
 
         if (dump_enabled && !dump_abw_only) {
             if (dump_batch >= 0) {
-                dump_dense_matrix_csv<T>(ctx, Presub, "Pre_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
+                dump_dense_matrix_csv<Scalar>(ctx, Presub, "Pre_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
             } else {
                 for (int b = 0; b < ABw.batch_size(); ++b) {
-                    dump_dense_matrix_csv<T>(ctx, Presub, "Pre_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
+                    dump_dense_matrix_csv<Scalar>(ctx, Presub, "Pre_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
                 }
             }
         }
 
         // Presub is above the diagonal (rows < cols); it is not stored in the lower band.
         // Avoid hermitian-scattering into the lower band (it would overwrite the Mid block).
-        band_scatter_block_lower<T>(ctx, Presub, ABw, kd_work, pre_r0, i1, mask);
+        band_scatter_block_lower<Scalar>(ctx, Presub, ABw, kd_work, pre_r0, i1, mask);
     }
 
-    dense_keep_qr_R_only<T>(ctx, Bsub, r, mask);
+    dense_keep_qr_R_only<Scalar>(ctx, Bsub, r, mask);
 
     if (dump_enabled && !dump_abw_only) {
         if (dump_batch >= 0) {
-            dump_dense_matrix_csv<T>(ctx, Bsub, "B_after_keepR", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
+            dump_dense_matrix_csv<Scalar>(ctx, Bsub, "B_after_keepR", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
         } else {
             for (int b = 0; b < ABw.batch_size(); ++b) {
-                dump_dense_matrix_csv<T>(ctx, Bsub, "B_after_keepR", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
+                dump_dense_matrix_csv<Scalar>(ctx, Bsub, "B_after_keepR", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
             }
         }
     }
 
-    band_scatter_block<T>(ctx, Bsub, ABw, kd_work, i1, j1, mask);
+    band_scatter_block<Scalar>(ctx, Bsub, ABw, kd_work, i1, j1, mask);
 
     if (dump_enabled) {
         if (dump_batch >= 0) {
-            dump_dense_matrix_csv<T>(ctx, ABw, "ABw_band_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
+            dump_dense_matrix_csv<Scalar>(ctx, ABw, "ABw_band_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, dump_batch);
         } else {
             for (int b = 0; b < ABw.batch_size(); ++b) {
-                dump_dense_matrix_csv<T>(ctx, ABw, "ABw_band_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
+                dump_dense_matrix_csv<Scalar>(ctx, ABw, "ABw_band_after", sweep_index, step_in_sweep, step_index, i1, i2, j1, j2, b);
             }
         }
     }
@@ -808,11 +808,11 @@ inline void bandr1_one_qr_step(Queue& ctx,
 
 // Helper: Initialize ABw from input band and allocate scratch buffers for chase steps.
 // Returns all initialized buffers and workspace offset.
-template <typename T>
-inline BandrBuffers<T> bandr1_init_buffers_and_copy_input(
+template <typename Scalar>
+inline BandrBuffers<Scalar> bandr1_init_buffers_and_copy_input(
     Queue& ctx,
-    const MatrixView<T, MatrixFormat::Dense>& ab_in,
-    const MatrixView<T, MatrixFormat::Dense>& abw_out,
+    const MatrixView<Scalar, MatrixFormat::Dense>& ab_in,
+    const MatrixView<Scalar, MatrixFormat::Dense>& abw_out,
     int32_t kd,
     int32_t kd_work,
     int32_t nb_target,
@@ -835,7 +835,7 @@ inline BandrBuffers<T> bandr1_init_buffers_and_copy_input(
                                  const int r = static_cast<int>(idx[1]);
                                  const int j = static_cast<int>(idx[2]);
                                  if (mask != nullptr && mask[b] == 0) return;  // I3
-                                 ABW(r, j, b) = T(0);
+                                 ABW(r, j, b) = Scalar(0);
                              });
         });
 
@@ -857,24 +857,24 @@ inline BandrBuffers<T> bandr1_init_buffers_and_copy_input(
     // Scratch buffers sized to worst-case within a sweep.
     const int nb_max = std::min(nb_target, std::max(1, kd - 1));
     const int m_max = kd;
-    auto B_buf = alloc_from_ws<T>(ctx, ws, off,
-                                  static_cast<size_t>(m_max) * static_cast<size_t>(nb_max) * static_cast<size_t>(batch));
-    auto B_ptrs = alloc_from_ws<T*>(ctx, ws, off, static_cast<size_t>(batch));
-    auto Sym_buf = alloc_from_ws<T>(ctx, ws, off,
-                                    static_cast<size_t>(m_max) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
-    auto Sym_ptrs = alloc_from_ws<T*>(ctx, ws, off, static_cast<size_t>(batch));
-    auto Post_buf = alloc_from_ws<T>(ctx, ws, off,
-                                     static_cast<size_t>(m_max) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
-    auto Post_ptrs = alloc_from_ws<T*>(ctx, ws, off, static_cast<size_t>(batch));
-    auto Pre_buf = alloc_from_ws<T>(ctx, ws, off,
-                                    static_cast<size_t>(kd_work) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
-    auto Pre_ptrs = alloc_from_ws<T*>(ctx, ws, off, static_cast<size_t>(batch));
-    auto Right_buf = alloc_from_ws<T>(ctx, ws, off,
-                                      static_cast<size_t>(m_max) * static_cast<size_t>(kd_work) * static_cast<size_t>(batch));
-    auto Right_ptrs = alloc_from_ws<T*>(ctx, ws, off, static_cast<size_t>(batch));
-    auto tau_buf = alloc_from_ws<T>(ctx, ws, off, static_cast<size_t>(nb_max) * static_cast<size_t>(batch));
+    auto B_buf = alloc_from_ws<Scalar>(ctx, ws, off,
+                                       static_cast<size_t>(m_max) * static_cast<size_t>(nb_max) * static_cast<size_t>(batch));
+    auto B_ptrs = alloc_from_ws<Scalar*>(ctx, ws, off, static_cast<size_t>(batch));
+    auto Sym_buf = alloc_from_ws<Scalar>(ctx, ws, off,
+                                         static_cast<size_t>(m_max) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
+    auto Sym_ptrs = alloc_from_ws<Scalar*>(ctx, ws, off, static_cast<size_t>(batch));
+    auto Post_buf = alloc_from_ws<Scalar>(ctx, ws, off,
+                                          static_cast<size_t>(m_max) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
+    auto Post_ptrs = alloc_from_ws<Scalar*>(ctx, ws, off, static_cast<size_t>(batch));
+    auto Pre_buf = alloc_from_ws<Scalar>(ctx, ws, off,
+                                         static_cast<size_t>(kd_work) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
+    auto Pre_ptrs = alloc_from_ws<Scalar*>(ctx, ws, off, static_cast<size_t>(batch));
+    auto Right_buf = alloc_from_ws<Scalar>(ctx, ws, off,
+                                           static_cast<size_t>(m_max) * static_cast<size_t>(kd_work) * static_cast<size_t>(batch));
+    auto Right_ptrs = alloc_from_ws<Scalar*>(ctx, ws, off, static_cast<size_t>(batch));
+    auto tau_buf = alloc_from_ws<Scalar>(ctx, ws, off, static_cast<size_t>(nb_max) * static_cast<size_t>(batch));
 
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     MV Bmat = MV(B_buf.data(), m_max, nb_max, m_max, m_max * nb_max, batch, B_ptrs.data()).with_batch_mask(mask_span);
     MV Symmat = MV(Sym_buf.data(), m_max, m_max, m_max, m_max * m_max, batch, Sym_ptrs.data()).with_batch_mask(mask_span);
     MV Postmat = MV(Post_buf.data(), m_max, m_max, m_max, m_max * m_max, batch, Post_ptrs.data()).with_batch_mask(mask_span);
@@ -891,7 +891,7 @@ inline BandrBuffers<T> bandr1_init_buffers_and_copy_input(
     (void)Premat.data_ptrs(ctx);
     (void)Rightmat.data_ptrs(ctx);
 
-    return BandrBuffers<T>{
+    return BandrBuffers<Scalar>{
         .Bmat = Bmat,
         .Symmat = Symmat,
         .Postmat = Postmat,
@@ -904,10 +904,10 @@ inline BandrBuffers<T> bandr1_init_buffers_and_copy_input(
 }
 
 // Helper: Run the common BANDR1 chase loop. Updates b to final bandwidth.
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 inline int bandr1_run_chase_sweeps(
     Queue& ctx,
-    const MatrixView<T, MatrixFormat::Dense>& abw,
+    const MatrixView<Scalar, MatrixFormat::Dense>& abw,
     int32_t kd_work,
     int32_t kd_initial,
     int32_t n,
@@ -915,7 +915,7 @@ inline int bandr1_run_chase_sweeps(
     const std::vector<int32_t>& block_size_seq,
     int32_t max_sweeps,
     int32_t max_steps,
-    const BandrBuffers<T>& buffers) {
+    const BandrBuffers<Scalar>& buffers) {
     int b = kd_initial;
     int steps_done = 0;
 
@@ -952,10 +952,10 @@ inline int bandr1_run_chase_sweeps(
                     break;
                 }
 
-                bandr1_one_qr_step<B, T>(ctx, abw, kd_work, b, sweep, step_in_sweep, steps_done, i1, i2, j1, j2,
-                                         buffers.Bmat, buffers.Symmat, buffers.Postmat,
-                                         buffers.Premat, buffers.Rightmat,
-                                         buffers.tau_buf, buffers.ws_backend, buffers.mask);
+                bandr1_one_qr_step<B, Scalar>(ctx, abw, kd_work, b, sweep, step_in_sweep, steps_done, i1, i2, j1, j2,
+                                              buffers.Bmat, buffers.Symmat, buffers.Postmat,
+                                              buffers.Premat, buffers.Rightmat,
+                                              buffers.tau_buf, buffers.ws_backend, buffers.mask);
                 ++steps_done;
                 ++step_in_sweep;
 
@@ -986,7 +986,7 @@ inline int bandr1_run_chase_sweeps(
         }
 
         if (b_tilde + 1 <= kd_work) {
-            band_zero_rows_from<T>(ctx, abw, b_tilde + 1, buffers.mask);
+            band_zero_rows_from<Scalar>(ctx, abw, b_tilde + 1, buffers.mask);
         }
 
         b = b_tilde;
@@ -996,15 +996,15 @@ inline int bandr1_run_chase_sweeps(
 }
 
 // Helper: Extract (d, e, tau) output from final ABw.
-template <typename T>
+template <typename Scalar>
 inline void bandr1_extract_tridiagonal_output(
     Queue& ctx,
-    const MatrixView<T, MatrixFormat::Dense>& abw,
+    const MatrixView<Scalar, MatrixFormat::Dense>& abw,
     int32_t n,
     int32_t batch,
-    const VectorView<typename base_type<T>::type>& d_out,
-    const VectorView<typename base_type<T>::type>& e_out,
-    const VectorView<T>& tau_out,
+    const VectorView<typename base_type<Scalar>::type>& d_out,
+    const VectorView<typename base_type<Scalar>::type>& e_out,
+    const VectorView<Scalar>& tau_out,
     const std::uint8_t* mask) {
     auto AB = abw.kernel_view();
     auto dptr = d_out.data_ptr();
@@ -1035,13 +1035,13 @@ inline void bandr1_extract_tridiagonal_output(
                                  const int j = static_cast<int>(idx[1]);
                                  if (mask != nullptr && mask[b] == 0) return;  // I3
                                  eptr[b * e_stride + j * e_inc] = detail::abs(AB(1, j, b));
-                                 tauptr[b * tau_stride + j * tau_inc] = T(0);
+                                 tauptr[b * tau_stride + j * tau_inc] = Scalar(0);
                              });
         });
     }
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t sytrd_band_reduction_single_step_buffer_size_core(Queue& ctx,
                                                          int32_t kd,
                                                          int32_t nb_target,
@@ -1056,45 +1056,45 @@ size_t sytrd_band_reduction_single_step_buffer_size_core(Queue& ctx,
     const int m_max = kd;
 
     size_t bytes = 0;
-    bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(m_max) * static_cast<size_t>(nb_max) * static_cast<size_t>(batch));
-    bytes += BumpAllocator::allocation_size<T*>(ctx, static_cast<size_t>(batch));
-    bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(m_max) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
-    bytes += BumpAllocator::allocation_size<T*>(ctx, static_cast<size_t>(batch));
-    bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(m_max) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
-    bytes += BumpAllocator::allocation_size<T*>(ctx, static_cast<size_t>(batch));
-    bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(kd_work) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
-    bytes += BumpAllocator::allocation_size<T*>(ctx, static_cast<size_t>(batch));
-    bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(m_max) * static_cast<size_t>(kd_work) * static_cast<size_t>(batch));
-    bytes += BumpAllocator::allocation_size<T*>(ctx, static_cast<size_t>(batch));
-    bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(nb_max) * static_cast<size_t>(batch));
+    bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(m_max) * static_cast<size_t>(nb_max) * static_cast<size_t>(batch));
+    bytes += BumpAllocator::allocation_size<Scalar*>(ctx, static_cast<size_t>(batch));
+    bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(m_max) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
+    bytes += BumpAllocator::allocation_size<Scalar*>(ctx, static_cast<size_t>(batch));
+    bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(m_max) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
+    bytes += BumpAllocator::allocation_size<Scalar*>(ctx, static_cast<size_t>(batch));
+    bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(kd_work) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
+    bytes += BumpAllocator::allocation_size<Scalar*>(ctx, static_cast<size_t>(batch));
+    bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(m_max) * static_cast<size_t>(kd_work) * static_cast<size_t>(batch));
+    bytes += BumpAllocator::allocation_size<Scalar*>(ctx, static_cast<size_t>(batch));
+    bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(nb_max) * static_cast<size_t>(batch));
 
-    const auto dummyB = MatrixView<T, MatrixFormat::Dense>(nullptr, m_max, nb_max, m_max, m_max * nb_max, batch)
+    const auto dummyB = MatrixView<Scalar, MatrixFormat::Dense>(nullptr, m_max, nb_max, m_max, m_max * nb_max, batch)
                             .with_batch_mask(mask);
-    Span<T> dummyTau(nullptr, static_cast<size_t>(nb_max) * static_cast<size_t>(batch));
-    bytes += geqrf_buffer_size_bound<B, T>(ctx, dummyB, dummyTau);
+    Span<Scalar> dummyTau(nullptr, static_cast<size_t>(nb_max) * static_cast<size_t>(batch));
+    bytes += geqrf_buffer_size_bound<B, Scalar>(ctx, dummyB, dummyTau);
 
-    const auto dummySym = MatrixView<T, MatrixFormat::Dense>(nullptr, m_max, m_max, m_max, m_max * m_max, batch)
+    const auto dummySym = MatrixView<Scalar, MatrixFormat::Dense>(nullptr, m_max, m_max, m_max, m_max * m_max, batch)
                               .with_batch_mask(mask);
-    bytes += ormqr_buffer_size<B, T>(ctx, dummyB, dummySym, Side::Left, Transpose::ConjTrans, dummyTau);
-    bytes += ormqr_buffer_size<B, T>(ctx, dummyB, dummySym, Side::Right, Transpose::NoTrans, dummyTau);
+    bytes += ormqr_buffer_size<B, Scalar>(ctx, dummyB, dummySym, Side::Left, Transpose::ConjTrans, dummyTau);
+    bytes += ormqr_buffer_size<B, Scalar>(ctx, dummyB, dummySym, Side::Right, Transpose::NoTrans, dummyTau);
 
-    const auto dummyPre = MatrixView<T, MatrixFormat::Dense>(nullptr, kd_work, m_max, kd_work,
-                                                             static_cast<int64_t>(kd_work) * m_max, batch)
+    const auto dummyPre = MatrixView<Scalar, MatrixFormat::Dense>(nullptr, kd_work, m_max, kd_work,
+                                                                  static_cast<int64_t>(kd_work) * m_max, batch)
                               .with_batch_mask(mask);
-    bytes += ormqr_buffer_size<B, T>(ctx, dummyB, dummyPre, Side::Right, Transpose::NoTrans, dummyTau);
+    bytes += ormqr_buffer_size<B, Scalar>(ctx, dummyB, dummyPre, Side::Right, Transpose::NoTrans, dummyTau);
 
-    const auto dummyRight = MatrixView<T, MatrixFormat::Dense>(nullptr, m_max, kd_work, m_max,
-                                                               static_cast<int64_t>(m_max) * kd_work, batch)
+    const auto dummyRight = MatrixView<Scalar, MatrixFormat::Dense>(nullptr, m_max, kd_work, m_max,
+                                                                    static_cast<int64_t>(m_max) * kd_work, batch)
                                 .with_batch_mask(mask);
-    bytes += ormqr_buffer_size<B, T>(ctx, dummyB, dummyRight, Side::Left, Transpose::ConjTrans, dummyTau);
+    bytes += ormqr_buffer_size<B, Scalar>(ctx, dummyB, dummyRight, Side::Left, Transpose::ConjTrans, dummyTau);
 
     return bytes;
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event sytrd_band_reduction_single_step_core(Queue& ctx,
-                                            const MatrixView<T, MatrixFormat::Dense>& ab_in,
-                                            const MatrixView<T, MatrixFormat::Dense>& abw_out,
+                                            const MatrixView<Scalar, MatrixFormat::Dense>& ab_in,
+                                            const MatrixView<Scalar, MatrixFormat::Dense>& abw_out,
                                             Uplo uplo,
                                             int32_t kd,
                                             const Span<std::byte>& ws,
@@ -1130,7 +1130,7 @@ Event sytrd_band_reduction_single_step_core(Queue& ctx,
                                  const int r = static_cast<int>(idx[1]);
                                  const int j = static_cast<int>(idx[2]);
                                  if (mask != nullptr && mask[b] == 0) return;  // I3
-                                 ABW(r, j, b) = T(0);
+                                 ABW(r, j, b) = Scalar(0);
                              });
         });
         auto ABin = ab_in.kernel_view();
@@ -1169,11 +1169,12 @@ Event sytrd_band_reduction_single_step_core(Queue& ctx,
     }
 
     size_t off = 0;
-    const MatrixView<T, MatrixFormat::Dense> abw = abw_out.with_batch_mask(mask_span);
-    auto buffers = bandr1_init_buffers_and_copy_input<T>(ctx, ab_in, abw, kd, kd_work, nb_target, ws, off, mask_span);
+    const MatrixView<Scalar, MatrixFormat::Dense> abw = abw_out.with_batch_mask(mask_span);
+    auto buffers = bandr1_init_buffers_and_copy_input<Scalar>(ctx, ab_in, abw, kd, kd_work, nb_target, ws, off,
+                                                              mask_span);
 
     const int max_sweeps = (params.max_sweeps < 0) ? std::max(0, kd - 1) : std::max(0, params.max_sweeps);
-    bandr1_run_chase_sweeps<B, T>(ctx, abw, kd_work, kd, n, d_seq_single, nb_seq_single, max_sweeps, max_steps, buffers);
+    bandr1_run_chase_sweeps<B, Scalar>(ctx, abw, kd_work, kd, n, d_seq_single, nb_seq_single, max_sweeps, max_steps, buffers);
 
     return ctx.get_event();
 }
@@ -1182,12 +1183,12 @@ Event sytrd_band_reduction_single_step_core(Queue& ctx,
 
 namespace {
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t sytrd_band_reduction_bandr1_buffer_size_core(Queue& ctx,
-                                                    const MatrixView<T, MatrixFormat::Dense>& ab_in,
-                                                    const VectorView<typename base_type<T>::type>& d_out,
-                                                    const VectorView<typename base_type<T>::type>& e_out,
-                                                    const VectorView<T>& tau_out,
+                                                    const MatrixView<Scalar, MatrixFormat::Dense>& ab_in,
+                                                    const VectorView<typename base_type<Scalar>::type>& d_out,
+                                                    const VectorView<typename base_type<Scalar>::type>& e_out,
+                                                    const VectorView<Scalar>& tau_out,
                                                     int32_t kd,
                                                     int32_t nb_target,
                                                     int32_t kd_work) {
@@ -1208,51 +1209,51 @@ size_t sytrd_band_reduction_bandr1_buffer_size_core(Queue& ctx,
 
     size_t bytes = 0;
 
-    bytes += BumpAllocator::allocation_size<T>(ctx,
-                                               static_cast<size_t>(kd_work + 1) * static_cast<size_t>(n) * static_cast<size_t>(batch));
+    bytes += BumpAllocator::allocation_size<Scalar>(ctx,
+                                                    static_cast<size_t>(kd_work + 1) * static_cast<size_t>(n) * static_cast<size_t>(batch));
 
-    bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(m_max) * static_cast<size_t>(nb_max) * static_cast<size_t>(batch));
-    bytes += BumpAllocator::allocation_size<T*>(ctx, static_cast<size_t>(batch));
-    bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(m_max) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
-    bytes += BumpAllocator::allocation_size<T*>(ctx, static_cast<size_t>(batch));
-    bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(m_max) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
-    bytes += BumpAllocator::allocation_size<T*>(ctx, static_cast<size_t>(batch));
-    bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(kd_work) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
-    bytes += BumpAllocator::allocation_size<T*>(ctx, static_cast<size_t>(batch));
-    bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(m_max) * static_cast<size_t>(kd_work) * static_cast<size_t>(batch));
-    bytes += BumpAllocator::allocation_size<T*>(ctx, static_cast<size_t>(batch));
-    bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(nb_max) * static_cast<size_t>(batch));
+    bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(m_max) * static_cast<size_t>(nb_max) * static_cast<size_t>(batch));
+    bytes += BumpAllocator::allocation_size<Scalar*>(ctx, static_cast<size_t>(batch));
+    bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(m_max) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
+    bytes += BumpAllocator::allocation_size<Scalar*>(ctx, static_cast<size_t>(batch));
+    bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(m_max) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
+    bytes += BumpAllocator::allocation_size<Scalar*>(ctx, static_cast<size_t>(batch));
+    bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(kd_work) * static_cast<size_t>(m_max) * static_cast<size_t>(batch));
+    bytes += BumpAllocator::allocation_size<Scalar*>(ctx, static_cast<size_t>(batch));
+    bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(m_max) * static_cast<size_t>(kd_work) * static_cast<size_t>(batch));
+    bytes += BumpAllocator::allocation_size<Scalar*>(ctx, static_cast<size_t>(batch));
+    bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(nb_max) * static_cast<size_t>(batch));
 
-    const auto dummyB = MatrixView<T, MatrixFormat::Dense>(nullptr, m_max, nb_max, m_max, m_max * nb_max, batch)
+    const auto dummyB = MatrixView<Scalar, MatrixFormat::Dense>(nullptr, m_max, nb_max, m_max, m_max * nb_max, batch)
                             .with_batch_mask(mask);
-    Span<T> dummyTau(nullptr, static_cast<size_t>(nb_max) * static_cast<size_t>(batch));
-    bytes += geqrf_buffer_size_bound<B, T>(ctx, dummyB, dummyTau);
+    Span<Scalar> dummyTau(nullptr, static_cast<size_t>(nb_max) * static_cast<size_t>(batch));
+    bytes += geqrf_buffer_size_bound<B, Scalar>(ctx, dummyB, dummyTau);
 
-    const auto dummySym = MatrixView<T, MatrixFormat::Dense>(nullptr, m_max, m_max, m_max, m_max * m_max, batch)
+    const auto dummySym = MatrixView<Scalar, MatrixFormat::Dense>(nullptr, m_max, m_max, m_max, m_max * m_max, batch)
                               .with_batch_mask(mask);
-    bytes += ormqr_buffer_size<B, T>(ctx, dummyB, dummySym, Side::Left, Transpose::ConjTrans, dummyTau);
-    bytes += ormqr_buffer_size<B, T>(ctx, dummyB, dummySym, Side::Right, Transpose::NoTrans, dummyTau);
-    bytes += ormqr_buffer_size<B, T>(ctx, dummyB, dummySym, Side::Right, Transpose::ConjTrans, dummyTau);
+    bytes += ormqr_buffer_size<B, Scalar>(ctx, dummyB, dummySym, Side::Left, Transpose::ConjTrans, dummyTau);
+    bytes += ormqr_buffer_size<B, Scalar>(ctx, dummyB, dummySym, Side::Right, Transpose::NoTrans, dummyTau);
+    bytes += ormqr_buffer_size<B, Scalar>(ctx, dummyB, dummySym, Side::Right, Transpose::ConjTrans, dummyTau);
 
-    const auto dummyPre = MatrixView<T, MatrixFormat::Dense>(nullptr, kd_work, m_max, kd_work,
-                                                             static_cast<int64_t>(kd_work) * m_max, batch)
+    const auto dummyPre = MatrixView<Scalar, MatrixFormat::Dense>(nullptr, kd_work, m_max, kd_work,
+                                                                  static_cast<int64_t>(kd_work) * m_max, batch)
                               .with_batch_mask(mask);
-    bytes += ormqr_buffer_size<B, T>(ctx, dummyB, dummyPre, Side::Right, Transpose::NoTrans, dummyTau);
+    bytes += ormqr_buffer_size<B, Scalar>(ctx, dummyB, dummyPre, Side::Right, Transpose::NoTrans, dummyTau);
 
-    const auto dummyRight = MatrixView<T, MatrixFormat::Dense>(nullptr, m_max, kd_work, m_max,
-                                                               static_cast<int64_t>(m_max) * kd_work, batch)
+    const auto dummyRight = MatrixView<Scalar, MatrixFormat::Dense>(nullptr, m_max, kd_work, m_max,
+                                                                    static_cast<int64_t>(m_max) * kd_work, batch)
                                 .with_batch_mask(mask);
-    bytes += ormqr_buffer_size<B, T>(ctx, dummyB, dummyRight, Side::Left, Transpose::ConjTrans, dummyTau);
+    bytes += ormqr_buffer_size<B, Scalar>(ctx, dummyB, dummyRight, Side::Left, Transpose::ConjTrans, dummyTau);
 
     return bytes;
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event sytrd_band_reduction_bandr1_core(Queue& ctx,
-                                       const MatrixView<T, MatrixFormat::Dense>& ab_in,
-                                       const VectorView<typename base_type<T>::type>& d_out,
-                                       const VectorView<typename base_type<T>::type>& e_out,
-                                       const VectorView<T>& tau_out,
+                                       const MatrixView<Scalar, MatrixFormat::Dense>& ab_in,
+                                       const VectorView<typename base_type<Scalar>::type>& d_out,
+                                       const VectorView<typename base_type<Scalar>::type>& e_out,
+                                       const VectorView<Scalar>& tau_out,
                                        Uplo uplo,
                                        int32_t kd,
                                        const Span<std::byte>& ws,
@@ -1306,8 +1307,8 @@ Event sytrd_band_reduction_bandr1_core(Queue& ctx,
                     const int b = static_cast<int>(idx[0]);
                     const int j = static_cast<int>(idx[1]);
                     if (mask != nullptr && mask[b] == 0) return;  // I3
-                    eptr[b * e_stride + j * e_inc] = typename base_type<T>::type(0);
-                    tauptr[b * tau_stride + j * tau_inc] = T(0);
+                    eptr[b * e_stride + j * e_inc] = typename base_type<Scalar>::type(0);
+                    tauptr[b * tau_stride + j * tau_inc] = Scalar(0);
                 });
             });
         }
@@ -1344,7 +1345,7 @@ Event sytrd_band_reduction_bandr1_core(Queue& ctx,
                     const int j = static_cast<int>(idx[1]);
                     if (mask != nullptr && mask[b] == 0) return;  // I3
                     eptr[b * e_stride + j * e_inc] = detail::abs(AB(1, j, b));
-                    tauptr[b * tau_stride + j * tau_inc] = T(0);
+                    tauptr[b * tau_stride + j * tau_inc] = Scalar(0);
                 });
             });
         }
@@ -1355,49 +1356,50 @@ Event sytrd_band_reduction_bandr1_core(Queue& ctx,
     kd_work = std::min(kd_work, n - 1);
 
     size_t off = 0;
-    auto ABw_buf = alloc_from_ws<T>(ctx, ws, off,
-                                    static_cast<size_t>(kd_work + 1) * static_cast<size_t>(n) * static_cast<size_t>(batch));
-    const auto ABw = MatrixView<T, MatrixFormat::Dense>(ABw_buf.data(), kd_work + 1, n, kd_work + 1,
-                                                        (kd_work + 1) * n, batch)
+    auto ABw_buf = alloc_from_ws<Scalar>(ctx, ws, off,
+                                         static_cast<size_t>(kd_work + 1) * static_cast<size_t>(n) * static_cast<size_t>(batch));
+    const auto ABw = MatrixView<Scalar, MatrixFormat::Dense>(ABw_buf.data(), kd_work + 1, n, kd_work + 1,
+                                                             (kd_work + 1) * n, batch)
                          .with_batch_mask(mask_span);
 
     const int nb_target = max_block_size_in_schedule(block_size_seq);
 
     // Use common buffer initialization helper
-    auto buffers = bandr1_init_buffers_and_copy_input<T>(ctx, ab_in, ABw, kd, kd_work, nb_target, ws, off, mask_span);
+    auto buffers = bandr1_init_buffers_and_copy_input<Scalar>(ctx, ab_in, ABw, kd, kd_work, nb_target, ws, off,
+                                                              mask_span);
 
     // Run chase sweeps until full tridiagonal (b == 1)
-    bandr1_run_chase_sweeps<B, T>(ctx, ABw, kd_work, kd, n, d_seq, block_size_seq, max_sweeps, INT_MAX, buffers);
+    bandr1_run_chase_sweeps<B, Scalar>(ctx, ABw, kd_work, kd, n, d_seq, block_size_seq, max_sweeps, INT_MAX, buffers);
 
     // Extract output (d, e, tau)
-    bandr1_extract_tridiagonal_output<T>(ctx, ABw, n, batch, d_out, e_out, tau_out, mask);
+    bandr1_extract_tridiagonal_output<Scalar>(ctx, ABw, n, batch, d_out, e_out, tau_out, mask);
 
     return ctx.get_event();
 }
 
 }  // namespace
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t sytrd_band_reduction_buffer_size(Queue& ctx,
-                                        const MatrixView<T, MatrixFormat::Dense>& ab_in,
-                                        const VectorView<typename base_type<T>::type>& d_out,
-                                        const VectorView<typename base_type<T>::type>& e_out,
-                                        const VectorView<T>& tau_out,
+                                        const MatrixView<Scalar, MatrixFormat::Dense>& ab_in,
+                                        const VectorView<typename base_type<Scalar>::type>& d_out,
+                                        const VectorView<typename base_type<Scalar>::type>& e_out,
+                                        const VectorView<Scalar>& tau_out,
                                         Uplo uplo,
                                         int32_t kd,
                                         int32_t block_size) {
     SytrdBandReductionParams params;
     params.block_size_seq = {block_size};
     params.d_seq = {0};
-    return sytrd_band_reduction_buffer_size<B, T>(ctx, ab_in, d_out, e_out, tau_out, uplo, kd, params);
+    return sytrd_band_reduction_buffer_size<B, Scalar>(ctx, ab_in, d_out, e_out, tau_out, uplo, kd, params);
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t sytrd_band_reduction_buffer_size(Queue& ctx,
-                                        const MatrixView<T, MatrixFormat::Dense>& ab_in,
-                                        const VectorView<typename base_type<T>::type>& d_out,
-                                        const VectorView<typename base_type<T>::type>& e_out,
-                                        const VectorView<T>& tau_out,
+                                        const MatrixView<Scalar, MatrixFormat::Dense>& ab_in,
+                                        const VectorView<typename base_type<Scalar>::type>& d_out,
+                                        const VectorView<typename base_type<Scalar>::type>& e_out,
+                                        const VectorView<Scalar>& tau_out,
                                         Uplo uplo,
                                         int32_t kd,
                                         SytrdBandReductionParams params) {
@@ -1411,15 +1413,15 @@ size_t sytrd_band_reduction_buffer_size(Queue& ctx,
     }
     const Bandr1Schedule schedule = make_bandr1_schedule(params, "sytrd_band_reduction_buffer_size");
     const int nb_target = max_block_size_in_schedule(schedule.block_size_seq);
-    return sytrd_band_reduction_bandr1_buffer_size_core<B, T>(ctx, ab_in, d_out, e_out, tau_out, kd, nb_target, kd_work);
+    return sytrd_band_reduction_bandr1_buffer_size_core<B, Scalar>(ctx, ab_in, d_out, e_out, tau_out, kd, nb_target, kd_work);
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event sytrd_band_reduction(Queue& ctx,
-                           const MatrixView<T, MatrixFormat::Dense>& ab_in,
-                           const VectorView<typename base_type<T>::type>& d_out,
-                           const VectorView<typename base_type<T>::type>& e_out,
-                           const VectorView<T>& tau_out,
+                           const MatrixView<Scalar, MatrixFormat::Dense>& ab_in,
+                           const VectorView<typename base_type<Scalar>::type>& d_out,
+                           const VectorView<typename base_type<Scalar>::type>& e_out,
+                           const VectorView<Scalar>& tau_out,
                            Uplo uplo,
                            int32_t kd,
                            const Span<std::byte>& ws,
@@ -1427,15 +1429,15 @@ Event sytrd_band_reduction(Queue& ctx,
     SytrdBandReductionParams params;
     params.block_size_seq = {block_size};
     params.d_seq = {0};
-    return sytrd_band_reduction<B, T>(ctx, ab_in, d_out, e_out, tau_out, uplo, kd, ws, params);
+    return sytrd_band_reduction<B, Scalar>(ctx, ab_in, d_out, e_out, tau_out, uplo, kd, ws, params);
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event sytrd_band_reduction(Queue& ctx,
-                           const MatrixView<T, MatrixFormat::Dense>& ab_in,
-                           const VectorView<typename base_type<T>::type>& d_out,
-                           const VectorView<typename base_type<T>::type>& e_out,
-                           const VectorView<T>& tau_out,
+                           const MatrixView<Scalar, MatrixFormat::Dense>& ab_in,
+                           const VectorView<typename base_type<Scalar>::type>& d_out,
+                           const VectorView<typename base_type<Scalar>::type>& e_out,
+                           const VectorView<Scalar>& tau_out,
                            Uplo uplo,
                            int32_t kd,
                            const Span<std::byte>& ws,
@@ -1450,26 +1452,27 @@ Event sytrd_band_reduction(Queue& ctx,
         kd_work = std::min(n - 1, 3 * kd);
     }
     const int max_sweeps = (params.max_sweeps < 0) ? std::max(0, kd - 1) : std::max(0, params.max_sweeps);
-    return sytrd_band_reduction_bandr1_core<B, T>(ctx, ab_in, d_out, e_out, tau_out, uplo, kd, ws,
-                                                  schedule.d_seq, schedule.block_size_seq, kd_work, max_sweeps, mask);
+    return sytrd_band_reduction_bandr1_core<B, Scalar>(ctx, ab_in, d_out, e_out, tau_out, uplo, kd, ws,
+                                                       schedule.d_seq, schedule.block_size_seq, kd_work, max_sweeps,
+                                                       mask);
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event sytrd_band_reduction_single_step(Queue& ctx,
-                                       const MatrixView<T, MatrixFormat::Dense>& ab_in,
-                                       const MatrixView<T, MatrixFormat::Dense>& abw_out,
+                                       const MatrixView<Scalar, MatrixFormat::Dense>& ab_in,
+                                       const MatrixView<Scalar, MatrixFormat::Dense>& abw_out,
                                        Uplo uplo,
                                        int32_t kd,
                                        const Span<std::byte>& ws,
                                        SytrdBandReductionParams params) {
     const auto mask = ::batchlas::detail::call_mask("sytrd_band_reduction_single_step", ab_in, abw_out);
-    return sytrd_band_reduction_single_step_core<B, T>(ctx, ab_in, abw_out, uplo, kd, ws, params, mask);
+    return sytrd_band_reduction_single_step_core<B, Scalar>(ctx, ab_in, abw_out, uplo, kd, ws, params, mask);
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t sytrd_band_reduction_single_step_buffer_size(Queue& ctx,
-                                                    const MatrixView<T, MatrixFormat::Dense>& ab_in,
-                                                    const MatrixView<T, MatrixFormat::Dense>& abw_out,
+                                                    const MatrixView<Scalar, MatrixFormat::Dense>& ab_in,
+                                                    const MatrixView<Scalar, MatrixFormat::Dense>& abw_out,
                                                     Uplo uplo,
                                                     int32_t kd,
                                                     SytrdBandReductionParams params) {
@@ -1490,7 +1493,7 @@ size_t sytrd_band_reduction_single_step_buffer_size(Queue& ctx,
     const Bandr1Schedule schedule = make_bandr1_schedule(params, "sytrd_band_reduction_single_step_buffer_size");
     const int nb_target = max_block_size_in_schedule(schedule.block_size_seq);
     const auto mask = ::batchlas::detail::call_mask("sytrd_band_reduction_single_step", ab_in, abw_out);
-    return sytrd_band_reduction_single_step_buffer_size_core<B, T>(ctx, kd, nb_target, kd_work, n, batch, mask);
+    return sytrd_band_reduction_single_step_buffer_size_core<B, Scalar>(ctx, kd, nb_target, kd_work, n, batch, mask);
 }
 
 #define SYTRD_BAND_REDUCTION_INSTANTIATE(back, fp) \

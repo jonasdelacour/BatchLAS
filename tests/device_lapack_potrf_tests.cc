@@ -39,71 +39,71 @@ struct alignas(16) Slab {
     unsigned char b[16];
 };
 
-template <class T> T poison() {
-    if constexpr (is_cplx<T>) return T(real_of<T>(1e6), real_of<T>(-1e6));
-    else return T(1e6);
+template <class Scalar> Scalar poison() {
+    if constexpr (is_cplx<Scalar>) return Scalar(real_of<Scalar>(1e6), real_of<Scalar>(-1e6));
+    else return Scalar(1e6);
 }
 
 // The batch: item b is representative b % 3 scaled by s_b (exact), each n x n Hermitian in the
 // uplo triangle of an (ld, stride) buffer whose every other element is poison.
-template <class T> struct Prob {
+template <class Scalar> struct Prob {
     int n, ld, stride;
     Uplo uplo;
-    std::vector<T> ref;  // the three representatives, n x n full Hermitian, real diagonal
-    std::vector<T> h;    // the kernel input
+    std::vector<Scalar> ref;  // the three representatives, n x n full Hermitian, real diagonal
+    std::vector<Scalar> h;    // the kernel input
 };
 
-template <class T> real_of<T> scale_of(int b) { return real_of<T>(1) + real_of<T>(b % 7) * real_of<T>(0.25); }
+template <class Scalar> real_of<Scalar> scale_of(int b) { return real_of<Scalar>(1) + real_of<Scalar>(b % 7) * real_of<Scalar>(0.25); }
 
-template <class T> std::vector<T> spd(int n, std::uint64_t seed) {
-    using R = real_of<T>;
-    std::vector<T> m(std::size_t(n) * n), a(std::size_t(n) * n);
-    for (std::size_t i = 0; i < m.size(); ++i) m[i] = val<T>(seed * 7919u + i);
+template <class Scalar> std::vector<Scalar> spd(int n, std::uint64_t seed) {
+    using R = real_of<Scalar>;
+    std::vector<Scalar> m(std::size_t(n) * n), a(std::size_t(n) * n);
+    for (std::size_t i = 0; i < m.size(); ++i) m[i] = val<Scalar>(seed * 7919u + i);
     for (int i = 0; i < n; ++i)
         for (int j = 0; j < n; ++j) {
-            LD<T> s{};
+            LD<Scalar> s{};
             for (int k = 0; k < n; ++k) {
-                const LD<T> x = wide(m[i + std::size_t(k) * n]), y = wide(m[j + std::size_t(k) * n]);
-                if constexpr (is_cplx<T>) s += x * std::conj(y);
+                const LD<Scalar> x = wide(m[i + std::size_t(k) * n]), y = wide(m[j + std::size_t(k) * n]);
+                if constexpr (is_cplx<Scalar>) s += x * std::conj(y);
                 else s += x * y;
             }
-            a[i + std::size_t(j) * n] = static_cast<T>(s / static_cast<long double>(n));
+            a[i + std::size_t(j) * n] = static_cast<Scalar>(s / static_cast<long double>(n));
         }
-    for (int i = 0; i < n; ++i) a[i + std::size_t(i) * n] = T(std::real(a[i + std::size_t(i) * n]) + R(2));
+    for (int i = 0; i < n; ++i) a[i + std::size_t(i) * n] = Scalar(std::real(a[i + std::size_t(i) * n]) + R(2));
     return a;
 }
 
-template <class T> Prob<T> make_prob(int n, Uplo uplo) {
-    using R = real_of<T>;
-    Prob<T> p{n, n + 3, (n + 3) * n + 5, uplo, {}, {}};
+template <class Scalar> Prob<Scalar> make_prob(int n, Uplo uplo) {
+    using R = real_of<Scalar>;
+    Prob<Scalar> p{n, n + 3, (n + 3) * n + 5, uplo, {}, {}};
     for (int r = 0; r < kPeriod; ++r) {
-        auto a = spd<T>(n, 17u + 3u * r + 101u * n);
+        auto a = spd<Scalar>(n, 17u + 3u * r + 101u * n);
         const int k = r == 1 ? n / 2 : n - 1;
-        if (r == 1) a[k + std::size_t(k) * n] = T(R(-1000));
-        if (r == 2) a[k + std::size_t(k) * n] = T(std::numeric_limits<R>::quiet_NaN());
+        if (r == 1) a[k + std::size_t(k) * n] = Scalar(R(-1000));
+        if (r == 2) a[k + std::size_t(k) * n] = Scalar(std::numeric_limits<R>::quiet_NaN());
         p.ref.insert(p.ref.end(), a.begin(), a.end());
     }
-    p.h.assign(std::size_t(p.stride) * kBatch, poison<T>());
+    p.h.assign(std::size_t(p.stride) * kBatch, poison<Scalar>());
     for (int b = 0; b < kBatch; ++b) {
-        const T* a = p.ref.data() + std::size_t(b % kPeriod) * n * n;
+        const Scalar* a = p.ref.data() + std::size_t(b % kPeriod) * n * n;
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i) {
                 if (uplo == Uplo::Lower ? i < j : i > j) continue;
-                T v = a[i + std::size_t(j) * n] * scale_of<T>(b);
-                if constexpr (is_cplx<T>)
-                    if (i == j) v = T(v.real(), R(0.75));  // Im(diag) is ignored by contract
+                Scalar v = a[i + std::size_t(j) * n] * scale_of<Scalar>(b);
+                if constexpr (is_cplx<Scalar>)
+                    if (i == j) v = Scalar(v.real(), R(0.75));  // Im(diag) is ignored by contract
                 p.h[std::size_t(b) * p.stride + i + std::size_t(j) * p.ld] = v;
             }
     }
     return p;
 }
 
-template <class T> KernelMatrixView<T, MatrixFormat::Dense> kview(T* d, const Prob<T>& p) {
-    return KernelMatrixView<T, MatrixFormat::Dense>(d, p.n, p.n, p.ld, p.stride, kBatch);
+template <class Scalar> KernelMatrixView<Scalar, MatrixFormat::Dense> kview(Scalar* d, const Prob<Scalar>& p) {
+    return KernelMatrixView<Scalar, MatrixFormat::Dense>(d, p.n, p.n, p.ld, p.stride, kBatch);
 }
 
 // The user kernel: 64-item work-groups of 64 / N partitions, one matrix each.
-template <class T, Uplo UL, int N> void run_reg(Dev& dev, const KernelMatrixView<T, MatrixFormat::Dense>& kv, std::int32_t* info) {
+template <class Scalar, Uplo UL, int N> void run_reg(Dev& dev, const KernelMatrixView<Scalar, MatrixFormat::Dense>& kv, std::int32_t* info) {
     constexpr int kWg = 64, kPer = kWg / N;
     dev.q().submit([&](sycl::handler& h) {
          h.parallel_for(sycl::nd_range<1>(std::size_t(kBatch / kPer) * kWg, kWg), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
@@ -116,10 +116,10 @@ template <class T, Uplo UL, int N> void run_reg(Dev& dev, const KernelMatrixView
 }
 
 // The user kernel: one matrix per work-group of the tier's width, local memory from the plan.
-template <class T, Uplo UL, int N> void run_cta(Dev& dev, const KernelMatrixView<T, MatrixFormat::Dense>& kv, int n, std::int32_t* info) {
+template <class Scalar, Uplo UL, int N> void run_cta(Dev& dev, const KernelMatrixView<Scalar, MatrixFormat::Dense>& kv, int n, std::int32_t* info) {
     using Tier = batchlas::device::tier::Cta<N>;
-    constexpr int kWg = batchlas::device::tier_info<batchlas::device::routine::potrf<UL>, Tier, T>::wg_size;
-    const batchlas::device::WorkspaceSize ws = batchlas::device::buffer_size<batchlas::device::routine::potrf<UL>, Tier, T>(n);
+    constexpr int kWg = batchlas::device::tier_info<batchlas::device::routine::potrf<UL>, Tier, Scalar>::wg_size;
+    const batchlas::device::WorkspaceSize ws = batchlas::device::buffer_size<batchlas::device::routine::potrf<UL>, Tier, Scalar>(n);
     dev.q().submit([&](sycl::handler& h) {
          sycl::local_accessor<Slab, 1> slm(sycl::range<1>(std::max<std::size_t>(ws.local_bytes / sizeof(Slab), 1)), h);
          h.parallel_for(sycl::nd_range<1>(std::size_t(kBatch) * kWg, kWg), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
@@ -134,19 +134,19 @@ template <class T, Uplo UL, int N> void run_cta(Dev& dev, const KernelMatrixView
 
 enum class Route { Tiny, Cta };
 
-template <class T> std::vector<std::int32_t> run_host(Dev& dev, Route route, T* d, const Prob<T>& p) {
-    MatrixView<T, MatrixFormat::Dense> V(d, p.n, p.n, p.ld, p.stride, kBatch);
+template <class Scalar> std::vector<std::int32_t> run_host(Dev& dev, Route route, Scalar* d, const Prob<Scalar>& p) {
+    MatrixView<Scalar, MatrixFormat::Dense> V(d, p.n, p.n, p.ld, p.stride, kBatch);
     Queue& ctx = *dev.ctx;
-    const std::size_t bytes = route == Route::Tiny ? ops::potrf::potrf_tiny_buffer_size<T>(ctx, V) : ops::potrf::potrf_cta_buffer_size<T>(ctx, V);
+    const std::size_t bytes = route == Route::Tiny ? ops::potrf::potrf_tiny_buffer_size<Scalar>(ctx, V) : ops::potrf::potrf_cta_buffer_size<Scalar>(ctx, V);
     std::byte* ws = dev.alloc<std::byte>(std::max<std::size_t>(bytes, 1), std::byte{0});
     std::int32_t* info = dev.alloc<std::int32_t>(kBatch, -7);
-    if (route == Route::Tiny) (void)ops::potrf::potrf_tiny_dispatch<T>(ctx, V, p.uplo, Span<std::byte>(ws, bytes), Span<std::int32_t>(info, kBatch));
-    else (void)ops::potrf::potrf_cta_dispatch<T>(ctx, V, p.uplo, Span<std::byte>(ws, bytes), Span<std::int32_t>(info, kBatch));
+    if (route == Route::Tiny) (void)ops::potrf::potrf_tiny_dispatch<Scalar>(ctx, V, p.uplo, Span<std::byte>(ws, bytes), Span<std::int32_t>(info, kBatch));
+    else (void)ops::potrf::potrf_cta_dispatch<Scalar>(ctx, V, p.uplo, Span<std::byte>(ws, bytes), Span<std::int32_t>(info, kBatch));
     ctx.wait();
     return dev.down(info, kBatch);
 }
 
-template <class T> int expected_info(const Prob<T>& p, int b) {
+template <class Scalar> int expected_info(const Prob<Scalar>& p, int b) {
     const int r = b % kPeriod;
     return r == 0 ? 0 : r == 1 ? p.n / 2 + 1 : p.n;
 }
@@ -187,40 +187,40 @@ template <class T> void check(Dev& dev, const Prob<T>& p, const std::vector<T>& 
     EXPECT_VERIFY(T, Check::factorization, p.n, res) << where;
 }
 
-template <class T> std::string tag(Uplo ul, int n, const char* tier) {
+template <class Scalar> std::string tag(Uplo ul, int n, const char* tier) {
     return std::string(tier) + (ul == Uplo::Lower ? " lower" : " upper") + " n=" + std::to_string(n);
 }
 
-template <class T, Uplo UL, int N> void reg_case(Dev& dev, int n) {
-    const auto p = make_prob<T>(n, UL);
-    T* d = dev.up(p.h);
-    T* dh = dev.up(p.h);
+template <class Scalar, Uplo UL, int N> void reg_case(Dev& dev, int n) {
+    const auto p = make_prob<Scalar>(n, UL);
+    Scalar* d = dev.up(p.h);
+    Scalar* dh = dev.up(p.h);
     std::int32_t* info = dev.alloc<std::int32_t>(kBatch, -7);
-    run_reg<T, UL, N>(dev, kview(d, p), info);
+    run_reg<Scalar, UL, N>(dev, kview(d, p), info);
     const auto hinfo = run_host(dev, Route::Tiny, dh, p);
     check(dev, p, dev.down(d, p.h.size()), dev.down(dh, p.h.size()), dev.down(info, kBatch), hinfo,
-          tag<T>(UL, n, ("Reg<" + std::to_string(N) + ">").c_str()));
+          tag<Scalar>(UL, n, ("Reg<" + std::to_string(N) + ">").c_str()));
 }
 
-template <class T, Uplo UL, int N> void cta_case(Dev& dev, int n) {
-    const auto p = make_prob<T>(n, UL);
-    T* d = dev.up(p.h);
-    T* dh = dev.up(p.h);
+template <class Scalar, Uplo UL, int N> void cta_case(Dev& dev, int n) {
+    const auto p = make_prob<Scalar>(n, UL);
+    Scalar* d = dev.up(p.h);
+    Scalar* dh = dev.up(p.h);
     std::int32_t* info = dev.alloc<std::int32_t>(kBatch, -7);
-    run_cta<T, UL, N>(dev, kview(d, p), n, info);
+    run_cta<Scalar, UL, N>(dev, kview(d, p), n, info);
     const auto hinfo = run_host(dev, Route::Cta, dh, p);
     check(dev, p, dev.down(d, p.h.size()), dev.down(dh, p.h.size()), dev.down(info, kBatch), hinfo,
-          tag<T>(UL, n, ("Cta<" + std::to_string(N) + ">").c_str()));
+          tag<Scalar>(UL, n, ("Cta<" + std::to_string(N) + ">").c_str()));
 }
 
 // n above the tier: info -2 on every item, A bit for bit as given.
-template <class T, Uplo UL, int N, bool Cta> void above_case(Dev& dev) {
+template <class Scalar, Uplo UL, int N, bool Cta> void above_case(Dev& dev) {
     const int n = N + 1;
-    const auto p = make_prob<T>(n, UL);
-    T* d = dev.up(p.h);
+    const auto p = make_prob<Scalar>(n, UL);
+    Scalar* d = dev.up(p.h);
     std::int32_t* info = dev.alloc<std::int32_t>(kBatch, -7);
-    if constexpr (Cta) run_cta<T, UL, N>(dev, kview(d, p), N, info);
-    else run_reg<T, UL, N>(dev, kview(d, p), info);
+    if constexpr (Cta) run_cta<Scalar, UL, N>(dev, kview(d, p), N, info);
+    else run_reg<Scalar, UL, N>(dev, kview(d, p), info);
     const auto got = dev.down(d, p.h.size());
     const auto gi = dev.down(info, kBatch);
     int bad = 0, changed = 0;
@@ -230,17 +230,17 @@ template <class T, Uplo UL, int N, bool Cta> void above_case(Dev& dev) {
     EXPECT_EQ(changed, 0) << (Cta ? "Cta<" : "Reg<") << N << "> n=" << n << ": A changed";
 }
 
-template <class T> class DeviceApiPotrfTest : public DeviceCoreTest<T> {
+template <class Scalar> class DeviceApiPotrfTest : public DeviceCoreTest<Scalar> {
 protected:
     void SetUp() override {
-        DeviceCoreTest<T>::SetUp();
+        DeviceCoreTest<Scalar>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (this->dev.ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the host tiny / cta routes are GPU kernels";
     }
 };
 TYPED_TEST_SUITE(DeviceApiPotrfTest, AllTypes);
 
-template <class T> constexpr bool kReg32 = batchlas::device::detail::reg_max_n<T> >= 32;
+template <class Scalar> constexpr bool kReg32 = batchlas::device::detail::reg_max_n<Scalar> >= 32;
 
 TYPED_TEST(DeviceApiPotrfTest, RegMatchesHostRoute) {
     using T = TypeParam;
@@ -283,10 +283,10 @@ TYPED_TEST(DeviceApiPotrfTest, AboveTheTierIsMinusTwo) {
 }
 
 // The largest n <= 128 whose Cta<128> plan fits `bytes` of local memory.
-template <class T> int cta_fit(std::size_t bytes) {
+template <class Scalar> int cta_fit(std::size_t bytes) {
     int n = 0;
     for (int m = 1; m <= 128; ++m)
-        if (batchlas::device::buffer_size<batchlas::device::routine::potrf<Uplo::Lower>, batchlas::device::tier::Cta<128>, T>(m).local_bytes <= bytes) n = m;
+        if (batchlas::device::buffer_size<batchlas::device::routine::potrf<Uplo::Lower>, batchlas::device::tier::Cta<128>, Scalar>(m).local_bytes <= bytes) n = m;
     return n;
 }
 
@@ -310,10 +310,11 @@ TYPED_TEST(DeviceApiPotrfTest, CtaAtTheLocalMemoryCeiling) {
     check(this->dev, p, got, got, gi, gi, "Cta<128> ceiling n=" + std::to_string(n));
 }
 
-template <class T> std::string pick(const batchlas::device::DeviceLimits& lim, int n) {
+template <class Scalar> std::string pick(const batchlas::device::DeviceLimits& lim, int n) {
     std::string got = "none";
     try {
-        batchlas::device::with_tier<batchlas::device::routine::potrf<Uplo::Lower>, T>(lim, n, [&]<class Tier>(Tier) {
+        batchlas::device::with_tier<batchlas::device::routine::potrf<Uplo::Lower>, Scalar>(lim, n,
+                                                                                           [&]<class Tier>(Tier) {
             if constexpr (batchlas::device::tier::is_reg_v<Tier>) got = "reg" + std::to_string(Tier::n_max);
             else if constexpr (batchlas::device::tier::is_blocked_v<Tier>) got = "blocked" + std::to_string(Tier::nb);
             else got = "cta" + std::to_string(Tier::n_max);

@@ -19,12 +19,12 @@ using namespace device_core_test;
 
 namespace {
 
-template <class T> class DeviceCoreArithTest : public DeviceCoreTest<T> {};
+template <class Scalar> class DeviceCoreArithTest : public DeviceCoreTest<Scalar> {};
 TYPED_TEST_SUITE(DeviceCoreArithTest, AllTypes);
 
 constexpr int kBatch = 1024;
 
-template <class T> T nan_of() { return batchlas::device::qnan<T>(); }
+template <class Scalar> Scalar nan_of() { return batchlas::device::qnan<Scalar>(); }
 
 // One y per item and case; out[c * kBatch + b] = y after case c.
 enum Case : int { kSumZero, kSumMaybeZeroSet, kSumMaybeZeroClear, kSumOne, kSumValue, kMacChain, kMacChainMaybeZero, kMulMac,

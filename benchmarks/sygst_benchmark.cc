@@ -11,7 +11,7 @@ namespace {
 // sygst from potrf's factor of a random SPD B (factored once, untimed). ARGS: n batch itype uplo
 // (uplo 0 = Lower, 1 = Upper). Pin a family with BATCHLAS_SYGST_ROUTE (blocked:nb=32, twosided, ...).
 // evidence: docs/perf/sygvd.md#sygst-measured
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_SYGST(minibench::State& state) {
     const int n = static_cast<int>(state.range(0));
     const int batch = static_cast<int>(state.range(1));
@@ -19,14 +19,15 @@ void BM_SYGST(minibench::State& state) {
     const Uplo uplo = state.range(3) == 0 ? Uplo::Lower : Uplo::Upper;
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    auto A = Matrix<T>::Random(n, n, true, batch);
-    Matrix<T> F(n, n, batch);
+    auto A = Matrix<Scalar>::Random(n, n, true, batch);
+    Matrix<Scalar> F(n, n, batch);
     (void)F.view().fill_random_spd(*q, 12345);
     UnifiedVector<int32_t> info(static_cast<std::size_t>(batch), 0);
-    UnifiedVector<std::byte> fws(std::max<std::size_t>(1, potrf_buffer_size<B, T>(*q, F.view(), uplo)));
-    (void)potrf<B, T>(*q, F.view(), uplo, fws.to_span(), info.to_span());
+    UnifiedVector<std::byte> fws(std::max<std::size_t>(1, potrf_buffer_size<B, Scalar>(*q, F.view(), uplo)));
+    (void)potrf<B, Scalar>(*q, F.view(), uplo, fws.to_span(), info.to_span());
     q->wait();
-    UnifiedVector<std::byte> ws(std::max<std::size_t>(1, sygst_buffer_size<B, T>(*q, A.view(), F.view(), itype, uplo)));
+    UnifiedVector<std::byte> ws(std::max<std::size_t>(1, sygst_buffer_size<B,
+                                                      Scalar>(*q, A.view(), F.view(), itype, uplo)));
 
     state.SetKernel(q, bench::pristine(A), std::move(F), itype, uplo, std::move(ws),
                     [](Queue& q, auto&&... xs) { (void)sygst(q, std::forward<decltype(xs)>(xs)...); });

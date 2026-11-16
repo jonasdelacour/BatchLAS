@@ -172,21 +172,21 @@ BATCHLAS_DEVICE_INLINE void repair(const Ex& wg, const MU& U, const MV& Vh, cons
 
 // tier::Blocked<1>'s plan of one matrix: the Golub-Kahan (gd, ge, gs), its eigenvalues w and
 // vectors Z (2n x 2n) in global memory, then the nested stedc's slices.
-template <class R> struct BdsdcLayout {
-    WsSlot<R> gd, ge, gs, w, z;
+template <class Real> struct BdsdcLayout {
+    WsSlot<Real> gd, ge, gs, w, z;
     WsSlot<std::byte> stedc_local, stedc_global;
     WorkspaceSize size;
 };
-template <class R> constexpr BdsdcLayout<R> plan(int n) {
+template <class Real> constexpr BdsdcLayout<Real> plan(int n) {
     const int N = 2 * (n > 0 ? n : 1);
-    const WorkspaceSize q = buffer_size<routine::stedc<JobType::EigenVectors>, tier::Blocked<1>, R>(N);
+    const WorkspaceSize q = buffer_size<routine::stedc<JobType::EigenVectors>, tier::Blocked<1>, Real>(N);
     Plan p(q.align > 16 ? q.align : 16);
-    BdsdcLayout<R> L{};
-    L.gd = p.take<R>(WsSpace::Global, std::size_t(N));
-    L.ge = p.take<R>(WsSpace::Global, std::size_t(N - 1));
-    L.gs = p.take<R>(WsSpace::Global, std::size_t(N));
-    L.w = p.take<R>(WsSpace::Global, std::size_t(N));
-    L.z = p.take<R>(WsSpace::Global, std::size_t(N) * std::size_t(N));
+    BdsdcLayout<Real> L{};
+    L.gd = p.take<Real>(WsSpace::Global, std::size_t(N));
+    L.ge = p.take<Real>(WsSpace::Global, std::size_t(N - 1));
+    L.gs = p.take<Real>(WsSpace::Global, std::size_t(N));
+    L.w = p.take<Real>(WsSpace::Global, std::size_t(N));
+    L.z = p.take<Real>(WsSpace::Global, std::size_t(N) * std::size_t(N));
     L.stedc_local = p.take<std::byte>(WsSpace::Local, q.local_bytes);
     L.stedc_global = p.take<std::byte>(WsSpace::Global, q.global_bytes);
     L.size = p.size();
@@ -195,17 +195,17 @@ template <class R> constexpr BdsdcLayout<R> plan(int n) {
 
 }  // namespace detail
 
-template <class T> struct tiers<routine::bdsdc, T> {
+template <class Real> struct tiers<routine::bdsdc, Real> {
     using type = tier::list<tier::Blocked<1>>;
 };
-// stedc's executor (WorkGroup<256, 32>) at order 2n; real T only (B is real for every gebrd T).
-template <class T> struct tier_info<routine::bdsdc, tier::Blocked<1>, T> {
-    static_assert(std::is_floating_point_v<T>, "bdsdc: a real T");
+// stedc's executor (WorkGroup<256, 32>) at order 2n; real types only (B is real for every gebrd Scalar).
+template <class Real> struct tier_info<routine::bdsdc, tier::Blocked<1>, Real> {
+    static_assert(std::is_floating_point_v<Real>, "bdsdc: a real T");
     static constexpr int wg_size = detail::wg_size, sg_size = detail::sg_size;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 1; }
-    static constexpr WorkspaceSize buffer_size(int n) { return detail::plan<T>(n).size; }
+    static constexpr WorkspaceSize buffer_size(int n) { return detail::plan<Real>(n).size; }
 };
 
 // bdsdc's options. sort_desc: s descending (else ascending), U's columns and Vh's rows with it.

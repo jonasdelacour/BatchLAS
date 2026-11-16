@@ -31,9 +31,9 @@ namespace batchlas::device {
 /// neighbours closer than ortho_threshold * ||T||_inf. seed: this matrix's; vector j starts from
 /// the LCG seeded with seed + j * 104729 (the host route passes params.seed + b * 7919 for matrix
 /// b). The defaults are SteinParams'.
-template <class R> struct SteinOptions {
+template <class Real> struct SteinOptions {
     std::int32_t max_iter = 3;
-    R ortho_threshold = R(1e-3);
+    Real ortho_threshold = Real(1e-3);
     std::uint32_t seed = 0x5eed1234u;
 };
 
@@ -47,21 +47,21 @@ BATCHLAS_DEVICE_HELPER std::uint32_t lcg(std::uint32_t& state) {
 
 // The workspace plan (design C.5): one local broadcast slot; per vector j the shifted
 // tridiagonal's LU rows dl, dd, du, du2, the iterate x and the pivot flags at j * n.
-template <class R> struct SteinLayout {
-    WsSlot<R> norm;
-    WsSlot<R> dl, dd, du, du2, x;
+template <class Real> struct SteinLayout {
+    WsSlot<Real> norm;
+    WsSlot<Real> dl, dd, du, du2, x;
     WsSlot<unsigned char> piv;
     WorkspaceSize size;
 };
-template <class R> constexpr SteinLayout<R> stein_layout(int n, int k) {
+template <class Real> constexpr SteinLayout<Real> stein_layout(int n, int k) {
     Plan p;
     const std::size_t nk = std::size_t(n) * std::size_t(k);
-    const auto norm = p.take<R>(WsSpace::Local, 1);
-    const auto dl = p.take<R>(WsSpace::Global, nk);
-    const auto dd = p.take<R>(WsSpace::Global, nk);
-    const auto du = p.take<R>(WsSpace::Global, nk);
-    const auto du2 = p.take<R>(WsSpace::Global, nk);
-    const auto x = p.take<R>(WsSpace::Global, nk);
+    const auto norm = p.take<Real>(WsSpace::Local, 1);
+    const auto dl = p.take<Real>(WsSpace::Global, nk);
+    const auto dd = p.take<Real>(WsSpace::Global, nk);
+    const auto du = p.take<Real>(WsSpace::Global, nk);
+    const auto du2 = p.take<Real>(WsSpace::Global, nk);
+    const auto x = p.take<Real>(WsSpace::Global, nk);
     const auto piv = p.take<unsigned char>(WsSpace::Global, nk);
     return {norm, dl, dd, du, du2, x, piv, p.size()};
 }
@@ -69,17 +69,18 @@ template <class R> constexpr SteinLayout<R> stein_layout(int n, int k) {
 // The phases' scratch as pointers: the broadcast slot, and vector j's LU rows and pivot flags
 // at (first + j) * n. device::stein carves it from its workspace (scratch(ws, L), first = 0); the
 // host route points it into batch-wide arrays, first = b * k, so its addressing is the legacy one.
-template <class R> struct SteinScratch {
-    local_mptr<R> norm;
-    R* dl;
-    R* dd;
-    R* du;
-    R* du2;
-    R* x;
+template <class Real> struct SteinScratch {
+    local_mptr<Real> norm;
+    Real* dl;
+    Real* dd;
+    Real* du;
+    Real* du2;
+    Real* x;
     unsigned char* piv;
     std::int64_t first;  // this matrix's first vector slot in the arrays
 };
-template <class R> BATCHLAS_DEVICE_INLINE SteinScratch<R> scratch(const Workspace& ws, const SteinLayout<R>& L) {
+template <class Real> BATCHLAS_DEVICE_INLINE SteinScratch<Real> scratch(const Workspace& ws,
+                                                                        const SteinLayout<Real>& L) {
     return {carve_local(ws, L.norm), carve_global(ws, L.dl), carve_global(ws, L.dd), carve_global(ws, L.du),
             carve_global(ws, L.du2), carve_global(ws, L.x), carve_global(ws, L.piv), 0};
 }
@@ -88,10 +89,10 @@ template <class R> BATCHLAS_DEVICE_INLINE SteinScratch<R> scratch(const Workspac
 // exactly repeated eigenvalue nudged by eps ||T|| j; z(:, j) = the normalised result. Columns
 // [kb, k) of z are written as zero (callers back-transform all k). No barrier inside the
 // vector loop: items diverge freely. Needs only z(i, j) and z.cols() of z.
-template <class Ex, class D, class E, class W, class Z, class R>
-BATCHLAS_DEVICE_INLINE void iterate(const Ex& ex, const D& d, const E& e, const W& w, int kb, const Z& z, const SteinScratch<R>& s,
-                                 const SteinOptions<R>& p) {
-    using T = R;
+template <class Ex, class D, class E, class W, class Z, class Real>
+BATCHLAS_DEVICE_INLINE void iterate(const Ex& ex, const D& d, const E& e, const W& w, int kb, const Z& z, const SteinScratch<Real>& s,
+                                 const SteinOptions<Real>& p) {
+    using T = Real;
     const std::int64_t n = d.size();
     const std::int64_t k = z.cols();
     const auto norm_local = s.norm;
@@ -179,10 +180,10 @@ BATCHLAS_DEVICE_INLINE void iterate(const Ex& ex, const D& d, const E& e, const 
 // Phase 2. Walk the ascending w(0..kb); a gap wider than ortho_threshold * ||T||_inf starts a
 // new cluster, and each vector is made orthogonal to its cluster's earlier ones (modified
 // Gram-Schmidt) and renormalised. Stopping at kb, not k, is a cost bound. Needs z.col(j).
-template <class Ex, class D, class E, class W, class Z, class R>
+template <class Ex, class D, class E, class W, class Z, class Real>
 BATCHLAS_DEVICE_INLINE void reorthogonalize(const Ex& ex, const D& d, const E& e, const W& w, int kb, const Z& z,
-                                         const SteinScratch<R>& s, const SteinOptions<R>& p) {
-    using T = R;
+                                         const SteinScratch<Real>& s, const SteinOptions<Real>& p) {
+    using T = Real;
     const auto scratch = s.norm;
     const T tnorm = sycl::max(lanst<NormType::Inf>(ex, d, e), std::numeric_limits<T>::min());
     const T gap_tol = p.ortho_threshold * tnorm;
@@ -214,19 +215,19 @@ struct stein {
 };
 }  // namespace routine
 
-template <class T> struct tiers<routine::stein, T> {
+template <class Real> struct tiers<routine::stein, Real> {
     using type = tier::list<tier::Blocked<1>>;
 };
 // buffer_size(n, k) for k vectors; buffer_size(n) is the k = n bound (with_tier's query). The
-// op runs on any executor width; wg_size is what with_tier checks. Real T only (xSTEIN's
+// op runs on any executor width; wg_size is what with_tier checks. Real types only (xSTEIN's
 // complex form takes a real tridiagonal and is the caller's back-transform).
-template <class T> struct tier_info<routine::stein, tier::Blocked<1>, T> {
-    static_assert(std::is_floating_point_v<T>, "stein: a real T");
+template <class Real> struct tier_info<routine::stein, tier::Blocked<1>, Real> {
+    static_assert(std::is_floating_point_v<Real>, "stein: a real T");
     static constexpr int wg_size = 256, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 1; }
-    static constexpr WorkspaceSize buffer_size(int n, int k) { return detail::stein_layout<T>(n, k).size; }
+    static constexpr WorkspaceSize buffer_size(int n, int k) { return detail::stein_layout<Real>(n, k).size; }
     static constexpr WorkspaceSize buffer_size(int n) { return buffer_size(n, n); }
 };
 
@@ -236,12 +237,13 @@ template <class T> struct tier_info<routine::stein, tier::Blocked<1>, T> {
 /// return. Returns 0 (inverse iteration runs a fixed number of steps, xSTEIN's info is not
 /// computed). Workspace: buffer_size<routine::stein, Tier, T>(n, k); ws.global is this matrix's
 /// slice.
-template <class Tier, class Ex, class D, class E, class W, class Z, class R>
+template <class Tier, class Ex, class D, class E, class W, class Z, class Real>
 BATCHLAS_DEVICE_INLINE int stein(const Ex& ex, const D& d, const E& e, const W& w, int kb, const Z& z, const Workspace& ws,
-                                 const SteinOptions<R>& p) {
-    static_assert(std::is_same_v<elem_t<D>, R>, "stein: options of the matrix's real type");
-    static_assert(std::is_same_v<resolve_tier_t<routine::stein, R, Tier>, tier::Blocked<1>>, "stein: tier::Blocked<1>");
-    const auto s = detail::scratch(ws, detail::stein_layout<R>(d.size(), z.cols()));
+                                 const SteinOptions<Real>& p) {
+    static_assert(std::is_same_v<elem_t<D>, Real>, "stein: options of the matrix's real type");
+    static_assert(std::is_same_v<resolve_tier_t<routine::stein, Real, Tier>, tier::Blocked<1>>,
+                  "stein: tier::Blocked<1>");
+    const auto s = detail::scratch(ws, detail::stein_layout<Real>(d.size(), z.cols()));
     detail::iterate(ex, d, e, w, kb, z, s, p);
     sync(ex, Mem::Global);  // phase 2 reads the vectors other items wrote
     detail::reorthogonalize(ex, d, e, w, kb, z, s, p);

@@ -12,22 +12,22 @@ namespace batchlas {
 // Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
 // src/util/template-instantiations.hh. Keep in sync with the declarations below.
 namespace sig {
-template <typename T>
+template <typename Scalar>
 using symm = Event(Queue&,
-                   const MatrixView<T, MatrixFormat::Dense>&,
-                   const MatrixView<T, MatrixFormat::Dense>&,
-                   const MatrixView<T, MatrixFormat::Dense>&,
-                   T, T, Side, Uplo);
+                   const MatrixView<Scalar, MatrixFormat::Dense>&,
+                   const MatrixView<Scalar, MatrixFormat::Dense>&,
+                   const MatrixView<Scalar, MatrixFormat::Dense>&,
+                   Scalar, Scalar, Side, Uplo);
 
 // Spelled out, not aliased to sig::symm: a vendor parameter order may differ
 // from the public one (trsm's alpha is last).
-template <typename T>
+template <typename Scalar>
 using symm_vendor = Event(Queue&,
-                          const MatrixView<T, MatrixFormat::Dense>&,
-                          const MatrixView<T, MatrixFormat::Dense>&,
-                          const MatrixView<T, MatrixFormat::Dense>&,
-                          T,
-                          T,
+                          const MatrixView<Scalar, MatrixFormat::Dense>&,
+                          const MatrixView<Scalar, MatrixFormat::Dense>&,
+                          const MatrixView<Scalar, MatrixFormat::Dense>&,
+                          Scalar,
+                          Scalar,
                           Side,
                           Uplo);
 }  // namespace sig

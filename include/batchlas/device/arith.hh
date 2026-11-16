@@ -13,11 +13,11 @@
 
 namespace batchlas::device {
 
-// A plain aggregate complex for device code: layout-compatible with std::complex<R> (a launcher
+// A plain aggregate complex for device code: layout-compatible with std::complex<Real> (a launcher
 // may reinterpret_cast at the pointer boundary) and free of Annex-G operators.
-template <class R> struct Cx {
-    R re;
-    R im;
+template <class Real> struct Cx {
+    Real re;
+    Real im;
 };
 
 namespace detail {
@@ -32,40 +32,40 @@ concept PodComplex = requires { &C::re; &C::im; } && std::is_same_v<decltype(C::
 // the Annex-G operator* (isnan branches + __mulsc3). Any POD {re, im} aggregate (Cx below, the
 // src device scalar sycl_device::Cx) gets the explicit complex Arith; specialise it for another
 // scalar type.
-template <class T> struct Arith {
-    using real_t = T;
+template <class Scalar> struct Arith {
+    using real_t = Scalar;
     static constexpr bool is_complex = false;
-    BATCHLAS_DEVICE_INLINE static T mul(T a, T b) { return a * b; }
-    BATCHLAS_DEVICE_INLINE static void mac(T& acc, T a, T b) { acc += a * b; }
-    BATCHLAS_DEVICE_INLINE static void mac_conj(T& acc, T a, T b) { acc += a * b; }
-    BATCHLAS_DEVICE_INLINE static T conj(T a) { return a; }
-    BATCHLAS_DEVICE_INLINE static T re(T a) { return a; }
-    BATCHLAS_DEVICE_INLINE static T im(T) { return T(0); }
-    BATCHLAS_DEVICE_INLINE static T make(T r, T) { return r; }
-    BATCHLAS_DEVICE_INLINE static T add(T a, T b) { return a + b; }
-    BATCHLAS_DEVICE_INLINE static T sub(T a, T b) { return a - b; }
-    BATCHLAS_DEVICE_INLINE static T neg(T a) { return -a; }
-    BATCHLAS_DEVICE_INLINE static T zero() { return T(0); }
-    BATCHLAS_DEVICE_INLINE static T one() { return T(1); }
+    BATCHLAS_DEVICE_INLINE static Scalar mul(Scalar a, Scalar b) { return a * b; }
+    BATCHLAS_DEVICE_INLINE static void mac(Scalar& acc, Scalar a, Scalar b) { acc += a * b; }
+    BATCHLAS_DEVICE_INLINE static void mac_conj(Scalar& acc, Scalar a, Scalar b) { acc += a * b; }
+    BATCHLAS_DEVICE_INLINE static Scalar conj(Scalar a) { return a; }
+    BATCHLAS_DEVICE_INLINE static Scalar re(Scalar a) { return a; }
+    BATCHLAS_DEVICE_INLINE static Scalar im(Scalar) { return Scalar(0); }
+    BATCHLAS_DEVICE_INLINE static Scalar make(Scalar r, Scalar) { return r; }
+    BATCHLAS_DEVICE_INLINE static Scalar add(Scalar a, Scalar b) { return a + b; }
+    BATCHLAS_DEVICE_INLINE static Scalar sub(Scalar a, Scalar b) { return a - b; }
+    BATCHLAS_DEVICE_INLINE static Scalar neg(Scalar a) { return -a; }
+    BATCHLAS_DEVICE_INLINE static Scalar zero() { return Scalar(0); }
+    BATCHLAS_DEVICE_INLINE static Scalar one() { return Scalar(1); }
     // c -= a * b as ONE expression (contracts to one FMA; two statements would round twice).
-    BATCHLAS_DEVICE_INLINE static void msub(T& c, const T& a, const T& b) { c = c - a * b; }
-    BATCHLAS_DEVICE_INLINE static T div(const T& a, const T& b) { return a / b; }
-    BATCHLAS_DEVICE_INLINE static T recip(const T& a) { return T(1) / a; }
-    BATCHLAS_DEVICE_INLINE static T div_real(const T& a, const T& s) { return a / s; }
-    BATCHLAS_DEVICE_INLINE static T scale_real(const T& s, const T& a) { return s * a; }
-    BATCHLAS_DEVICE_INLINE static bool is_zero(const T& a) { return a == T(0); }
-    BATCHLAS_DEVICE_INLINE static bool isfinite(const T& a) { return sycl::isfinite(a); }
+    BATCHLAS_DEVICE_INLINE static void msub(Scalar& c, const Scalar& a, const Scalar& b) { c = c - a * b; }
+    BATCHLAS_DEVICE_INLINE static Scalar div(const Scalar& a, const Scalar& b) { return a / b; }
+    BATCHLAS_DEVICE_INLINE static Scalar recip(const Scalar& a) { return Scalar(1) / a; }
+    BATCHLAS_DEVICE_INLINE static Scalar div_real(const Scalar& a, const Scalar& s) { return a / s; }
+    BATCHLAS_DEVICE_INLINE static Scalar scale_real(const Scalar& s, const Scalar& a) { return s * a; }
+    BATCHLAS_DEVICE_INLINE static bool is_zero(const Scalar& a) { return a == Scalar(0); }
+    BATCHLAS_DEVICE_INLINE static bool isfinite(const Scalar& a) { return sycl::isfinite(a); }
 };
 
 namespace detail {
 // The field access of a complex kind, by reference (one part loaded at a time): std::complex
-// (.real() / .imag(), T(r, i)) and a POD {re, im} (.re / .im, T{r, i}).
-template <class T> struct StdComplexParts {
-    using R = typename T::value_type;
+// (.real() / .imag(), Scalar(r, i)) and a POD {re, im} (.re / .im, Scalar{r, i}).
+template <class Scalar> struct StdComplexParts {
+    using R = typename Scalar::value_type;
     static constexpr bool pod = false;
-    BATCHLAS_DEVICE_INLINE static R re(const T& a) { return a.real(); }
-    BATCHLAS_DEVICE_INLINE static R im(const T& a) { return a.imag(); }
-    BATCHLAS_DEVICE_INLINE static T make(R r, R i) { return T(r, i); }
+    BATCHLAS_DEVICE_INLINE static R re(const Scalar& a) { return a.real(); }
+    BATCHLAS_DEVICE_INLINE static R im(const Scalar& a) { return a.imag(); }
+    BATCHLAS_DEVICE_INLINE static Scalar make(R r, R i) { return Scalar(r, i); }
 };
 template <class C> struct PodComplexParts {
     using R = decltype(C::re);
@@ -184,30 +184,30 @@ template <class T_, class P> struct ComplexArith {
     }
 };
 
-template <class R> struct Arith<std::complex<R>> : ComplexArith<std::complex<R>, detail::StdComplexParts<std::complex<R>>> {};
+template <class Real> struct Arith<std::complex<Real>> : ComplexArith<std::complex<Real>, detail::StdComplexParts<std::complex<Real>>> {};
 template <class C> requires detail::PodComplex<C> struct Arith<C> : ComplexArith<C, detail::PodComplexParts<C>> {};
 
-template <class T> using real_t = typename Arith<std::remove_cv_t<T>>::real_t;
+template <class Scalar> using real_t = typename Arith<std::remove_cv_t<Scalar>>::real_t;
 
-// Is T complex (std::complex or a POD {re, im})? The device-side question; host code asks
+// Is Scalar complex (std::complex or a POD {re, im})? The device-side question; host code asks
 // batchlas::is_std_complex_v.
-template <class T> inline constexpr bool is_complex_v = Arith<std::remove_cv_t<T>>::is_complex;
+template <class Scalar> inline constexpr bool is_complex_v = Arith<std::remove_cv_t<Scalar>>::is_complex;
 
-// The device scalar of a host scalar: std::complex<R> -> Cx<R> (launchers re-type operands at
-// the pointer boundary, no Annex-G operator* reaches the kernel); every other T is itself.
+// The device scalar of a host scalar: std::complex<Real> -> Cx<Real> (launchers re-type operands at
+// the pointer boundary, no Annex-G operator* reaches the kernel); every other Scalar is itself.
 namespace detail {
-template <class T> struct dev_scalar_of {
-    using type = T;
+template <class Scalar> struct dev_scalar_of {
+    using type = Scalar;
 };
-template <class R> struct dev_scalar_of<std::complex<R>> {
-    using type = Cx<R>;
+template <class Real> struct dev_scalar_of<std::complex<Real>> {
+    using type = Cx<Real>;
 };
 }  // namespace detail
-template <class T> using dev_scalar_t = typename detail::dev_scalar_of<std::remove_cv_t<T>>::type;
+template <class Scalar> using dev_scalar_t = typename detail::dev_scalar_of<std::remove_cv_t<Scalar>>::type;
 
-// Re(a) read through the reference (no copy of the imaginary part); a itself for a real T.
-template <class T> BATCHLAS_DEVICE_INLINE real_t<T> re(const T& a) {
-    using A = Arith<std::remove_cv_t<T>>;
+// Re(a) read through the reference (no copy of the imaginary part); a itself for a real Scalar.
+template <class Scalar> BATCHLAS_DEVICE_INLINE real_t<Scalar> re(const Scalar& a) {
+    using A = Arith<std::remove_cv_t<Scalar>>;
     if constexpr (A::is_complex) return A::parts::re(a);
     else return a;
 }
@@ -237,11 +237,11 @@ template <class Ops> inline constexpr bool is_native_v = std::is_same_v<Ops, ari
 // Operands by reference and complex parts read one at a time, as in the hand helper: the loads
 // sit inside the call, and a by-value std::complex is one 8/16-byte load (other unrolling). Any
 // complex kind (std::complex, Cx) through its Parts.
-template <class T> struct ArithInline : Arith<T> {
-    static inline void mac(T& acc, const T& a, const T& b) {
-        if constexpr (Arith<T>::is_complex) {
-            using P = typename Arith<T>::parts;
-            using R = typename Arith<T>::real_t;
+template <class Scalar> struct ArithInline : Arith<Scalar> {
+    static inline void mac(Scalar& acc, const Scalar& a, const Scalar& b) {
+        if constexpr (Arith<Scalar>::is_complex) {
+            using P = typename Arith<Scalar>::parts;
+            using R = typename Arith<Scalar>::real_t;
             const R ar = P::re(a), ai = P::im(a), br = P::re(b), bi = P::im(b);
             const R pr = ar * br - ai * bi;
             const R pi = ar * bi + ai * br;
@@ -250,10 +250,10 @@ template <class T> struct ArithInline : Arith<T> {
             acc += a * b;
         }
     }
-    static inline void mac_conj(T& acc, const T& a, const T& b) {
-        if constexpr (Arith<T>::is_complex) {
-            using P = typename Arith<T>::parts;
-            using R = typename Arith<T>::real_t;
+    static inline void mac_conj(Scalar& acc, const Scalar& a, const Scalar& b) {
+        if constexpr (Arith<Scalar>::is_complex) {
+            using P = typename Arith<Scalar>::parts;
+            using R = typename Arith<Scalar>::real_t;
             const R ar = P::re(a), ai = P::im(a), br = P::re(b), bi = P::im(b);
             const R pr = ar * br + ai * bi;
             const R pi = ar * bi - ai * br;
@@ -264,45 +264,45 @@ template <class T> struct ArithInline : Arith<T> {
     }
 };
 
-template <class T> struct NativeArith {
-    using real_t = typename Arith<T>::real_t;
-    static constexpr bool is_complex = Arith<T>::is_complex;
-    BATCHLAS_DEVICE_INLINE static T cj(T a) {
+template <class Scalar> struct NativeArith {
+    using real_t = typename Arith<Scalar>::real_t;
+    static constexpr bool is_complex = Arith<Scalar>::is_complex;
+    BATCHLAS_DEVICE_INLINE static Scalar cj(Scalar a) {
         if constexpr (is_complex) return std::conj(a);
         else return a;
     }
-    BATCHLAS_DEVICE_INLINE static T mul(T a, T b) { return a * b; }
-    BATCHLAS_DEVICE_INLINE static void mac(T& acc, T a, T b) { acc += a * b; }
-    BATCHLAS_DEVICE_INLINE static void mac_conj(T& acc, T a, T b) { acc += cj(a) * b; }
-    BATCHLAS_DEVICE_INLINE static T conj(T a) { return cj(a); }
-    BATCHLAS_DEVICE_INLINE static T add(T a, T b) { return a + b; }
-    BATCHLAS_DEVICE_INLINE static T sub(T a, T b) { return a - b; }
-    BATCHLAS_DEVICE_INLINE static T neg(T a) { return -a; }
-    BATCHLAS_DEVICE_INLINE static T zero() { return T(0); }
-    BATCHLAS_DEVICE_INLINE static T one() { return T(1); }
-    BATCHLAS_DEVICE_INLINE static real_t re(const T& a) { return Arith<T>::re(a); }
-    BATCHLAS_DEVICE_INLINE static real_t im(const T& a) { return Arith<T>::im(a); }
-    BATCHLAS_DEVICE_INLINE static T make(real_t r, real_t i) { return Arith<T>::make(r, i); }
-    BATCHLAS_DEVICE_INLINE static void msub(T& c, const T& a, const T& b) { c -= a * b; }
-    BATCHLAS_DEVICE_INLINE static T div(const T& a, const T& b) { return a / b; }
-    BATCHLAS_DEVICE_INLINE static T recip(const T& a) { return T(1) / a; }
-    BATCHLAS_DEVICE_INLINE static T div_real(const T& a, const real_t& s) { return a / s; }
-    BATCHLAS_DEVICE_INLINE static T scale_real(const real_t& s, const T& a) { return s * a; }
-    BATCHLAS_DEVICE_INLINE static bool is_zero(const T& a) { return a == T(0); }
-    BATCHLAS_DEVICE_INLINE static bool isfinite(const T& a) { return Arith<T>::isfinite(a); }
+    BATCHLAS_DEVICE_INLINE static Scalar mul(Scalar a, Scalar b) { return a * b; }
+    BATCHLAS_DEVICE_INLINE static void mac(Scalar& acc, Scalar a, Scalar b) { acc += a * b; }
+    BATCHLAS_DEVICE_INLINE static void mac_conj(Scalar& acc, Scalar a, Scalar b) { acc += cj(a) * b; }
+    BATCHLAS_DEVICE_INLINE static Scalar conj(Scalar a) { return cj(a); }
+    BATCHLAS_DEVICE_INLINE static Scalar add(Scalar a, Scalar b) { return a + b; }
+    BATCHLAS_DEVICE_INLINE static Scalar sub(Scalar a, Scalar b) { return a - b; }
+    BATCHLAS_DEVICE_INLINE static Scalar neg(Scalar a) { return -a; }
+    BATCHLAS_DEVICE_INLINE static Scalar zero() { return Scalar(0); }
+    BATCHLAS_DEVICE_INLINE static Scalar one() { return Scalar(1); }
+    BATCHLAS_DEVICE_INLINE static real_t re(const Scalar& a) { return Arith<Scalar>::re(a); }
+    BATCHLAS_DEVICE_INLINE static real_t im(const Scalar& a) { return Arith<Scalar>::im(a); }
+    BATCHLAS_DEVICE_INLINE static Scalar make(real_t r, real_t i) { return Arith<Scalar>::make(r, i); }
+    BATCHLAS_DEVICE_INLINE static void msub(Scalar& c, const Scalar& a, const Scalar& b) { c -= a * b; }
+    BATCHLAS_DEVICE_INLINE static Scalar div(const Scalar& a, const Scalar& b) { return a / b; }
+    BATCHLAS_DEVICE_INLINE static Scalar recip(const Scalar& a) { return Scalar(1) / a; }
+    BATCHLAS_DEVICE_INLINE static Scalar div_real(const Scalar& a, const real_t& s) { return a / s; }
+    BATCHLAS_DEVICE_INLINE static Scalar scale_real(const real_t& s, const Scalar& a) { return s * a; }
+    BATCHLAS_DEVICE_INLINE static bool is_zero(const Scalar& a) { return a == Scalar(0); }
+    BATCHLAS_DEVICE_INLINE static bool isfinite(const Scalar& a) { return Arith<Scalar>::isfinite(a); }
 };
 
 // Explicit fma chains (src/sycl/device_scalar.hh, bit for bit): real mac is one fma, complex
 // four; mul is dev_mul's two; div / recip are Smith's with fma denominators.
-template <class T> struct FmaArith : Arith<T> {
-    using A = Arith<T>;
+template <class Scalar> struct FmaArith : Arith<Scalar> {
+    using A = Arith<Scalar>;
     using R = typename A::real_t;
-    BATCHLAS_DEVICE_INLINE static T mul(const T& a, const T& b) {
+    BATCHLAS_DEVICE_INLINE static Scalar mul(const Scalar& a, const Scalar& b) {
         if constexpr (A::is_complex)
             return A::make(sycl::fma(A::re(a), A::re(b), -A::im(a) * A::im(b)), sycl::fma(A::re(a), A::im(b), A::im(a) * A::re(b)));
         else return a * b;
     }
-    BATCHLAS_DEVICE_INLINE static void mac(T& acc, const T& a, const T& b) {
+    BATCHLAS_DEVICE_INLINE static void mac(Scalar& acc, const Scalar& a, const Scalar& b) {
         if constexpr (A::is_complex) {
             R re = sycl::fma(A::re(a), A::re(b), A::re(acc));
             re = sycl::fma(-A::im(a), A::im(b), re);
@@ -313,7 +313,7 @@ template <class T> struct FmaArith : Arith<T> {
             acc = sycl::fma(a, b, acc);
         }
     }
-    BATCHLAS_DEVICE_INLINE static void mac_conj(T& acc, const T& a, const T& b) {
+    BATCHLAS_DEVICE_INLINE static void mac_conj(Scalar& acc, const Scalar& a, const Scalar& b) {
         if constexpr (A::is_complex) {
             R re = sycl::fma(A::re(a), A::re(b), A::re(acc));
             re = sycl::fma(A::im(a), A::im(b), re);
@@ -324,7 +324,7 @@ template <class T> struct FmaArith : Arith<T> {
             acc = sycl::fma(a, b, acc);
         }
     }
-    BATCHLAS_DEVICE_INLINE static void msub(T& c, const T& a, const T& b) {
+    BATCHLAS_DEVICE_INLINE static void msub(Scalar& c, const Scalar& a, const Scalar& b) {
         if constexpr (A::is_complex) {
             R re = sycl::fma(-A::re(a), A::re(b), A::re(c));
             re = sycl::fma(A::im(a), A::im(b), re);
@@ -335,7 +335,7 @@ template <class T> struct FmaArith : Arith<T> {
             c = sycl::fma(-a, b, c);
         }
     }
-    BATCHLAS_DEVICE_INLINE static T recip(const T& d) {
+    BATCHLAS_DEVICE_INLINE static Scalar recip(const Scalar& d) {
         if constexpr (A::is_complex) {
             const R dr = A::re(d), di = A::im(d);
             if (sycl::fabs(dr) >= sycl::fabs(di)) {
@@ -347,10 +347,10 @@ template <class T> struct FmaArith : Arith<T> {
             const R den = sycl::fma(dr, r, di);
             return A::make(r / den, R(-1) / den);
         } else {
-            return T(1) / d;
+            return Scalar(1) / d;
         }
     }
-    BATCHLAS_DEVICE_INLINE static T div(const T& a, const T& b) {
+    BATCHLAS_DEVICE_INLINE static Scalar div(const Scalar& a, const Scalar& b) {
         if constexpr (A::is_complex) {
             const R ar = A::re(a), ai = A::im(a), br = A::re(b), bi = A::im(b);
             if (sycl::fabs(br) >= sycl::fabs(bi)) {
@@ -367,40 +367,40 @@ template <class T> struct FmaArith : Arith<T> {
     }
 };
 
-template <class Ops, class T>
+template <class Ops, class Scalar>
 using arith_t = std::conditional_t<
-    std::is_same_v<Ops, arith::Native>, NativeArith<std::remove_cv_t<T>>,
-    std::conditional_t<std::is_same_v<Ops, arith::ExplicitInline>, ArithInline<std::remove_cv_t<T>>,
-                       std::conditional_t<std::is_same_v<Ops, arith::Fma>, FmaArith<std::remove_cv_t<T>>, Arith<std::remove_cv_t<T>>>>>;
+    std::is_same_v<Ops, arith::Native>, NativeArith<std::remove_cv_t<Scalar>>,
+    std::conditional_t<std::is_same_v<Ops, arith::ExplicitInline>, ArithInline<std::remove_cv_t<Scalar>>,
+                       std::conditional_t<std::is_same_v<Ops, arith::Fma>, FmaArith<std::remove_cv_t<Scalar>>, Arith<std::remove_cv_t<Scalar>>>>>;
 
 // |a|^2 = re^2 + im^2, by value. Its result is a separate rounding: it cannot contract into the
 // caller's accumulation (syevx), so accumulate with sumsq / acc_abs2 (level1.hh) instead.
-template <class T> BATCHLAS_DEVICE_INLINE real_t<T> abs2(T a) {
-    using A = Arith<std::remove_cv_t<T>>;
+template <class Scalar> BATCHLAS_DEVICE_INLINE real_t<Scalar> abs2(Scalar a) {
+    using A = Arith<std::remove_cv_t<Scalar>>;
     if constexpr (A::is_complex) return A::re(a) * A::re(a) + A::im(a) * A::im(a);
     else return a * a;
 }
 
 // BLAS |re| + |im| (dcabs1): the key of asum, amax and iamax.
-template <class T> BATCHLAS_DEVICE_INLINE real_t<T> abs1(T a) {
-    using A = Arith<std::remove_cv_t<T>>;
+template <class Scalar> BATCHLAS_DEVICE_INLINE real_t<Scalar> abs1(Scalar a) {
+    using A = Arith<std::remove_cv_t<Scalar>>;
     if constexpr (A::is_complex) return sycl::fabs(A::re(a)) + sycl::fabs(A::im(a));
     else return sycl::fabs(a);
 }
 
-// Conjugate, the identity on a real T. arith::Native is std::conj, plain inline by reference: the
+// Conjugate, the identity on a real Scalar. arith::Native is std::conj, plain inline by reference: the
 // legacy kernels' form (always_inline / by value moves their complex SASS).
-template <class Ops = arith::Native, class T> BATCHLAS_DEVICE_HELPER constexpr T conj(const T& a) {
-    if constexpr (!std::is_same_v<Ops, arith::Native>) return arith_t<Ops, T>::conj(a);
-    else if constexpr (Arith<std::remove_cv_t<T>>::is_complex) return std::conj(a);
+template <class Ops = arith::Native, class Scalar> BATCHLAS_DEVICE_HELPER constexpr Scalar conj(const Scalar& a) {
+    if constexpr (!std::is_same_v<Ops, arith::Native>) return arith_t<Ops, Scalar>::conj(a);
+    else if constexpr (Arith<std::remove_cv_t<Scalar>>::is_complex) return std::conj(a);
     else return a;
 }
 
 // cond ? a : b component by component: LLVM builds no `select` of a complex aggregate, and
 // a register array read through one stops being promotable. The components are read before
 // the ternaries: a call inside a `?:` arm leaves a branchier CFG (complex<float> SASS moves).
-template <class T> BATCHLAS_DEVICE_INLINE T select(bool cond, T a, T b) {
-    using A = Arith<T>;
+template <class Scalar> BATCHLAS_DEVICE_INLINE Scalar select(bool cond, Scalar a, Scalar b) {
+    using A = Arith<Scalar>;
     if constexpr (A::is_complex) {
         const auto ar = A::re(a), ai = A::im(a), br = A::re(b), bi = A::im(b);
         return A::make(cond ? ar : br, cond ? ai : bi);
@@ -410,11 +410,11 @@ template <class T> BATCHLAS_DEVICE_INLINE T select(bool cond, T a, T b) {
 }
 
 // s * x for a tag s; Zero never reads x.
-template <class T, class S> BATCHLAS_DEVICE_INLINE T tag_mul(S s, T x) {
+template <class Scalar, class S> BATCHLAS_DEVICE_INLINE Scalar tag_mul(S s, Scalar x) {
     if constexpr (std::is_same_v<S, One>) return x;
-    else if constexpr (std::is_same_v<S, Zero>) return Arith<T>::zero();
-    else if constexpr (std::is_same_v<S, NegOne>) return Arith<T>::neg(x);
-    else return Arith<T>::mul(static_cast<T>(s.v), x);
+    else if constexpr (std::is_same_v<S, Zero>) return Arith<Scalar>::zero();
+    else if constexpr (std::is_same_v<S, NegOne>) return Arith<Scalar>::neg(x);
+    else return Arith<Scalar>::mul(static_cast<Scalar>(s.v), x);
 }
 
 // ---- scalar helpers (design A.2 arith.hh) --------------------------------------------------
@@ -423,85 +423,88 @@ template <class T, class S> BATCHLAS_DEVICE_INLINE T tag_mul(S s, T x) {
 namespace arith {
 struct FmaSplit {};
 }  // namespace arith
-template <class T> struct FmaSplitArith : Arith<T> {
-    BATCHLAS_DEVICE_INLINE static void msub(T& c, const T& a, const T& b) { c = Arith<T>::sub(c, Arith<T>::mul(a, b)); }
+template <class Scalar> struct FmaSplitArith : Arith<Scalar> {
+    BATCHLAS_DEVICE_INLINE static void msub(Scalar& c, const Scalar& a,
+                                            const Scalar& b) { c = Arith<Scalar>::sub(c, Arith<Scalar>::mul(a, b)); }
 };
-template <class Ops, class T>
-using ops_arith_t = std::conditional_t<std::is_same_v<Ops, arith::FmaSplit>, FmaSplitArith<std::remove_cv_t<T>>, arith_t<Ops, T>>;
+template <class Ops, class Scalar>
+using ops_arith_t = std::conditional_t<std::is_same_v<Ops, arith::FmaSplit>, FmaSplitArith<std::remove_cv_t<Scalar>>, arith_t<Ops, Scalar>>;
 
 // max(|re|, |im|): LAPACK's ABSSQ-free magnitude bound (izmax1's key is abs1; this is the inf norm).
-template <class T> BATCHLAS_DEVICE_INLINE real_t<T> abs_inf(T a) {
-    using A = Arith<std::remove_cv_t<T>>;
+template <class Scalar> BATCHLAS_DEVICE_INLINE real_t<Scalar> abs_inf(Scalar a) {
+    using A = Arith<std::remove_cv_t<Scalar>>;
     if constexpr (A::is_complex) return sycl::fmax(sycl::fabs(A::re(a)), sycl::fabs(A::im(a)));
     else return sycl::fabs(a);
 }
-// (re, 0): the real part as T (a Hermitian diagonal, a phase-free reflector beta).
-template <class T> BATCHLAS_DEVICE_INLINE T force_real(T a) {
-    using A = Arith<std::remove_cv_t<T>>;
+// (re, 0): the real part as Scalar (a Hermitian diagonal, a phase-free reflector beta).
+template <class Scalar> BATCHLAS_DEVICE_INLINE Scalar force_real(Scalar a) {
+    using A = Arith<std::remove_cv_t<Scalar>>;
     if constexpr (A::is_complex) return A::make(A::re(a), typename A::real_t(0));
     else return a;
 }
-// A real r as T (r, 0).
-template <class T> BATCHLAS_DEVICE_INLINE T lift(real_t<T> r) {
-    using A = Arith<std::remove_cv_t<T>>;
+// A real r as Scalar (r, 0).
+template <class Scalar> BATCHLAS_DEVICE_INLINE Scalar lift(real_t<Scalar> r) {
+    using A = Arith<std::remove_cv_t<Scalar>>;
     if constexpr (A::is_complex) return A::make(r, typename A::real_t(0));
     else return r;
 }
-// {re, im} of a (im = 0 for real T).
-template <class R> struct Parts {
-    R re, im;
+// {re, im} of a (im = 0 for real Scalar).
+template <class Real> struct Parts {
+    Real re, im;
 };
-template <class T> BATCHLAS_DEVICE_INLINE Parts<real_t<T>> by_parts(T a) {
-    using A = Arith<std::remove_cv_t<T>>;
+template <class Scalar> BATCHLAS_DEVICE_INLINE Parts<real_t<Scalar>> by_parts(Scalar a) {
+    using A = Arith<std::remove_cv_t<Scalar>>;
     return {A::re(a), A::im(a)};
 }
-// conj(a) when C (compile time) or when on (run time, one select); the identity on real T.
-template <bool C, class T>
-    requires std::is_floating_point_v<real_t<T>>
-BATCHLAS_DEVICE_INLINE T conj_if(const T& a) {
-    if constexpr (C) return Arith<std::remove_cv_t<T>>::conj(a);
+// conj(a) when C (compile time) or when on (run time, one select); the identity on real Scalar.
+template <bool C, class Scalar>
+    requires std::is_floating_point_v<real_t<Scalar>>
+BATCHLAS_DEVICE_INLINE Scalar conj_if(const Scalar& a) {
+    if constexpr (C) return Arith<std::remove_cv_t<Scalar>>::conj(a);
     else return a;
 }
-template <class T>
-    requires std::is_floating_point_v<real_t<T>>
-BATCHLAS_DEVICE_INLINE T conj_if(bool on, const T& a) {
-    using A = Arith<std::remove_cv_t<T>>;
+template <class Scalar>
+    requires std::is_floating_point_v<real_t<Scalar>>
+BATCHLAS_DEVICE_INLINE Scalar conj_if(bool on, const Scalar& a) {
+    using A = Arith<std::remove_cv_t<Scalar>>;
     if constexpr (A::is_complex) return on ? A::conj(a) : a;
     else return a;
 }
 // s * x and x / s for a REAL s (componentwise; no complex multiply), and a - s * x. scale_real
 // takes x by value, as dev_mul_real: one load of an x in memory, not one per part.
-template <class T> BATCHLAS_DEVICE_INLINE T scale_real(real_t<T> s, T x) { return Arith<std::remove_cv_t<T>>::scale_real(s, x); }
-template <class T> BATCHLAS_DEVICE_INLINE T div_real(const T& x, real_t<T> s) { return Arith<std::remove_cv_t<T>>::div_real(x, s); }
-template <class T> BATCHLAS_DEVICE_INLINE T sub_scale_real(const T& a, real_t<T> s, const T& x) {
-    using A = Arith<std::remove_cv_t<T>>;
+template <class Scalar> BATCHLAS_DEVICE_INLINE Scalar scale_real(real_t<Scalar> s, Scalar x) { return Arith<std::remove_cv_t<Scalar>>::scale_real(s, x); }
+template <class Scalar> BATCHLAS_DEVICE_INLINE Scalar div_real(const Scalar& x, real_t<Scalar> s) { return Arith<std::remove_cv_t<Scalar>>::div_real(x, s); }
+template <class Scalar> BATCHLAS_DEVICE_INLINE Scalar sub_scale_real(const Scalar& a, real_t<Scalar> s,
+                                                                     const Scalar& x) {
+    using A = Arith<std::remove_cv_t<Scalar>>;
     if constexpr (A::is_complex) return A::make(A::re(a) - s * A::re(x), A::im(a) - s * A::im(x));
     else return a - s * x;
 }
 
 namespace detail {
 // The value a scalar tag stands for (MaybeZero: its value, the flag ignored).
-template <class T, class S> BATCHLAS_DEVICE_INLINE T tag_value(const S& s) {
-    if constexpr (std::is_same_v<S, One>) return Arith<T>::one();
-    else if constexpr (std::is_same_v<S, Zero>) return Arith<T>::zero();
-    else if constexpr (std::is_same_v<S, NegOne>) return Arith<T>::neg(Arith<T>::one());
-    else return static_cast<T>(s.v);
+template <class Scalar, class S> BATCHLAS_DEVICE_INLINE Scalar tag_value(const S& s) {
+    if constexpr (std::is_same_v<S, One>) return Arith<Scalar>::one();
+    else if constexpr (std::is_same_v<S, Zero>) return Arith<Scalar>::zero();
+    else if constexpr (std::is_same_v<S, NegOne>) return Arith<Scalar>::neg(Arith<Scalar>::one());
+    else return static_cast<Scalar>(s.v);
 }
 template <class S> inline constexpr bool is_maybe_zero_v = false;
-template <class T> inline constexpr bool is_maybe_zero_v<MaybeZero<T>> = true;
+template <class Scalar> inline constexpr bool is_maybe_zero_v<MaybeZero<Scalar>> = true;
 // out += s * x under Ar: Zero adds nothing, One / NegOne add exactly, a value is one mac.
-template <class Ar, class T, class S> BATCHLAS_DEVICE_INLINE void mac_term(T& out, const S& s, const T& x) {
+template <class Ar, class Scalar, class S> BATCHLAS_DEVICE_INLINE void mac_term(Scalar& out, const S& s,
+                                                                                const Scalar& x) {
     if constexpr (std::is_same_v<S, Zero>) return;
     else if constexpr (std::is_same_v<S, One>) out = Ar::add(out, x);
     else if constexpr (std::is_same_v<S, NegOne>) out = Ar::sub(out, x);
-    else Ar::mac(out, static_cast<T>(s.v), x);
+    else Ar::mac(out, static_cast<Scalar>(s.v), x);
 }
 // s * x under Ar; Zero never reads x.
-template <class Ar, class T, class S> BATCHLAS_DEVICE_INLINE T mul_term(const S& s, const T& x) {
+template <class Ar, class Scalar, class S> BATCHLAS_DEVICE_INLINE Scalar mul_term(const S& s, const Scalar& x) {
     if constexpr (std::is_same_v<S, One>) return x;
     else if constexpr (std::is_same_v<S, Zero>) return Ar::zero();
     else if constexpr (std::is_same_v<S, NegOne>) return Ar::neg(x);
-    else return Ar::mul(static_cast<T>(s.v), x);
+    else return Ar::mul(static_cast<Scalar>(s.v), x);
 }
 // beta == 0 as the epilogue sees it: a Zero tag, a MaybeZero flag, else false (a value is not
 // compared: only epi::Linear / LinearNegZero compare beta with 0, as their sources do).
@@ -513,8 +516,9 @@ template <class S> BATCHLAS_DEVICE_INLINE bool known_zero(const S& s) {
 }  // namespace detail
 
 // out += s * x under Ops (Zero adds nothing; MaybeZero adds nothing when its flag is set).
-template <class Ops = arith::Explicit, class T, class S> BATCHLAS_DEVICE_INLINE void tag_mac(T& out, S s_, const T& x) {
-    using Ar = ops_arith_t<Ops, T>;
+template <class Ops = arith::Explicit, class Scalar, class S> BATCHLAS_DEVICE_INLINE void tag_mac(Scalar& out, S s_,
+                                                                                                  const Scalar& x) {
+    using Ar = ops_arith_t<Ops, Scalar>;
     const auto s = as_tag(s_);
     if constexpr (detail::is_maybe_zero_v<std::remove_cv_t<decltype(s)>>) {
         if (!s.zero) Ar::mac(out, s.v, x);

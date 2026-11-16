@@ -21,12 +21,12 @@ namespace batchlas {
 namespace {
 
 // Distinct from steqr_wg.cc's tags: both TUs link into one device image.
-template <typename T> struct SteqrLegacyFrancisKernel {};
-template <typename T> struct SteqrLegacyRotationKernel {};
+template <typename Real> struct SteqrLegacyFrancisKernel {};
+template <typename Real> struct SteqrLegacyRotationKernel {};
 
 }  // namespace
 
-template <typename T>
+template <typename Real>
 struct SteqrImplScratch {
     Span<int32_t> scan;
     VectorView<std::array<int32_t, 2>> temp_deflation_indices;
@@ -34,21 +34,21 @@ struct SteqrImplScratch {
 
 // Single description of the per-pass scratch steqr_impl carves off the pool it
 // is handed; see workspace_bytes() in util/mempool.hh.
-template <typename T>
-SteqrImplScratch<T> steqr_impl_layout(Queue& ctx, BumpAllocator& pool, int64_t n, int64_t batch_size) {
+template <typename Real>
+SteqrImplScratch<Real> steqr_impl_layout(Queue& ctx, BumpAllocator& pool, int64_t n, int64_t batch_size) {
     auto scan = pool.allocate<int32_t>(ctx, batch_size);
     auto tdi = pool.allocate<std::array<int32_t, 2>>(
         ctx, VectorView<std::array<int32_t, 2>>::required_span_length(n / 2, 1, n / 2, batch_size));
     return {scan, VectorView<std::array<int32_t, 2>>(tdi, n / 2, batch_size, 1, n / 2)};
 }
 
-template <typename T>
+template <typename Real>
 Event steqr_impl(Queue& ctx,
-                    const VectorView<T>& d, // Diagonal elements
-                    const VectorView<T>& e, // Off-diagonal elements
+                    const VectorView<Real>& d, // Diagonal elements
+                    const VectorView<Real>& e, // Off-diagonal elements
                     JobType jobz, // Eigenvector computation flag
-                    const MatrixView<T, MatrixFormat::Dense>& Q, // Eigenvector storage
-                    const MatrixView<std::array<T, 2>, MatrixFormat::Dense>& givens_rotations, // Storage for Givens rotations
+                    const MatrixView<Real, MatrixFormat::Dense>& Q, // Eigenvector storage
+                    const MatrixView<std::array<Real, 2>, MatrixFormat::Dense>& givens_rotations, // Storage for Givens rotations
                     const Span<std::array<int32_t, 3>>& deflation_indices, // #sub_problems deflation indices i.e. where e is zero
                     const Span<ApplyOrder>& order_view, // Order of application of rotations, has #sub_problems number of entries
                     const Span<int32_t>& sweep_counts, // Number of sweeps actually performed per sub-problem
@@ -61,7 +61,7 @@ Event steqr_impl(Queue& ctx,
     auto batch_size = d.batch_size();
     bool store_givens = jobz == JobType::EigenVectors;
     auto ncus = ctx.device().get_property(DeviceProperty::MAX_COMPUTE_UNITS);
-    auto scratch = steqr_impl_layout<T>(ctx, allocator, n, batch_size);
+    auto scratch = steqr_impl_layout<Real>(ctx, allocator, n, batch_size);
     auto scan_view = scratch.scan;
     auto temp_deflation_indices = scratch.temp_deflation_indices;
 
@@ -77,9 +77,9 @@ Event steqr_impl(Queue& ctx,
             // An inactive item lists no sub-problem, so neither the sweep nor the rotations touch it.
             while (e.active(i) && ix < n - 1) {
                 auto start_ix = ix;
-                if (ebid(ix) != T(0)) {
+                if (ebid(ix) != Real(0)) {
                     for (ix = ix + 1; ix < n - 1; ++ix) {
-                        if (ebid(ix) == T(0)) break;
+                        if (ebid(ix) == Real(0)) break;
                     }
                 } else {
                     ix++;
@@ -119,7 +119,7 @@ Event steqr_impl(Queue& ctx,
         BATCHLAS_KERNEL_TRACE_SCOPE("steqr:francis_sweep");
         ctx->submit([&](sycl::handler& h) {
         auto rotations_view = givens_rotations.kernel_view();
-        batchlas::impl::parallel_for<SteqrLegacyFrancisKernel<T>>(h, sycl::nd_range<1>(sycl::range<1>(ncus*128), sycl::range<1>(64)), [=](sycl::nd_item<1> it) {
+        batchlas::impl::parallel_for<SteqrLegacyFrancisKernel<Real>>(h, sycl::nd_range<1>(sycl::range<1>(ncus*128), sycl::range<1>(64)), [=](sycl::nd_item<1> it) {
             auto i = it.get_global_id(0);
             auto n_problems = scan_view[batch_size - 1];
 
@@ -137,7 +137,7 @@ Event steqr_impl(Queue& ctx,
             // The sweep bodies are steqr_wg's (device::detail::wg_*); this route also records the
             // sweep count of each block for the rotation replay.
             if (n == 2) {
-                device::detail::wg_solve_2x2<T>(d_, e_, store_givens, [&](const device::Givens<T>& g) BATCHLAS_DEVICE_BODY {
+                device::detail::wg_solve_2x2<Real>(d_, e_, store_givens, [&](const device::Givens<Real>& g) BATCHLAS_DEVICE_BODY {
                     rotations_view(0, 0, gid) = {g.c, g.s};
                     order_view[gid] = ApplyOrder::Forward;
                     sweep_counts[gid] = 1;
@@ -148,7 +148,7 @@ Event steqr_impl(Queue& ctx,
             bool QR = device::detail::wg_forward(d_, n);
             order_view[gid] = QR ? ApplyOrder::Forward : ApplyOrder::Backward;
             for (size_t k = 0; k < max_sweeps; ++k) {
-                const bool deflatable = device::detail::wg_sweep<T>(d_, e_, n, QR, [&](size_t j, const device::Givens<T>& g) BATCHLAS_DEVICE_BODY {
+                const bool deflatable = device::detail::wg_sweep<Real>(d_, e_, n, QR, [&](size_t j, const device::Givens<Real>& g) BATCHLAS_DEVICE_BODY {
                     if (store_givens) {
                         rotations_view(j, k, gid) = {g.c, g.s};
                     }
@@ -163,7 +163,7 @@ Event steqr_impl(Queue& ctx,
     ctx->submit([&](sycl::handler& h) {
         auto Qview = Q.kernel_view();
         auto rotations_view = givens_rotations.kernel_view();
-        batchlas::impl::parallel_for<SteqrLegacyRotationKernel<T>>(h, sycl::nd_range<1>(sycl::range<1>(Q.rows()*Q.batch_size()*2), sycl::range<1>(Q.rows())), [=](sycl::nd_item<1> it) {
+        batchlas::impl::parallel_for<SteqrLegacyRotationKernel<Real>>(h, sycl::nd_range<1>(sycl::range<1>(Q.rows()*Q.batch_size()*2), sycl::range<1>(Q.rows())), [=](sycl::nd_item<1> it) {
             auto bid = it.get_group(0);
             auto k = it.get_local_linear_id();
             auto n_problems = scan_view[batch_size - 1];
@@ -188,14 +188,14 @@ Event steqr_impl(Queue& ctx,
             for (int i = 0; i < n_sweeps; ++i) {
                 for (int j = 0; j < ncols - 1; ++j) {
                     auto [c, s] = rotations_view(j, i, gid);
-                    if (c == T(1) && s == T(0)) continue; // Skip identity rotations
+                    if (c == Real(1) && s == Real(0)) continue; // Skip identity rotations
 
                     // Map virtual indices (j, j+1) to physical column indices.
                     int ix1 = col_index(j);
                     int ix2 = col_index(j + 1);
 
-                    const T x = Q_(k, ix1);
-                    const T y = Q_(k, ix2);
+                    const Real x = Q_(k, ix1);
+                    const Real y = Q_(k, ix2);
                     Q_(k, ix1) = c * x - s * y;
                     Q_(k, ix2) = s * x + c * y;
                 }
@@ -208,12 +208,12 @@ Event steqr_impl(Queue& ctx,
     return ctx.get_event();
 }
 
-template <typename T>
+template <typename Real>
 struct SteqrLegacyWorkspace {
-    VectorView<T> d;
-    VectorView<T> e;
-    Span<T> apply_Q_ws;
-    MatrixView<std::array<T, 2>, MatrixFormat::Dense> givens_rotations;
+    VectorView<Real> d;
+    VectorView<Real> e;
+    Span<Real> apply_Q_ws;
+    MatrixView<std::array<Real, 2>, MatrixFormat::Dense> givens_rotations;
     Span<ApplyOrder> apply_order;
     Span<std::array<int32_t, 3>> deflation_indices;
     Span<int32_t> sweep_counts;
@@ -228,29 +228,29 @@ struct SteqrLegacyWorkspace {
 //
 // `eigvects` is only inspected for its shape (to size the sort scratch), so the
 // sizing entry point may pass a shape-only view over no memory.
-template <typename T>
-SteqrLegacyWorkspace<T> steqr_legacy_layout(Queue& ctx,
-                                            BumpAllocator& pool,
-                                            int64_t n,
-                                            int64_t batch_size,
-                                            JobType jobz,
-                                            const SteqrParams<T>& params,
-                                            const VectorView<T>& eigenvalues,
-                                            const MatrixView<T, MatrixFormat::Dense>& eigvects) {
+template <typename Real>
+SteqrLegacyWorkspace<Real> steqr_legacy_layout(Queue& ctx,
+                                               BumpAllocator& pool,
+                                               int64_t n,
+                                               int64_t batch_size,
+                                               JobType jobz,
+                                               const SteqrParams<Real>& params,
+                                               const VectorView<Real>& eigenvalues,
+                                               const MatrixView<Real, MatrixFormat::Dense>& eigvects) {
     const bool want_vectors = jobz == JobType::EigenVectors;
     const auto increment = params.transpose_working_vectors ? batch_size : 1;
     const auto d_stride = params.transpose_working_vectors ? 1 : n;
     const auto e_stride = params.transpose_working_vectors ? 1 : n - 1;
 
-    auto d = VectorView<T>(pool.allocate<T>(ctx, VectorView<T>::required_span_length(n, increment, d_stride, batch_size)),
-                           n, batch_size, increment, d_stride);
-    auto e = VectorView<T>(pool.allocate<T>(ctx, VectorView<T>::required_span_length(n - 1, increment, e_stride, batch_size)),
-                           n - 1, batch_size, increment, e_stride);
+    auto d = VectorView<Real>(pool.allocate<Real>(ctx, VectorView<Real>::required_span_length(n, increment, d_stride, batch_size)),
+                              n, batch_size, increment, d_stride);
+    auto e = VectorView<Real>(pool.allocate<Real>(ctx, VectorView<Real>::required_span_length(n - 1, increment, e_stride, batch_size)),
+                              n - 1, batch_size, increment, e_stride);
 
     // Nothing reads this any more -- it is kept only so that converting this
     // function does not change how much workspace callers must supply. Removing
     // it is a separate, deliberate change.
-    auto apply_Q_ws = pool.allocate<T>(
+    auto apply_Q_ws = pool.allocate<Real>(
         ctx, want_vectors ? (batch_size * params.block_size * 2 * params.block_size * 2 + batch_size * n * params.block_size * 4) : 0);
 
     const auto n_sweeps_to_store = (want_vectors && params.block_rotations)
@@ -260,30 +260,30 @@ SteqrLegacyWorkspace<T> steqr_legacy_layout(Queue& ctx,
     const auto max_subproblems = n / 2 + 1;
 
     auto givens_rotations =
-        want_vectors ? MatrixView<std::array<T, 2>>(pool.allocate<std::array<T, 2>>(ctx, stride * max_subproblems * batch_size).data(),
-                                                    n - 1, n_sweeps_to_store, n - 1, stride, max_subproblems * batch_size)
-                     : MatrixView<std::array<T, 2>>();
+        want_vectors ? MatrixView<std::array<Real, 2>>(pool.allocate<std::array<Real, 2>>(ctx, stride * max_subproblems * batch_size).data(),
+                                                       n - 1, n_sweeps_to_store, n - 1, stride, max_subproblems * batch_size)
+                     : MatrixView<std::array<Real, 2>>();
     auto apply_order = pool.allocate<ApplyOrder>(ctx, batch_size * max_subproblems);
     auto deflation_indices = pool.allocate<std::array<int32_t, 3>>(ctx, batch_size * max_subproblems);
     auto sweep_counts = want_vectors ? pool.allocate<int32_t>(ctx, batch_size * max_subproblems) : Span<int32_t>();
 
-    const size_t pass_scratch = workspace_bytes([&](BumpAllocator& p) { return steqr_impl_layout<T>(ctx, p, n, batch_size); });
-    const size_t sort_scratch = params.sort ? sort_buffer_size<T>(ctx, eigenvalues.data(), eigvects, jobz) : 0;
+    const size_t pass_scratch = workspace_bytes([&](BumpAllocator& p) { return steqr_impl_layout<Real>(ctx, p, n, batch_size); });
+    const size_t sort_scratch = params.sort ? sort_buffer_size<Real>(ctx, eigenvalues.data(), eigvects, jobz) : 0;
     auto scratch = pool.allocate<std::byte>(ctx, std::max(pass_scratch, sort_scratch));
 
     return {d, e, apply_Q_ws, givens_rotations, apply_order, deflation_indices, sweep_counts, scratch};
 }
 
-template <Backend B, typename T>
-Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e_in, const VectorView<T>& eigenvalues_in, const Span<std::byte>& ws,
-                   JobType jobz, SteqrParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects_in,
+template <Backend B, typename Real>
+Event steqr_legacy(Queue& ctx, const VectorView<Real>& d_in, const VectorView<Real>& e_in, const VectorView<Real>& eigenvalues_in, const Span<std::byte>& ws,
+                   JobType jobz, SteqrParams<Real> params, const MatrixView<Real, MatrixFormat::Dense>& eigvects_in,
                    Span<int32_t> info) {
     const int64_t n = d_in.size();
     const int64_t batch_size = d_in.batch_size();
     // The working copies are rebuilt from the pool, so they take the call's mask back on.
     const auto mask = batchlas::detail::call_mask("steqr_legacy", d_in, e_in, eigenvalues_in, eigvects_in);
-    const VectorView<T> eigenvalues = eigenvalues_in.with_batch_mask(mask);
-    const MatrixView<T, MatrixFormat::Dense> eigvects =
+    const VectorView<Real> eigenvalues = eigenvalues_in.with_batch_mask(mask);
+    const MatrixView<Real, MatrixFormat::Dense> eigvects =
         jobz == JobType::EigenVectors ? eigvects_in.with_batch_mask(mask) : eigvects_in;
 
     if (jobz == JobType::EigenVectors) {
@@ -300,12 +300,12 @@ Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e
     }
 
     auto pool = BumpAllocator(ws);
-    auto wsl = steqr_legacy_layout<T>(ctx, pool, n, batch_size, jobz, params, eigenvalues, eigvects);
-    const VectorView<T> d = wsl.d.with_batch_mask(mask);
-    const VectorView<T> e = wsl.e.with_batch_mask(mask);
+    auto wsl = steqr_legacy_layout<Real>(ctx, pool, n, batch_size, jobz, params, eigenvalues, eigvects);
+    const VectorView<Real> d = wsl.d.with_batch_mask(mask);
+    const VectorView<Real> e = wsl.e.with_batch_mask(mask);
     // Copy inputs to working buffers
-    (void)VectorView<T>::copy(ctx, d, d_in);
-    (void)VectorView<T>::copy(ctx, e, e_in);
+    (void)VectorView<Real>::copy(ctx, d, d_in);
+    (void)VectorView<Real>::copy(ctx, e, e_in);
 
     auto givens_rotations = wsl.givens_rotations;
     auto apply_order = wsl.apply_order;
@@ -328,7 +328,7 @@ Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e
                 if (!e.active(id[0])) return;  // I3: neutral for the host's convergence read
                 auto ebid = e.batch_item(id[0]);
                 for (int64_t j = 0; j < n - 1; ++j) {
-                    if (ebid(j) != T(0)) {
+                    if (ebid(j) != Real(0)) {
                         sycl::atomic_ref<int32_t, sycl::memory_order::relaxed,
                                          sycl::memory_scope::device> flag(converged_flag[0]);
                         flag.store(1);
@@ -357,7 +357,7 @@ Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e
                 auto ebid = e.batch_item(id[0]);
                 int32_t unconverged = 0;
                 for (int64_t j = 0; j < n - 1; ++j) {
-                    if (ebid(j) != T(0)) ++unconverged;
+                    if (ebid(j) != Real(0)) ++unconverged;
                 }
                 detail::info_report(info_out, static_cast<int64_t>(id[0]), unconverged);
             });
@@ -380,17 +380,17 @@ Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e
     return ctx.get_event();
 }
 
-template <typename T>
-size_t steqr_legacy_buffer_size(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
-                                const VectorView<T>& eigenvalues, JobType jobz, SteqrParams<T> params) {
+template <typename Real>
+size_t steqr_legacy_buffer_size(Queue& ctx, const VectorView<Real>& d, const VectorView<Real>& e,
+                                const VectorView<Real>& eigenvalues, JobType jobz, SteqrParams<Real> params) {
     (void)e;
     const auto n = d.size();
     const auto batch_size = d.batch_size();
     // Shape-only stand-in for the eigenvector matrix; the layout reads its
     // dimensions to size the sort scratch and nothing else.
-    const MatrixView<T, MatrixFormat::Dense> eigvects_shape(nullptr, n, n, n, n * n, batch_size);
+    const MatrixView<Real, MatrixFormat::Dense> eigvects_shape(nullptr, n, n, n, n * n, batch_size);
     return workspace_bytes([&](BumpAllocator& pool) {
-        return steqr_legacy_layout<T>(ctx, pool, n, batch_size, jobz, params, eigenvalues, eigvects_shape);
+        return steqr_legacy_layout<Real>(ctx, pool, n, batch_size, jobz, params, eigenvalues, eigvects_shape);
     });
 }
 

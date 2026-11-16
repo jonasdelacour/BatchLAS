@@ -12,22 +12,22 @@ namespace batchlas {
 // Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
 // src/util/template-instantiations.hh. Keep in sync with the declarations below.
 namespace sig {
-template <typename T>
+template <typename Scalar>
 using her2k = Event(Queue&,
-                    const MatrixView<T, MatrixFormat::Dense>&,
-                    const MatrixView<T, MatrixFormat::Dense>&,
-                    const MatrixView<T, MatrixFormat::Dense>&,
-                    T, float_t<T>, Uplo, Transpose);
+                    const MatrixView<Scalar, MatrixFormat::Dense>&,
+                    const MatrixView<Scalar, MatrixFormat::Dense>&,
+                    const MatrixView<Scalar, MatrixFormat::Dense>&,
+                    Scalar, float_t<Scalar>, Uplo, Transpose);
 
 // Spelled out, not aliased to sig::her2k: a vendor parameter order may differ
 // from the public one (trsm's alpha is last).
-template <typename T>
+template <typename Scalar>
 using her2k_vendor = Event(Queue&,
-                          const MatrixView<T, MatrixFormat::Dense>&,
-                          const MatrixView<T, MatrixFormat::Dense>&,
-                          const MatrixView<T, MatrixFormat::Dense>&,
-                          T,
-                          float_t<T>,
+                          const MatrixView<Scalar, MatrixFormat::Dense>&,
+                          const MatrixView<Scalar, MatrixFormat::Dense>&,
+                          const MatrixView<Scalar, MatrixFormat::Dense>&,
+                          Scalar,
+                          float_t<Scalar>,
                           Uplo,
                           Transpose);
 }  // namespace sig

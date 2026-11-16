@@ -27,7 +27,7 @@ namespace batchlas::ops::trsm {
 
 namespace {
 
-template <typename T, int N, int QC, bool Masked>
+template <typename Scalar, int N, int QC, bool Masked>
 class TrsmSgLeftKernel;
 
 // Row bucket: N lanes per matrix, 32/N matrices per sub-group; 0 means no bucket.
@@ -49,12 +49,12 @@ static_assert(kTrsmSgLeftMaxN == 32, "sg_left_bucket's largest bucket is trsm's 
 // Masked: several items share a sub-group (I2), so an inactive item folds into okb like a tail slot
 // and is never returned; a template so the unmasked instance stays the kernel as it was.
 // evidence: docs/perf/blackwell.md#trsm-sub-group-left-kernel
-template <typename T, int N, int QC, bool Masked>
+template <typename Scalar, int N, int QC, bool Masked>
 Event trsm_native_sg_left(Queue& ctx,
-                          const MatrixView<T, MatrixFormat::Dense>& A,
-                          const MatrixView<T, MatrixFormat::Dense>& B,
-                          T alpha, Uplo uplo, Transpose transA, Diag diag, const std::uint8_t* mask) {
-    using D = typename sycl_device::DevMap<T>::type;
+                          const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                          const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                          Scalar alpha, Uplo uplo, Transpose transA, Diag diag, const std::uint8_t* mask) {
+    using D = typename sycl_device::DevMap<Scalar>::type;
     static_assert(N >= 4 && N <= 32 && 32 % N == 0, "a matrix must tile the sub-group");
     constexpr int kSg = 32;
     constexpr int kMpw = kSg / N;
@@ -84,7 +84,7 @@ Event trsm_native_sg_left(Queue& ctx,
     __builtin_memcpy(&alpha_d, &alpha, sizeof(D));
 
     ctx->submit([&](sycl::handler& h) {
-        batchlas::impl::parallel_for<TrsmSgLeftKernel<T, N, QC, Masked>>(h,
+        batchlas::impl::parallel_for<TrsmSgLeftKernel<Scalar, N, QC, Masked>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(nwg) * kSgPerWg * kSg),
                               sycl::range<1>(kSgPerWg * kSg)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
@@ -137,43 +137,43 @@ Event trsm_native_sg_left(Queue& ctx,
 
 // QC tracks q up to 16: every broadcast is paid for all QC slots.
 // evidence: docs/perf/blackwell.md#trsm-sub-group-left-kernel
-template <typename T, int N, bool Masked>
+template <typename Scalar, int N, bool Masked>
 Event trsm_native_sg_left_qc(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& A,
-                             const MatrixView<T, MatrixFormat::Dense>& B,
-                             T alpha, Uplo uplo, Transpose transA, Diag diag, const std::uint8_t* mask) {
+                             const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                             const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                             Scalar alpha, Uplo uplo, Transpose transA, Diag diag, const std::uint8_t* mask) {
     const int q = static_cast<int>(B.cols());
     const int qc = q <= 4 ? 4 : (q <= 8 ? 8 : 16);
-    if (qc == 4) return trsm_native_sg_left<T, N, 4, Masked>(ctx, A, B, alpha, uplo, transA, diag, mask);
+    if (qc == 4) return trsm_native_sg_left<Scalar, N, 4, Masked>(ctx, A, B, alpha, uplo, transA, diag, mask);
     // complex<double> at QC=16 needs 255 registers and a stack frame.
-    if constexpr (std::is_same_v<T, std::complex<double>>) {
-        return trsm_native_sg_left<T, N, 8, Masked>(ctx, A, B, alpha, uplo, transA, diag, mask);
+    if constexpr (std::is_same_v<Scalar, std::complex<double>>) {
+        return trsm_native_sg_left<Scalar, N, 8, Masked>(ctx, A, B, alpha, uplo, transA, diag, mask);
     } else {
-        if (qc == 8) return trsm_native_sg_left<T, N, 8, Masked>(ctx, A, B, alpha, uplo, transA, diag, mask);
-        return trsm_native_sg_left<T, N, 16, Masked>(ctx, A, B, alpha, uplo, transA, diag, mask);
+        if (qc == 8) return trsm_native_sg_left<Scalar, N, 8, Masked>(ctx, A, B, alpha, uplo, transA, diag, mask);
+        return trsm_native_sg_left<Scalar, N, 16, Masked>(ctx, A, B, alpha, uplo, transA, diag, mask);
     }
 }
 
-template <typename T, int N>
+template <typename Scalar, int N>
 Event trsm_native_sg_left_leg(Queue& ctx,
-                              const MatrixView<T, MatrixFormat::Dense>& A,
-                              const MatrixView<T, MatrixFormat::Dense>& B,
-                              T alpha, Uplo uplo, Transpose transA, Diag diag) {
+                              const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                              const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                              Scalar alpha, Uplo uplo, Transpose transA, Diag diag) {
     const std::uint8_t* mask = batchlas::detail::mask_ptr(batchlas::detail::call_mask("trsm", A, B));
-    if (mask) return trsm_native_sg_left_qc<T, N, true>(ctx, A, B, alpha, uplo, transA, diag, mask);
-    return trsm_native_sg_left_qc<T, N, false>(ctx, A, B, alpha, uplo, transA, diag, nullptr);
+    if (mask) return trsm_native_sg_left_qc<Scalar, N, true>(ctx, A, B, alpha, uplo, transA, diag, mask);
+    return trsm_native_sg_left_qc<Scalar, N, false>(ctx, A, B, alpha, uplo, transA, diag, nullptr);
 }
 
-template <typename T>
+template <typename Scalar>
 Event trsm_native_sg_left_dispatch(Queue& ctx,
-                                   const MatrixView<T, MatrixFormat::Dense>& A,
-                                   const MatrixView<T, MatrixFormat::Dense>& B,
-                                   T alpha, Uplo uplo, Transpose transA, Diag diag) {
+                                   const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                   const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                                   Scalar alpha, Uplo uplo, Transpose transA, Diag diag) {
     switch (sg_left_bucket(static_cast<int>(A.rows()))) {
-        case 4:  return trsm_native_sg_left_leg<T, 4>(ctx, A, B, alpha, uplo, transA, diag);
-        case 8:  return trsm_native_sg_left_leg<T, 8>(ctx, A, B, alpha, uplo, transA, diag);
-        case 16: return trsm_native_sg_left_leg<T, 16>(ctx, A, B, alpha, uplo, transA, diag);
-        case 32: return trsm_native_sg_left_leg<T, 32>(ctx, A, B, alpha, uplo, transA, diag);
+        case 4:  return trsm_native_sg_left_leg<Scalar, 4>(ctx, A, B, alpha, uplo, transA, diag);
+        case 8:  return trsm_native_sg_left_leg<Scalar, 8>(ctx, A, B, alpha, uplo, transA, diag);
+        case 16: return trsm_native_sg_left_leg<Scalar, 16>(ctx, A, B, alpha, uplo, transA, diag);
+        case 32: return trsm_native_sg_left_leg<Scalar, 32>(ctx, A, B, alpha, uplo, transA, diag);
         default: break;
     }
     throw batchlas::unsupported("BatchLAS: trsm_native_sg_left called with triangular order " +

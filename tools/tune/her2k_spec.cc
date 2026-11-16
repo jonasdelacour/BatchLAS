@@ -26,20 +26,20 @@ namespace {
 
 namespace H2 = ops::her2k;
 
-template <typename T>
+template <typename Scalar>
 struct Her2kProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
-    using R = float_t<T>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+    using R = float_t<Scalar>;
     Queue& q;
     int n, k, batch, lda, ldc;
     std::size_t sa, sc;
-    T alpha;
+    Scalar alpha;
     R beta;
-    UnifiedVector<T> A, B, C0, C;
+    UnifiedVector<Scalar> A, B, C0, C;
 
     Her2kProblem(Queue& q_, int n_, int k_, int batch_, int pad)
         : q(q_), n(n_), k(k_), batch(batch_), lda(n_ + pad), ldc(n_ + pad), sa(std::size_t(lda) * std::size_t(k_)),
-          sc(std::size_t(ldc) * std::size_t(n_)), alpha(T(1.25, -0.5)), beta(R(0.75)), A(sa * std::size_t(batch_)),
+          sc(std::size_t(ldc) * std::size_t(n_)), alpha(Scalar(1.25, -0.5)), beta(R(0.75)), A(sa * std::size_t(batch_)),
           B(sa * std::size_t(batch_)), C0(sc * std::size_t(batch_)), C(sc * std::size_t(batch_)) {
         (void)view(A, n, k, lda, sa).fill_random(q, false, 9191);
         (void)view(B, n, k, lda, sa).fill_random(q, false, 9192);
@@ -47,12 +47,13 @@ struct Her2kProblem {
         q.wait();
         for (int b = 0; b < batch; ++b)
             for (int c = 0; c < n; ++c) {
-                T* col = C0.data() + std::size_t(b) * sc + std::size_t(c) * std::size_t(ldc);
-                col[c] = T(col[c].real(), R(0));
-                for (int r = 0; r < c; ++r) col[r] = T(1e6, -1e6);
+                Scalar* col = C0.data() + std::size_t(b) * sc + std::size_t(c) * std::size_t(ldc);
+                col[c] = Scalar(col[c].real(), R(0));
+                for (int r = 0; r < c; ++r) col[r] = Scalar(1e6, -1e6);
             }
     }
-    MV view(UnifiedVector<T>& v, int r, int c, int ld, std::size_t s) { return MV(v.data(), r, c, ld, int(s), batch); }
+    MV view(UnifiedVector<Scalar>& v, int r, int c, int ld,
+            std::size_t s) { return MV(v.data(), r, c, ld, int(s), batch); }
     void reset() {  // beta != 0 accumulates into C
         (void)MV::copy(q, view(C, n, n, ldc, sc), view(C0, n, n, ldc, sc));
         q.wait();
@@ -64,8 +65,8 @@ struct Her2kProblem {
     }
     void clear_info() {}
     void run(Span<std::byte>) {
-        (void)her2k<kBackend, T>(q, view(A, n, k, lda, sa), view(B, n, k, lda, sa), view(C, n, n, ldc, sc), alpha,
-                                 beta, Uplo::Lower, Transpose::NoTrans);
+        (void)her2k<kBackend, Scalar>(q, view(A, n, k, lda, sa), view(B, n, k, lda, sa), view(C, n, n, ldc, sc), alpha,
+                                      beta, Uplo::Lower, Transpose::NoTrans);
         q.wait();
     }
     std::pair<double, int> verify() {
@@ -78,7 +79,7 @@ struct Her2kProblem {
             }
         return {MV::rank2k_backward_error(q, view(A, n, k, lda, sa), view(B, n, k, lda, sa), Transpose::NoTrans,
                                           view(C0, n, n, ldc, sc), view(C, n, n, ldc, sc), Uplo::Lower, MV::up(alpha),
-                                          MV::up(T(beta)), true),
+                                          MV::up(Scalar(beta)), true),
                 touched};
     }
 };

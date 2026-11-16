@@ -71,13 +71,13 @@ struct Entry {
 std::vector<Entry>& registry();
 
 // Work-group / sub-group sum, complex per component (the legacy latrd reduction).
-template <class G, class T> LAB_INLINE T group_sum(const G& g, const T& v) {
+template <class G, class Scalar> LAB_INLINE Scalar group_sum(const G& g, const Scalar& v) {
     if constexpr (requires { v.real(); }) {
         using R = decltype(v.real());
-        return T(batchlas::portable::reduce_over_group(g, v.real(), sycl::plus<R>()),
-                 batchlas::portable::reduce_over_group(g, v.imag(), sycl::plus<R>()));
+        return Scalar(batchlas::portable::reduce_over_group(g, v.real(), sycl::plus<R>()),
+                      batchlas::portable::reduce_over_group(g, v.imag(), sycl::plus<R>()));
     } else {
-        return batchlas::portable::reduce_over_group(g, v, sycl::plus<T>());
+        return batchlas::portable::reduce_over_group(g, v, sycl::plus<Scalar>());
     }
 }
 
@@ -90,7 +90,7 @@ template <int WG> struct WgExec {  // work-group, size known at compile time
     sycl::nd_item<1> it;
     LAB_INLINE int lid() const { return static_cast<int>(it.get_local_linear_id()); }
     LAB_INLINE constexpr int size() const { return WG; }
-    template <class T> LAB_INLINE T sum(T v) const {
+    template <class Scalar> LAB_INLINE Scalar sum(Scalar v) const {
         return group_sum(it.get_group(), v);
     }
     LAB_INLINE void barrier() const { sycl::group_barrier(it.get_group()); }
@@ -100,7 +100,7 @@ struct WgExecRt {  // work-group, size read at run time
     sycl::nd_item<1> it;
     LAB_INLINE int lid() const { return static_cast<int>(it.get_local_linear_id()); }
     LAB_INLINE int size() const { return static_cast<int>(it.get_local_range(0)); }
-    template <class T> LAB_INLINE T sum(T v) const {
+    template <class Scalar> LAB_INLINE Scalar sum(Scalar v) const {
         return group_sum(it.get_group(), v);
     }
     LAB_INLINE void barrier() const { sycl::group_barrier(it.get_group()); }
@@ -110,13 +110,13 @@ template <int SG> struct SgExec {
     sycl::sub_group g;
     LAB_INLINE int lid() const { return static_cast<int>(g.get_local_linear_id()); }
     LAB_INLINE constexpr int size() const { return SG; }
-    template <class T> LAB_INLINE T sum(T v) const { return group_sum(g, v); }
+    template <class Scalar> LAB_INLINE Scalar sum(Scalar v) const { return group_sum(g, v); }
 };
 struct SgExecRt {
     sycl::sub_group g;
     LAB_INLINE int lid() const { return static_cast<int>(g.get_local_linear_id()); }
     LAB_INLINE int size() const { return static_cast<int>(g.get_local_range()[0]); }
-    template <class T> LAB_INLINE T sum(T v) const { return group_sum(g, v); }
+    template <class Scalar> LAB_INLINE Scalar sum(Scalar v) const { return group_sum(g, v); }
 };
 
 // ---- lean views: pointer + int32 extents, unit stride vectors ------------------------
@@ -264,12 +264,12 @@ template <class T, int D> LAB_INLINE T* raw(const sycl::local_accessor<T, D>& a)
     return batchlas::util::get_raw_ptr(a);
 }
 
-// Registration helper: one Entry per (op, T, N, V).
-template <class T> inline const char* tname() { return sizeof(T) == 4 ? "float" : "double"; }
-template <class T, int N, int V, class F>
+// Registration helper: one Entry per (op, Real, N, V).
+template <class Real> inline const char* tname() { return sizeof(Real) == 4 ? "float" : "double"; }
+template <class Real, int N, int V, class F>
 inline void add(const char* op, bool inplace, F f) {
-    registry().push_back(Entry{op, tname<T>(), N, V, inplace, [f](sycl::queue& q, void* d, int n) {
-        return f(q, *static_cast<Data<T>*>(d), n);
+    registry().push_back(Entry{op, tname<Real>(), N, V, inplace, [f](sycl::queue& q, void* d, int n) {
+        return f(q, *static_cast<Data<Real>*>(d), n);
     }});
 }
 

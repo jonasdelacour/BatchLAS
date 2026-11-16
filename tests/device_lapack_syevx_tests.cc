@@ -28,8 +28,8 @@ using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename device::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
+template <class Scalar> using real_of = typename device::Arith<Scalar>::real_t;
+template <class Scalar> constexpr bool is_cplx = device::Arith<Scalar>::is_complex;
 
 constexpr int kBatch = 1024;
 
@@ -39,18 +39,18 @@ std::uint64_t mix(std::uint64_t x) {
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
     return x ^ (x >> 31);
 }
-template <class R> R uval(std::uint64_t i) { return static_cast<R>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
-template <class T> T val(std::uint64_t i) {
-    if constexpr (is_cplx<T>) return T(uval<real_of<T>>(2 * i), uval<real_of<T>>(2 * i + 1));
-    else return uval<T>(i);
+template <class Real> Real uval(std::uint64_t i) { return static_cast<Real>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
+template <class Scalar> Scalar val(std::uint64_t i) {
+    if constexpr (is_cplx<Scalar>) return Scalar(uval<real_of<Scalar>>(2 * i), uval<real_of<Scalar>>(2 * i + 1));
+    else return uval<Scalar>(i);
 }
-template <class T> std::vector<T> filled(std::size_t n, std::uint64_t seed) {
-    std::vector<T> h(n);
-    for (std::size_t i = 0; i < n; ++i) h[i] = val<T>(seed * 1000003u + i);
+template <class Scalar> std::vector<Scalar> filled(std::size_t n, std::uint64_t seed) {
+    std::vector<Scalar> h(n);
+    for (std::size_t i = 0; i < n; ++i) h[i] = val<Scalar>(seed * 1000003u + i);
     return h;
 }
 template <class T> bool same_bits(const T& a, const T& b) { return std::memcmp(&a, &b, sizeof(T)) == 0; }
-template <class T> bool is_nan(const T& v) { return std::isnan(std::abs(v)); }
+template <class Scalar> bool is_nan(const Scalar& v) { return std::isnan(std::abs(v)); }
 
 struct Dev {
     std::optional<Queue> ctx = test_utils::sycl_device_visible()
@@ -81,12 +81,12 @@ struct Dev {
     std::vector<void*> ptrs;
 };
 
-template <class T> class DeviceLapackSyevxTest : public ::testing::Test {
+template <class Scalar> class DeviceLapackSyevxTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx) GTEST_SKIP() << "no SYCL device visible";
         if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "device tests launch sub-group size 32";
-        if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
+        if (test_utils::lacks_fp64<Scalar>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
 };
@@ -96,15 +96,16 @@ TYPED_TEST_SUITE(DeviceLapackSyevxTest, Types);
 
 // Item b reverses iff b is odd. Columns: lacpy(flip<Axis::Cols>(A, rev)) into an ld-padded block;
 // vector: copy(flip(x.tail(off).head(len), rev)) from a stride-inc source, as syevx_select.
-template <class T> void run_flips(Dev& dev, int wg) {
+template <class Scalar> void run_flips(Dev& dev, int wg) {
     constexpr int m = 37, n = 9, lda = m + 3, ldo = m + 5, nx = 23, inc = 2, off = 3, len = nx - 5;
-    const auto ha = filled<T>(std::size_t(kBatch) * n * lda, 11), hx = filled<T>(std::size_t(kBatch) * nx * inc, 12);
-    const T nan = T(std::numeric_limits<real_of<T>>::quiet_NaN());
-    std::vector<T> ho(std::size_t(kBatch) * n * ldo, nan), hv(std::size_t(kBatch) * nx, nan);
-    const T* a = dev.up(ha);
-    const T* x = dev.up(hx);
-    T* o = dev.up(ho);
-    T* v = dev.up(hv);
+    const auto ha = filled<Scalar>(std::size_t(kBatch) * n * lda,
+                                   11), hx = filled<Scalar>(std::size_t(kBatch) * nx * inc, 12);
+    const Scalar nan = Scalar(std::numeric_limits<real_of<Scalar>>::quiet_NaN());
+    std::vector<Scalar> ho(std::size_t(kBatch) * n * ldo, nan), hv(std::size_t(kBatch) * nx, nan);
+    const Scalar* a = dev.up(ha);
+    const Scalar* x = dev.up(hx);
+    Scalar* o = dev.up(ho);
+    Scalar* v = dev.up(hv);
     dev.run(kBatch, wg, [=](sycl::nd_item<1> it) {
         const device::RtGroup<> ex{it};
         const int b = static_cast<int>(it.get_group_linear_id());
@@ -119,15 +120,15 @@ template <class T> void run_flips(Dev& dev, int wg) {
     int bad = 0, poison = 0;
     for (int b = 0; b < kBatch; ++b) {
         const bool rev = (b & 1) != 0;
-        const T* ab = ha.data() + std::size_t(b) * n * lda;
-        const T* ob = go.data() + std::size_t(b) * n * ldo;
+        const Scalar* ab = ha.data() + std::size_t(b) * n * lda;
+        const Scalar* ob = go.data() + std::size_t(b) * n * ldo;
         for (int c = 0; c < n; ++c) {
             const int src = rev ? n - 1 - c : c;
             for (int r = 0; r < m; ++r) bad += !same_bits(ob[r + std::size_t(c) * ldo], ab[r + std::size_t(src) * lda]);
             for (int r = m; r < ldo; ++r) poison += !is_nan(ob[r + std::size_t(c) * ldo]);
         }
-        const T* xb = hx.data() + std::size_t(b) * nx * inc;
-        const T* vb = gv.data() + std::size_t(b) * nx;
+        const Scalar* xb = hx.data() + std::size_t(b) * nx * inc;
+        const Scalar* vb = gv.data() + std::size_t(b) * nx;
         for (int i = 0; i < len; ++i) bad += !same_bits(vb[i], xb[(off + (rev ? len - 1 - i : i)) * inc]);
         for (int i = len; i < nx; ++i) poison += !is_nan(vb[i]);
     }

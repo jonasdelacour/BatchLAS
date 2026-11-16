@@ -12,13 +12,13 @@
 
 namespace batchlas::ops::spmm {
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API Event spmm_native_csr(Queue& ctx,  // all nine (transA, transB) spellings, dispatched on transA
-                      const MatrixView<T, MatrixFormat::CSR>& A,
-                      const MatrixView<T, MatrixFormat::Dense>& B_mat,  // own ld/stride: never derive ld*cols
-                      const MatrixView<T, MatrixFormat::Dense>& C,  // evidence: docs/perf/spmm.md#supports-and-what-is-deliberately-not-in-it
-                      T alpha,
-                      T beta,
+                      const MatrixView<Scalar, MatrixFormat::CSR>& A,
+                      const MatrixView<Scalar, MatrixFormat::Dense>& B_mat,  // own ld/stride: never derive ld*cols
+                      const MatrixView<Scalar, MatrixFormat::Dense>& C,  // evidence: docs/perf/spmm.md#supports-and-what-is-deliberately-not-in-it
+                      Scalar alpha,
+                      Scalar beta,
                       Transpose transA,
                       Transpose transB);
 

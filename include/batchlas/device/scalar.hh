@@ -24,44 +24,45 @@
 
 namespace batchlas::device {
 
-template <class R> constexpr R safmin() {
-    constexpr R eps = std::numeric_limits<R>::epsilon();
-    constexpr R s1 = std::numeric_limits<R>::min();
-    constexpr R s2 = R(1) / std::numeric_limits<R>::max();
-    return s2 > s1 ? s2 * (R(1) + eps) : s1;
+template <class Real> constexpr Real safmin() {
+    constexpr Real eps = std::numeric_limits<Real>::epsilon();
+    constexpr Real s1 = std::numeric_limits<Real>::min();
+    constexpr Real s2 = Real(1) / std::numeric_limits<Real>::max();
+    return s2 > s1 ? s2 * (Real(1) + eps) : s1;
 }
-template <class R> constexpr R safmax() { return R(1) / safmin<R>(); }
+template <class Real> constexpr Real safmax() { return Real(1) / safmin<Real>(); }
 
 // lassq's pair: scale = max |component|, scale^2 * ssq = sum |x_i|^2.
-template <class R> struct ScaledSsq {
-    R scale;
-    R ssq;
+template <class Real> struct ScaledSsq {
+    Real scale;
+    Real ssq;
 };
 
-// A plane rotation; S = R (real) or T (complex s, c stays real).
-template <class R, class S = R> struct Givens {
-    R c;
+// A plane rotation; S = Real (real) or T (complex s, c stays real).
+template <class Real, class S = Real> struct Givens {
+    Real c;
     S s;
 };
 
 // |a| as LAPACK's abs (hypot for complex), not BLAS abs1.
-template <class T> BATCHLAS_DEVICE_INLINE real_t<T> modulus(const T& a) {
-    using A = Arith<T>;
+template <class Scalar> BATCHLAS_DEVICE_INLINE real_t<Scalar> modulus(const Scalar& a) {
+    using A = Arith<Scalar>;
     if constexpr (A::is_complex) return sycl::hypot(A::re(a), A::im(a));
     else return sycl::fabs(a);
 }
 
 // ---- lartg -------------------------------------------------------------------------------------
-template <class T> struct LartgResult {
-    real_t<T> c;
-    T s;
-    T r;
+template <class Scalar> struct LartgResult {
+    real_t<Scalar> c;
+    Scalar s;
+    Scalar r;
 };
 
 namespace detail {
 // CLARTG/ZLARTG with f, g != 0, the scalar math in W (scaled against overflow / underflow).
-template <class W, class T> BATCHLAS_DEVICE_INLINE LartgResult<T> lartg_complex_scaled(const T& f, const T& g) {
-    using R = real_t<T>;
+template <class W, class Scalar> BATCHLAS_DEVICE_INLINE LartgResult<Scalar> lartg_complex_scaled(const Scalar& f,
+                                                                                                 const Scalar& g) {
+    using R = real_t<Scalar>;
     const W f_abs_w = sycl::hypot(static_cast<W>(f.real()), static_cast<W>(f.imag()));
     const W g_abs_w = sycl::hypot(static_cast<W>(g.real()), static_cast<W>(g.imag()));
     const W u = sycl::fmin(safmax<W>(), sycl::fmax(safmin<W>(), sycl::fmax(f_abs_w, g_abs_w)));
@@ -75,8 +76,8 @@ template <class W, class T> BATCHLAS_DEVICE_INLINE LartgResult<T> lartg_complex_
     const std::complex<W> conjg_w{g_w.real(), -g_w.imag()};
     const std::complex<W> s_w = alpha * conjg_w / norm;
     const std::complex<W> r_w = alpha * norm;
-    return {static_cast<R>(c_w), T{static_cast<R>(s_w.real()), static_cast<R>(s_w.imag())},
-            T{static_cast<R>(r_w.real()), static_cast<R>(r_w.imag())}};
+    return {static_cast<R>(c_w), Scalar{static_cast<R>(s_w.real()), static_cast<R>(s_w.imag())},
+            Scalar{static_cast<R>(r_w.real()), static_cast<R>(r_w.imag())}};
 }
 }  // namespace detail
 
@@ -93,29 +94,30 @@ struct LartgExact {};
 struct LartgFast {};
 struct Promote {};
 }  // namespace alg
-template <class W = void, class T> BATCHLAS_DEVICE_HELPER LartgResult<T> lartg(const T& f, const T& g) {
-    using R = real_t<T>;
+template <class W = void, class Scalar> BATCHLAS_DEVICE_HELPER LartgResult<Scalar> lartg(const Scalar& f,
+                                                                                         const Scalar& g) {
+    using R = real_t<Scalar>;
     if constexpr (std::is_same_v<W, alg::LartgExact>) {
         return lartg<void>(f, g);
     } else if constexpr (std::is_same_v<W, alg::Promote>) {
-        if constexpr (Arith<T>::is_complex && std::is_same_v<R, float>) {
+        if constexpr (Arith<Scalar>::is_complex && std::is_same_v<R, float>) {
             if (::batchlas::sycl_impl::on_metal()) return lartg<float>(f, g);
             return lartg<double>(f, g);
         } else {
             return lartg<void>(f, g);
         }
     } else if constexpr (std::is_same_v<W, alg::LartgFast>) {
-        if constexpr (std::is_same_v<T, float>) {
-            const bool gz = (g == T(0));
-            const T f_abs = sycl::fabs(f), g_abs = sycl::fabs(g);
-            const T rtmin = sycl::sqrt(safmin<T>());
-            const T rtmax = sycl::sqrt(safmax<T>() / T(2));
-            T c = T(1), s = T(0), r = f;
+        if constexpr (std::is_same_v<Scalar, float>) {
+            const bool gz = (g == Scalar(0));
+            const Scalar f_abs = sycl::fabs(f), g_abs = sycl::fabs(g);
+            const Scalar rtmin = sycl::sqrt(safmin<Scalar>());
+            const Scalar rtmax = sycl::sqrt(safmax<Scalar>() / Scalar(2));
+            Scalar c = Scalar(1), s = Scalar(0), r = f;
             if (f_abs > rtmin && f_abs < rtmax && (gz || (g_abs > rtmin && g_abs < rtmax))) {
-                const T t = f * f + g * g;
-                T inv = sycl::rsqrt(t);
-                inv = sycl::fma(inv * T(0.5), sycl::fma(-(t * inv), inv, T(1)), inv);
-                const T d = sycl::sqrt(t);
+                const Scalar t = f * f + g * g;
+                Scalar inv = sycl::rsqrt(t);
+                inv = sycl::fma(inv * Scalar(0.5), sycl::fma(-(t * inv), inv, Scalar(1)), inv);
+                const Scalar d = sycl::sqrt(t);
                 c = f_abs * inv;
                 s = g * sycl::copysign(inv, f);
                 r = sycl::copysign(d, f);
@@ -125,23 +127,23 @@ template <class W = void, class T> BATCHLAS_DEVICE_HELPER LartgResult<T> lartg(c
                 s = e.s;
                 r = e.r;
             }
-            return {gz ? T(1) : c, gz ? T(0) : s, gz ? f : r};
+            return {gz ? Scalar(1) : c, gz ? Scalar(0) : s, gz ? f : r};
         } else {
             return lartg<void>(f, g);
         }
     } else {
     const R f_abs = modulus(f);
     const R g_abs = modulus(g);
-    if (g_abs == R(0)) return {R(1), T(0), f};
+    if (g_abs == R(0)) return {R(1), Scalar(0), f};
     if (f_abs == R(0)) {
-        if constexpr (Arith<T>::is_complex) {
-            const T conjg = T(g.real(), -g.imag());
-            return {R(0), conjg / T(g_abs), T(g_abs, R(0))};
+        if constexpr (Arith<Scalar>::is_complex) {
+            const Scalar conjg = Scalar(g.real(), -g.imag());
+            return {R(0), conjg / Scalar(g_abs), Scalar(g_abs, R(0))};
         } else {
-            return {R(0), T(sycl::copysign(R(1), static_cast<R>(g))), T(g_abs)};
+            return {R(0), Scalar(sycl::copysign(R(1), static_cast<R>(g))), Scalar(g_abs)};
         }
     }
-    if constexpr (Arith<T>::is_complex) {
+    if constexpr (Arith<Scalar>::is_complex) {
         return detail::lartg_complex_scaled<std::conditional_t<std::is_void_v<W>, R, W>>(f, g);
     } else {
         const R rtmin = sycl::sqrt(safmin<R>());
@@ -151,14 +153,14 @@ template <class W = void, class T> BATCHLAS_DEVICE_HELPER LartgResult<T> lartg(c
             const R d = sycl::sqrt(f_r * f_r + g_r * g_r);
             const R c = f_abs / d;
             const R r = sycl::copysign(d, f_r);
-            return {c, T(g_r / r), T(r)};
+            return {c, Scalar(g_r / r), Scalar(r)};
         }
         const R u = sycl::fmin(safmax<R>(), sycl::fmax(safmin<R>(), sycl::fmax(f_abs, g_abs)));
         const R fs = f_r / u, gs = g_r / u;
         const R d = sycl::sqrt(fs * fs + gs * gs);
         const R c = sycl::fabs(fs) / d;
         const R r_unscaled = sycl::copysign(d, f_r);
-        return {c, T(gs / r_unscaled), T(r_unscaled * u)};
+        return {c, Scalar(gs / r_unscaled), Scalar(r_unscaled * u)};
     }
     }
 }
@@ -166,68 +168,68 @@ template <class W = void, class T> BATCHLAS_DEVICE_HELPER LartgResult<T> lartg(c
 // ---- symmetric / triangular 2x2 ---------------------------------------------------------------
 // sqrt(adf^2 + (2b)^2) without overflow / underflow (shared by lae2 and laev2).
 namespace detail {
-template <class R> BATCHLAS_DEVICE_INLINE R lae2_rt(R adf, R ab) {
-    if (adf > ab) return adf * sycl::sqrt(R(1) + (ab / adf) * (ab / adf));
-    if (adf < ab) return ab * sycl::sqrt(R(1) + (adf / ab) * (adf / ab));
-    return ab * sycl::sqrt(R(2));  // includes ab = adf = 0
+template <class Real> BATCHLAS_DEVICE_INLINE Real lae2_rt(Real adf, Real ab) {
+    if (adf > ab) return adf * sycl::sqrt(Real(1) + (ab / adf) * (ab / adf));
+    if (adf < ab) return ab * sycl::sqrt(Real(1) + (adf / ab) * (adf / ab));
+    return ab * sycl::sqrt(Real(2));  // includes ab = adf = 0
 }
 }  // namespace detail
 
 // SLAE2/DLAE2: {rt1, rt2} of [[a, b], [b, c]], |rt1| >= |rt2|.
-template <class R> BATCHLAS_DEVICE_INLINE std::array<R, 2> lae2(const R& a, const R& b, const R& c) {
-    const R sm = a + c, df = a - c, adf = sycl::fabs(df), tb = b + b, ab = sycl::fabs(tb);
+template <class Real> BATCHLAS_DEVICE_INLINE std::array<Real, 2> lae2(const Real& a, const Real& b, const Real& c) {
+    const Real sm = a + c, df = a - c, adf = sycl::fabs(df), tb = b + b, ab = sycl::fabs(tb);
     const bool amax = sycl::fabs(a) > sycl::fabs(c);
-    const R acmx = amax ? a : c, acmn = amax ? c : a;
-    const R rt = detail::lae2_rt(adf, ab);
-    if (sm < R(0)) {
-        const R rt1 = R(0.5) * (sm - rt);
+    const Real acmx = amax ? a : c, acmn = amax ? c : a;
+    const Real rt = detail::lae2_rt(adf, ab);
+    if (sm < Real(0)) {
+        const Real rt1 = Real(0.5) * (sm - rt);
         return {rt1, (acmx / rt1) * acmn - (b / rt1) * b};  // this order keeps rt2 accurate
     }
-    if (sm > R(0)) {
-        const R rt1 = R(0.5) * (sm + rt);
+    if (sm > Real(0)) {
+        const Real rt1 = Real(0.5) * (sm + rt);
         return {rt1, (acmx / rt1) * acmn - (b / rt1) * b};
     }
-    return {R(0.5) * rt, R(-0.5) * rt};
+    return {Real(0.5) * rt, Real(-0.5) * rt};
 }
 
 // SLAEV2/DLAEV2: {rt1, rt2, cs1, sn1}; (cs1, sn1) is the unit eigenvector of rt1.
-template <class R> BATCHLAS_DEVICE_INLINE std::array<R, 4> laev2(const R& a, const R& b, const R& c) {
-    const R sm = a + c, df = a - c, adf = sycl::fabs(df), tb = b + b, ab = sycl::fabs(tb);
+template <class Real> BATCHLAS_DEVICE_INLINE std::array<Real, 4> laev2(const Real& a, const Real& b, const Real& c) {
+    const Real sm = a + c, df = a - c, adf = sycl::fabs(df), tb = b + b, ab = sycl::fabs(tb);
     const bool amax = sycl::fabs(a) > sycl::fabs(c);
-    const R acmx = amax ? a : c, acmn = amax ? c : a;
-    const R rt = detail::lae2_rt(adf, ab);
-    R rt1, rt2;
+    const Real acmx = amax ? a : c, acmn = amax ? c : a;
+    const Real rt = detail::lae2_rt(adf, ab);
+    Real rt1, rt2;
     int sgn1;
-    if (sm < R(0)) {
-        rt1 = R(0.5) * (sm - rt);
+    if (sm < Real(0)) {
+        rt1 = Real(0.5) * (sm - rt);
         sgn1 = -1;
         rt2 = (acmx / rt1) * acmn - (b / rt1) * b;
-    } else if (sm > R(0)) {
-        rt1 = R(0.5) * (sm + rt);
+    } else if (sm > Real(0)) {
+        rt1 = Real(0.5) * (sm + rt);
         sgn1 = 1;
         rt2 = (acmx / rt1) * acmn - (b / rt1) * b;
     } else {
-        rt1 = R(0.5) * rt;
-        rt2 = R(-0.5) * rt;
+        rt1 = Real(0.5) * rt;
+        rt2 = Real(-0.5) * rt;
         sgn1 = 1;
     }
-    const int sgn2 = df >= R(0) ? 1 : -1;
-    const R cs = df >= R(0) ? df + rt : df - rt;
-    R cs1, sn1;
+    const int sgn2 = df >= Real(0) ? 1 : -1;
+    const Real cs = df >= Real(0) ? df + rt : df - rt;
+    Real cs1, sn1;
     if (sycl::fabs(cs) > ab) {
-        const R ct = -tb / cs;
-        sn1 = R(1) / sycl::sqrt(R(1) + ct * ct);
+        const Real ct = -tb / cs;
+        sn1 = Real(1) / sycl::sqrt(Real(1) + ct * ct);
         cs1 = ct * sn1;
-    } else if (ab == R(0)) {
-        cs1 = R(1);
-        sn1 = R(0);
+    } else if (ab == Real(0)) {
+        cs1 = Real(1);
+        sn1 = Real(0);
     } else {
-        const R tn = -cs / tb;
-        cs1 = R(1) / sycl::sqrt(R(1) + tn * tn);
+        const Real tn = -cs / tb;
+        cs1 = Real(1) / sycl::sqrt(Real(1) + tn * tn);
         sn1 = tn * cs1;
     }
     if (sgn1 == sgn2) {
-        const R tn = cs1;
+        const Real tn = cs1;
         cs1 = -sn1;
         sn1 = tn;
     }
@@ -235,32 +237,32 @@ template <class R> BATCHLAS_DEVICE_INLINE std::array<R, 4> laev2(const R& a, con
 }
 
 // SLAS2/DLAS2: {ssmin, ssmax} of the upper triangular [[f, g], [0, h]], nothing squared.
-template <class R> BATCHLAS_DEVICE_INLINE std::array<R, 2> las2(const R& f, const R& g, const R& h) {
-    const R fa = sycl::fabs(f), ga = sycl::fabs(g), ha = sycl::fabs(h);
-    const R fhmn = fa < ha ? fa : ha, fhmx = fa < ha ? ha : fa;
-    if (fhmn == R(0)) {
-        if (fhmx == R(0)) return {R(0), ga};
-        const R mx = fhmx > ga ? fhmx : ga, mn = fhmx > ga ? ga : fhmx;
-        return {R(0), mx * sycl::sqrt(R(1) + (mn / mx) * (mn / mx))};
+template <class Real> BATCHLAS_DEVICE_INLINE std::array<Real, 2> las2(const Real& f, const Real& g, const Real& h) {
+    const Real fa = sycl::fabs(f), ga = sycl::fabs(g), ha = sycl::fabs(h);
+    const Real fhmn = fa < ha ? fa : ha, fhmx = fa < ha ? ha : fa;
+    if (fhmn == Real(0)) {
+        if (fhmx == Real(0)) return {Real(0), ga};
+        const Real mx = fhmx > ga ? fhmx : ga, mn = fhmx > ga ? ga : fhmx;
+        return {Real(0), mx * sycl::sqrt(Real(1) + (mn / mx) * (mn / mx))};
     }
     if (ga < fhmx) {
-        const R as = R(1) + fhmn / fhmx, at = (fhmx - fhmn) / fhmx, au = (ga / fhmx) * (ga / fhmx);
-        const R c = R(2) / (sycl::sqrt(as * as + au) + sycl::sqrt(at * at + au));
+        const Real as = Real(1) + fhmn / fhmx, at = (fhmx - fhmn) / fhmx, au = (ga / fhmx) * (ga / fhmx);
+        const Real c = Real(2) / (sycl::sqrt(as * as + au) + sycl::sqrt(at * at + au));
         return {fhmn * c, fhmx / c};
     }
-    const R au = fhmx / ga;
-    if (au == R(0)) return {(fhmn * fhmx) / ga, ga};
-    const R as = R(1) + fhmn / fhmx, at = (fhmx - fhmn) / fhmx;
-    const R c = R(1) / (sycl::sqrt(R(1) + (as * au) * (as * au)) + sycl::sqrt(R(1) + (at * au) * (at * au)));
-    return {R(2) * ((fhmn * c) * au), ga / (c + c)};
+    const Real au = fhmx / ga;
+    if (au == Real(0)) return {(fhmn * fhmx) / ga, ga};
+    const Real as = Real(1) + fhmn / fhmx, at = (fhmx - fhmn) / fhmx;
+    const Real c = Real(1) / (sycl::sqrt(Real(1) + (as * au) * (as * au)) + sycl::sqrt(Real(1) + (at * au) * (at * au)));
+    return {Real(2) * ((fhmn * c) * au), ga / (c + c)};
 }
 
 // dsteqr's Wilkinson shift for the window starting at l: the eigenvalue of
 // [[d(l), e(l)], [e(l), d(l+1)]] nearest d(l): g = (d(l+1) - d(l)) / (2 e(l)),
 // d(l) - e(l) / (g + sign(hypot(g, 1), g)). e(l) != 0.
-template <class R> BATCHLAS_DEVICE_INLINE R lapack_shift(R dl, R el, R dl1) {
-    const R g = (dl1 - dl) / (R(2) * el);
-    const R r = sycl::hypot(g, R(1));
+template <class Real> BATCHLAS_DEVICE_INLINE Real lapack_shift(Real dl, Real el, Real dl1) {
+    const Real g = (dl1 - dl) / (Real(2) * el);
+    const Real r = sycl::hypot(g, Real(1));
     return dl - el / (g + sycl::copysign(r, g));
 }
 
@@ -285,19 +287,19 @@ struct PhaseN1 {};
 struct RealBeta {};
 }  // namespace alg
 
-template <class T> struct LarfgScalars {
-    T tau;
-    T beta;
-    T scale;
+template <class Scalar> struct LarfgScalars {
+    Scalar tau;
+    Scalar beta;
+    Scalar scale;
     bool use_mul;
     bool identity;
 };
 
-template <class Conv = alg::LarfgLapack, class T> BATCHLAS_DEVICE_INLINE LarfgScalars<T> larfg_scalars(const T& alpha, ScaledSsq<real_t<T>> q) {
+template <class Conv = alg::LarfgLapack, class Scalar> BATCHLAS_DEVICE_INLINE LarfgScalars<Scalar> larfg_scalars(const Scalar& alpha, ScaledSsq<real_t<Scalar>> q) {
     static_assert(std::is_same_v<Conv, alg::LarfgLapack>, "larfg_scalars(alpha, ScaledSsq): alg::LarfgLapack");
-    using A = Arith<T>;
-    using R = real_t<T>;
-    LarfgScalars<T> out{A::zero(), alpha, A::one(), true, true};
+    using A = Arith<Scalar>;
+    using R = real_t<Scalar>;
+    LarfgScalars<Scalar> out{A::zero(), alpha, A::one(), true, true};
     const R alphi = A::im(alpha);
     if (q.ssq == R(0) && alphi == R(0)) return out;  // a complex alpha still needs a reflector
     if (!(q.scale > R(0))) return out;
@@ -307,47 +309,47 @@ template <class Conv = alg::LarfgLapack, class T> BATCHLAS_DEVICE_INLINE LarfgSc
     const R beta_s = (alphr >= R(0)) ? -nrm : nrm;  // -SIGN(nrm, alphr): +0 counts as positive
     out.tau = A::make((beta_s - ar) / beta_s, -ai / beta_s);
     out.beta = A::make(beta_s * q.scale, R(0));
-    const T d = A::sub(alpha, out.beta);
-    const T r = FmaArith<T>::recip(d);
+    const Scalar d = A::sub(alpha, out.beta);
+    const Scalar r = FmaArith<Scalar>::recip(d);
     out.use_mul = A::isfinite(r) && !A::is_zero(r);
     out.scale = out.use_mul ? r : d;
     out.identity = false;
     return out;
 }
 
-template <class Conv, class T> BATCHLAS_DEVICE_HELPER LarfgScalars<T> larfg_scalars(const T& alpha, real_t<T> xnorm, int len) {
+template <class Conv, class Scalar> BATCHLAS_DEVICE_HELPER LarfgScalars<Scalar> larfg_scalars(const Scalar& alpha, real_t<Scalar> xnorm, int len) {
     static_assert(std::is_same_v<Conv, alg::Phase> || std::is_same_v<Conv, alg::RealBeta>,
                   "larfg_scalars(alpha, xnorm, len): alg::Phase or alg::RealBeta");
-    using R = real_t<T>;
-    LarfgScalars<T> out{T(0), alpha, T(0), true, true};
-    if constexpr (std::is_same_v<Conv, alg::RealBeta> && Arith<T>::is_complex) {
+    using R = real_t<Scalar>;
+    LarfgScalars<Scalar> out{Scalar(0), alpha, Scalar(0), true, true};
+    if constexpr (std::is_same_v<Conv, alg::RealBeta> && Arith<Scalar>::is_complex) {
         if (len < 1 || (xnorm == R(0) && alpha.imag() == R(0))) return out;
         const R norm = sycl::hypot(sycl::hypot(alpha.real(), alpha.imag()), xnorm);
         if (norm == R(0)) return out;
         const R beta = sycl::signbit(alpha.real()) ? norm : -norm;
-        out.beta = T(beta);
-        out.tau = T((beta - alpha.real()) / beta, -alpha.imag() / beta);
-    } else if constexpr (Arith<T>::is_complex) {
+        out.beta = Scalar(beta);
+        out.tau = Scalar((beta - alpha.real()) / beta, -alpha.imag() / beta);
+    } else if constexpr (Arith<Scalar>::is_complex) {
         if (len <= 1) return out;
         if (xnorm == R(0) && alpha.imag() == R(0)) return out;
         const R alpha_abs = sycl::hypot(alpha.real(), alpha.imag());
         const R beta_abs = sycl::hypot(alpha_abs, xnorm);
-        const T alpha_sign = (alpha_abs == R(0)) ? T(1) : (alpha / alpha_abs);
-        out.beta = -alpha_sign * T(beta_abs);
+        const Scalar alpha_sign = (alpha_abs == R(0)) ? Scalar(1) : (alpha / alpha_abs);
+        out.beta = -alpha_sign * Scalar(beta_abs);
         out.tau = (out.beta - alpha) / out.beta;
     } else {
         if (len <= 1 || xnorm == R(0)) return out;
         const R sign = sycl::signbit(alpha) ? R(-1) : R(1);
-        out.beta = T(-sign * sycl::hypot(alpha, xnorm));
+        out.beta = Scalar(-sign * sycl::hypot(alpha, xnorm));
         out.tau = (out.beta - alpha) / out.beta;
     }
-    out.scale = T(1) / (alpha - out.beta);
+    out.scale = Scalar(1) / (alpha - out.beta);
     out.identity = false;
     return out;
 }
-template <class Conv, class T>
+template <class Conv, class Scalar>
     requires std::is_same_v<Conv, alg::PhaseN1>
-BATCHLAS_DEVICE_HELPER LarfgScalars<T> larfg_scalars(const T& alpha, real_t<T> xnorm, int) {
+BATCHLAS_DEVICE_HELPER LarfgScalars<Scalar> larfg_scalars(const Scalar& alpha, real_t<Scalar> xnorm, int) {
     return larfg_scalars<alg::Phase>(alpha, xnorm, 2);  // len >= 2: no len <= 1 identity
 }
 
@@ -355,28 +357,28 @@ BATCHLAS_DEVICE_HELPER LarfgScalars<T> larfg_scalars(const T& alpha, real_t<T> x
 // dlamch: lamch<'E'>() eps (relative machine precision, eps/2 of numeric_limits as LAPACK 3.x
 // with rounding), 'S' safe minimum, 'P' eps * base, 'B' base, 'N' digits, 'U' underflow
 // threshold (min normal), 'O' overflow threshold (max), 'R' 1 (rounding mode).
-template <char C, class R> constexpr R lamch() {
-    constexpr R eps = std::numeric_limits<R>::epsilon() * R(0.5);
+template <char C, class Real> constexpr Real lamch() {
+    constexpr Real eps = std::numeric_limits<Real>::epsilon() * Real(0.5);
     if constexpr (C == 'E') return eps;
-    else if constexpr (C == 'S') return safmin<R>();
-    else if constexpr (C == 'P') return eps * R(std::numeric_limits<R>::radix);
-    else if constexpr (C == 'B') return R(std::numeric_limits<R>::radix);
-    else if constexpr (C == 'N') return R(std::numeric_limits<R>::digits);
-    else if constexpr (C == 'U') return std::numeric_limits<R>::min();
-    else if constexpr (C == 'O') return std::numeric_limits<R>::max();
+    else if constexpr (C == 'S') return safmin<Real>();
+    else if constexpr (C == 'P') return eps * Real(std::numeric_limits<Real>::radix);
+    else if constexpr (C == 'B') return Real(std::numeric_limits<Real>::radix);
+    else if constexpr (C == 'N') return Real(std::numeric_limits<Real>::digits);
+    else if constexpr (C == 'U') return std::numeric_limits<Real>::min();
+    else if constexpr (C == 'O') return std::numeric_limits<Real>::max();
     else {
         static_assert(C == 'R', "lamch: one of E S P B N U O R");
-        return R(1);
+        return Real(1);
     }
 }
 
 namespace detail {
 // dsteqr's SSFMIN / SSFMAX (the range dlascl scales a block into) and EPS2 = eps^2.
-template <class R> inline constexpr R ssfmin() {
-    return std::sqrt(safmin<R>()) / (lamch<'P', R>() * lamch<'P', R>());
+template <class Real> inline constexpr Real ssfmin() {
+    return std::sqrt(safmin<Real>()) / (lamch<'P', Real>() * lamch<'P', Real>());
 }
-template <class R> inline constexpr R ssfmax() { return std::sqrt(safmax<R>()) / R(3.0); }
-template <class R> inline constexpr R eps2() { return lamch<'E', R>() * lamch<'E', R>(); }
+template <class Real> inline constexpr Real ssfmax() { return std::sqrt(safmax<Real>()) / Real(3.0); }
+template <class Real> inline constexpr Real eps2() { return lamch<'E', Real>() * lamch<'E', Real>(); }
 }  // namespace detail
 
 // dsteqr's dlascl decision for a block of max-norm anorm: s brings it into [ssfmin, ssfmax]
@@ -387,38 +389,38 @@ namespace alg {
 struct UnscaleRecip {};
 struct UnscaleRatio {};
 }  // namespace alg
-template <class R> struct BlockScale {
-    R s;
-    R inv;
+template <class Real> struct BlockScale {
+    Real s;
+    Real inv;
 };
 namespace detail {
-template <class Unscale = alg::UnscaleRecip, class R> BATCHLAS_DEVICE_INLINE BlockScale<R> block_scale(R anorm) {
+template <class Unscale = alg::UnscaleRecip, class Real> BATCHLAS_DEVICE_INLINE BlockScale<Real> block_scale(Real anorm) {
     static_assert(std::is_same_v<Unscale, alg::UnscaleRecip> || std::is_same_v<Unscale, alg::UnscaleRatio>,
                   "block_scale: alg::UnscaleRecip or alg::UnscaleRatio");
-    R s = R(1), inv = R(1);
-    if (anorm > ssfmax<R>()) {
-        s = ssfmax<R>() / anorm;
-        if constexpr (std::is_same_v<Unscale, alg::UnscaleRatio>) inv = anorm / ssfmax<R>();
-    } else if (anorm < ssfmin<R>() && anorm != R(0)) {
-        s = ssfmin<R>() / anorm;
-        if constexpr (std::is_same_v<Unscale, alg::UnscaleRatio>) inv = anorm / ssfmin<R>();
+    Real s = Real(1), inv = Real(1);
+    if (anorm > ssfmax<Real>()) {
+        s = ssfmax<Real>() / anorm;
+        if constexpr (std::is_same_v<Unscale, alg::UnscaleRatio>) inv = anorm / ssfmax<Real>();
+    } else if (anorm < ssfmin<Real>() && anorm != Real(0)) {
+        s = ssfmin<Real>() / anorm;
+        if constexpr (std::is_same_v<Unscale, alg::UnscaleRatio>) inv = anorm / ssfmin<Real>();
     }
-    if constexpr (std::is_same_v<Unscale, alg::UnscaleRecip>) inv = R(1) / s;
+    if constexpr (std::is_same_v<Unscale, alg::UnscaleRecip>) inv = Real(1) / s;
     return {s, inv};
 }
 }  // namespace detail
 
-// A quiet NaN of T's real type (both parts NaN for complex T).
-template <class T> BATCHLAS_DEVICE_INLINE T qnan() {
-    using A = Arith<T>;
+// A quiet NaN of Scalar's real type (both parts NaN for complex Scalar).
+template <class Scalar> BATCHLAS_DEVICE_INLINE Scalar qnan() {
+    using A = Arith<Scalar>;
     using R = typename A::real_t;
     return A::make(std::numeric_limits<R>::quiet_NaN(), std::numeric_limits<R>::quiet_NaN());
 }
 
 // x / |x|, and 1 at x == 0 (a unit-modulus sign: the phase a Hermitian tridiagonal's
-// off-diagonal is rotated by). Real T: copysign(1, x) with +1 at +-0.
-template <class T> BATCHLAS_DEVICE_INLINE T phase(T x) {
-    using A = Arith<T>;
+// off-diagonal is rotated by). Real Scalar: copysign(1, x) with +1 at +-0.
+template <class Scalar> BATCHLAS_DEVICE_INLINE Scalar phase(Scalar x) {
+    using A = Arith<Scalar>;
     using R = typename A::real_t;
     if constexpr (A::is_complex) {
         const R m = sycl::hypot(A::re(x), A::im(x));
@@ -429,9 +431,9 @@ template <class T> BATCHLAS_DEVICE_INLINE T phase(T x) {
     }
 }
 // sign(re x) as +-1 with +1 at 0 (LAPACK's SIGN(ONE, x) on a real part).
-template <class T> BATCHLAS_DEVICE_INLINE real_t<T> sign_nonzero_real(T x) {
-    using R = real_t<T>;
-    const R r = Arith<T>::re(x);
+template <class Scalar> BATCHLAS_DEVICE_INLINE real_t<Scalar> sign_nonzero_real(Scalar x) {
+    using R = real_t<Scalar>;
+    const R r = Arith<Scalar>::re(x);
     return r < R(0) ? R(-1) : R(1);
 }
 
@@ -439,7 +441,7 @@ template <class T> BATCHLAS_DEVICE_INLINE real_t<T> sign_nonzero_real(T x) {
 // whichever is closer to c. Tie: alg::TieLowest (rt1, the open-coded steqr form) or
 // alg::TieHighest (rt2: the CTA Wilkinson strategy). Plain inline, operands by reference (the
 // forms it replaces).
-template <class Tie = alg::TieLowest, class R> BATCHLAS_DEVICE_HELPER R eig2x2_nearest(const R& a, const R& b, const R& c) {
+template <class Tie = alg::TieLowest, class Real> BATCHLAS_DEVICE_HELPER Real eig2x2_nearest(const Real& a, const Real& b, const Real& c) {
     static_assert(std::is_same_v<Tie, alg::TieLowest> || std::is_same_v<Tie, alg::TieHighest>,
                   "eig2x2_nearest: alg::TieLowest or alg::TieHighest");
     const auto [rt1, rt2] = lae2(a, b, c);
@@ -449,12 +451,12 @@ template <class Tie = alg::TieLowest, class R> BATCHLAS_DEVICE_HELPER R eig2x2_n
 
 // The tridiagonal solver's 2-vector Householder (apply it with rot<Reflector2>).
 // v with (I - 2 v v^T) (a0, a1)^T = (-sign(a0) ||a||, 0)^T; unscaled norms (inputs are O(||T||)).
-template <class R> BATCHLAS_DEVICE_INLINE std::array<R, 2> house2(R a0, R a1) {
-    const R anorm = sycl::sqrt(a0 * a0 + a1 * a1);
-    const R alpha = -sycl::copysign(anorm, a0);
-    const R v0 = a0 - alpha, v1 = a1;
-    const R vnorm = sycl::sqrt(v0 * v0 + v1 * v1);
-    const R inv = R(1) / vnorm;
+template <class Real> BATCHLAS_DEVICE_INLINE std::array<Real, 2> house2(Real a0, Real a1) {
+    const Real anorm = sycl::sqrt(a0 * a0 + a1 * a1);
+    const Real alpha = -sycl::copysign(anorm, a0);
+    const Real v0 = a0 - alpha, v1 = a1;
+    const Real vnorm = sycl::sqrt(v0 * v0 + v1 * v1);
+    const Real inv = Real(1) / vnorm;
     return {v0 * inv, v1 * inv};
 }
 
@@ -466,9 +468,9 @@ template <class R> BATCHLAS_DEVICE_INLINE std::array<R, 2> house2(R a0, R a1) {
 // guard, the Jacobi cosine 1 + t^2); Exact 1 / sqrt_a on every target. Elsewhere 1 / sqrt_a.
 enum class InvSqrtEdge { Lapack, FiniteGeOne, Exact };
 
-template <InvSqrtEdge E = InvSqrtEdge::Lapack, class R> BATCHLAS_DEVICE_HELPER R inv_sqrt(R a, R sqrt_a) {
+template <InvSqrtEdge E = InvSqrtEdge::Lapack, class Real> BATCHLAS_DEVICE_HELPER Real inv_sqrt(Real a, Real sqrt_a) {
 #if !BATCHLAS_SYCL_IMPL_ACPP && defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
-    if constexpr (std::is_same_v<R, float> && E != InvSqrtEdge::Exact) {
+    if constexpr (std::is_same_v<Real, float> && E != InvSqrtEdge::Exact) {
         float y;
         asm("rsqrt.approx.f32 %0, %1;" : "=f"(y) : "f"(a));
         const float e = sycl::fma(-(a * y), y, 1.0f);
@@ -478,28 +480,28 @@ template <InvSqrtEdge E = InvSqrtEdge::Lapack, class R> BATCHLAS_DEVICE_HELPER R
     }
 #endif
     (void)a;
-    return R(1) / sqrt_a;
+    return Real(1) / sqrt_a;
 }
-template <InvSqrtEdge E = InvSqrtEdge::Lapack, class R> BATCHLAS_DEVICE_HELPER R inv_sqrt(R a) { return inv_sqrt<E>(a, sycl::sqrt(a)); }
+template <InvSqrtEdge E = InvSqrtEdge::Lapack, class Real> BATCHLAS_DEVICE_HELPER Real inv_sqrt(Real a) { return inv_sqrt<E>(a, sycl::sqrt(a)); }
 
 // Multiply by the reciprocal when it is finite and nonzero, else divide (the sfmin arm), else
 // (an exact zero d) the caller's value. make() decides once per pivot; apply() branches on the
 // (uniform) flags, never a select (a select pays the divide every time).
 // evidence: docs/perf/lu.md#the-rhs-pad-column-cost
-template <class T, class Ops = arith::Fma> struct SafeRecip {
-    T d;
-    T r;
+template <class Scalar, class Ops = arith::Fma> struct SafeRecip {
+    Scalar d;
+    Scalar r;
     bool zero;
     bool use_mul;
-    BATCHLAS_DEVICE_INLINE static SafeRecip make(T d) {
-        using Ar = arith_t<Ops, T>;
-        const bool z = Arith<T>::is_zero(d);  // EXACT zero, no epsilon
-        const T rc = Ar::recip(d);
-        return {d, rc, z, !z && Arith<T>::isfinite(rc) && !Arith<T>::is_zero(rc)};
+    BATCHLAS_DEVICE_INLINE static SafeRecip make(Scalar d) {
+        using Ar = arith_t<Ops, Scalar>;
+        const bool z = Arith<Scalar>::is_zero(d);  // EXACT zero, no epsilon
+        const Scalar rc = Ar::recip(d);
+        return {d, rc, z, !z && Arith<Scalar>::isfinite(rc) && !Arith<Scalar>::is_zero(rc)};
     }
-    BATCHLAS_DEVICE_INLINE T apply(T y, T if_zero) const {
-        using Ar = arith_t<Ops, T>;
-        T x = if_zero;
+    BATCHLAS_DEVICE_INLINE Scalar apply(Scalar y, Scalar if_zero) const {
+        using Ar = arith_t<Ops, Scalar>;
+        Scalar x = if_zero;
         if (use_mul) x = Ar::mul(y, r);
         else if (!zero) x = Ar::div(y, d);
         return x;

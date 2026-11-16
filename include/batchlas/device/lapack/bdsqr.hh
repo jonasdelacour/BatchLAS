@@ -36,22 +36,22 @@ struct bdsqr {
 // bdsqr's options. sort_desc: s descending, U's columns and Vh's rows permuted with it. tol: the
 // relative tolerance (<= 0: DBDSQR's tolmul * eps, tolmul = clamp(eps^(-1/8), 10, 100)). maxit:
 // the iteration cap (<= 0: DBDSQR's max(32, 6 n^2)).
-template <class R> struct BdsqrOptions {
+template <class Real> struct BdsqrOptions {
     bool sort_desc = true;
-    R tol = R(0);
+    Real tol = Real(0);
     int maxit = 0;
 };
 
 namespace detail {
 // DBDSQR's tolerance (tolmul * eps, tolmul = clamp(eps^(-1/8), 10, 100)) and its iteration cap
 // (maxitr * n^2, maxitr = 6, at least 32).
-template <class R> struct bdsqr_params {
-    R tol;
+template <class Real> struct bdsqr_params {
+    Real tol;
     int maxit;
 };
-template <class R> inline bdsqr_params<R> params(int n) {
-    const R eps = std::numeric_limits<R>::epsilon();
-    const R tolmul = sycl::fmax(R(10), sycl::fmin(R(100), sycl::pow(eps, R(-0.125))));
+template <class Real> inline bdsqr_params<Real> params(int n) {
+    const Real eps = std::numeric_limits<Real>::epsilon();
+    const Real tolmul = sycl::fmax(Real(10), sycl::fmin(Real(100), sycl::pow(eps, Real(-0.125))));
     return {tolmul * eps, std::max<int>(32, 6 * n * n)};
 }
 
@@ -59,32 +59,32 @@ template <class R> inline bdsqr_params<R> params(int n) {
 enum Step : int { kNone = 0, kStop = 1, kChaseU = 2, kChaseV = 3, kSweep = 4 };
 inline constexpr int kCtrl = 8;  // [0] converged, [1] step, [2] lo, [3] hi, [4] l, [5] iters, [6] info
 
-template <class R> struct BdsqrLayout {
+template <class Real> struct BdsqrLayout {
     WsSlot<int> ctrl;  // local: the published scan state
-    WsSlot<R> rot;     // global: 2 (n - 1) (c, s) of U, then 2 (n - 1) of Vh, one block's
+    WsSlot<Real> rot;     // global: 2 (n - 1) (c, s) of U, then 2 (n - 1) of Vh, one block's
     WsSlot<int> perm;  // global: n sign flags, then the sort's swap targets
     WorkspaceSize size;
 };
-template <class R> constexpr BdsqrLayout<R> sweep_plan(int n) {
+template <class Real> constexpr BdsqrLayout<Real> sweep_plan(int n) {
     Plan p;
     const WsSlot<int> ctrl = p.take<int>(WsSpace::Local, kCtrl);
-    const WsSlot<R> rot = p.take<R>(WsSpace::Global, std::size_t(4) * std::size_t(n > 1 ? n - 1 : 1));
+    const WsSlot<Real> rot = p.take<Real>(WsSpace::Global, std::size_t(4) * std::size_t(n > 1 ? n - 1 : 1));
     const WsSlot<int> perm = p.take<int>(WsSpace::Global, std::size_t(n > 0 ? n : 1));
     return {ctrl, rot, perm, p.size()};
 }
 
 // (x0, x1) := (c x0 + s x1, -s x0 + c x1): DBDSQR's rotation in its expression order.
-template <class R> BATCHLAS_DEVICE_INLINE void rot_pair(R& x0, R& x1, R c, R s) {
-    const R a = x0, b = x1;
+template <class Real> BATCHLAS_DEVICE_INLINE void rot_pair(Real& x0, Real& x1, Real c, Real s) {
+    const Real a = x0, b = x1;
     x0 = c * a + s * b;
     x1 = -s * a + c * b;
 }
 // Columns c0, c1 of a over the rows the item owns; rows r0, r1 over the columns it owns.
-template <class Ex, class M, class R> BATCHLAS_DEVICE_INLINE void rot_cols(const Ex& ex, const M& a, int c0, int c1, R c, R s) {
-    for_each_owned(ex, a.rows(), [&](int r) { rot_pair<R>(a(r, c0), a(r, c1), c, s); });
+template <class Ex, class M, class Real> BATCHLAS_DEVICE_INLINE void rot_cols(const Ex& ex, const M& a, int c0, int c1, Real c, Real s) {
+    for_each_owned(ex, a.rows(), [&](int r) { rot_pair<Real>(a(r, c0), a(r, c1), c, s); });
 }
-template <class Ex, class M, class R> BATCHLAS_DEVICE_INLINE void rot_rows(const Ex& ex, const M& a, int r0, int r1, R c, R s) {
-    for_each_owned(ex, a.cols(), [&](int col) { rot_pair<R>(a(r0, col), a(r1, col), c, s); });
+template <class Ex, class M, class Real> BATCHLAS_DEVICE_INLINE void rot_rows(const Ex& ex, const M& a, int r0, int r1, Real c, Real s) {
+    for_each_owned(ex, a.cols(), [&](int col) { rot_pair<Real>(a(r0, col), a(r1, col), c, s); });
 }
 // The sort's interchange of elements (i0, j0) and (i1, j1) of a (any operand: ItemMat has no
 // col / row views for core swap).
@@ -95,37 +95,38 @@ template <class M> BATCHLAS_DEVICE_INLINE void swap_at(const M& a, int i0, int j
 }
 }  // namespace detail
 
-template <class T> struct tiers<routine::bdsqr, T> {
+template <class Real> struct tiers<routine::bdsqr, Real> {
     using type = tier::list<tier::Blocked<1>>;
 };
 // wg_size is what with_tier checks; the op runs on any work-group width (items past the owned
-// count idle). Real T only (B is real; gebrd's complex reduction hands bdsqr a real B too).
-template <class T> struct tier_info<routine::bdsqr, tier::Blocked<1>, T> {
-    static_assert(std::is_floating_point_v<T>, "bdsqr: a real T");
+// count idle). Real types only (B is real; gebrd's complex reduction hands bdsqr a real B too).
+template <class Real> struct tier_info<routine::bdsqr, tier::Blocked<1>, Real> {
+    static_assert(std::is_floating_point_v<Real>, "bdsqr: a real T");
     static constexpr int wg_size = 256, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 1; }
-    static constexpr WorkspaceSize buffer_size(int n) { return detail::sweep_plan<T>(n).size; }
+    static constexpr WorkspaceSize buffer_size(int n) { return detail::sweep_plan<Real>(n).size; }
 };
 
 namespace detail {
 // xBDSQR's body with the tolerance and iteration cap resolved: the public bdsqr below (DBDSQR's
 // values for BdsqrOptions' zeros) and the host route (p formed on the host, a kernel argument).
-template <class Tier, class Ex, class D, class E, class S, class MU, class MV, class R>
+template <class Tier, class Ex, class D, class E, class S, class MU, class MV, class Real>
 BATCHLAS_DEVICE_INLINE int bdsqr_sweep(const Ex& ex, const D& d, const E& e, const S& s, const MU& U, const MV& Vh, const Workspace& ws,
-                                       bool sort_desc, const bdsqr_params<R>& p) {
-    static_assert(std::is_same_v<elem_t<D>, R>, "bdsqr: params of the bidiagonal's real type");
-    static_assert(std::is_same_v<resolve_tier_t<routine::bdsqr, R, Tier>, tier::Blocked<1>>, "bdsqr: tier::Blocked<1>");
+                                       bool sort_desc, const bdsqr_params<Real>& p) {
+    static_assert(std::is_same_v<elem_t<D>, Real>, "bdsqr: params of the bidiagonal's real type");
+    static_assert(std::is_same_v<resolve_tier_t<routine::bdsqr, Real, Tier>, tier::Blocked<1>>,
+                  "bdsqr: tier::Blocked<1>");
     constexpr bool solo = is_thread_v<Ex>;
-    const R eps = std::numeric_limits<R>::epsilon();
+    const Real eps = std::numeric_limits<Real>::epsilon();
     const int n = d.size();
     const bool acc_u = U.rows() > 0 && U.cols() == n;
     const bool acc_vh = Vh.rows() == n && Vh.cols() > 0;
-    const auto L = detail::sweep_plan<R>(n);
+    const auto L = detail::sweep_plan<Real>(n);
     int* ctrl = nullptr;
-    R* ru = nullptr;
-    R* rv = nullptr;
+    Real* ru = nullptr;
+    Real* rv = nullptr;
     int* perm = nullptr;
     if constexpr (!solo) {
         ctrl = carve_local(ws, L.ctrl).get_raw();
@@ -134,7 +135,7 @@ BATCHLAS_DEVICE_INLINE int bdsqr_sweep(const Ex& ex, const D& d, const E& e, con
         perm = carve_global(ws, L.perm);
     }
     // Rotation i of the current block: applied now (Thread) or stored for the work-group.
-    auto emit_u = [&]([[maybe_unused]] int i, [[maybe_unused]] int c0, [[maybe_unused]] int c1, R c, R sn) {
+    auto emit_u = [&]([[maybe_unused]] int i, [[maybe_unused]] int c0, [[maybe_unused]] int c1, Real c, Real sn) {
         if constexpr (solo) {
             if (acc_u) detail::rot_cols(ex, U, c0, c1, c, sn);
         } else {
@@ -142,7 +143,7 @@ BATCHLAS_DEVICE_INLINE int bdsqr_sweep(const Ex& ex, const D& d, const E& e, con
             ru[2 * i + 1] = sn;
         }
     };
-    auto emit_vh = [&]([[maybe_unused]] int i, [[maybe_unused]] int r0, [[maybe_unused]] int r1, R c, R sn) {
+    auto emit_vh = [&]([[maybe_unused]] int i, [[maybe_unused]] int r0, [[maybe_unused]] int r1, Real c, Real sn) {
         if constexpr (solo) {
             if (acc_vh) detail::rot_rows(ex, Vh, r0, r1, c, sn);
         } else {
@@ -153,17 +154,17 @@ BATCHLAS_DEVICE_INLINE int bdsqr_sweep(const Ex& ex, const D& d, const E& e, con
 
     int iters = 0;
     bool converged = (n <= 1);
-    R abs_thresh = R(0);  // the leader's
+    Real abs_thresh = Real(0);  // the leader's
     while (!converged && iters < p.maxit) {
         int conv = 1;
         if (ex.leader()) {
-            R smax = R(0);
+            Real smax = Real(0);
             for (int i = 0; i < n; ++i) smax = sycl::fmax(smax, sycl::fabs(d(i)));
             for (int i = 0; i < n - 1; ++i) smax = sycl::fmax(smax, sycl::fabs(e(i)));
             abs_thresh = p.tol * smax;
             for (int i = 0; i < n - 1; ++i) {
-                const R thresh = sycl::fmax(eps * (sycl::fabs(d(i)) + sycl::fabs(d(i + 1))), abs_thresh);
-                if (sycl::fabs(e(i)) <= thresh) e(i) = R(0);
+                const Real thresh = sycl::fmax(eps * (sycl::fabs(d(i)) + sycl::fabs(d(i + 1))), abs_thresh);
+                if (sycl::fabs(e(i)) <= thresh) e(i) = Real(0);
                 else conv = 0;
             }
         }
@@ -184,15 +185,15 @@ BATCHLAS_DEVICE_INLINE int bdsqr_sweep(const Ex& ex, const D& d, const E& e, con
                 // reconvergence point after the scan, and on Thread (one item per matrix) a warp's
                 // items enter the sweep 2-3 at a time instead of ~15: 3.4x warp instructions,
                 // 1.33x time at n = 64 (float, values only, batch 1024).
-                while ((l < n - 1) & (e(sycl::min(l, n - 2)) == R(0))) ++l;
+                while ((l < n - 1) & (e(sycl::min(l, n - 2)) == Real(0))) ++l;
                 if (l >= n - 1) {
                     step = detail::kStop;
                 } else {
                     int m = l;
-                    while (m < n - 1 && e(m) != R(0)) ++m;
+                    while (m < n - 1 && e(m) != Real(0)) ++m;
                     int zrow = -1;
                     for (int i = l; i <= m; ++i) {
-                        if (sycl::fabs(d(i)) <= sycl::fmax(abs_thresh, std::numeric_limits<R>::min())) {
+                        if (sycl::fabs(d(i)) <= sycl::fmax(abs_thresh, std::numeric_limits<Real>::min())) {
                             zrow = i;
                             break;
                         }
@@ -202,12 +203,12 @@ BATCHLAS_DEVICE_INLINE int bdsqr_sweep(const Ex& ex, const D& d, const E& e, con
                         // left rotations (rightwards); one at the bottom empties column m with
                         // right rotations (leftwards).
                         // evidence: docs/perf/gesvd.md#gesvd-bdsqr-the-missing-zero-shift-chase
-                        d(zrow) = R(0);
+                        d(zrow) = Real(0);
                         if (zrow < m) {
-                            R f2 = e(zrow);
-                            e(zrow) = R(0);
+                            Real f2 = e(zrow);
+                            e(zrow) = Real(0);
                             for (int j = zrow + 1; j <= m; ++j) {
-                                const auto rz = lartg(static_cast<R>(d(j)), f2);
+                                const auto rz = lartg(static_cast<Real>(d(j)), f2);
                                 d(j) = rz.r;
                                 emit_u(j - zrow - 1, j, zrow, rz.c, rz.s);
                                 if (j < m) {
@@ -218,10 +219,10 @@ BATCHLAS_DEVICE_INLINE int bdsqr_sweep(const Ex& ex, const D& d, const E& e, con
                             step = detail::kChaseU;
                             lo = zrow;
                         } else if (m > l) {
-                            R f2 = e(m - 1);
-                            e(m - 1) = R(0);
+                            Real f2 = e(m - 1);
+                            e(m - 1) = Real(0);
                             for (int j = m - 1; j >= l; --j) {
-                                const auto rz = lartg(static_cast<R>(d(j)), f2);
+                                const auto rz = lartg(static_cast<Real>(d(j)), f2);
                                 d(j) = rz.r;
                                 emit_vh(m - 1 - j, j, m, rz.c, rz.s);
                                 if (j > l) {
@@ -235,16 +236,17 @@ BATCHLAS_DEVICE_INLINE int bdsqr_sweep(const Ex& ex, const D& d, const E& e, con
                     } else {
                         // DBDSQR's shift: the smaller singular value of the trailing 2 x 2 (xLAS2),
                         // dropped when negligible against d(l).
-                        R shift = las2(static_cast<R>(d(m - 1)), static_cast<R>(e(m - 1)), static_cast<R>(d(m)))[0];
-                        const R sll = sycl::fabs(d(l));
-                        if (sll > R(0) && (shift / sll) * (shift / sll) < eps) shift = R(0);
-                        R f = (sll - shift) * (sycl::copysign(R(1), d(l)) + shift / d(l));
-                        R g = e(l);
+                        Real shift = las2(static_cast<Real>(d(m - 1)), static_cast<Real>(e(m - 1)),
+                                          static_cast<Real>(d(m)))[0];
+                        const Real sll = sycl::fabs(d(l));
+                        if (sll > Real(0) && (shift / sll) * (shift / sll) < eps) shift = Real(0);
+                        Real f = (sll - shift) * (sycl::copysign(Real(1), d(l)) + shift / d(l));
+                        Real g = e(l);
                         for (int k = l; k <= m - 1; ++k) {
                             const auto r1 = lartg(f, g);
                             emit_vh(k - l, k, k + 1, r1.c, r1.s);
                             if (k > l) e(k - 1) = r1.r;
-                            const R dk = d(k), ek = e(k), dk1 = d(k + 1);
+                            const Real dk = d(k), ek = e(k), dk1 = d(k + 1);
                             f = r1.c * dk + r1.s * ek;
                             e(k) = r1.c * ek - r1.s * dk;
                             g = r1.s * dk1;
@@ -252,14 +254,14 @@ BATCHLAS_DEVICE_INLINE int bdsqr_sweep(const Ex& ex, const D& d, const E& e, con
                             const auto r2 = lartg(f, g);
                             emit_u(k - l, k, k + 1, r2.c, r2.s);
                             d(k) = r2.r;
-                            const R dk1b = d(k + 1), ekb = e(k);
+                            const Real dk1b = d(k + 1), ekb = e(k);
                             f = r2.c * ekb + r2.s * dk1b;
                             d(k + 1) = r2.c * dk1b - r2.s * ekb;
                             if (k < m - 1) {
                                 g = r2.s * e(k + 1);
                                 e(k + 1) = r2.c * e(k + 1);
                             } else {
-                                g = R(0);
+                                g = Real(0);
                             }
                             e(k) = f;
                         }
@@ -289,21 +291,21 @@ BATCHLAS_DEVICE_INLINE int bdsqr_sweep(const Ex& ex, const D& d, const E& e, con
                 // The block's rotations, in the leader's order, on every owned row / column.
                 if (step == detail::kChaseU && acc_u) {
                     for_each_owned(ex, U.rows(), [&](int r) {
-                        for (int j = lo + 1; j <= hi; ++j) detail::rot_pair<R>(U(r, j), U(r, lo), ru[2 * (j - lo - 1)], ru[2 * (j - lo - 1) + 1]);
+                        for (int j = lo + 1; j <= hi; ++j) detail::rot_pair<Real>(U(r, j), U(r, lo), ru[2 * (j - lo - 1)], ru[2 * (j - lo - 1) + 1]);
                     });
                 } else if (step == detail::kChaseV && acc_vh) {
                     for_each_owned(ex, Vh.cols(), [&](int col) {
                         for (int j = hi - 1; j >= lo; --j)
-                            detail::rot_pair<R>(Vh(j, col), Vh(hi, col), rv[2 * (hi - 1 - j)], rv[2 * (hi - 1 - j) + 1]);
+                            detail::rot_pair<Real>(Vh(j, col), Vh(hi, col), rv[2 * (hi - 1 - j)], rv[2 * (hi - 1 - j) + 1]);
                     });
                 } else if (step == detail::kSweep) {
                     if (acc_vh)
                         for_each_owned(ex, Vh.cols(), [&](int col) {
-                            for (int k = lo; k < hi; ++k) detail::rot_pair<R>(Vh(k, col), Vh(k + 1, col), rv[2 * (k - lo)], rv[2 * (k - lo) + 1]);
+                            for (int k = lo; k < hi; ++k) detail::rot_pair<Real>(Vh(k, col), Vh(k + 1, col), rv[2 * (k - lo)], rv[2 * (k - lo) + 1]);
                         });
                     if (acc_u)
                         for_each_owned(ex, U.rows(), [&](int r) {
-                            for (int k = lo; k < hi; ++k) detail::rot_pair<R>(U(r, k), U(r, k + 1), ru[2 * (k - lo)], ru[2 * (k - lo) + 1]);
+                            for (int k = lo; k < hi; ++k) detail::rot_pair<Real>(U(r, k), U(r, k + 1), ru[2 * (k - lo)], ru[2 * (k - lo) + 1]);
                         });
                 }
                 sync(ex, Mem::Global);
@@ -317,11 +319,11 @@ BATCHLAS_DEVICE_INLINE int bdsqr_sweep(const Ex& ex, const D& d, const E& e, con
     // swaps applied to U's columns and Vh's rows; info from the convergence and a NaN scan.
     if (ex.leader()) {
         for (int i = 0; i < n; ++i) {
-            const bool neg = d(i) < R(0);
+            const bool neg = d(i) < Real(0);
             if (neg) {
                 d(i) = -d(i);
                 if constexpr (solo) {
-                    if (acc_vh) for_each_owned(ex, Vh.cols(), [&](int col) { Vh(i, col) *= R(-1); });
+                    if (acc_vh) for_each_owned(ex, Vh.cols(), [&](int col) { Vh(i, col) *= Real(-1); });
                 }
             }
             if constexpr (!solo) perm[i] = neg ? 1 : 0;
@@ -333,7 +335,7 @@ BATCHLAS_DEVICE_INLINE int bdsqr_sweep(const Ex& ex, const D& d, const E& e, con
         if (acc_vh)
             for_each_owned(ex, Vh.cols(), [&](int col) {
                 for (int i = 0; i < n; ++i)
-                    if (perm[i] != 0) Vh(i, col) *= R(-1);
+                    if (perm[i] != 0) Vh(i, col) *= Real(-1);
             });
         sync(ex, Mem::Global);
     }
@@ -345,7 +347,7 @@ BATCHLAS_DEVICE_INLINE int bdsqr_sweep(const Ex& ex, const D& d, const E& e, con
                 for (int j = i + 1; j < n; ++j)
                     if (s(j) > s(best)) best = j;
                 if (best != i) {
-                    const R tmp = s(i);
+                    const Real tmp = s(i);
                     s(i) = s(best);
                     s(best) = tmp;
                     if constexpr (solo) {

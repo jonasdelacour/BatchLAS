@@ -55,8 +55,8 @@ constexpr int kItems = 3;
 constexpr int kBig = 1024;
 constexpr int kPeriod = 3;
 constexpr int kTail = 7;  // poisoned elements past the last tau / workspace slice
-template <class T> constexpr int kNB = batchlas::device::larfb_default_nb<T>();
-template <class T> using Blk = batchlas::device::tier::Blocked<kNB<T>>;
+template <class Scalar> constexpr int kNB = batchlas::device::larfb_default_nb<Scalar>();
+template <class Scalar> using Blk = batchlas::device::tier::Blocked<kNB<Scalar>>;
 static_assert(batchlas::device::tier_info<batchlas::device::routine::geqrf, Blk<float>, float>::wg_size == kWG);
 static_assert(std::is_same_v<batchlas::device::resolve_tier_t<batchlas::device::routine::geqrf, double, batchlas::device::tier::upto<4096>>, batchlas::device::tier::Blocked<16>>);
 static_assert(std::is_same_v<batchlas::device::resolve_tier_t<batchlas::device::routine::orgqr, float, batchlas::device::tier::upto<1>>, batchlas::device::tier::Blocked<32>>);
@@ -65,43 +65,44 @@ struct alignas(16) Chunk16 {
     unsigned char b[16];
 };
 
-template <class T> T pad_value() { return T(real_of<T>(1e30)); }
-template <class T> LD<T> cj(LD<T> v) {
-    if constexpr (is_cplx<T>) return std::conj(v);
+template <class Scalar> Scalar pad_value() { return Scalar(real_of<Scalar>(1e30)); }
+template <class Scalar> LD<Scalar> cj(LD<Scalar> v) {
+    if constexpr (is_cplx<Scalar>) return std::conj(v);
     else return v;
 }
 
 // A batch of column-major rows x cols matrices, ld = rows + 3, stride = ld * cols + 5; every element
 // outside them is pad_value(). Item q holds item q % period's data: shift * I + scale * G.
-template <class T> struct Batch {
+template <class Scalar> struct Batch {
     int rows, cols, ld, items;
     std::size_t stride;
-    std::vector<T> h;
+    std::vector<Scalar> h;
     Batch(int r, int c, int n_items, std::uint64_t seed, double shift, double scale, int period = 1 << 30)
-        : rows(r), cols(c), ld(r + 3), items(n_items), stride(std::size_t(r + 3) * c + 5), h(stride * n_items, pad_value<T>()) {
+        : rows(r), cols(c), ld(r + 3), items(n_items), stride(std::size_t(r + 3) * c + 5), h(stride * n_items, pad_value<Scalar>()) {
         for (int q = 0; q < items; ++q)
             for (int j = 0; j < cols; ++j)
                 for (int i = 0; i < rows; ++i) {
-                    const T g = val<T>(seed * 1000003u + off(q % period, i, j));
-                    at(q, i, j) = T(real_of<T>(scale)) * g + (i == j ? T(real_of<T>(shift)) : T(0));
+                    const Scalar g = val<Scalar>(seed * 1000003u + off(q % period, i, j));
+                    at(q, i,
+                       j) = Scalar(real_of<Scalar>(scale)) * g + (i == j ? Scalar(real_of<Scalar>(shift)) : Scalar(0));
                 }
     }
     std::size_t off(int q, int i, int j) const { return std::size_t(q) * stride + i + std::size_t(j) * ld; }
-    T& at(int q, int i, int j) { return h[off(q, i, j)]; }
-    const T& at(int q, int i, int j) const { return h[off(q, i, j)]; }
+    Scalar& at(int q, int i, int j) { return h[off(q, i, j)]; }
+    const Scalar& at(int q, int i, int j) const { return h[off(q, i, j)]; }
     bool inside(std::size_t e) const {
         const std::size_t r = e % stride;
         return e < stride * items && r < std::size_t(ld) * cols && int(r % ld) < rows;
     }
-    std::vector<LD<T>> wide_item(int q) const {
-        std::vector<LD<T>> w(std::size_t(rows) * cols);
+    std::vector<LD<Scalar>> wide_item(int q) const {
+        std::vector<LD<Scalar>> w(std::size_t(rows) * cols);
         for (int j = 0; j < cols; ++j)
             for (int i = 0; i < rows; ++i) w[i + std::size_t(j) * rows] = wide(at(q, i, j));
         return w;
     }
-    void set_item(int q, const std::vector<LD<T>>& w) {
+    void set_item(int q, const std::vector<LD<Scalar>>& w) {
         for (int j = 0; j < cols; ++j)
-            for (int i = 0; i < rows; ++i) at(q, i, j) = static_cast<T>(w[i + std::size_t(j) * rows]);
+            for (int i = 0; i < rows; ++i) at(q, i, j) = static_cast<Scalar>(w[i + std::size_t(j) * rows]);
     }
 };
 
@@ -109,27 +110,27 @@ template <class T> struct Batch {
 
 // xGEQR2: xLARFG (beta = -sign(Re alpha) ||(alpha, x)||, tau = (beta - alpha) / beta, x /= alpha -
 // beta; tau = 0 when x = 0 and Im alpha = 0), then H^H = I - conj(tau) v v^H from the left.
-template <class T> void geqr2_ref(std::vector<LD<T>>& a, int m, int n, std::vector<LD<T>>& tau) {
+template <class Scalar> void geqr2_ref(std::vector<LD<Scalar>>& a, int m, int n, std::vector<LD<Scalar>>& tau) {
     using L = long double;
     const int k = std::min(m, n);
-    tau.assign(k, LD<T>(0));
+    tau.assign(k, LD<Scalar>(0));
     for (int j = 0; j < k; ++j) {
-        const LD<T> alpha = a[j + std::size_t(j) * m];
+        const LD<Scalar> alpha = a[j + std::size_t(j) * m];
         L xn2 = 0;
         for (int i = j + 1; i < m; ++i) xn2 += std::norm(a[i + std::size_t(j) * m]);
         const L ar = std::real(alpha), ai = std::imag(alpha);
         if (xn2 == 0 && ai == 0) continue;
         const L beta = -std::copysign(std::sqrt(ar * ar + ai * ai + xn2), ar);
-        if constexpr (is_cplx<T>) tau[j] = LD<T>((beta - ar) / beta, -ai / beta);
+        if constexpr (is_cplx<Scalar>) tau[j] = LD<Scalar>((beta - ar) / beta, -ai / beta);
         else tau[j] = (beta - ar) / beta;
-        const LD<T> s = LD<T>(1) / (alpha - LD<T>(beta));
+        const LD<Scalar> s = LD<Scalar>(1) / (alpha - LD<Scalar>(beta));
         for (int i = j + 1; i < m; ++i) a[i + std::size_t(j) * m] *= s;
-        a[j + std::size_t(j) * m] = LD<T>(beta);
-        const LD<T> ct = cj<T>(tau[j]);
+        a[j + std::size_t(j) * m] = LD<Scalar>(beta);
+        const LD<Scalar> ct = cj<Scalar>(tau[j]);
         for (int c = j + 1; c < n; ++c) {
-            LD<T> w = a[j + std::size_t(c) * m];
-            for (int i = j + 1; i < m; ++i) w += cj<T>(a[i + std::size_t(j) * m]) * a[i + std::size_t(c) * m];
-            const LD<T> f = ct * w;
+            LD<Scalar> w = a[j + std::size_t(c) * m];
+            for (int i = j + 1; i < m; ++i) w += cj<Scalar>(a[i + std::size_t(j) * m]) * a[i + std::size_t(c) * m];
+            const LD<Scalar> f = ct * w;
             a[j + std::size_t(c) * m] -= f;
             for (int i = j + 1; i < m; ++i) a[i + std::size_t(c) * m] -= f * a[i + std::size_t(j) * m];
         }
@@ -138,43 +139,44 @@ template <class T> void geqr2_ref(std::vector<LD<T>>& a, int m, int n, std::vect
 
 // x (rows x cols) := op(Q) x (left) or x op(Q), Q = H_0 ... H_{k-1} of the factor f (order nq, ld
 // nq), op = ^H when conj_q. H_i = I - tau_i v v^H, v = [0 .. 0, 1, f(i + 1 :, i)].
-template <class T>
-void apply_q_ref(const std::vector<LD<T>>& f, const std::vector<LD<T>>& tau, int nq, int k, bool left, bool conj_q, std::vector<LD<T>>& x,
+template <class Scalar>
+void apply_q_ref(const std::vector<LD<Scalar>>& f, const std::vector<LD<Scalar>>& tau, int nq, int k, bool left, bool conj_q, std::vector<LD<Scalar>>& x,
                  int rows, int cols) {
-    auto v = [&](int i, int r) { return r < i ? LD<T>(0) : (r == i ? LD<T>(1) : f[r + std::size_t(i) * nq]); };
+    auto v = [&](int i,
+                 int r) { return r < i ? LD<Scalar>(0) : (r == i ? LD<Scalar>(1) : f[r + std::size_t(i) * nq]); };
     // Left Q x and right x Q^H apply H_{k-1} first; left Q^H x and right x Q apply H_0 first.
     const bool from_last = left != conj_q;
     for (int s = 0; s < k; ++s) {
         const int i = from_last ? k - 1 - s : s;
-        const LD<T> t = conj_q ? cj<T>(tau[i]) : tau[i];
+        const LD<Scalar> t = conj_q ? cj<Scalar>(tau[i]) : tau[i];
         if (left) {
             for (int c = 0; c < cols; ++c) {
-                LD<T> w = 0;
-                for (int r = i; r < nq; ++r) w += cj<T>(v(i, r)) * x[r + std::size_t(c) * rows];
+                LD<Scalar> w = 0;
+                for (int r = i; r < nq; ++r) w += cj<Scalar>(v(i, r)) * x[r + std::size_t(c) * rows];
                 for (int r = i; r < nq; ++r) x[r + std::size_t(c) * rows] -= t * v(i, r) * w;
             }
         } else {
             for (int r = 0; r < rows; ++r) {
-                LD<T> w = 0;
+                LD<Scalar> w = 0;
                 for (int c = i; c < nq; ++c) w += x[r + std::size_t(c) * rows] * v(i, c);
-                for (int c = i; c < nq; ++c) x[r + std::size_t(c) * rows] -= t * w * cj<T>(v(i, c));
+                for (int c = i; c < nq; ++c) x[r + std::size_t(c) * rows] -= t * w * cj<Scalar>(v(i, c));
             }
         }
     }
 }
 
 // ||got(q) - ref||_F / ||ref||_F over a rows x cols item; NaN-propagating.
-template <class T> double rel_err(const Batch<T>& layout, const std::vector<T>& got, int q, const std::vector<LD<T>>& ref) {
+template <class Scalar> double rel_err(const Batch<Scalar>& layout, const std::vector<Scalar>& got, int q, const std::vector<LD<Scalar>>& ref) {
     long double num = 0, den = 0;
     for (int j = 0; j < layout.cols; ++j)
         for (int i = 0; i < layout.rows; ++i) {
-            const LD<T> r = ref[i + std::size_t(j) * layout.rows];
+            const LD<Scalar> r = ref[i + std::size_t(j) * layout.rows];
             num += std::norm(wide(got[layout.off(q, i, j)]) - r);
             den += std::norm(r);
         }
     return static_cast<double>(std::sqrt(num) / std::sqrt(den));
 }
-template <class T> double rel_err_vec(const T* got, const std::vector<LD<T>>& ref) {
+template <class Scalar> double rel_err_vec(const Scalar* got, const std::vector<LD<Scalar>>& ref) {
     long double num = 0, den = 0;
     for (std::size_t i = 0; i < ref.size(); ++i) {
         num += std::norm(wide(got[i]) - ref[i]);
@@ -182,7 +184,7 @@ template <class T> double rel_err_vec(const T* got, const std::vector<LD<T>>& re
     }
     return den == 0 ? static_cast<double>(std::sqrt(num)) : static_cast<double>(std::sqrt(num) / std::sqrt(den));
 }
-template <class T> int pads_changed(const Batch<T>& before, const std::vector<T>& after) {
+template <class Scalar> int pads_changed(const Batch<Scalar>& before, const std::vector<Scalar>& after) {
     int bad = 0;
     for (std::size_t e = 0; e < after.size(); ++e)
         if (!before.inside(e) && !same_bits(before.h[e], after[e])) ++bad;
@@ -193,15 +195,15 @@ template <class T> int pads_changed(const Batch<T>& before, const std::vector<T>
 
 // items work-groups of kWG at sub-group 32, a 16-byte aligned local slab of local_bytes, the global
 // workspace of items * global_bytes (+ a poisoned tail) NaN-filled; f(ex, b, ws) returns info[b].
-template <class T> struct Launch {
+template <class Scalar> struct Launch {
     Dev& d;
     batchlas::device::WorkspaceSize sz;
     std::byte* gws = nullptr;
     int* info = nullptr;
     int items;
     Launch(Dev& dev, batchlas::device::WorkspaceSize s, int n_items) : d(dev), sz(s), items(n_items) {
-        const std::size_t elems = (sz.global_bytes * items) / sizeof(T) + kTail;
-        gws = reinterpret_cast<std::byte*>(d.alloc<T>(elems, batchlas::device::qnan<T>()));
+        const std::size_t elems = (sz.global_bytes * items) / sizeof(Scalar) + kTail;
+        gws = reinterpret_cast<std::byte*>(d.alloc<Scalar>(elems, batchlas::device::qnan<Scalar>()));
         info = d.alloc<int>(items, 12345);
     }
     template <class F> std::vector<int> run(F f) {
@@ -225,61 +227,63 @@ template <class T> struct Launch {
     }
 };
 
-template <class T> batchlas::KernelMatrixView<T, batchlas::MatrixFormat::Dense> kview(T* p, const Batch<T>& b) {
-    return batchlas::KernelMatrixView<T, batchlas::MatrixFormat::Dense>(p, b.rows, b.cols, b.ld, int(b.stride), b.items);
+template <class Scalar> batchlas::KernelMatrixView<Scalar, batchlas::MatrixFormat::Dense> kview(Scalar* p, const Batch<Scalar>& b) {
+    return batchlas::KernelMatrixView<Scalar, batchlas::MatrixFormat::Dense>(p, b.rows, b.cols, b.ld, int(b.stride), b.items);
 }
-template <class T> batchlas::MatrixView<T, batchlas::MatrixFormat::Dense> hview(T* p, const Batch<T>& b) {
-    return batchlas::MatrixView<T, batchlas::MatrixFormat::Dense>(p, b.rows, b.cols, b.ld, int(b.stride), b.items);
+template <class Scalar> batchlas::MatrixView<Scalar, batchlas::MatrixFormat::Dense> hview(Scalar* p,
+                                                                                          const Batch<Scalar>& b) {
+    return batchlas::MatrixView<Scalar, batchlas::MatrixFormat::Dense>(p, b.rows, b.cols, b.ld, int(b.stride), b.items);
 }
 
 struct Shape {
     int m, n;
 };
 // Across NB (n = NB - 1, NB, NB + 1, 2 NB + 1, tall) and one wide geqrf (m < n).
-template <class T> std::vector<Shape> shapes(bool with_wide) {
-    constexpr int nb = kNB<T>;
+template <class Scalar> std::vector<Shape> shapes(bool with_wide) {
+    constexpr int nb = kNB<Scalar>;
     std::vector<Shape> s{{nb + 6, nb - 1}, {nb + 7, nb}, {nb + 8, nb + 1}, {2 * nb + 9, 2 * nb + 1}};
     if (with_wide) s.push_back({nb + 1, 2 * nb + 3});
     return s;
 }
 
 // Device geqrf on a copy of A; returns (factors, tau, info).
-template <class T> struct QrOut {
-    std::vector<T> f, tau;
+template <class Scalar> struct QrOut {
+    std::vector<Scalar> f, tau;
     std::vector<int> info;
 };
-template <class T> QrOut<T> device_geqrf(Dev& d, const Batch<T>& A) {
+template <class Scalar> QrOut<Scalar> device_geqrf(Dev& d, const Batch<Scalar>& A) {
     const int k = std::min(A.rows, A.cols);
-    T* a = d.up(A.h);
-    T* tau = d.alloc<T>(std::size_t(k) * A.items + kTail, pad_value<T>());
+    Scalar* a = d.up(A.h);
+    Scalar* tau = d.alloc<Scalar>(std::size_t(k) * A.items + kTail, pad_value<Scalar>());
     const auto kv = kview(a, A);
-    Launch<T> L(d, batchlas::device::buffer_size<batchlas::device::routine::geqrf, Blk<T>, T>(A.rows, A.cols), A.items);
+    Launch<Scalar> L(d, batchlas::device::buffer_size<batchlas::device::routine::geqrf, Blk<Scalar>,
+                     Scalar>(A.rows, A.cols), A.items);
     auto info = L.run([=](const auto& ex, int b, const batchlas::device::Workspace& ws) {
-        return batchlas::device::geqrf<Blk<T>>(ex, batchlas::device::item(kv, b), batchlas::device::vec(tau + std::ptrdiff_t(b) * k, k), ws);
+        return batchlas::device::geqrf<Blk<Scalar>>(ex, batchlas::device::item(kv, b), batchlas::device::vec(tau + std::ptrdiff_t(b) * k, k), ws);
     });
     return {d.down(a, A.h.size()), d.down(tau, std::size_t(k) * A.items + kTail), info};
 }
 
-// The T-rounded long-double factors of A (geqr2_ref), as orgqr's / ormqr's inputs.
-template <class T> std::vector<T> ref_factors(Batch<T>& F, const Batch<T>& A) {
+// The Scalar-rounded long-double factors of A (geqr2_ref), as orgqr's / ormqr's inputs.
+template <class Scalar> std::vector<Scalar> ref_factors(Batch<Scalar>& F, const Batch<Scalar>& A) {
     const int k = std::min(A.rows, A.cols);
-    std::vector<T> tau(std::size_t(k) * A.items + kTail, pad_value<T>());
+    std::vector<Scalar> tau(std::size_t(k) * A.items + kTail, pad_value<Scalar>());
     for (int q = 0; q < A.items; ++q) {
         auto w = A.wide_item(q);
-        std::vector<LD<T>> t;
-        geqr2_ref<T>(w, A.rows, A.cols, t);
+        std::vector<LD<Scalar>> t;
+        geqr2_ref<Scalar>(w, A.rows, A.cols, t);
         F.set_item(q, w);
-        for (int i = 0; i < k; ++i) tau[std::size_t(q) * k + i] = static_cast<T>(t[i]);
+        for (int i = 0; i < k; ++i) tau[std::size_t(q) * k + i] = static_cast<Scalar>(t[i]);
     }
     return tau;
 }
-template <class T> std::vector<LD<T>> wide_tau(const std::vector<T>& tau, int q, int k) {
-    std::vector<LD<T>> t(k);
+template <class Scalar> std::vector<LD<Scalar>> wide_tau(const std::vector<Scalar>& tau, int q, int k) {
+    std::vector<LD<Scalar>> t(k);
     for (int i = 0; i < k; ++i) t[i] = wide(tau[std::size_t(q) * k + i]);
     return t;
 }
 
-template <class T> bool on_gpu(Dev& d) { return d.ctx->device().type == batchlas::DeviceType::GPU; }
+template <class Scalar> bool on_gpu(Dev& d) { return d.ctx->device().type == batchlas::DeviceType::GPU; }
 
 template <class Choice, class F> bool reached(const char* op, F&& run) {
     const auto rows = test_support::reached_rows([&] {
@@ -291,7 +295,7 @@ template <class Choice, class F> bool reached(const char* op, F&& run) {
     return hit;
 }
 
-template <class T> class DeviceApiQrTest : public DeviceCoreTest<T> {};
+template <class Scalar> class DeviceApiQrTest : public DeviceCoreTest<Scalar> {};
 TYPED_TEST_SUITE(DeviceApiQrTest, AllTypes);
 
 // ---- geqrf ---------------------------------------------------------------------------------------
@@ -442,7 +446,7 @@ TYPED_TEST(DeviceApiQrTest, OrmqrBlockedAllSidesAndTrans) {
 
 // ---- batch bit-identity (local memory reused across tiles) ---------------------------------------
 
-template <class T> int items_differing(const Batch<T>& layout, const std::vector<T>& got) {
+template <class Scalar> int items_differing(const Batch<Scalar>& layout, const std::vector<Scalar>& got) {
     int bad = 0;
     for (int q = kPeriod; q < layout.items; ++q) {
         bool same = true;
@@ -535,10 +539,10 @@ TEST(DeviceApiQrArgs, BadArgumentsReturnMinusI) {
 
 // ---- with_tier and buffer_size (host only) ------------------------------------------------------
 
-template <class Routine, class T> std::string pick(const batchlas::device::DeviceLimits& lim, int n) {
+template <class Routine, class Scalar> std::string pick(const batchlas::device::DeviceLimits& lim, int n) {
     std::string got = "none";
     try {
-        batchlas::device::with_tier<Routine, T>(lim, n, [&]<class Tier>(Tier) { got = "Blocked<" + std::to_string(Tier::nb) + ">"; });
+        batchlas::device::with_tier<Routine, Scalar>(lim, n, [&]<class Tier>(Tier) { got = "Blocked<" + std::to_string(Tier::nb) + ">"; });
     } catch (const batchlas::invalid_argument& e) {
         got = e.what();
     }

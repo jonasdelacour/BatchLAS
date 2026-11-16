@@ -27,7 +27,8 @@ struct IlukPlanStorage {
 };
 
 // ILU(levels_of_fill) on item 0's pattern, validated as iluk_factorize (no per-item pattern check).
-template <typename T>
-BATCHLAS_INTERNAL_API IlukPlanStorage iluk_plan(const MatrixView<T, MatrixFormat::CSR>& A, const ILUKParams<T>& params);
+template <typename Scalar>
+BATCHLAS_INTERNAL_API IlukPlanStorage iluk_plan(const MatrixView<Scalar, MatrixFormat::CSR>& A,
+                                                const ILUKParams<Scalar>& params);
 
 }  // namespace batchlas::ops::iluk

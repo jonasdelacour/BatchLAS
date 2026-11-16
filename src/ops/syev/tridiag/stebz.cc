@@ -28,17 +28,17 @@
 
 namespace batchlas {
 
-template <Backend B, typename T>
+template <Backend B, typename Real>
 struct StebzKernel;
 
-template <Backend B, typename T>
+template <Backend B, typename Real>
 Event stebz(Queue& ctx,
-            const VectorView<T>& d,
-            const VectorView<T>& e,
-            const VectorView<T>& w,
+            const VectorView<Real>& d,
+            const VectorView<Real>& e,
+            const VectorView<Real>& w,
             Span<int32_t> m,
             const Span<std::byte>& ws,
-            StebzParams<T> params) {
+            StebzParams<Real> params) {
     const std::uint8_t* mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("stebz", d, e, w));
     const int64_t n = d.size();
     const int64_t batch_size = d.batch_size();
@@ -71,9 +71,9 @@ Event stebz(Queue& ctx,
 
     (void)ws; // Bisection needs no scratch: each work-item's state is in registers.
 
-    const T vl = params.vl;
-    const T vu = params.vu;
-    const T abstol = params.abstol;
+    const Real vl = params.vl;
+    const Real vu = params.vu;
+    const Real abstol = params.abstol;
     const int32_t max_iter = std::max<int32_t>(1, params.max_iterations);
     const bool descending = (params.order == SortOrder::Descending);
 
@@ -83,13 +83,13 @@ Event stebz(Queue& ctx,
 
     auto* m_ptr = m.data();
     using Tier = device::tier::Blocked<1>;
-    const device::WorkspaceSize wsz = device::buffer_size<device::routine::stebz, Tier, T>(static_cast<int>(n));
+    const device::WorkspaceSize wsz = device::buffer_size<device::routine::stebz, Tier, Real>(static_cast<int>(n));
 
     // Thin launcher (design C.8): the body is the public device::stebz.
     ctx->submit([&](sycl::handler& h) {
         auto slm = sycl::local_accessor<std::byte, 1>(sycl::range<1>(wsz.local_bytes), h);
 
-        batchlas::impl::parallel_for<StebzKernel<B, T>>(h,
+        batchlas::impl::parallel_for<StebzKernel<B, Real>>(h,
             sycl::nd_range<1>(sycl::range<1>{static_cast<size_t>(batch_size) * wg}, sycl::range<1>{wg}),
             [=](sycl::nd_item<1> it) {
                 const int64_t bid = static_cast<int64_t>(it.get_group_linear_id());
@@ -97,7 +97,7 @@ Event stebz(Queue& ctx,
                 const device::RtGroup<> ex{it};
                 const auto dv = device::vec(d.data_ptr() + bid * d.stride(), int(n), d.inc());
                 const auto ev = device::vec(e.data_ptr() + bid * e.stride(), int(n) - 1, e.inc());
-                const device::StebzOptions<T> p{value_range, il, iu, vl, vu, abstol, descending, max_iter};
+                const device::StebzOptions<Real> p{value_range, il, iu, vl, vu, abstol, descending, max_iter};
                 int found = 0;
                 device::stebz<Tier>(ex, dv, ev, device::item(w, static_cast<int>(bid)), found,
                                 device::Workspace{slm.template get_multi_ptr<sycl::access::decorated::yes>(), nullptr}, p);
@@ -108,8 +108,8 @@ Event stebz(Queue& ctx,
     return ctx.get_event();
 }
 
-template <Backend B, typename T>
-size_t stebz_buffer_size(Queue& ctx, size_t n, size_t batch_size, StebzParams<T> params) {
+template <Backend B, typename Real>
+size_t stebz_buffer_size(Queue& ctx, size_t n, size_t batch_size, StebzParams<Real> params) {
     // Bisection carries its per-eigenvalue state in registers and needs only a
     // handful of work-group locals, so no global scratch is required.
     (void)ctx; (void)n; (void)batch_size; (void)params;

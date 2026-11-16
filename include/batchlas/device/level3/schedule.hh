@@ -27,9 +27,9 @@ inline int slab_count(int value, int divisor) { return (value + divisor - 1) / d
 /// tile_a / tile_b (a pointer or a local_accessor, indexed as the tuned kernel indexed it):
 /// Stages * StageASize / StageBSize local elements. Exact: k % TileK == 0, no tail tests. Ends
 /// on a barrier after the last read of both stages (kloop), so an epilogue may reuse them.
-template <class G, bool Exact, class Ops = arith::Native, class Ex, class Mem, class Stage, class T>
+template <class G, bool Exact, class Ops = arith::Native, class Ex, class Mem, class Stage, class Scalar>
 BATCHLAS_DEVICE_INLINE void reg_tile_mma(const Ex& ex, int local_row, int local_col, const Mem& tile_a, const Mem& tile_b, Stage&& stage,
-                                      const int& k, Tile<T, G::ThreadTileRows, G::ThreadTileCols>& accum) {
+                                      const int& k, Tile<Scalar, G::ThreadTileRows, G::ThreadTileCols>& accum) {
     auto load_stage = [&](int kk0, int s) BATCHLAS_DEVICE_BODY {
         auto* tile_a_stage = &tile_a[s * G::StageASize];
         auto* tile_b_stage = &tile_b[s * G::StageBSize];

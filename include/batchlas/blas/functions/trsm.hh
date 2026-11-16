@@ -16,22 +16,22 @@ namespace batchlas {
 // Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
 // src/util/template-instantiations.hh. Keep in sync with the declarations below.
 namespace sig {
-template <typename T>
+template <typename Scalar>
 using trsm = Event(Queue&,
-                   const MatrixView<T, MatrixFormat::Dense>&,
-                   const MatrixView<T, MatrixFormat::Dense>&,
-                   T, Side, Uplo, Transpose, Diag);
+                   const MatrixView<Scalar, MatrixFormat::Dense>&,
+                   const MatrixView<Scalar, MatrixFormat::Dense>&,
+                   Scalar, Side, Uplo, Transpose, Diag);
 
 // NOT an alias for sig::trsm: the vendor signature puts alpha last.
-template <typename T>
+template <typename Scalar>
 using trsm_vendor = Event(Queue&,
-                          const MatrixView<T, MatrixFormat::Dense>&,
-                          const MatrixView<T, MatrixFormat::Dense>&,
+                          const MatrixView<Scalar, MatrixFormat::Dense>&,
+                          const MatrixView<Scalar, MatrixFormat::Dense>&,
                           Side,
                           Uplo,
                           Transpose,
                           Diag,
-                          T);
+                          Scalar);
 }  // namespace sig
 
 /// @brief Host-side argument check that trsm runs on every backend before kernel selection.
@@ -48,10 +48,10 @@ using trsm_vendor = Event(Queue&,
 /// @param[in] diag    Diag::NonUnit or Diag::Unit
 /// @throws batchlas::invalid_argument naming the first violated requirement
 /// @ingroup api_blas3_lowlevel
-template <typename T>
+template <typename Scalar>
 inline void trsm_validate_params(
-                        const MatrixView<T, MatrixFormat::Dense>& A,
-                        const MatrixView<T, MatrixFormat::Dense>& B,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& B,
                         Side side,
                         Uplo uplo,
                         Transpose transA,
@@ -123,11 +123,11 @@ inline void trsm_validate_params(
 /// \f$A, A^T, A^H\f$. `B` is \f$m \times n\f$; `A` is \f$m \times m\f$ (Left) or \f$n \times n\f$ (Right).
 /// No singularity check is made: a zero on a non-unit diagonal gives Inf/NaN.
 ///
-/// Also callable as `trsm(ctx, A, B, TrsmOptions<T>{...})`, with owning
+/// Also callable as `trsm(ctx, A, B, TrsmOptions<Scalar>{...})`, with owning
 /// `Matrix` arguments, and without `Back` (taken from `ctx.backend()`).
 ///
 /// @tparam Back  backend the call is compiled for; must match `ctx`'s device
-/// @tparam T     scalar type: `float`, `double`, `std::complex<float>` or `std::complex<double>`
+/// @tparam Scalar     scalar type: `float`, `double`, `std::complex<float>` or `std::complex<double>`
 /// @param[in]     ctx     queue the work is enqueued on
 /// @param[in]     A       batch of triangular matrices, \f$m \times m\f$ (Left) or \f$n \times n\f$ (Right);
 ///                        only the `uplo` triangle is read
@@ -147,11 +147,11 @@ inline void trsm_validate_params(
 ///       survives (known defect 5, @ref md_docs_2design_2known-defects).
 /// @see trmm, TrsmOptions, @ref perf_trsm, @ref md_docs_2cpp-api
 /// @ingroup api_blas3
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 BATCHLAS_API Event trsm(Queue& ctx,
-                        const MatrixView<T, MatrixFormat::Dense>& A,
-                        const MatrixView<T, MatrixFormat::Dense>& B,
-                        T alpha,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                        Scalar alpha,
                         Side side,
                         Uplo uplo,
                         Transpose transA,
@@ -162,11 +162,11 @@ BATCHLAS_API Event trsm(Queue& ctx,
 /// @brief Deleted: the old argument order with `alpha` last. Pass `alpha` right
 /// after `B`.
 /// @ingroup api_blas3
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 Event trsm(Queue&,
-           const MatrixView<T, MatrixFormat::Dense>&,
-           const MatrixView<T, MatrixFormat::Dense>&,
-           Side, Uplo, Transpose, Diag, T) = delete;
+           const MatrixView<Scalar, MatrixFormat::Dense>&,
+           const MatrixView<Scalar, MatrixFormat::Dense>&,
+           Side, Uplo, Transpose, Diag, Scalar) = delete;
 
 }  // namespace batchlas
 
@@ -191,15 +191,15 @@ namespace batchlas::backend {
 /// @param[in]     alpha   scale \f$\alpha\f$ of the right-hand side
 /// @return event of the enqueued work; `B` holds \f$X\f$ once it completes
 /// @ingroup api_dispatch
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 BATCHLAS_API Event trsm_vendor(Queue& ctx,
-                               const MatrixView<T, MatrixFormat::Dense>& A,
-                               const MatrixView<T, MatrixFormat::Dense>& B,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& B,
                                Side side,
                                Uplo uplo,
                                Transpose transA,
                                Diag diag,
-                               T alpha);
+                               Scalar alpha);
 
 }  // namespace batchlas::backend
 

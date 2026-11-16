@@ -20,7 +20,7 @@
 
 namespace batchlas {
 
-template <typename T, MatrixFormat MType>
+template <typename Scalar, MatrixFormat MType>
 struct BackendMatrixHandle {
     BackendMatrixHandle() = default;
     ~BackendMatrixHandle() = default;
@@ -29,7 +29,7 @@ struct BackendMatrixHandle {
     BackendMatrixHandle& operator=(const BackendMatrixHandle&) = default;
     BackendMatrixHandle& operator=(BackendMatrixHandle&&) = default;
 
-    BackendMatrixHandle(const MatrixView<T, MType>& matrix) { initialize(matrix); }
+    BackendMatrixHandle(const MatrixView<Scalar, MType>& matrix) { initialize(matrix); }
 
 #if BATCHLAS_HAS_CUSPARSE
         inline constexpr operator cusparseDnMatDescr_t() const { return cusparse_descr_; }
@@ -42,7 +42,7 @@ struct BackendMatrixHandle {
 #endif
 
 private:
-    void initialize(const MatrixView<T, MType>& matrix) {
+    void initialize(const MatrixView<Scalar, MType>& matrix) {
 #if BATCHLAS_HAS_CUSPARSE
             initialize_cuda_descriptors(matrix);
 #endif
@@ -52,15 +52,15 @@ private:
     }
 
 #if BATCHLAS_HAS_CUSPARSE
-        void initialize_cuda_descriptors(const MatrixView<T, MType>& matrix) {
-            if constexpr (MType == MatrixFormat::Dense && is_complex_or_floating_point<T>::value) {
-                cusparseCreateDnMat(&cusparse_descr_, matrix.rows(), matrix.cols(), matrix.ld(), matrix.data_ptr(), BackendScalar<T, BackendLibrary::CUSPARSE>::type, CUSPARSE_ORDER_COL);
+        void initialize_cuda_descriptors(const MatrixView<Scalar, MType>& matrix) {
+            if constexpr (MType == MatrixFormat::Dense && is_complex_or_floating_point<Scalar>::value) {
+                cusparseCreateDnMat(&cusparse_descr_, matrix.rows(), matrix.cols(), matrix.ld(), matrix.data_ptr(), BackendScalar<Scalar, BackendLibrary::CUSPARSE>::type, CUSPARSE_ORDER_COL);
                 if (matrix.batch_size() > 1) {
                     cusparseDnMatSetStridedBatch(cusparse_descr_, matrix.batch_size(), matrix.stride());
                 }
-            } else if constexpr (MType == MatrixFormat::CSR && is_complex_or_floating_point<T>::value) {
+            } else if constexpr (MType == MatrixFormat::CSR && is_complex_or_floating_point<Scalar>::value) {
                 cusparseCreateCsr(&cusparse_descr_sp_, matrix.rows(), matrix.cols(), matrix.nnz(), matrix.row_offsets().data(), matrix.col_indices().data(), matrix.data_ptr(),
-                                  CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, BackendScalar<T, BackendLibrary::CUSPARSE>::type);
+                                  CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I, CUSPARSE_INDEX_BASE_ZERO, BackendScalar<Scalar, BackendLibrary::CUSPARSE>::type);
                 if (matrix.batch_size() > 1) {
                     cusparseCsrSetStridedBatch(cusparse_descr_sp_, matrix.batch_size(), matrix.offset_stride(), matrix.matrix_stride());
                 }
@@ -73,26 +73,26 @@ private:
 
 #if BATCHLAS_HAS_ROCSPARSE
         static constexpr rocsparse_datatype rocsparse_value_type() {
-            if constexpr (std::is_same_v<T, float>) {
+            if constexpr (std::is_same_v<Scalar, float>) {
                 return rocsparse_datatype_f32_r;
-            } else if constexpr (std::is_same_v<T, double>) {
+            } else if constexpr (std::is_same_v<Scalar, double>) {
                 return rocsparse_datatype_f64_r;
-            } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+            } else if constexpr (std::is_same_v<Scalar, std::complex<float>>) {
                 return rocsparse_datatype_f32_c;
             } else {
                 return rocsparse_datatype_f64_c;
             }
         }
 
-        void initialize_rocm_descriptors(const MatrixView<T, MType>& matrix) {
-            if constexpr (MType == MatrixFormat::Dense && is_complex_or_floating_point<T>::value) {
+        void initialize_rocm_descriptors(const MatrixView<Scalar, MType>& matrix) {
+            if constexpr (MType == MatrixFormat::Dense && is_complex_or_floating_point<Scalar>::value) {
                 rocsparse_create_dnmat_descr(&rocsparse_descr_, matrix.rows(), matrix.cols(), matrix.ld(), matrix.data_ptr(),
                                              rocsparse_value_type(),
                                              rocsparse_order_column);
                 if (matrix.batch_size() > 1) {
                     rocsparse_dnmat_set_strided_batch(rocsparse_descr_, matrix.batch_size(), matrix.stride());
                 }
-            } else if constexpr (MType == MatrixFormat::CSR && is_complex_or_floating_point<T>::value) {
+            } else if constexpr (MType == MatrixFormat::CSR && is_complex_or_floating_point<Scalar>::value) {
                 rocsparse_create_csr_descr(&rocsparse_descr_sp_, matrix.rows(), matrix.cols(), matrix.nnz(),
                                            matrix.row_offsets().data(), matrix.col_indices().data(), matrix.data_ptr(),
                                            rocsparse_indextype_i32, rocsparse_indextype_i32, rocsparse_index_base_zero,
@@ -108,9 +108,9 @@ private:
 #endif
 };
 
-template <typename T, MatrixFormat MType>
-std::shared_ptr<BackendMatrixHandle<T, MType>> createBackendHandle(const MatrixView<T, MType>& view) {
-    return std::make_shared<BackendMatrixHandle<T, MType>>(view);
+template <typename Scalar, MatrixFormat MType>
+std::shared_ptr<BackendMatrixHandle<Scalar, MType>> createBackendHandle(const MatrixView<Scalar, MType>& view) {
+    return std::make_shared<BackendMatrixHandle<Scalar, MType>>(view);
 }
 
 }  // namespace batchlas

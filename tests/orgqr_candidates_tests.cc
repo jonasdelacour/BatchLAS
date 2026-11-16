@@ -48,58 +48,58 @@ namespace {
 namespace oq = batchlas::ops::orgqr;
 using C = oq::OrgqrChoice;
 using Pin = select::ScopedPin<C>;
-template <typename T>
-using MVof = MatrixView<T, MatrixFormat::Dense>;
-template <typename T>
-using RealOf = typename batchlas::base_type<T>::type;
-template <typename T>
-constexpr bool kCx = test_utils::is_complex<T>::value;
+template <typename Scalar>
+using MVof = MatrixView<Scalar, MatrixFormat::Dense>;
+template <typename Scalar>
+using RealOf = typename batchlas::base_type<Scalar>::type;
+template <typename Scalar>
+constexpr bool kCx = test_utils::is_complex<Scalar>::value;
 
 template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
 }
-template <typename T>
-T poison() {
-    return MVof<T>::make(-999, 777);
+template <typename Scalar>
+Scalar poison() {
+    return MVof<Scalar>::make(-999, 777);
 }
 
 // One factored A at ld = m + 3 and stride = ld * n + 5 inside a buffer of large finite poison,
 // and tau with poison past k * batch. `period > 0`: item it repeats item it % period bit for bit.
-template <typename T>
+template <typename Scalar>
 struct Prob {
     int m = 0, n = 0, batch = 0, ld = 0, stride = 0, period = 0;
-    UnifiedVector<T> mem, tau;
-    UnifiedVector<T*> ptrs;  // the vendor geqrf/orgqr are pointer-array APIs
-    std::vector<T> a0, f, tau0;
-    MVof<T> A() { return {mem.data(), m, n, ld, stride, batch, ptrs.data()}; }
+    UnifiedVector<Scalar> mem, tau;
+    UnifiedVector<Scalar*> ptrs;  // the vendor geqrf/orgqr are pointer-array APIs
+    std::vector<Scalar> a0, f, tau0;
+    MVof<Scalar> A() { return {mem.data(), m, n, ld, stride, batch, ptrs.data()}; }
     int k() const { return std::min(m, n); }
     std::size_t at(int it, int i, int j) const { return std::size_t(it) * stride + std::size_t(j) * ld + i; }
 };
 
-template <Backend B, typename T>
-Prob<T> make_prob(Queue& q, int m, int n, int batch, unsigned seed, int period = 0) {
-    using R = RealOf<T>;
-    Prob<T> p;
+template <Backend B, typename Scalar>
+Prob<Scalar> make_prob(Queue& q, int m, int n, int batch, unsigned seed, int period = 0) {
+    using R = RealOf<Scalar>;
+    Prob<Scalar> p;
     p.m = m, p.n = n, p.batch = batch, p.period = period;
     p.ld = std::max(1, m + 3);
     p.stride = p.ld * std::max(1, n) + 5;
-    p.mem = UnifiedVector<T>(std::size_t(p.stride) * std::max(1, batch) + 7, poison<T>());
-    p.tau = UnifiedVector<T>(std::size_t(std::max(1, p.k())) * std::max(1, batch) + 4, poison<T>());
-    p.ptrs = UnifiedVector<T*>(std::max(1, batch), nullptr);
+    p.mem = UnifiedVector<Scalar>(std::size_t(p.stride) * std::max(1, batch) + 7, poison<Scalar>());
+    p.tau = UnifiedVector<Scalar>(std::size_t(std::max(1, p.k())) * std::max(1, batch) + 4, poison<Scalar>());
+    p.ptrs = UnifiedVector<Scalar*>(std::max(1, batch), nullptr);
     std::mt19937 gen(seed);
     std::uniform_real_distribution<R> u(R(-1), R(1));
     for (int it = 0; it < batch; ++it)
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < m; ++i) {
                 const auto re = u(gen), im = u(gen);
-                p.mem[p.at(it, i, j)] = MVof<T>::make(re, im);
+                p.mem[p.at(it, i, j)] = MVof<Scalar>::make(re, im);
             }
     p.a0.assign(p.mem.begin(), p.mem.end());
     // A wide A (n > m) has no vendor-free geqrf; only a refused pin or the vendor ever sees one.
     if (m >= 1 && n >= 1 && batch >= 1 && (n <= m || batchlas::select::factorization_vendor_available<B>)) {
-        UnifiedVector<std::byte> ws(std::max<std::size_t>(1, geqrf_buffer_size<B, T>(q, p.A(), p.tau.to_span())));
-        (void)geqrf<B, T>(q, p.A(), p.tau.to_span(), ws.to_span());
+        UnifiedVector<std::byte> ws(std::max<std::size_t>(1, geqrf_buffer_size<B, Scalar>(q, p.A(), p.tau.to_span())));
+        (void)geqrf<B, Scalar>(q, p.A(), p.tau.to_span(), ws.to_span());
         q.wait();
     }
     if (period > 0)
@@ -192,9 +192,9 @@ std::string old_first(int m, int n, bool vendor) {
     return runs && m <= 512 && n <= 512 ? "blocked" : "vendor";
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;

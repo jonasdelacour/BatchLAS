@@ -23,25 +23,26 @@ namespace detail {
 
 // A complex copied as two scalars, not as a struct: larfg_scalars takes alpha by const&, and
 // a struct-copied Cx<float> alpha is re-read from A after the reductions (+2 loads a column).
-template <class T> BATCHLAS_DEVICE_INLINE T copy_by_parts(const T& a) {
-    using A = Arith<T>;
+template <class Scalar> BATCHLAS_DEVICE_INLINE Scalar copy_by_parts(const Scalar& a) {
+    using A = Arith<Scalar>;
     if constexpr (A::is_complex) return A::make(A::re(a), A::im(a));
     else return a;
 }
 
 // ---- slots: s[off + ...] from one base, never a moved pointer (the index form decides how
 // ptxas unrolls the run-time folds: +112 LD, +4 REG otherwise) --------------------------------
-template <class Ex, class T> BATCHLAS_DEVICE_INLINE void team_slot_put(const Ex& ex, T* slots, int off, T v) {
+template <class Ex, class Scalar> BATCHLAS_DEVICE_INLINE void team_slot_put(const Ex& ex, Scalar* slots, int off,
+                                                                            Scalar v) {
     if (ex.lane() == 0) slots[off + ex.team()] = v;
 }
-template <class T> BATCHLAS_DEVICE_INLINE T slot_fold_max(const T* s, int off, int k) {
-    T v = s[off];
+template <class Real> BATCHLAS_DEVICE_INLINE Real slot_fold_max(const Real* s, int off, int k) {
+    Real v = s[off];
     for (int i = 1; i < k; ++i) v = sycl::fmax(v, s[off + i]);
     return v;
 }
-template <class T> BATCHLAS_DEVICE_INLINE T slot_fold_sum(const T* s, int off, int k) {
-    T v = Arith<T>::zero();
-    for (int i = 0; i < k; ++i) v = Arith<T>::add(v, s[off + i]);
+template <class Scalar> BATCHLAS_DEVICE_INLINE Scalar slot_fold_sum(const Scalar* s, int off, int k) {
+    Scalar v = Arith<Scalar>::zero();
+    for (int i = 0; i < k; ++i) v = Arith<Scalar>::add(v, s[off + i]);
     return v;
 }
 
@@ -49,25 +50,25 @@ template <class T> BATCHLAS_DEVICE_INLINE T slot_fold_sum(const T* s, int off, i
 // gemv^H partials: for lo <= k < hi, team sum of cv * F[k] (xor butterfly over the run-time
 // sub-group range), stored by lane 0 at slots[off + team * ld + k]. N, lo and hi fold after the
 // caller's unroll.
-template <int N, class Ex, class T>
-BATCHLAS_DEVICE_INLINE void gemv_rowfrag_partials(const Ex& ex, T cv, const T* F, int lo, int hi, T* slots, int off, int ld) {
+template <int N, class Ex, class Scalar>
+BATCHLAS_DEVICE_INLINE void gemv_rowfrag_partials(const Ex& ex, Scalar cv, const Scalar* F, int lo, int hi, Scalar* slots, int off, int ld) {
 #pragma clang loop unroll(full)
     for (int k = 0; k < N; ++k) {
         if (k < lo || k >= hi) continue;  // uniform, or lanes drop out of the butterfly
-        const T pw = butterfly(ex.sub(), FmaArith<T>::mul(cv, F[k]), [](const T& p, const T& q) { return Arith<T>::add(p, q); }, 1,
-                               ex.team_size());
+        const Scalar pw = butterfly(ex.sub(), FmaArith<Scalar>::mul(cv, F[k]), [](const Scalar& p, const Scalar& q) { return Arith<Scalar>::add(p, q); }, 1,
+                                    ex.team_size());
         if (ex.lane() == 0) slots[off + ex.team() * ld + k] = pw;
     }
 }
 // F[k] -= (tau * sum_t slots[off + t * ld + k]) * v for lo <= k < hi.
-template <int N, class T>
-BATCHLAS_DEVICE_INLINE void ger_rowfrag_slots(T tau, T v, T* F, int lo, int hi, const T* slots, int off, int nslots, int ld) {
-    using A = Arith<T>;
-    using Fm = FmaArith<T>;
+template <int N, class Scalar>
+BATCHLAS_DEVICE_INLINE void ger_rowfrag_slots(Scalar tau, Scalar v, Scalar* F, int lo, int hi, const Scalar* slots, int off, int nslots, int ld) {
+    using A = Arith<Scalar>;
+    using Fm = FmaArith<Scalar>;
 #pragma clang loop unroll(full)
     for (int k = 0; k < N; ++k) {
         if (k < lo || k >= hi) continue;
-        T w = A::zero();
+        Scalar w = A::zero();
         for (int i = 0; i < nslots; ++i) w = A::add(w, slots[off + i * ld + k]);
         F[k] = A::sub(F[k], Fm::mul(Fm::mul(tau, w), v));
     }
@@ -76,29 +77,30 @@ BATCHLAS_DEVICE_INLINE void ger_rowfrag_slots(T tau, T v, T* F, int lo, int hi, 
 // Three steps through a local tile, the caller's barrier between each: (1) tile[off + kk] =
 // cv * F[k0 + kk] for k in [lo, hi), else 0; (2) lane < C: y[lane] = tau * sum_{r >= r0}
 // tile(r, lane) in row order; (3) F[k0 + kk] -= v * y[kk].
-template <int C, class T> BATCHLAS_DEVICE_INLINE void frag_scale_to_row(T cv, const T* F, int k0, int lo, int hi, T* tile, int off) {
+template <int C, class Scalar> BATCHLAS_DEVICE_INLINE void frag_scale_to_row(Scalar cv, const Scalar* F, int k0, int lo, int hi, Scalar* tile, int off) {
 #pragma clang loop unroll(full)
     for (int kk = 0; kk < C; ++kk) {
         const int k = k0 + kk;
         const bool act = (k >= lo) && (k < hi);
-        tile[off + kk] = act ? FmaArith<T>::mul(cv, F[k]) : T{};
+        tile[off + kk] = act ? FmaArith<Scalar>::mul(cv, F[k]) : Scalar{};
     }
 }
-template <int C, int NR, class T> BATCHLAS_DEVICE_INLINE void colsum_colperlane(int lane, T tau, const T* tile, int ldt, int r0, T* y) {
+template <int C, int NR, class Scalar> BATCHLAS_DEVICE_INLINE void colsum_colperlane(int lane, Scalar tau, const Scalar* tile, int ldt, int r0, Scalar* y) {
     if (lane < C) {
-        T acc = T{};
+        Scalar acc = Scalar{};
         BATCHLAS_UNROLL_FULL
         for (int r = 0; r < NR; ++r) {
-            if (r >= r0) acc = Arith<T>::add(acc, tile[r * ldt + lane]);
+            if (r >= r0) acc = Arith<Scalar>::add(acc, tile[r * ldt + lane]);
         }
-        y[lane] = FmaArith<T>::mul(tau, acc);
+        y[lane] = FmaArith<Scalar>::mul(tau, acc);
     }
 }
-template <int C, class T> BATCHLAS_DEVICE_INLINE void frag_rank1(T v, const T* y, T* F, int k0, int lo, int hi) {
+template <int C, class Scalar> BATCHLAS_DEVICE_INLINE void frag_rank1(Scalar v, const Scalar* y, Scalar* F, int k0,
+                                                                      int lo, int hi) {
 #pragma clang loop unroll(full)
     for (int kk = 0; kk < C; ++kk) {
         const int k = k0 + kk;
-        if ((k >= lo) && (k < hi)) F[k] = Arith<T>::sub(F[k], FmaArith<T>::mul(v, y[kk]));
+        if ((k >= lo) && (k < hi)) F[k] = Arith<Scalar>::sub(F[k], FmaArith<Scalar>::mul(v, y[kk]));
     }
 }
 
@@ -241,24 +243,24 @@ struct geqrf {
 }  // namespace routine
 
 namespace detail {
-template <class T> struct GeqrfSlots {
-    WsSlot<T> smem, v, t, work;
+template <class Scalar> struct GeqrfSlots {
+    WsSlot<Scalar> smem, v, t, work;
 };
 // The host blocked route's layout per matrix: V (m x NB), T (NB x NB), W1 / W2 (NB x (n - nb)).
-template <int NB, class Cfg, class T> constexpr GeqrfSlots<T> geqrf_take(Plan& p, int m, int n) {
+template <int NB, class Cfg, class Scalar> constexpr GeqrfSlots<Scalar> geqrf_take(Plan& p, int m, int n) {
     const int k = m < n ? m : n;
     const int nb = k < NB ? (k > 0 ? k : 1) : NB;
     const int n2max = n - nb > 0 ? n - nb : 0;
-    GeqrfSlots<T> s{};
-    s.smem = p.take<T>(WsSpace::Local, static_cast<std::size_t>(l3::smem_elems<Cfg>()));
-    s.v = p.take<T>(WsSpace::Global, static_cast<std::size_t>(m > 0 ? m : 0) * NB);
-    s.t = p.take<T>(WsSpace::Global, static_cast<std::size_t>(NB) * NB);
-    s.work = p.take<T>(WsSpace::Global, larfb_work_elems<Side::Left>(NB, n2max, NB));
+    GeqrfSlots<Scalar> s{};
+    s.smem = p.take<Scalar>(WsSpace::Local, static_cast<std::size_t>(l3::smem_elems<Cfg>()));
+    s.v = p.take<Scalar>(WsSpace::Global, static_cast<std::size_t>(m > 0 ? m : 0) * NB);
+    s.t = p.take<Scalar>(WsSpace::Global, static_cast<std::size_t>(NB) * NB);
+    s.work = p.take<Scalar>(WsSpace::Global, larfb_work_elems<Side::Left>(NB, n2max, NB));
     return s;
 }
-template <int NB, class Cfg, class T> constexpr WorkspaceSize geqrf_size(int m, int n) {
+template <int NB, class Cfg, class Scalar> constexpr WorkspaceSize geqrf_size(int m, int n) {
     Plan p;
-    (void)geqrf_take<NB, Cfg, T>(p, m, n);
+    (void)geqrf_take<NB, Cfg, Scalar>(p, m, n);
     return p.size();
 }
 
@@ -266,11 +268,11 @@ template <int NB, class Cfg, class T> constexpr WorkspaceSize geqrf_size(int m, 
 // geqr2 on the panel in global memory (the host's global leaf, RtGroup<Scope::Group>), then
 // larfb_from_panel<Left, ConjTrans> on A(j0 :, j0 + ib :). m < n: k = m panels, each update
 // spanning every column to the right (no separate ormqr pass).
-template <int NB, class Cfg, class Ex, class T>
-BATCHLAS_DEVICE_INLINE void geqrf_blocked_run(const Ex& ex, const l3::Global<T>& a, T* tau, const GeqrfSlots<T>& s, const Workspace& w) {
+template <int NB, class Cfg, class Ex, class Scalar>
+BATCHLAS_DEVICE_INLINE void geqrf_blocked_run(const Ex& ex, const l3::Global<Scalar>& a, Scalar* tau, const GeqrfSlots<Scalar>& s, const Workspace& w) {
     const Workspace sm = sub_workspace(w, s.smem, s.work);
-    T* const vb = carve_global(w, s.v);
-    T* const tb = carve_global(w, s.t);
+    Scalar* const vb = carve_global(w, s.v);
+    Scalar* const tb = carve_global(w, s.t);
     const RtGroup<Scope::Group, Ex::sg_size> pex{ex.it};
     const int m = a.m, n = a.n, k = m < n ? m : n;
     for (int j0 = 0; j0 < k; j0 += NB) {
@@ -279,7 +281,7 @@ BATCHLAS_DEVICE_INLINE void geqrf_blocked_run(const Ex& ex, const l3::Global<T>&
         geqr2(pex, mat_wide(a.p + j0 + static_cast<std::ptrdiff_t>(j0) * a.ld, mp, ib, a.ld), vec(tau + j0, ib));
         ex.barrier(Mem::Global);  // the panel's last column update visible before V is packed
         if (n2 <= 0) break;       // uniform
-        const l3::Global<T> a22{a.p + j0 + static_cast<std::ptrdiff_t>(j2) * a.ld, a.ld, mp, n2};
+        const l3::Global<Scalar> a22{a.p + j0 + static_cast<std::ptrdiff_t>(j2) * a.ld, a.ld, mp, n2};
         larfb_from_panel<Side::Left, Transpose::ConjTrans, Cfg>(ex, a, j0, ib, tau, a22, vb, tb, NB, sm);
     }
 }
@@ -288,17 +290,17 @@ template <class Tier> inline constexpr bool geqrf_is_blocked_v = false;
 template <int NB, class A> inline constexpr bool geqrf_is_blocked_v<tier::Blocked<NB, A>> = true;
 }  // namespace detail
 
-template <int NB, class A, class T> struct tier_info<routine::geqrf, tier::Blocked<NB, A>, T> {
-    using cfg = larfb_cfg_t<A, T>;
+template <int NB, class A, class Scalar> struct tier_info<routine::geqrf, tier::Blocked<NB, A>, Scalar> {
+    using cfg = larfb_cfg_t<A, Scalar>;
     static constexpr int wg_size = cfg::threads, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
-    static constexpr WorkspaceSize buffer_size(int m, int n) { return detail::geqrf_size<NB, cfg, T>(m, n); }
+    static constexpr WorkspaceSize buffer_size(int m, int n) { return detail::geqrf_size<NB, cfg, Scalar>(m, n); }
     static constexpr WorkspaceSize buffer_size(int n) { return buffer_size(n, n); }
 };
-template <class T> struct tiers<routine::geqrf, T> {
-    using type = tier::list<tier::Blocked<larfb_default_nb<T>()>>;
+template <class Scalar> struct tiers<routine::geqrf, Scalar> {
+    using type = tier::list<tier::Blocked<larfb_default_nb<Scalar>()>>;
 };
 
 /// @brief ?GEQRF in a kernel: A = Q R in place for one m x n matrix (any m, n).

@@ -30,11 +30,11 @@ namespace batchlas {
 
 namespace {
 
-template <typename T>
-inline void validate_sytrd_sb2st_dims(const MatrixView<T, MatrixFormat::Dense>& ab,
-                                     const VectorView<typename base_type<T>::type>& d,
-                                     const VectorView<typename base_type<T>::type>& e,
-                                     const VectorView<T>& tau,
+template <typename Scalar>
+inline void validate_sytrd_sb2st_dims(const MatrixView<Scalar, MatrixFormat::Dense>& ab,
+                                     const VectorView<typename base_type<Scalar>::type>& d,
+                                     const VectorView<typename base_type<Scalar>::type>& e,
+                                     const VectorView<Scalar>& tau,
                                      Uplo uplo,
                                      int32_t kd) {
     if (kd < 0) {
@@ -61,15 +61,15 @@ inline void validate_sytrd_sb2st_dims(const MatrixView<T, MatrixFormat::Dense>& 
     }
 }
 
-template <typename T>
+template <typename Scalar>
 class Kd0ExtractKernel;
 
-template <typename T>
+template <typename Scalar>
 Event kd0_extract(Queue& q,
-                  const MatrixView<T, MatrixFormat::Dense>& ab,
-                  const VectorView<typename base_type<T>::type>& d,
-                  const VectorView<typename base_type<T>::type>& e,
-                  const VectorView<T>& tau,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& ab,
+                  const VectorView<typename base_type<Scalar>::type>& d,
+                  const VectorView<typename base_type<Scalar>::type>& e,
+                  const VectorView<Scalar>& tau,
                   const std::uint8_t* mask) {
     const int n = ab.cols();
     const int batch = ab.batch_size();
@@ -80,7 +80,7 @@ Event kd0_extract(Queue& q,
     auto tauv = tau;
 
     (void)q->submit([&](sycl::handler& h) {
-        batchlas::impl::parallel_for<Kd0ExtractKernel<T>>(h, sycl::range<1>(static_cast<size_t>(batch)),
+        batchlas::impl::parallel_for<Kd0ExtractKernel<Scalar>>(h, sycl::range<1>(static_cast<size_t>(batch)),
                                             [=](sycl::id<1> idx) {
             const int b = static_cast<int>(idx[0]);
             if (mask != nullptr && mask[b] == 0) return;  // I3
@@ -95,18 +95,18 @@ Event kd0_extract(Queue& q,
     return q.get_event();
 }
 
-template <typename T>
+template <typename Scalar>
 class Kd1ExtractKernel;
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 class AbWorkCopyKernel;
 
-template <typename T>
+template <typename Scalar>
 Event kd1_extract_lower(Queue& q,
-                        const MatrixView<T, MatrixFormat::Dense>& ab,
-                        const VectorView<typename base_type<T>::type>& d,
-                        const VectorView<typename base_type<T>::type>& e,
-                        const VectorView<T>& tau,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& ab,
+                        const VectorView<typename base_type<Scalar>::type>& d,
+                        const VectorView<typename base_type<Scalar>::type>& e,
+                        const VectorView<Scalar>& tau,
                   const std::uint8_t* mask) {
     const int n = ab.cols();
     const int batch = ab.batch_size();
@@ -117,7 +117,7 @@ Event kd1_extract_lower(Queue& q,
     auto tauv = tau;
 
     (void)q->submit([&](sycl::handler& h) {
-        batchlas::impl::parallel_for<Kd1ExtractKernel<T>>(h, sycl::range<1>(static_cast<size_t>(batch)),
+        batchlas::impl::parallel_for<Kd1ExtractKernel<Scalar>>(h, sycl::range<1>(static_cast<size_t>(batch)),
                                             [=](sycl::id<1> idx) {
             const int b = static_cast<int>(idx[0]);
             if (mask != nullptr && mask[b] == 0) return;  // I3
@@ -134,19 +134,19 @@ Event kd1_extract_lower(Queue& q,
 
 // === Band-only SB2ST path (real symmetric, lower storage) ===
 
-template <typename T>
+template <typename Scalar>
 class BtrdLowerKernel;
 
-template <typename T>
+template <typename Scalar>
 Event btrd_lower_inplace(Queue& q,
-                         KernelMatrixView<T, MatrixFormat::Dense> ab,
+                         KernelMatrixView<Scalar, MatrixFormat::Dense> ab,
                          int n,
                          int kd,
-                         VectorView<typename base_type<T>::type> c,
-                         VectorView<T> work,
-                         VectorView<typename base_type<T>::type> d,
-                         VectorView<typename base_type<T>::type> e,
-                         VectorView<T> tau,
+                         VectorView<typename base_type<Scalar>::type> c,
+                         VectorView<Scalar> work,
+                         VectorView<typename base_type<Scalar>::type> d,
+                         VectorView<typename base_type<Scalar>::type> e,
+                         VectorView<Scalar> tau,
                          const std::uint8_t* mask) {
     (void)q->submit([&](sycl::handler& h) {
         constexpr int kWorkGroupSize = 128;
@@ -155,10 +155,10 @@ Event btrd_lower_inplace(Queue& q,
         const size_t global = groups * static_cast<size_t>(kWorkGroupSize);
         sycl::local_accessor<int, 1> shared_ints(4, h); // {nr, j1, j2, k}
 
-        batchlas::impl::parallel_for<BtrdLowerKernel<T>>(h, sycl::nd_range<1>(sycl::range<1>(global),
+        batchlas::impl::parallel_for<BtrdLowerKernel<Scalar>>(h, sycl::nd_range<1>(sycl::range<1>(global),
                                                             sycl::range<1>(static_cast<size_t>(kWorkGroupSize))),
                                            [=](sycl::nd_item<1> it) {
-            using Real = typename base_type<T>::type;
+            using Real = typename base_type<Scalar>::type;
             using Native = device::arith::Native;
 
             const int b = static_cast<int>(it.get_group(0));
@@ -174,18 +174,18 @@ Event btrd_lower_inplace(Queue& q,
             auto TAUv = tau.batch_item(b);
 
             const int ldab = ABv.ld();
-            T* AB = ABv.data();
+            Scalar* AB = ABv.data();
             auto& C = Cv;
             auto& WORK = WORKv;
             auto& D = Dv;
             auto& E = Ev;
             auto& TAU = TAUv;
             Real* const Cp = C.data_ptr();  // C / WORK are built with inc = 1
-            T* const Wp = WORK.data_ptr();
+            Scalar* const Wp = WORK.data_ptr();
 
             device::for_each_owned(ex, n + kd + 2, [&](int i) BATCHLAS_DEVICE_BODY {
                 C[i] = Real(0);
-                WORK[i] = T(0);
+                WORK[i] = Scalar(0);
             });
             device::sync(ex, device::Mem::Global);
 
@@ -208,14 +208,14 @@ Event btrd_lower_inplace(Queue& q,
                 });
             };
             auto Cj = [&](int j) BATCHLAS_DEVICE_BODY -> Real& { return C[j]; };
-            auto Wj = [&](int j) BATCHLAS_DEVICE_BODY -> T& { return WORK[j]; };
+            auto Wj = [&](int j) BATCHLAS_DEVICE_BODY -> Scalar& { return WORK[j]; };
             auto Cpj = [&](int j) BATCHLAS_DEVICE_BODY -> Real& { return Cp[j]; };
-            auto Wpj = [&](int j) BATCHLAS_DEVICE_BODY -> T& { return Wp[j]; };
+            auto Wpj = [&](int j) BATCHLAS_DEVICE_BODY -> Scalar& { return Wp[j]; };
             auto band = [&](int r, int dc) BATCHLAS_DEVICE_BODY {
-                return [&ABv, r, dc](int j) BATCHLAS_DEVICE_BODY -> T& { return ABv(r, j + dc); };
+                return [&ABv, r, dc](int j) BATCHLAS_DEVICE_BODY -> Scalar& { return ABv(r, j + dc); };
             };
             auto band_p = [&](int r, int dc) BATCHLAS_DEVICE_BODY {
-                return [&idx, AB, r, dc](int j) BATCHLAS_DEVICE_BODY -> T& { return AB[idx(r, j + dc)]; };
+                return [&idx, AB, r, dc](int j) BATCHLAS_DEVICE_BODY -> Scalar& { return AB[idx(r, j + dc)]; };
             };
 
             if (ex.leader()) {
@@ -227,7 +227,7 @@ Event btrd_lower_inplace(Queue& q,
             device::sync(ex, device::Mem::Global);
 
             // Ensure diagonal is real (for Hermitian path). Parallelize across columns.
-            if constexpr (detail::is_complex<T>::value) {
+            if constexpr (detail::is_complex<Scalar>::value) {
                 auto diag = ABv(int32_t(0), Slice{});
                 device::for_each_owned(ex, n, [&](int j) BATCHLAS_DEVICE_BODY { diag[j] = device::force_real(diag[j]); });
                 device::sync(ex, device::Mem::Global);
@@ -270,7 +270,7 @@ Event btrd_lower_inplace(Queue& q,
                                 const int jend = j1 + (nr - 1) * kd1;
                                 for (int jinc = j1; jinc <= jend; jinc += kd1) {
                                     if (kdm1 > 0) {
-                                        device::rot<device::alg::RotLapack, Native>(device::Thread{}, device::Givens<Real, T>{C[jinc], WORK[jinc]},
+                                        device::rot<device::alg::RotLapack, Native>(device::Thread{}, device::Givens<Real, Scalar>{C[jinc], WORK[jinc]},
                                                      device::vec(AB + idx(kd - 1, jinc - kd), kdm1, incx),
                                                      device::vec(AB + idx(kd, jinc - kd), kdm1, incx));
                                     }
@@ -283,11 +283,11 @@ Event btrd_lower_inplace(Queue& q,
                     if (ex.leader()) {
                         if (k > 1) {
                             if (k <= n - i - 1) {
-                                const T f = ABv(k - 1, i);
-                                const T g = ABv(k, i);
+                                const Scalar f = ABv(k - 1, i);
+                                const Scalar g = ABv(k, i);
                                 Real ct = Real(0);
-                                T st = T(0);
-                                T rt = T(0);
+                                Scalar st = Scalar(0);
+                                Scalar rt = Scalar(0);
                                 device::detail::lartg_out<device::alg::Promote>(f, g, ct, st, rt);
                                 C[i + k] = ct;
                                 WORK[i + k] = st;
@@ -295,8 +295,8 @@ Event btrd_lower_inplace(Queue& q,
 
                                 if (k > 2) {
                                     const Real ct = C[i + k];
-                                    const T st = WORK[i + k];
-                                    device::rot<device::alg::RotLapack, Native>(device::Thread{}, device::Givens<Real, T>{ct, st},
+                                    const Scalar st = WORK[i + k];
+                                    device::rot<device::alg::RotLapack, Native>(device::Thread{}, device::Givens<Real, Scalar>{ct, st},
                                                  device::vec(AB + idx(k - 2, i + 1), k - 2, ldab - 1),
                                                  device::vec(AB + idx(k - 1, i + 1), k - 2, ldab - 1));
                                 }
@@ -321,9 +321,9 @@ Event btrd_lower_inplace(Queue& q,
                         device::sync(ex, device::Mem::Global);
 
                         // ZHBTRD requirement: conjugate WORK(J1) before right-application.
-                        if constexpr (detail::is_complex<T>::value) {
+                        if constexpr (detail::is_complex<Scalar>::value) {
                             const auto ws = rseq(nr, Wj);
-                            device::map(ex, ws, [](const T& w) { return device::arith_t<device::arith::Native, T>::conj(w); }, ws);
+                            device::map(ex, ws, [](const Scalar& w) { return device::arith_t<device::arith::Native, Scalar>::conj(w); }, ws);
                             device::sync(ex, device::Mem::Global);
                         }
 
@@ -345,7 +345,7 @@ Event btrd_lower_inplace(Queue& q,
                                 if (j1end >= j1) {
                                     for (int j1inc = j1; j1inc <= j1end; j1inc += kd1) {
                                         if (kdm1 > 0) {
-                                            device::rot<device::alg::RotLapack, Native>(device::Thread{}, device::Givens<Real, T>{C[j1inc], WORK[j1inc]},
+                                            device::rot<device::alg::RotLapack, Native>(device::Thread{}, device::Givens<Real, Scalar>{C[j1inc], WORK[j1inc]},
                                                          device::vec(AB + idx(2, j1inc - 1), kdm1),
                                                          device::vec(AB + idx(1, j1inc), kdm1));
                                         }
@@ -354,7 +354,7 @@ Event btrd_lower_inplace(Queue& q,
                                 const int lend = (n - j2 - 1 < kdm1) ? (n - j2 - 1) : kdm1;
                                 const int last = j1end + kd1;
                                 if (lend > 0) {
-                                    device::rot<device::alg::RotLapack, Native>(device::Thread{}, device::Givens<Real, T>{C[last], WORK[last]},
+                                    device::rot<device::alg::RotLapack, Native>(device::Thread{}, device::Givens<Real, Scalar>{C[last], WORK[last]},
                                                  device::vec(AB + idx(2, last - 1), lend),
                                                  device::vec(AB + idx(1, last), lend));
                                 }
@@ -383,7 +383,7 @@ Event btrd_lower_inplace(Queue& q,
                         device::for_each_owned(ex, nr, [&](int t) BATCHLAS_DEVICE_BODY {
                             const int j = j1 + t * kd1;
                             WORK[j + kd] = WORK[j] * ABv(kd, j);
-                            ABv(kd, j) = T(C[j]) * ABv(kd, j);
+                            ABv(kd, j) = Scalar(C[j]) * ABv(kd, j);
                         });
                         device::sync(ex, device::Mem::Global);
                     }
@@ -400,33 +400,33 @@ Event btrd_lower_inplace(Queue& q,
 
 }  // namespace
 
-template <typename T>
+template <typename Scalar>
 struct Sb2stWorkspace {
-    Span<T> ab_work;                        // AB work copy: (kd+1) x n per batch
-    Span<typename base_type<T>::type> c;    // Givens cosines: n+kd+2 per batch
-    Span<T> work;                           // Givens sines / scratch: n+kd+2 per batch
+    Span<Scalar> ab_work;                        // AB work copy: (kd+1) x n per batch
+    Span<typename base_type<Scalar>::type> c;    // Givens cosines: n+kd+2 per batch
+    Span<Scalar> work;                           // Givens sines / scratch: n+kd+2 per batch
 };
 
 // Single description of sytrd_sb2st's unified band-only (SBTRD/HBTRD-style)
 // workspace; see workspace_bytes() in util/mempool.hh.
-template <typename T>
-Sb2stWorkspace<T> sytrd_sb2st_layout(Queue& ctx, BumpAllocator& pool, int n, int kd_i, int batch) {
-    using Real = typename base_type<T>::type;
+template <typename Scalar>
+Sb2stWorkspace<Scalar> sytrd_sb2st_layout(Queue& ctx, BumpAllocator& pool, int n, int kd_i, int batch) {
+    using Real = typename base_type<Scalar>::type;
     const int ldab = kd_i + 1;
     const size_t ab_elems = static_cast<size_t>(ldab) * static_cast<size_t>(n) * static_cast<size_t>(batch);
     const size_t rot_elems = static_cast<size_t>(n + kd_i + 2) * static_cast<size_t>(batch);
-    auto ab_work = pool.allocate<T>(ctx, ab_elems);
+    auto ab_work = pool.allocate<Scalar>(ctx, ab_elems);
     auto c = pool.allocate<Real>(ctx, rot_elems);
-    auto work = pool.allocate<T>(ctx, rot_elems);
+    auto work = pool.allocate<Scalar>(ctx, rot_elems);
     return {ab_work, c, work};
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t sytrd_sb2st_buffer_size(Queue& ctx,
-                               const MatrixView<T, MatrixFormat::Dense>& ab_in,
-                               const VectorView<typename base_type<T>::type>& d_out,
-                               const VectorView<typename base_type<T>::type>& e_out,
-                               const VectorView<T>& tau_out,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& ab_in,
+                               const VectorView<typename base_type<Scalar>::type>& d_out,
+                               const VectorView<typename base_type<Scalar>::type>& e_out,
+                               const VectorView<Scalar>& tau_out,
                                Uplo uplo,
                                int32_t kd,
                                int32_t block_size) {
@@ -441,16 +441,16 @@ size_t sytrd_sb2st_buffer_size(Queue& ctx,
     if (n <= 0) return 0;
 
     return workspace_bytes([&](BumpAllocator& pool) {
-        return sytrd_sb2st_layout<T>(ctx, pool, n, kd_i, batch);
+        return sytrd_sb2st_layout<Scalar>(ctx, pool, n, kd_i, batch);
     });
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event sytrd_sb2st(Queue& ctx,
-                  const MatrixView<T, MatrixFormat::Dense>& ab_in,
-                  const VectorView<typename base_type<T>::type>& d_out,
-                  const VectorView<typename base_type<T>::type>& e_out,
-                  const VectorView<T>& tau_out,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& ab_in,
+                  const VectorView<typename base_type<Scalar>::type>& d_out,
+                  const VectorView<typename base_type<Scalar>::type>& e_out,
+                  const VectorView<Scalar>& tau_out,
                   Uplo uplo,
                   int32_t kd,
                   const Span<std::byte>& ws,
@@ -475,27 +475,27 @@ Event sytrd_sb2st(Queue& ctx,
 
     // Fast paths.
     if (kd_i == 0) {
-        (void)kd0_extract<T>(ctx, ab_in, d_out, e_out, tau_out, mask);
+        (void)kd0_extract<Scalar>(ctx, ab_in, d_out, e_out, tau_out, mask);
         return ctx.get_event();
     }
     if (kd_i == 1) {
-        (void)kd1_extract_lower<T>(ctx, ab_in, d_out, e_out, tau_out, mask);
+        (void)kd1_extract_lower<Scalar>(ctx, ab_in, d_out, e_out, tau_out, mask);
         return ctx.get_event();
     }
 
     BumpAllocator pool(ws);
 
     // Unified band-only SB2ST/HBTRD: copy AB into a mutable workspace and run bulge chasing.
-    auto sb2st_ws = sytrd_sb2st_layout<T>(ctx, pool, n, kd_i, batch);
+    auto sb2st_ws = sytrd_sb2st_layout<Scalar>(ctx, pool, n, kd_i, batch);
     const int ldab = kd_i + 1;
-    T* ab_ptr = sb2st_ws.ab_work.data();
+    Scalar* ab_ptr = sb2st_ws.ab_work.data();
 
     {
         const int stride_out = ldab * n;
         auto ABsrc = ab_in.kernel_view();
-        KernelMatrixView<T, MatrixFormat::Dense> ABdst(ab_ptr, ldab, n, ldab, stride_out, batch);
+        KernelMatrixView<Scalar, MatrixFormat::Dense> ABdst(ab_ptr, ldab, n, ldab, stride_out, batch);
         (void)ctx->submit([&](sycl::handler& h) {
-            batchlas::impl::parallel_for<AbWorkCopyKernel<B, T>>(h, sycl::range<1>(static_cast<size_t>(batch)),
+            batchlas::impl::parallel_for<AbWorkCopyKernel<B, Scalar>>(h, sycl::range<1>(static_cast<size_t>(batch)),
                                                    [=](sycl::id<1> idx_b) {
                 const int b = static_cast<int>(idx_b[0]);
                 device::lacpy(device::Thread{}, device::mat(ABsrc.batch_item(b)).sub(0, 0, ldab, n),
@@ -504,13 +504,13 @@ Event sytrd_sb2st(Queue& ctx,
         });
     }
 
-    using Real = typename base_type<T>::type;
+    using Real = typename base_type<Scalar>::type;
     auto c_buf = sb2st_ws.c;
     auto work_buf = sb2st_ws.work;
 
-    KernelMatrixView<T, MatrixFormat::Dense> ABwork(ab_ptr, ldab, n, ldab, ldab * n, batch);
+    KernelMatrixView<Scalar, MatrixFormat::Dense> ABwork(ab_ptr, ldab, n, ldab, ldab * n, batch);
     VectorView<Real> Cv(c_buf.data(), n + kd_i + 2, batch, 1, (n + kd_i + 2));
-    VectorView<T> WORKv(work_buf.data(), n + kd_i + 2, batch, 1, (n + kd_i + 2));
+    VectorView<Scalar> WORKv(work_buf.data(), n + kd_i + 2, batch, 1, (n + kd_i + 2));
 
     enum class Sb2stSubgroupMode {
         Auto,
@@ -545,9 +545,9 @@ Event sytrd_sb2st(Queue& ctx,
     }
 
     if (can_use_subgroup) {
-        (void)detail::btrd_lower_inplace_subgroup_dispatch<T>(ctx, ABwork, n, kd_i, Cv, WORKv, d_out, e_out, tau_out, mask);
+        (void)detail::btrd_lower_inplace_subgroup_dispatch<Scalar>(ctx, ABwork, n, kd_i, Cv, WORKv, d_out, e_out, tau_out, mask);
     } else {
-        (void)btrd_lower_inplace<T>(ctx, ABwork, n, kd_i, Cv, WORKv, d_out, e_out, tau_out, mask);
+        (void)btrd_lower_inplace<Scalar>(ctx, ABwork, n, kd_i, Cv, WORKv, d_out, e_out, tau_out, mask);
     }
 
     return ctx.get_event();

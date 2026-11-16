@@ -11,23 +11,23 @@
 
 namespace batchlas::device {
 
-template <class V, class P, class T>
-BATCHLAS_DEVICE_HELPER void lagtf(const Thread&, const V& dl, const V& dd, const V& du, const V& du2, const P& swapped, T tol) {
+template <class V, class P, class Real>
+BATCHLAS_DEVICE_HELPER void lagtf(const Thread&, const V& dl, const V& dd, const V& du, const V& du2, const P& swapped, Real tol) {
     const int n = dd.size();
     for (int i = 0; i < n - 1; ++i) {
         if (sycl::fabs(dd(i)) >= sycl::fabs(dl(i))) {
             swapped(i) = 0;
-            if (sycl::fabs(dd(i)) < tol) dd(i) = (dd(i) < T(0)) ? -tol : tol;
-            const T fact = dl(i) / dd(i);
+            if (sycl::fabs(dd(i)) < tol) dd(i) = (dd(i) < Real(0)) ? -tol : tol;
+            const Real fact = dl(i) / dd(i);
             dl(i) = fact;
             dd(i + 1) -= fact * du(i);
-            if (i < n - 2) du2(i) = T(0);
+            if (i < n - 2) du2(i) = Real(0);
         } else {
             swapped(i) = 1;
-            const T fact = dd(i) / dl(i);
+            const Real fact = dd(i) / dl(i);
             dd(i) = dl(i);
             dl(i) = fact;
-            const T tmp = du(i);
+            const Real tmp = du(i);
             du(i) = dd(i + 1);
             dd(i + 1) = tmp - fact * dd(i + 1);
             if (i < n - 2) {
@@ -36,7 +36,7 @@ BATCHLAS_DEVICE_HELPER void lagtf(const Thread&, const V& dl, const V& dd, const
             }
         }
     }
-    if (sycl::fabs(dd(n - 1)) < tol) dd(n - 1) = (dd(n - 1) < T(0)) ? -tol : tol;
+    if (sycl::fabs(dd(n - 1)) < tol) dd(n - 1) = (dd(n - 1) < Real(0)) ? -tol : tol;
 }
 
 }  // namespace batchlas::device

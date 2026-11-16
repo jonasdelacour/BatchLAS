@@ -19,40 +19,40 @@ namespace batchlas::ops::orgqr {
 
 // Must be the SELECTED ormqr: a native entry point called from a driver TU bypasses
 // ormqr's choose(). Positional argument order; absent injection throws.
-template <typename T>
+template <typename Scalar>
 using OrgqrApplyQ = std::function<Event(
     Queue&,
-    const MatrixView<T, MatrixFormat::Dense>&,   // A: the geqrf output, reflectors
-    const MatrixView<T, MatrixFormat::Dense>&,   // C: the identity, overwritten by Q
+    const MatrixView<Scalar, MatrixFormat::Dense>&,   // A: the geqrf output, reflectors
+    const MatrixView<Scalar, MatrixFormat::Dense>&,   // C: the identity, overwritten by Q
     Side, Transpose,
-    Span<T>,                                     // tau
+    Span<Scalar>,                                     // tau
     Span<std::byte>,                             // workspace
     int32_t)>;                                   // block_size_hint
 
-template <typename T>
+template <typename Scalar>
 using OrgqrApplyQBufferSize = std::function<std::size_t(
     Queue&,
-    const MatrixView<T, MatrixFormat::Dense>&,
-    const MatrixView<T, MatrixFormat::Dense>&,
+    const MatrixView<Scalar, MatrixFormat::Dense>&,
+    const MatrixView<Scalar, MatrixFormat::Dense>&,
     Side, Transpose,
-    Span<T>,
+    Span<Scalar>,
     int32_t)>;
 
 // Runs under BumpAllocator::measuring(): same resolution as the call, no data dereference.
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API std::size_t orgqr_blocked_buffer_size(Queue& ctx,
-                                                            const MatrixView<T, MatrixFormat::Dense>& A,
-                                                            Span<T> tau,
-                                                            OrgqrApplyQBufferSize<T> apply_q_buffer_size = {});
+                                                            const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                                            Span<Scalar> tau,
+                                                            OrgqrApplyQBufferSize<Scalar> apply_q_buffer_size = {});
 
 // Callable directly (tests, benchmarks), bypassing select::choose, so it re-checks every
 // can_run gate itself and throws rather than computing a wrong Q.
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API Event orgqr_blocked_dispatch(Queue& ctx,
-                                                   const MatrixView<T, MatrixFormat::Dense>& A,
-                                                   Span<T> tau,
+                                                   const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                                   Span<Scalar> tau,
                                                    Span<std::byte> workspace,
-                                                   OrgqrApplyQ<T> apply_q = {},
-                                                   OrgqrApplyQBufferSize<T> apply_q_buffer_size = {});
+                                                   OrgqrApplyQ<Scalar> apply_q = {},
+                                                   OrgqrApplyQBufferSize<Scalar> apply_q_buffer_size = {});
 
 }  // namespace batchlas::ops::orgqr

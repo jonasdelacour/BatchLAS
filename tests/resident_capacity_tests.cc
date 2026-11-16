@@ -174,7 +174,7 @@ TEST(ResidentCapacity, PackingIsBoundedByAllThreeLimits) {
 // what can_run advertises, the unscaled one is what a blocked driver's panel can be held
 // at. evidence: docs/perf/potrf.md#the-shipped-ceilings-pinned-in-both-scales
 
-template <typename T> struct Ceilings;
+template <typename Scalar> struct Ceilings;
 template <> struct Ceilings<float> {
     static constexpr int potrf_advertised = 77,  potrf_resident = 155;
     static constexpr int getrf_advertised = 77,  getrf_resident = 155;
@@ -196,7 +196,7 @@ template <> struct Ceilings<std::complex<double>> {
     static constexpr int64_t geqrf_advertised = 2944, geqrf_resident = 6080;
 };
 
-template <typename T>
+template <typename Scalar>
 class CapacityCeilingTest : public ::testing::Test {};
 
 using CeilingTypes = ::testing::Types<float, double, std::complex<float>,
@@ -274,9 +274,9 @@ TYPED_TEST(CapacityCeilingTest, CeilingsRiseWithTheBudget) {
 
 // 4. PACKED VS SOLO, BIT FOR BIT -- getrf_cta's resident leaf
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct CapConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 

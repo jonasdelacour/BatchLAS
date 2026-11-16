@@ -37,12 +37,12 @@ using ts::Live;
 using verify::Check;
 using batchlas::float_t;  // not math.h's
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
-template <typename T>
-using P = typename MV<T>::promoted_type;
-template <typename T>
-using Fn = SyfnFunction<float_t<T>>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+template <typename Scalar>
+using P = typename MV<Scalar>::promoted_type;
+template <typename Scalar>
+using Fn = SyfnFunction<float_t<Scalar>>;
 using Spectra = std::vector<std::vector<double>>;  // one spectrum per item
 
 // A vendor-free build has no host syev or syrk, so its NETLIB items are covered only by
@@ -60,9 +60,9 @@ protected:
 using SyfnTestTypes = typename test_utils::backend_types<ts::Config>::type;
 TYPED_TEST_SUITE(SyfnTest, SyfnTestTypes);
 
-template <typename T>
-Matrix<P<T>> up(const MV<T>& v) {
-    return v.template astype<P<T>>();
+template <typename Scalar>
+Matrix<P<Scalar>> up(const MV<Scalar>& v) {
+    return v.template astype<P<Scalar>>();
 }
 
 Spectra map(Spectra d, auto&& f) {
@@ -72,35 +72,35 @@ Spectra map(Spectra d, auto&& f) {
 }
 
 // Q diag(g_b) Q^H per item, through the checks' reference product.
-template <typename U>
-Matrix<U> qdq(Queue& q, const Matrix<U>& Q, const Spectra& g) {
+template <typename Scalar>
+Matrix<Scalar> qdq(Queue& q, const Matrix<Scalar>& Q, const Spectra& g) {
     const int n = Q.rows(), batch = Q.batch_size();
-    Matrix<U> D = Matrix<U>::Zeros(n, n, batch), QD(n, n, batch), R(n, n, batch);
+    Matrix<Scalar> D = Matrix<Scalar>::Zeros(n, n, batch), QD(n, n, batch), R(n, n, batch);
     for (int b = 0; b < batch; ++b)
-        for (int k = 0; k < n; ++k) D(k, k, b) = U(g[b][k]);
-    (void)MV<U>::product(q, Q, Transpose::NoTrans, D, Transpose::NoTrans, QD);
-    (void)MV<U>::product(q, QD, Transpose::NoTrans, Q, Transpose::ConjTrans, R);
+        for (int k = 0; k < n; ++k) D(k, k, b) = Scalar(g[b][k]);
+    (void)MV<Scalar>::product(q, Q, Transpose::NoTrans, D, Transpose::NoTrans, QD);
+    (void)MV<Scalar>::product(q, QD, Transpose::NoTrans, Q, Transpose::ConjTrans, R);
     q.wait();
     return R;
 }
 
 // ||X - Y||_F / ||Y||_F, the worst item: qr_reconstruction with R = I.
-template <typename U>
-double rel_diff(Queue& q, const Matrix<U>& X, const Matrix<U>& Y) {
-    return MV<U>::qr_reconstruction(q, Y, X, Matrix<U>::Identity(Y.cols(), Y.batch_size()), Y.all_items());
+template <typename Scalar>
+double rel_diff(Queue& q, const Matrix<Scalar>& X, const Matrix<Scalar>& Y) {
+    return MV<Scalar>::qr_reconstruction(q, Y, X, Matrix<Scalar>::Identity(Y.cols(), Y.batch_size()), Y.all_items());
 }
 
-// Item b: Q_b (double), d_b = spectrum(b), A = Q diag(d) Q^H in double and rounded to T (At).
-template <typename T>
+// Item b: Q_b (double), d_b = spectrum(b), A = Q diag(d) Q^H in double and rounded to Scalar (At).
+template <typename Scalar>
 struct Problem {
-    Matrix<P<T>> Q, A;
-    Matrix<T> At;
+    Matrix<P<Scalar>> Q, A;
+    Matrix<Scalar> At;
     Spectra d;
 };
 
-template <typename T>
-Problem<T> make_problem(Queue& q, int n, int batch, unsigned seed, auto&& spectrum) {
-    using U = P<T>;
+template <typename Scalar>
+Problem<Scalar> make_problem(Queue& q, int n, int batch, unsigned seed, auto&& spectrum) {
+    using U = P<Scalar>;
     std::mt19937 gen(seed);
     std::normal_distribution<double> nd;
     Matrix<U> Q = Matrix<U>::Identity(n, batch);
@@ -109,7 +109,7 @@ Problem<T> make_problem(Queue& q, int n, int batch, unsigned seed, auto&& spectr
         for (int r = 0; r < 2; ++r) {  // Q := Q (I - 2 v v^H / v^H v), row by row
             std::vector<U> v(n);
             double nv = 0;
-            for (U& x : v) x = MV<U>::make(nd(gen), is_std_complex_v<T> ? nd(gen) : 0.0), nv += std::norm(x);
+            for (U& x : v) x = MV<U>::make(nd(gen), is_std_complex_v<Scalar> ? nd(gen) : 0.0), nv += std::norm(x);
             for (int i = 0; i < n; ++i) {
                 U qv = 0;
                 for (int k = 0; k < n; ++k) qv += U(Q(i, k, b)) * v[k];
@@ -119,7 +119,7 @@ Problem<T> make_problem(Queue& q, int n, int batch, unsigned seed, auto&& spectr
         d.push_back(spectrum(b));
     }
     Matrix<U> A = qdq(q, Q, d);
-    Matrix<T> At = A.template astype<T>();
+    Matrix<Scalar> At = A.template astype<Scalar>();
     return {std::move(Q), std::move(A), std::move(At), std::move(d)};
 }
 
@@ -131,36 +131,37 @@ std::vector<double> graded(int n, double kappa) {
 }
 
 // A's uplo triangle in poisoned storage at ld n + pad; a one-item A repeats into every item.
-template <typename T>
-Matrix<T> stored(const MV<T>& A, Uplo uplo, int pad, int batch) {
-    Matrix<T> a = ts::padded<T>(A.rows(), A.cols(), batch, pad);
-    ts::store<T>(a, A, Live::triangle(uplo));
+template <typename Scalar>
+Matrix<Scalar> stored(const MV<Scalar>& A, Uplo uplo, int pad, int batch) {
+    Matrix<Scalar> a = ts::padded<Scalar>(A.rows(), A.cols(), batch, pad);
+    ts::store<Scalar>(a, A, Live::triangle(uplo));
     return a;
 }
 
-// F == F^H element for element (real T: symmetric), every item.
-template <typename T>
-bool exactly_hermitian(const MV<T>& F) {
+// F == F^H element for element (real Scalar: symmetric), every item.
+template <typename Scalar>
+bool exactly_hermitian(const MV<Scalar>& F) {
     for (int b = 0; b < F.batch_size(); ++b)
         for (int j = 0; j < F.cols(); ++j)
             for (int i = 0; i < F.rows(); ++i)
-                if (!(T(F(i, j, b)) == MV<T>::conj(T(F(j, i, b))))) return false;
+                if (!(Scalar(F(i, j, b)) == MV<Scalar>::conj(Scalar(F(j, i, b))))) return false;
     return true;
 }
 
-template <typename T, Backend B>
-std::vector<int32_t> run_syfn(Queue& q, const MV<T>& A, const MV<T>& F, Fn<T> fn, Uplo uplo) {
-    UnifiedVector<std::byte> ws(syfn_buffer_size<B, T>(q, A, F, fn, uplo));
+template <typename Scalar, Backend B>
+std::vector<int32_t> run_syfn(Queue& q, const MV<Scalar>& A, const MV<Scalar>& F, Fn<Scalar> fn, Uplo uplo) {
+    UnifiedVector<std::byte> ws(syfn_buffer_size<B, Scalar>(q, A, F, fn, uplo));
     UnifiedVector<int32_t> info(size_t(A.batch_size()), int32_t(-7));
-    syfn<B, T>(q, A, F, fn, uplo, ws.to_span(), info.to_span()).wait();
+    syfn<B, Scalar>(q, A, F, fn, uplo, ws.to_span(), info.to_span()).wait();
     return std::vector<int32_t>(info.begin(), info.end());
 }
 
-template <typename T, Backend B>
-std::vector<int32_t> run_from_eigen(Queue& q, const MV<T>& V, UnifiedVector<float_t<T>>& W, const MV<T>& F, Fn<T> fn) {
-    UnifiedVector<std::byte> ws(syfn_from_eigen_buffer_size<B, T>(q, V, W.to_span(), F, fn));
+template <typename Scalar, Backend B>
+std::vector<int32_t> run_from_eigen(Queue& q, const MV<Scalar>& V, UnifiedVector<float_t<Scalar>>& W,
+                                    const MV<Scalar>& F, Fn<Scalar> fn) {
+    UnifiedVector<std::byte> ws(syfn_from_eigen_buffer_size<B, Scalar>(q, V, W.to_span(), F, fn));
     UnifiedVector<int32_t> info(size_t(V.batch_size()), int32_t(-7));
-    syfn_from_eigen<B, T>(q, V, W.to_span(), F, fn, ws.to_span(), info.to_span()).wait();
+    syfn_from_eigen<B, Scalar>(q, V, W.to_span(), F, fn, ws.to_span(), info.to_span()).wait();
     return std::vector<int32_t>(info.begin(), info.end());
 }
 

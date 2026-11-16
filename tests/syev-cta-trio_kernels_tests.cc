@@ -41,8 +41,8 @@ using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename device::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
+template <class Scalar> using real_of = typename device::Arith<Scalar>::real_t;
+template <class Scalar> constexpr bool is_cplx = device::Arith<Scalar>::is_complex;
 
 constexpr int kBatch = 1024;  // saturating batch: items repeat with period kPeriod
 constexpr int kPeriod = 3;
@@ -53,50 +53,51 @@ std::uint64_t mix(std::uint64_t x) {
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
     return x ^ (x >> 31);
 }
-template <class R> R uval(std::uint64_t i) { return static_cast<R>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
-template <class T> T val(std::uint64_t i) {
-    if constexpr (is_cplx<T>) return T(uval<real_of<T>>(2 * i), uval<real_of<T>>(2 * i + 1));
-    else return uval<T>(i);
+template <class Real> Real uval(std::uint64_t i) { return static_cast<Real>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
+template <class Scalar> Scalar val(std::uint64_t i) {
+    if constexpr (is_cplx<Scalar>) return Scalar(uval<real_of<Scalar>>(2 * i), uval<real_of<Scalar>>(2 * i + 1));
+    else return uval<Scalar>(i);
 }
 // Element i of item b: item b repeats representative b % kPeriod.
-template <class T> T item_val(std::uint64_t seed, int b, int i) { return val<T>(seed + std::uint64_t(b % kPeriod) * 1000003u + i); }
-template <class T> T nan_v() { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }
-template <class T> bool same_bits(const T& a, const T& b) { return std::memcmp(&a, &b, sizeof(T)) == 0; }
+template <class Scalar> Scalar item_val(std::uint64_t seed, int b, int i) { return val<Scalar>(seed + std::uint64_t(b % kPeriod) * 1000003u + i); }
+template <class Scalar> Scalar nan_v() { return Scalar(std::numeric_limits<real_of<Scalar>>::quiet_NaN()); }
+template <class Scalar> bool same_bits(const Scalar& a,
+                                       const Scalar& b) { return std::memcmp(&a, &b, sizeof(Scalar)) == 0; }
 
-template <class T> using LD = std::conditional_t<is_cplx<T>, std::complex<long double>, long double>;
-template <class T> LD<T> wide(T v) { return LD<T>(v); }
-template <class T> T conj_h(T v) {
-    if constexpr (is_cplx<T>) return std::conj(v);
+template <class Scalar> using LD = std::conditional_t<is_cplx<Scalar>, std::complex<long double>, long double>;
+template <class Scalar> LD<Scalar> wide(Scalar v) { return LD<Scalar>(v); }
+template <class Scalar> Scalar conj_h(Scalar v) {
+    if constexpr (is_cplx<Scalar>) return std::conj(v);
     else return v;
 }
 template <class C> C conj_w(C v) {
     if constexpr (std::is_same_v<C, long double>) return v;
     else return std::conj(v);
 }
-template <class T> long double nanabs(LD<T> v) {
+template <class Scalar> long double nanabs(LD<Scalar> v) {
     const long double a = std::abs(v);
     return std::isnan(a) ? std::numeric_limits<long double>::infinity() : a;
 }
-template <class T> double rel(T got, LD<T> ref, long double scale) {
-    const long double d = std::abs(LD<T>(got) - ref);
+template <class Scalar> double rel(Scalar got, LD<Scalar> ref, long double scale) {
+    const long double d = std::abs(LD<Scalar>(got) - ref);
     if (std::isnan(d)) return std::numeric_limits<double>::infinity();
-    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<T>>::min()));
+    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<Scalar>>::min()));
 }
 
 // Per-item array: representative b % kPeriod, edited by fix(item pointer, representative).
-template <class T, class Fix> std::vector<T> batched(int per, std::uint64_t seed, Fix fix) {
-    std::vector<T> h(std::size_t(kBatch) * per);
+template <class Scalar, class Fix> std::vector<Scalar> batched(int per, std::uint64_t seed, Fix fix) {
+    std::vector<Scalar> h(std::size_t(kBatch) * per);
     for (int b = 0; b < kPeriod; ++b) {
-        for (int i = 0; i < per; ++i) h[std::size_t(b) * per + i] = item_val<T>(seed, b, i);
+        for (int i = 0; i < per; ++i) h[std::size_t(b) * per + i] = item_val<Scalar>(seed, b, i);
         fix(h.data() + std::size_t(b) * per, b);
     }
     for (int b = kPeriod; b < kBatch; ++b) std::copy_n(h.data() + std::size_t(b % kPeriod) * per, per, h.data() + std::size_t(b) * per);
     return h;
 }
-template <class T> std::vector<T> batched(int per, std::uint64_t seed) {
-    return batched<T>(per, seed, [](T*, int) {});
+template <class Scalar> std::vector<Scalar> batched(int per, std::uint64_t seed) {
+    return batched<Scalar>(per, seed, [](Scalar*, int) {});
 }
-template <class T> int bitdiff(const std::vector<T>& g, int per) {
+template <class Scalar> int bitdiff(const std::vector<Scalar>& g, int per) {
     int d = 0;
     for (int b = kPeriod; b < kBatch; ++b)
         for (int i = 0; i < per; ++i) d += !same_bits(g[std::size_t(b) * per + i], g[std::size_t(b % kPeriod) * per + i]);
@@ -124,10 +125,10 @@ struct Dev {
              h.parallel_for(sycl::nd_range<1>(std::size_t(groups) * WG, WG), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) { f(it); });
          }).wait_and_throw();
     }
-    // A typed local accessor of `elems` T, passed itself (the kernels' accessor-based views).
-    template <int WG, class T, class F> void run_acc(int groups, std::size_t elems, F f) {
+    // A typed local accessor of `elems` Scalar, passed itself (the kernels' accessor-based views).
+    template <int WG, class Scalar, class F> void run_acc(int groups, std::size_t elems, F f) {
         q().submit([&](sycl::handler& h) {
-             sycl::local_accessor<T, 1> lm(sycl::range<1>(std::max<std::size_t>(elems, 1)), h);
+             sycl::local_accessor<Scalar, 1> lm(sycl::range<1>(std::max<std::size_t>(elems, 1)), h);
              h.parallel_for(sycl::nd_range<1>(std::size_t(groups) * WG, WG), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) { f(it, lm); });
          }).wait_and_throw();
     }
@@ -137,16 +138,16 @@ struct Dev {
     std::vector<void*> ptrs;
 };
 
-template <class T> class SyevCtaTrioKernelsTest : public ::testing::Test {
+template <class Scalar> class SyevCtaTrioKernelsTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx) GTEST_SKIP() << "no SYCL device visible";
         if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "device tests launch sub-group size 32";
-        if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
+        if (test_utils::lacks_fp64<Scalar>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
 };
-template <class T> class SyevCtaTrioKernelsRealTest : public SyevCtaTrioKernelsTest<T> {};
+template <class Real> class SyevCtaTrioKernelsRealTest : public SyevCtaTrioKernelsTest<Real> {};
 
 using Types = ::testing::Types<float, double, std::complex<float>, std::complex<double>>;
 using RealTypes = ::testing::Types<float, double>;
@@ -460,37 +461,37 @@ TYPED_TEST(SyevCtaTrioKernelsTest, SytrdReflectorPack) {
 // QL reflectors of a P-frame: reflector k (k < n-1) in column k+1 of R (rows < k), unitary
 // H(k) = I - tau_k v v^H with tau_k = (1 - e^{i theta}) / (v^H v) (real: theta = pi), tau_2 = 0.
 // Every other entry of R is NaN, so a read outside the support poisons the result.
-template <class T> void ql_reflectors(int P, int ldr, int n, std::uint64_t seed, T* R, T* tau) {
-    using RT = real_of<T>;
-    for (int i = 0; i < P * ldr; ++i) R[i] = nan_v<T>();
-    for (int k = 0; k < P; ++k) tau[k] = T(0);
+template <class Scalar> void ql_reflectors(int P, int ldr, int n, std::uint64_t seed, Scalar* R, Scalar* tau) {
+    using RT = real_of<Scalar>;
+    for (int i = 0; i < P * ldr; ++i) R[i] = nan_v<Scalar>();
+    for (int k = 0; k < P; ++k) tau[k] = Scalar(0);
     for (int k = 0; k < n - 1; ++k) {
         long double s = 1;
         for (int r = 0; r < k; ++r) {
-            const T v = val<T>(seed + std::uint64_t(k) * 97 + r);
+            const Scalar v = val<Scalar>(seed + std::uint64_t(k) * 97 + r);
             R[r + (k + 1) * ldr] = v;
-            s += std::norm(LD<T>(v));
+            s += std::norm(LD<Scalar>(v));
         }
         if (k == 2) continue;
-        if constexpr (is_cplx<T>) {
+        if constexpr (is_cplx<Scalar>) {
             const long double th = 0.7L + 0.3L * k;
-            tau[k] = T(static_cast<RT>((1 - std::cos(th)) / s), static_cast<RT>(-std::sin(th) / s));
+            tau[k] = Scalar(static_cast<RT>((1 - std::cos(th)) / s), static_cast<RT>(-std::sin(th) / s));
         } else {
-            tau[k] = static_cast<T>(2 / s);
+            tau[k] = static_cast<Scalar>(2 / s);
         }
     }
 }
 // M = H(n-2) ... H(0) (P x P, column-major), long double.
-template <class T> std::vector<LD<T>> ql_product(int P, int ldr, int n, const T* R, const T* tau) {
-    std::vector<LD<T>> M(std::size_t(P) * P, LD<T>(0));
-    for (int i = 0; i < P; ++i) M[i + i * P] = LD<T>(1);
+template <class Scalar> std::vector<LD<Scalar>> ql_product(int P, int ldr, int n, const Scalar* R, const Scalar* tau) {
+    std::vector<LD<Scalar>> M(std::size_t(P) * P, LD<Scalar>(0));
+    for (int i = 0; i < P; ++i) M[i + i * P] = LD<Scalar>(1);
     for (int k = 0; k < n - 1; ++k) {
-        std::vector<LD<T>> v(P, LD<T>(0));
+        std::vector<LD<Scalar>> v(P, LD<Scalar>(0));
         for (int r = 0; r < k; ++r) v[r] = wide(R[r + (k + 1) * ldr]);
-        v[k] = LD<T>(1);
-        const LD<T> t = wide(tau[k]);
+        v[k] = LD<Scalar>(1);
+        const LD<Scalar> t = wide(tau[k]);
         for (int j = 0; j < P; ++j) {
-            LD<T> dot = 0;
+            LD<Scalar> dot = 0;
             for (int r = 0; r < P; ++r) dot += conj_w(v[r]) * M[r + j * P];
             for (int r = 0; r < P; ++r) M[r + j * P] -= v[r] * (t * dot);
         }
@@ -649,34 +650,34 @@ TYPED_TEST(SyevCtaTrioKernelsTest, RegisterColumnOps) {
 // ============================== sytrd (lapack/sytrd.hh) ===============================
 
 // The Hermitian matrix whose UL triangle is stored in h (column-major, ld), real diagonal.
-template <class T> std::vector<LD<T>> herm_from(const T* h, int n, int ld, Uplo ul) {
-    std::vector<LD<T>> a(std::size_t(n) * n);
+template <class Scalar> std::vector<LD<Scalar>> herm_from(const Scalar* h, int n, int ld, Uplo ul) {
+    std::vector<LD<Scalar>> a(std::size_t(n) * n);
     for (int c = 0; c < n; ++c)
         for (int r = 0; r < n; ++r) {
             const bool stored = ul == Uplo::Lower ? r >= c : r <= c;
-            LD<T> e = stored ? wide(h[r + std::size_t(c) * ld]) : conj_w(wide(h[c + std::size_t(r) * ld]));
-            if (r == c) e = LD<T>(std::real(e));
+            LD<Scalar> e = stored ? wide(h[r + std::size_t(c) * ld]) : conj_w(wide(h[c + std::size_t(r) * ld]));
+            if (r == c) e = LD<Scalar>(std::real(e));
             a[r + std::size_t(c) * n] = e;
         }
     return a;
 }
 // Poison everything the op must not read: the other triangle, Im(diag), rows past n.
-template <class T> void poison_herm(T* h, int n, int ld, Uplo ul) {
+template <class Scalar> void poison_herm(Scalar* h, int n, int ld, Uplo ul) {
     for (int c = 0; c < n; ++c)
         for (int r = 0; r < ld; ++r) {
             const bool stored = r < n && (ul == Uplo::Lower ? r >= c : r <= c);
-            if (!stored) h[r + std::size_t(c) * ld] = nan_v<T>();
+            if (!stored) h[r + std::size_t(c) * ld] = nan_v<Scalar>();
             if (r == c) {
-                if constexpr (is_cplx<T>)
-                    h[r + std::size_t(c) * ld] = T(std::real(h[r + std::size_t(c) * ld]), std::numeric_limits<real_of<T>>::quiet_NaN());
+                if constexpr (is_cplx<Scalar>)
+                    h[r + std::size_t(c) * ld] = Scalar(std::real(h[r + std::size_t(c) * ld]), std::numeric_limits<real_of<Scalar>>::quiet_NaN());
             }
         }
 }
 
 // ||A - Q T Q^H||_F / ||A||_F from LAPACK's sytd2 packing in o (n x n, ld ldo), d, e, tau.
-template <class T>
-double sytd2_residual(const std::vector<LD<T>>& a, const T* o, int ldo, const T* d, const T* e, const T* tau, int n, Uplo ul) {
-    using L = LD<T>;
+template <class Scalar>
+double sytd2_residual(const std::vector<LD<Scalar>>& a, const Scalar* o, int ldo, const Scalar* d, const Scalar* e, const Scalar* tau, int n, Uplo ul) {
+    using L = LD<Scalar>;
     std::vector<L> q(std::size_t(n) * n, L(0)), qv(n), v(n);
     for (int i = 0; i < n; ++i) q[i + std::size_t(i) * n] = L(1);
     auto apply = [&](int i) {  // Q := Q (I - tau_i v_i v_i^H)
@@ -713,7 +714,7 @@ double sytd2_residual(const std::vector<LD<T>>& a, const T* o, int ldo, const T*
             L s = 0;
             for (int k = 0; k < n; ++k)
                 for (int l = 0; l < n; ++l) s += q[r + std::size_t(k) * n] * t[k + std::size_t(l) * n] * conj_w(q[c + std::size_t(l) * n]);
-            const long double x = nanabs<T>(a[r + std::size_t(c) * n] - s);
+            const long double x = nanabs<Scalar>(a[r + std::size_t(c) * n] - s);
             num += x * x;
             den += std::norm(a[r + std::size_t(c) * n]);
         }
@@ -1067,38 +1068,40 @@ TYPED_TEST(SyevCtaTrioKernelsRealTest, TridiagRotMatchesDenseSimilarity) {
 // a planted extreme on each side, the split over the whole e, find_first (LaneVec) past a leading
 // zero, LaneVec scal on a window, then reverse of d (paired with an empty e window), and the paired
 // reverse of d[2, n-1) with e (e only on even problems).
-template <class T, int P, bool Masked> void lane_case(Dev& dev) {
+template <class Real, int P, bool Masked> void lane_case(Dev& dev) {
     constexpr int WG = 32, chunks = WG / P, n = P - 1, nprob = kBatch;
-    const device::detail::SplitTol<T> tol{T(std::numeric_limits<T>::epsilon() / 2) * T(std::numeric_limits<T>::epsilon() / 2),
-                              std::numeric_limits<T>::min()};
-    std::vector<T> hd(std::size_t(nprob) * n), he(std::size_t(nprob) * n, T(0));
+    const device::detail::SplitTol<Real> tol{Real(std::numeric_limits<Real>::epsilon() / 2) * Real(std::numeric_limits<Real>::epsilon() / 2),
+                              std::numeric_limits<Real>::min()};
+    std::vector<Real> hd(std::size_t(nprob) * n), he(std::size_t(nprob) * n, Real(0));
     for (int q = 0; q < nprob; ++q) {
-        T* d = hd.data() + std::size_t(q) * n;
-        T* e = he.data() + std::size_t(q) * n;
-        for (int i = 0; i < n; ++i) d[i] = item_val<T>(11, q, i);
-        for (int i = 0; i < n - 1; ++i) e[i] = item_val<T>(12, q, i);
-        d[0] = T(100);     // outside the d window [1, n-1)
-        d[n - 2] = T(-5);  // inside it: the expected norm
-        e[n - 2] = T(50);  // outside the e window [1, n-2)
-        e[0] = T(0);       // outside the find_first window [1, n-1)
+        Real* d = hd.data() + std::size_t(q) * n;
+        Real* e = he.data() + std::size_t(q) * n;
+        for (int i = 0; i < n; ++i) d[i] = item_val<Real>(11, q, i);
+        for (int i = 0; i < n - 1; ++i) e[i] = item_val<Real>(12, q, i);
+        d[0] = Real(100);     // outside the d window [1, n-1)
+        d[n - 2] = Real(-5);  // inside it: the expected norm
+        e[n - 2] = Real(50);  // outside the e window [1, n-2)
+        e[0] = Real(0);       // outside the find_first window [1, n-1)
         const auto thr = [&](int i) { return std::sqrt(tol.eps2 * std::abs(d[i]) * std::abs(d[i + 1]) + tol.safmin); };
-        e[1] = T(2) * thr(1);                                // kept
-        e[2 + q % kPeriod] = T(0.5) * thr(2 + q % kPeriod);  // split
+        e[1] = Real(2) * thr(1);                                // kept
+        e[2 + q % kPeriod] = Real(0.5) * thr(2 + q % kPeriod);  // split
     }
-    T* d = dev.up(hd);
-    T* e = dev.up(he);
-    T* nrm = dev.up(std::vector<T>(nprob));
+    Real* d = dev.up(hd);
+    Real* e = dev.up(he);
+    Real* nrm = dev.up(std::vector<Real>(nprob));
     int* idx = dev.up(std::vector<int>(nprob));
     dev.template run<WG>(nprob / chunks, [=](sycl::nd_item<1> it) {
         const auto ex = device::wrap(make_partition<P, Masked>(it.get_sub_group()));
         const int q = static_cast<int>(it.get_group_linear_id()) * chunks + static_cast<int>(it.get_sub_group().get_local_linear_id()) / P;
         const int l = ex.lid();
-        T dl = l < n ? d[std::ptrdiff_t(q) * n + l] : T(0);
-        T el = l < n - 1 ? e[std::ptrdiff_t(q) * n + l] : T(0);
-        const T an = device::lanst<NormType::Max>(ex, device::lane_vec(dl, 1, n - 1), device::lane_vec(el, 1, n - 2));
+        Real dl = l < n ? d[std::ptrdiff_t(q) * n + l] : Real(0);
+        Real el = l < n - 1 ? e[std::ptrdiff_t(q) * n + l] : Real(0);
+        const Real an = device::lanst<NormType::Max>(ex, device::lane_vec(dl, 1, n - 1),
+                                                     device::lane_vec(el, 1, n - 2));
         device::detail::tridiag_split(ex, dl, device::lane_vec(el, 0, n - 1), tol);
-        const int first = device::find_first(ex, device::lane_vec(el, 1, n - 1), [](T x) { return x == T(0); }, n - 1);
-        device::scal<device::arith::Native>(ex, T(2), device::lane_vec(dl, n - 1, n));  // the window [n-1, n): only d(n-1)
+        const int first = device::find_first(ex, device::lane_vec(el, 1, n - 1), [](Real x) { return x == Real(0); },
+                                             n - 1);
+        device::scal<device::arith::Native>(ex, Real(2), device::lane_vec(dl, n - 1, n));  // the window [n-1, n): only d(n-1)
         device::detail::reverse(ex, device::lane_vec(dl, 1, n - 1), device::lane_vec(el, 0, 0), true);
         device::detail::reverse(ex, device::lane_vec(dl, 2, n - 1), device::lane_vec(el, 1, q % 2 == 0 ? n - 2 : 1), true);
         if (l < n) d[std::ptrdiff_t(q) * n + l] = dl;
@@ -1112,21 +1115,21 @@ template <class T, int P, bool Masked> void lane_case(Dev& dev) {
     const auto gi = dev.down(idx, nprob);
     int bad = 0;
     for (int q = 0; q < nprob; ++q) {
-        const T* d0 = hd.data() + std::size_t(q) * n;
-        std::vector<T> es(he.begin() + std::ptrdiff_t(q) * n, he.begin() + std::ptrdiff_t(q + 1) * n);
-        T mx = 0;
+        const Real* d0 = hd.data() + std::size_t(q) * n;
+        std::vector<Real> es(he.begin() + std::ptrdiff_t(q) * n, he.begin() + std::ptrdiff_t(q + 1) * n);
+        Real mx = 0;
         for (int i = 1; i < n - 1; ++i) mx = std::max(mx, std::abs(d0[i]));
         for (int i = 1; i < n - 2; ++i) mx = std::max(mx, std::abs(es[i]));
         int ff = n - 1;
         for (int i = 0; i < n - 1; ++i)
-            if (es[i] != T(0) && es[i] * es[i] <= tol.eps2 * std::abs(d0[i]) * std::abs(d0[i + 1]) + tol.safmin) es[i] = T(0);
+            if (es[i] != Real(0) && es[i] * es[i] <= tol.eps2 * std::abs(d0[i]) * std::abs(d0[i + 1]) + tol.safmin) es[i] = Real(0);
         for (int i = n - 2; i >= 1; --i)
-            if (es[i] == T(0)) ff = i;
+            if (es[i] == Real(0)) ff = i;
         bad += gn[q] != mx;
         bad += gi[q] != ff;
         // d reversed on [1, n-1), then [2, n-1) reversed again: a rotation of d[1, n-1); d(n-1) doubled.
         for (int i = 0; i < n; ++i) {
-            const T want = i == 1 ? d0[n - 2] : (i >= 2 && i < n - 1) ? d0[i - 1] : (i == n - 1 ? T(2) * d0[i] : d0[i]);
+            const Real want = i == 1 ? d0[n - 2] : (i >= 2 && i < n - 1) ? d0[i - 1] : (i == n - 1 ? Real(2) * d0[i] : d0[i]);
             bad += !same_bits(gd[std::size_t(q) * n + i], want);
         }
         for (int i = 0; i < n - 1; ++i) bad += !same_bits(ge[std::size_t(q) * n + i], (q % 2 == 0 && i >= 1 && i < n - 2) ? es[n - 2 - i] : es[i]);

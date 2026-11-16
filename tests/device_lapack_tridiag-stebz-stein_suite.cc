@@ -51,20 +51,20 @@ std::uint64_t mix(std::uint64_t x) {
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
     return x ^ (x >> 31);
 }
-template <class R> R uval(std::uint64_t i) { return static_cast<R>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
+template <class Real> Real uval(std::uint64_t i) { return static_cast<Real>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
 // kPeriod representatives copied to every item (item b is a twin of b % kPeriod). With inc > 1
 // the gaps hold `pad`, a value that wins every max / min an op that read it would take.
-template <class T> std::vector<T> batched(int n, int inc, std::uint64_t seed, T pad) {
-    std::vector<T> h(std::size_t(kBatch) * n * inc, pad);
+template <class Real> std::vector<Real> batched(int n, int inc, std::uint64_t seed, Real pad) {
+    std::vector<Real> h(std::size_t(kBatch) * n * inc, pad);
     for (int b = 0; b < kBatch; ++b)
-        for (int i = 0; i < n; ++i) h[(std::size_t(b) * n + i) * inc] = uval<T>(seed + std::uint64_t(b % kPeriod) * 1000003u + i);
+        for (int i = 0; i < n; ++i) h[(std::size_t(b) * n + i) * inc] = uval<Real>(seed + std::uint64_t(b % kPeriod) * 1000003u + i);
     return h;
 }
 template <class T> bool same_bits(const T& a, const T& b) { return std::memcmp(&a, &b, sizeof(T)) == 0; }
-template <class T> double rel(T got, long double ref, long double scale) {
+template <class Real> double rel(Real got, long double ref, long double scale) {
     const long double d = std::fabs((long double)got - ref);
     if (std::isnan(d)) return std::numeric_limits<double>::infinity();
-    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<T>::min()));
+    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<Real>::min()));
 }
 template <class T> int bitdiff_items(const std::vector<T>& got, int per_item) {
     int bad = 0;
@@ -102,11 +102,11 @@ struct Dev {
     std::vector<void*> ptrs;
 };
 
-template <class T> class DeviceLapackTridiag : public ::testing::Test {
+template <class Real> class DeviceLapackTridiag : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx) GTEST_SKIP() << "no SYCL device visible";
-        if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
+        if (test_utils::lacks_fp64<Real>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
 };

@@ -70,46 +70,47 @@ std::string label(const Shape& s) {
 // An item that fails: not positive definite (potrf, posv), or a factor with a zero pivot (potri).
 bool failing(const Shape& s, int b) { return !s.identical && b % 5 == 3; }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Problem {
     Queue& q;
     Shape s;
-    Matrix<T> A, Bm;
-    std::vector<T> a_image, b_image;
+    Matrix<Scalar> A, Bm;
+    std::vector<Scalar> a_image, b_image;
     UnifiedVector<int32_t> info;
 
     Problem(Queue& queue, const Shape& shape)
-        : q(queue), s(shape), A(ts::padded<T>(s.n, s.n, s.batch)), Bm(ts::padded<T>(s.n, std::max(s.nrhs, 1), s.batch)),
+        : q(queue), s(shape), A(ts::padded<Scalar>(s.n, s.n, s.batch)), Bm(ts::padded<Scalar>(s.n, std::max(s.nrhs, 1),
+                                                                                              s.batch)),
           info(static_cast<std::size_t>(s.batch)) {
-        Matrix<T> src = ts::hpd<T>(q, s.n, s.identical ? 1 : s.batch, 0, 17);
+        Matrix<Scalar> src = ts::hpd<Scalar>(q, s.n, s.identical ? 1 : s.batch, 0, 17);
         // potri and potrs take a factor: the unmasked, unpinned potrf of the same items.
         if (s.op == Op::potri || s.op == Op::potrs) {
             UnifiedVector<int32_t> fi(static_cast<std::size_t>(src.batch_size()));
-            ts::potrf_in_place<B, T>(q, src.view(), s.uplo, fi.to_span());
+            ts::potrf_in_place<B, Scalar>(q, src.view(), s.uplo, fi.to_span());
         }
         ts::store(A.view(), src.view());
-        T* a = A.data_ptr();
+        Scalar* a = A.data_ptr();
         for (int b = 0; b < s.batch; ++b)
             if (failing(s, b)) {
                 const int k = s.n / 2;
-                a[std::size_t(b) * A.stride() + std::size_t(k) * A.ld() + k] = s.op == Op::potri ? T(0) : T(-1);
+                a[std::size_t(b) * A.stride() + std::size_t(k) * A.ld() + k] = s.op == Op::potri ? Scalar(0) : Scalar(-1);
             }
         a_image.assign(a, a + std::size_t(A.stride()) * s.batch);
-        T* bp = Bm.data_ptr();
+        Scalar* bp = Bm.data_ptr();
         for (int b = 0; b < s.batch; ++b)
             for (int j = 0; j < Bm.cols(); ++j)
                 for (int i = 0; i < s.n; ++i) {
                     const int item = s.identical ? 0 : b;
                     bp[std::size_t(b) * Bm.stride() + std::size_t(j) * Bm.ld() + i] =
-                        MatrixView<T>::make(double((i * 7 + j * 3 + item) % 11) / 4 - 1, double((i + 2 * j + item) % 5) / 8);
+                        MatrixView<Scalar>::make(double((i * 7 + j * 3 + item) % 11) / 4 - 1, double((i + 2 * j + item) % 5) / 8);
                 }
         b_image.assign(bp, bp + std::size_t(Bm.stride()) * s.batch);
     }
 
-    MatrixView<T, MatrixFormat::Dense> a(Span<const std::uint8_t> m) {
+    MatrixView<Scalar, MatrixFormat::Dense> a(Span<const std::uint8_t> m) {
         return A.view().with_batch_mask(s.only_b ? Span<const std::uint8_t>{} : m);
     }
-    MatrixView<T, MatrixFormat::Dense> b(Span<const std::uint8_t> m) { return Bm.view().with_batch_mask(m); }
+    MatrixView<Scalar, MatrixFormat::Dense> b(Span<const std::uint8_t> m) { return Bm.view().with_batch_mask(m); }
 
     mc::Case make_case() {
         mc::Case c;
@@ -124,18 +125,19 @@ struct Problem {
         };
         c.call = [this](Span<const std::uint8_t> m, Span<std::byte> ws) {
             switch (s.op) {
-                case Op::potrf: potrf<B, T>(q, a(m), s.uplo, ws, info.to_span()); break;
-                case Op::posv: posv<B, T>(q, a(m), b(m), s.uplo, ws, info.to_span()); break;
-                case Op::potri: potri<B, T>(q, a(m), s.uplo, s.spelling != "cta:full=0", ws, info.to_span()); break;
-                case Op::potrs: potrs<B, T>(q, a(m), b(m), s.uplo); break;
+                case Op::potrf: potrf<B, Scalar>(q, a(m), s.uplo, ws, info.to_span()); break;
+                case Op::posv: posv<B, Scalar>(q, a(m), b(m), s.uplo, ws, info.to_span()); break;
+                case Op::potri: potri<B, Scalar>(q, a(m), s.uplo, s.spelling != "cta:full=0", ws,
+                                                 info.to_span()); break;
+                case Op::potrs: potrs<B, Scalar>(q, a(m), b(m), s.uplo); break;
             }
         };
         if (s.op != Op::potrs)
             c.buffer_size = [this](Span<const std::uint8_t> m) -> std::size_t {
                 switch (s.op) {
-                    case Op::potrf: return potrf_buffer_size<B, T>(q, a(m), s.uplo);
-                    case Op::posv: return posv_buffer_size<B, T>(q, a(m), b(m), s.uplo);
-                    default: return potri_buffer_size<B, T>(q, a(m), s.uplo);
+                    case Op::potrf: return potrf_buffer_size<B, Scalar>(q, a(m), s.uplo);
+                    case Op::posv: return posv_buffer_size<B, Scalar>(q, a(m), b(m), s.uplo);
+                    default: return potri_buffer_size<B, Scalar>(q, a(m), s.uplo);
                 }
             };
         c.outputs = [this] {
@@ -148,9 +150,9 @@ struct Problem {
     }
 };
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;

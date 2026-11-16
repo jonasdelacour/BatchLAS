@@ -26,21 +26,21 @@
 
 namespace batchlas {
 
-template <typename T, size_t P, bool ComputeVecs>
+template <typename Real, size_t P, bool ComputeVecs>
 class SteqrCTAKernel;
 
 // Multiplier for a caller's 0 (the default): two-warp groups clear the per-SM block
 // limit that caps one-warp groups below the float register limit. Tuned on sm_89.
 // evidence: docs/perf/steqr.md#work-group-multiplier
-template <typename T, size_t P>
+template <typename Real, size_t P>
 inline constexpr int32_t kSteqrCtaAutoWgMultiplier =
-    (std::is_same_v<T, float> && (P == 8 || P == 16)) ? 2 : 1;
+    (std::is_same_v<Real, float> && (P == 8 || P == 16)) ? 2 : 1;
 
-template <typename T, size_t P, bool ComputeVecs>
+template <typename Real, size_t P, bool ComputeVecs>
 inline void steqr_cta_impl(Queue& ctx,
-                          VectorView<T>& d,
-                          VectorView<T>& e,
-                          MatrixView<T, MatrixFormat::Dense>& eigvects,
+                          VectorView<Real>& d,
+                          VectorView<Real>& e,
+                          MatrixView<Real, MatrixFormat::Dense>& eigvects,
                           int32_t n,
                           size_t max_sweeps,
                           SteqrShiftStrategy cta_shift_strategy,
@@ -63,7 +63,7 @@ inline void steqr_cta_impl(Queue& ctx,
         // Allow scaling it at runtime to tune the number of sub-groups per work-group.
         const int32_t base_wg_size = std::lcm<int32_t>(static_cast<int32_t>(P), static_cast<int32_t>(sg_size));
         int32_t wg_size_multiplier = cta_wg_size_multiplier == 0
-                                         ? kSteqrCtaAutoWgMultiplier<T, P>
+                                         ? kSteqrCtaAutoWgMultiplier<Real, P>
                                          : std::max<int32_t>(int32_t(1), cta_wg_size_multiplier);
         int32_t wg_size = base_wg_size * wg_size_multiplier;
 
@@ -78,9 +78,9 @@ inline void steqr_cta_impl(Queue& ctx,
         const int32_t num_wg = (batch_size + probs_per_wg - 1) / probs_per_wg;
         const int32_t global_size = num_wg * wg_size;
 
-        auto Q_local = sycl::local_accessor<T, 1>(
+        auto Q_local = sycl::local_accessor<Real, 1>(
             sycl::range<1>(ComputeVecs ? (probs_per_wg * P * P) : 1), cgh);
-        batchlas::impl::parallel_for<SteqrCTAKernel<T, P, ComputeVecs>>(cgh,
+        batchlas::impl::parallel_for<SteqrCTAKernel<Real, P, ComputeVecs>>(cgh,
             sycl::nd_range<1>(global_size, wg_size),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(sg_size) {
                 const auto wg = it.get_group();
@@ -109,10 +109,10 @@ inline void steqr_cta_impl(Queue& ctx,
 
                 const int32_t base_q = part_id * static_cast<int32_t>(P) * static_cast<int32_t>(P);
                 using QLocalAccT = decltype(Q_local);
-                device::detail::QSharedCache<T, P, P, ComputeVecs, QLocalAccT> qcache(Q_local, base_q, lane, n);
+                device::detail::QSharedCache<Real, P, P, ComputeVecs, QLocalAccT> qcache(Q_local, base_q, lane, n);
 
                 // Thin launcher: device::steqr<J, tier::Cta<P>>'s body; info is written before the stores.
-                device::detail::steqr_cta_run<T, P, ComputeVecs>(
+                device::detail::steqr_cta_run<Real, P, ComputeVecs>(
                     partition, d_prob, e_prob, Q_view.batch_item(b), qcache, n, static_cast<int32_t>(max_sweeps),
                     cta_shift_strategy, live, [&](bool failed) BATCHLAS_DEVICE_BODY {
                         if (live && failed && lane == 0) {
@@ -129,11 +129,11 @@ inline void steqr_cta_impl(Queue& ctx,
 
 }
 
-template <Backend B, typename T>
-Event steqr_cta(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e_in,
-                const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
-                JobType jobz, SteqrParams<T> params,
-                const MatrixView<T, MatrixFormat::Dense>& eigvects,
+template <Backend B, typename Real>
+Event steqr_cta(Queue& ctx, const VectorView<Real>& d_in, const VectorView<Real>& e_in,
+                const VectorView<Real>& eigenvalues, const Span<std::byte>& ws,
+                JobType jobz, SteqrParams<Real> params,
+                const MatrixView<Real, MatrixFormat::Dense>& eigvects,
                 Span<int32_t> info) {
     BATCHLAS_KERNEL_TRACE_SCOPE("steqr_cta");
     // The working copies are rebuilt from the pool, so they take the call's mask back on.
@@ -142,7 +142,7 @@ Event steqr_cta(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e_in
         throw batchlas::invalid_argument("Matrix must be square for eigenvalue computation.");
     }
     if (params.sort) require_sortable(eigenvalues);
-    const VectorView<T> evals = eigenvalues.with_batch_mask(mask);
+    const VectorView<Real> evals = eigenvalues.with_batch_mask(mask);
     auto eigvects_mut = jobz == JobType::EigenVectors ? eigvects.with_batch_mask(mask) : eigvects;
     if (jobz == JobType::EigenVectors && !params.back_transform) {
         // (void) on an Event: deliberate. This Queue is in-order, so the next submission
@@ -158,10 +158,10 @@ Event steqr_cta(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e_in
     const auto d_stride = params.transpose_working_vectors ? 1 : n;
     const auto e_stride = params.transpose_working_vectors ? 1 : n - 1;
 
-    auto d = VectorView<T>(pool.allocate<T>(ctx, VectorView<T>::required_span_length(n, increment, d_stride, batch_size)),
-                           n, batch_size, increment, d_stride).with_batch_mask(mask);
-    auto e = VectorView<T>(pool.allocate<T>(ctx, VectorView<T>::required_span_length(n - 1, increment, e_stride, batch_size)),
-                           n - 1, batch_size, increment, e_stride).with_batch_mask(mask);
+    auto d = VectorView<Real>(pool.allocate<Real>(ctx, VectorView<Real>::required_span_length(n, increment, d_stride, batch_size)),
+                              n, batch_size, increment, d_stride).with_batch_mask(mask);
+    auto e = VectorView<Real>(pool.allocate<Real>(ctx, VectorView<Real>::required_span_length(n - 1, increment, e_stride, batch_size)),
+                              n - 1, batch_size, increment, e_stride).with_batch_mask(mask);
 
     // `info` is caller USM: when supplied it is written in place and the pool draw is
     // skipped, so the int32 term in steqr_cta_buffer_size stays UNCONDITIONAL. Only
@@ -174,8 +174,8 @@ Event steqr_cta(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e_in
         ctx->memset(status, 0, sizeof(int32_t) * static_cast<size_t>(status_len));
     }
 
-    (void)VectorView<T>::copy(ctx, d, d_in);
-    (void)VectorView<T>::copy(ctx, e, e_in);
+    (void)VectorView<Real>::copy(ctx, d, d_in);
+    (void)VectorView<Real>::copy(ctx, e, e_in);
 
     // CTA backend: choose an optimal compile-time partition size P in {4,8,16,32}.
     // Requires warp-sized sub-groups (32) on NVIDIA.
@@ -186,7 +186,7 @@ Event steqr_cta(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e_in
     // The CTA kernels build without CPU targets (NO_CPU_TARGETS), and the Intel OpenCL CPU
     // offers sub-group size 32, so only a GPU reaches the launch.
     if (ctx.device().type != DeviceType::GPU || !ctx.device().supports_sub_group_size(32)) {
-        return steqr_wg<B, T>(ctx, d_in, e_in, eigenvalues, ws, jobz, params, eigvects, info);
+        return steqr_wg<B, Real>(ctx, d_in, e_in, eigenvalues, ws, jobz, params, eigvects, info);
     }
 
     const int32_t n_i32 = static_cast<int32_t>(n);
@@ -194,17 +194,17 @@ Event steqr_cta(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e_in
     auto launch = [&](auto P_tag) {
         constexpr int32_t P = decltype(P_tag)::value;
         if (jobz == JobType::EigenVectors) {
-            steqr_cta_impl<T, P, true>(ctx, d, e, eigvects_mut, n_i32,
-                                       params.max_sweeps,
-                                       params.cta_shift_strategy, params.cta_wg_size_multiplier,
-                                       status,
-                                       pool);
+            steqr_cta_impl<Real, P, true>(ctx, d, e, eigvects_mut, n_i32,
+                                          params.max_sweeps,
+                                          params.cta_shift_strategy, params.cta_wg_size_multiplier,
+                                          status,
+                                          pool);
         } else {
-            steqr_cta_impl<T, P, false>(ctx, d, e, eigvects_mut, n_i32,
-                                        params.max_sweeps,
-                                        params.cta_shift_strategy, params.cta_wg_size_multiplier,
-                                        status,
-                                        pool);
+            steqr_cta_impl<Real, P, false>(ctx, d, e, eigvects_mut, n_i32,
+                                           params.max_sweeps,
+                                           params.cta_shift_strategy, params.cta_wg_size_multiplier,
+                                           status,
+                                           pool);
         }
     };
 
@@ -219,7 +219,7 @@ Event steqr_cta(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e_in
     }
 
     // Copy back eigenvalues.
-    (void)VectorView<T>::copy(ctx, evals, d);
+    (void)VectorView<Real>::copy(ctx, evals, d);
 
     // Optional fail-fast diagnostics: avoids silent non-convergence.
     // Note: checking requires synchronization, so keep it opt-in.
@@ -246,34 +246,34 @@ Event steqr_cta(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e_in
     }
 
     if (params.sort) {
-        auto ws_sort = pool.allocate<std::byte>(ctx, sort_buffer_size<T>(ctx, eigenvalues.data(), eigvects, jobz));
+        auto ws_sort = pool.allocate<std::byte>(ctx, sort_buffer_size<Real>(ctx, eigenvalues.data(), eigvects, jobz));
         (void)sort(ctx, evals, eigvects_mut, jobz, params.sort_order, ws_sort);
     }
 
     return ctx.get_event();
 }
 
-template <typename T>
-size_t steqr_cta_buffer_size(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
-                             const VectorView<T>& eigenvalues, JobType jobz, SteqrParams<T> params) {
+template <typename Real>
+size_t steqr_cta_buffer_size(Queue& ctx, const VectorView<Real>& d, const VectorView<Real>& e,
+                             const VectorView<Real>& eigenvalues, JobType jobz, SteqrParams<Real> params) {
     const auto n = d.size();
     const auto batch_size = d.batch_size();
     const auto d_stride = d.stride() > 0 ? d.stride() : n * d.inc();
     const auto e_stride = e.stride() > 0 ? e.stride() : (n - 1) * e.inc();
-    const auto d_size = VectorView<T>::required_span_length(n, d.inc(), d_stride, batch_size);
-    const auto e_size = VectorView<T>::required_span_length(n - 1, e.inc(), e_stride, batch_size);
+    const auto d_size = VectorView<Real>::required_span_length(n, d.inc(), d_stride, batch_size);
+    const auto e_size = VectorView<Real>::required_span_length(n - 1, e.inc(), e_stride, batch_size);
 
-    size_t size = BumpAllocator::allocation_size<T>(ctx, d_size)
-            + BumpAllocator::allocation_size<T>(ctx, e_size);
+    size_t size = BumpAllocator::allocation_size<Real>(ctx, d_size)
+            + BumpAllocator::allocation_size<Real>(ctx, e_size);
 
     // steqr_cta allocates a per-problem status array (int32_t) for non-convergence tracking.
     size += BumpAllocator::allocation_size<int32_t>(ctx, std::max<int64_t>(int64_t(1), batch_size));
 
-    size += sort_buffer_size<T>(ctx, eigenvalues.data(),
-                                MatrixView<T, MatrixFormat::Dense>(nullptr, n, n, n, n * n, batch_size), jobz);
+    size += sort_buffer_size<Real>(ctx, eigenvalues.data(),
+                                   MatrixView<Real, MatrixFormat::Dense>(nullptr, n, n, n, n * n, batch_size), jobz);
 
     if (ctx.device().type != DeviceType::GPU || !ctx.device().supports_sub_group_size(32)) {
-        const auto steqr_size = steqr_wg_buffer_size<T>(ctx, d, e, eigenvalues, jobz, params);
+        const auto steqr_size = steqr_wg_buffer_size<Real>(ctx, d, e, eigenvalues, jobz, params);
         size = std::max<size_t>(size, steqr_size);
     }
     return size;

@@ -31,7 +31,7 @@
 namespace batchlas {
 
 // Kernel name tag; outside the anonymous namespace so it names no internal-linkage entity.
-template <typename T, int NB, int TS, device::Scope SC>
+template <typename Scalar, int NB, int TS, device::Scope SC>
 class PotrfCtaKernel;
 
 namespace ops::potrf {
@@ -39,9 +39,9 @@ namespace ops::potrf {
 namespace {
 
 // NB / TS are device::potrf's tier::Cta constants (one source). evidence: docs/perf/potrf.md#register-gate
-template <typename T>
+template <typename Scalar>
 struct PotrfCtaConst {
-    using C = ::batchlas::device::detail::CtaConst<typename sycl_device::DevMap<T>::type>;
+    using C = ::batchlas::device::detail::CtaConst<typename sycl_device::DevMap<Scalar>::type>;
     static constexpr int NB = C::nb;
     static constexpr int TS = C::ts;
 };
@@ -123,15 +123,15 @@ PotrfCtaLaunch potrf_cta_launch_params(int n, int batch, std::size_t sz_d, std::
 
 }  // namespace
 
-template <typename T>
+template <typename Scalar>
 int potrf_cta_max_n_for_slm(std::size_t slm_budget_bytes, int min_blocks_per_sm) {
     // The pad is applied inside the walked function, so this ceiling and the launcher's
     // p.fits test remain one predicate; the walk's `break` clause lives in
     // resident_max_n and is documented there.
     return resident::resident_max_n(
         [](int n) {
-            using C = PotrfCtaConst<T>;
-            using DM = sycl_device::DevMap<T>;
+            using C = PotrfCtaConst<Scalar>;
+            using DM = sycl_device::DevMap<Scalar>;
             return resident::hole_padded(potrf_slm_per_matrix(n, C::NB, C::TS,
                                                           sizeof(typename DM::type),
                                                           sizeof(typename DM::real)));
@@ -139,22 +139,22 @@ int potrf_cta_max_n_for_slm(std::size_t slm_budget_bytes, int min_blocks_per_sm)
         slm_budget_bytes, min_blocks_per_sm);
 }
 
-template <typename T>
+template <typename Scalar>
 int potrf_cta_max_n() {
-    return potrf_cta_max_n_for_slm<T>(kPotrfReferenceSlmBudget);
+    return potrf_cta_max_n_for_slm<Scalar>(kPotrfReferenceSlmBudget);
 }
 
-template <typename T>
-std::size_t potrf_cta_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
+template <typename Scalar>
+std::size_t potrf_cta_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A) {
     const int batch = A.batch_size();
     return detail::info_scratch_bytes(ctx, batch);
 }
 
 // The launch geometry, for tests; see potrf_native.hh.
-template <typename T>
+template <typename Scalar>
 unsigned potrf_cta_debug_launch(Queue& ctx, int n, int batch, int min_blocks_per_sm) {
-    using C = PotrfCtaConst<T>;
-    using DM = sycl_device::DevMap<T>;
+    using C = PotrfCtaConst<Scalar>;
+    using DM = sycl_device::DevMap<Scalar>;
     const auto dev = ctx.device();
     const std::size_t budget = resident::device_slm_budget(
         dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
@@ -168,19 +168,19 @@ unsigned potrf_cta_debug_launch(Queue& ctx, int n, int batch, int min_blocks_per
 
 namespace {
 
-template <typename T, int NB, int TS, device::Scope SC>
+template <typename Scalar, int NB, int TS, device::Scope SC>
 Event potrf_cta_launch(Queue& ctx,
-                       const MatrixView<T, MatrixFormat::Dense>& A,
+                       const MatrixView<Scalar, MatrixFormat::Dense>& A,
                        bool upper,
                        Span<int32_t> info,
                        const PotrfCtaLaunch& p,
                        int n, int batch, const std::uint8_t* mask) {
     // std::complex is re-typed to the POD device scalar at the pointer boundary: its
     // Annex-G operator* costs an isnan branch and a __mulsc3 call in device code.
-    using DM = sycl_device::DevMap<T>;
+    using DM = sycl_device::DevMap<Scalar>;
     using D = typename DM::type;
     using R = typename DM::real;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     D* a_ptr = reinterpret_cast<D*>(A.data_ptr());
     const int ldg = A.ld();
@@ -206,7 +206,7 @@ Event potrf_cta_launch(Queue& ctx,
         sycl::local_accessor<int, 1> off(
             sycl::range<1>(static_cast<std::size_t>(G) * static_cast<std::size_t>(Rt0 + 1)), h);
 
-        batchlas::impl::parallel_for<PotrfCtaKernel<T, NB, TS, SC>>(h,
+        batchlas::impl::parallel_for<PotrfCtaKernel<Scalar, NB, TS, SC>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) * wg_size),
                               sycl::range<1>(wg_size)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
@@ -259,15 +259,15 @@ Event potrf_cta_launch(Queue& ctx,
 
 }  // namespace
 
-template <typename T>
+template <typename Scalar>
 Event potrf_cta_dispatch(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A,
                          Uplo uplo,
                          Span<std::byte> workspace,
                          Span<int32_t> info_out,
                          int min_blocks_per_sm) {
-    using C = PotrfCtaConst<T>;
-    using DM = sycl_device::DevMap<T>;
+    using C = PotrfCtaConst<Scalar>;
+    using DM = sycl_device::DevMap<Scalar>;
     constexpr std::size_t sz_d = sizeof(typename DM::type);
     constexpr std::size_t sz_r = sizeof(typename DM::real);
 
@@ -293,7 +293,7 @@ Event potrf_cta_dispatch(Queue& ctx,
             " does not fit this device's local memory (needs " +
             std::to_string(p.slm_total) + " B of " + std::to_string(budget) +
             " B); the ceiling for this type is " +
-            std::to_string(potrf_cta_max_n_for_slm<T>(device_budget, min_blocks_per_sm)));
+            std::to_string(potrf_cta_max_n_for_slm<Scalar>(device_budget, min_blocks_per_sm)));
     }
 
     BumpAllocator pool(workspace);
@@ -303,10 +303,10 @@ Event potrf_cta_dispatch(Queue& ctx,
     const std::uint8_t* const mask = detail::mask_ptr(detail::call_mask("potrf", A));
 
     if (p.scope == device::Scope::Sub) {
-        return potrf_cta_launch<T, C::NB, C::TS, device::Scope::Sub>(
+        return potrf_cta_launch<Scalar, C::NB, C::TS, device::Scope::Sub>(
             ctx, A, upper, info, p, n, batch, mask);
     }
-    return potrf_cta_launch<T, C::NB, C::TS, device::Scope::Group>(
+    return potrf_cta_launch<Scalar, C::NB, C::TS, device::Scope::Group>(
         ctx, A, upper, info, p, n, batch, mask);
 }
 

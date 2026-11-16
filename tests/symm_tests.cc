@@ -13,9 +13,9 @@ using SymmPin = batchlas::select::ScopedPin<batchlas::ops::symm::SymmChoice>;
 
 using namespace batchlas;
 
-template <typename T, Backend B>
+template <typename Real, Backend B>
 struct SymmConfig {
-    using ScalarType = T;
+    using ScalarType = Real;
     static constexpr Backend BackendVal = B;
 };
 

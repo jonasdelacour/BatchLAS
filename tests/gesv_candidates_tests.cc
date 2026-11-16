@@ -50,60 +50,60 @@ namespace gs = batchlas::ops::gesv;
 using C = gs::GesvChoice;
 using Pin = select::ScopedPin<C>;
 
-template <typename T>
-using RealOf = typename batchlas::base_type<T>::type;
-template <typename T>
-constexpr bool kCx = test_utils::is_complex<T>::value;
+template <typename Scalar>
+using RealOf = typename batchlas::base_type<Scalar>::type;
+template <typename Scalar>
+constexpr bool kCx = test_utils::is_complex<Scalar>::value;
 
-template <typename T>
-bool same_bits(T a, T b) {
-    return std::memcmp(&a, &b, sizeof(T)) == 0;
+template <typename Scalar>
+bool same_bits(Scalar a, Scalar b) {
+    return std::memcmp(&a, &b, sizeof(Scalar)) == 0;
 }
 
 // A and B at padded lds and strides that are not ld*cols; the pads hold a large finite value a
 // kernel would happily consume. A is diagonally dominant with its rows cyclically shifted by an
 // item-dependent offset, so partial pivoting must interchange rows (an identity pivot list would
 // hide a dropped interchange); every off-diagonal entry has a nonzero imaginary part.
-template <typename T>
+template <typename Scalar>
 struct Sys {
     int n = 0, nrhs = 0, batch = 0, lda = 0, stra = 0, ldb = 0, strb = 0;
-    UnifiedVector<T> a, b;
-    UnifiedVector<T*> aptr, bptr;
+    UnifiedVector<Scalar> a, b;
+    UnifiedVector<Scalar*> aptr, bptr;
     UnifiedVector<int64_t> piv;
-    std::vector<T> a0, b0;
+    std::vector<Scalar> a0, b0;
 
-    MatrixView<T, MatrixFormat::Dense> A() { return {a.data(), n, n, lda, stra, batch, aptr.data()}; }
-    MatrixView<T, MatrixFormat::Dense> B() { return {b.data(), n, nrhs, ldb, strb, batch, bptr.data()}; }
+    MatrixView<Scalar, MatrixFormat::Dense> A() { return {a.data(), n, n, lda, stra, batch, aptr.data()}; }
+    MatrixView<Scalar, MatrixFormat::Dense> B() { return {b.data(), n, nrhs, ldb, strb, batch, bptr.data()}; }
 };
 
-template <typename T>
-Sys<T> make_sys(int n, int nrhs, int batch, unsigned seed, bool identical = false) {
-    using R = RealOf<T>;
-    Sys<T> p;
+template <typename Scalar>
+Sys<Scalar> make_sys(int n, int nrhs, int batch, unsigned seed, bool identical = false) {
+    using R = RealOf<Scalar>;
+    Sys<Scalar> p;
     p.n = n, p.nrhs = nrhs, p.batch = batch;
     p.lda = n + 3, p.stra = p.lda * n + 5, p.ldb = n + 2, p.strb = p.ldb * nrhs + 7;
-    const T poison = MatrixView<T, MatrixFormat::Dense>::make(R(-999), R(777));
-    p.a = UnifiedVector<T>(static_cast<size_t>(p.stra) * batch, poison);
-    p.b = UnifiedVector<T>(static_cast<size_t>(p.strb) * batch, poison);
-    p.aptr = UnifiedVector<T*>(batch, nullptr);
-    p.bptr = UnifiedVector<T*>(batch, nullptr);
+    const Scalar poison = MatrixView<Scalar, MatrixFormat::Dense>::make(R(-999), R(777));
+    p.a = UnifiedVector<Scalar>(static_cast<size_t>(p.stra) * batch, poison);
+    p.b = UnifiedVector<Scalar>(static_cast<size_t>(p.strb) * batch, poison);
+    p.aptr = UnifiedVector<Scalar*>(batch, nullptr);
+    p.bptr = UnifiedVector<Scalar*>(batch, nullptr);
     p.piv = UnifiedVector<int64_t>(static_cast<size_t>(n) * batch, int64_t(0x0BADBEEF0BADBEEFLL));
     std::mt19937 gen(seed);
     std::uniform_real_distribution<R> d(R(-1), R(1));
-    std::vector<T> a1(static_cast<size_t>(n) * n), b1(static_cast<size_t>(n) * nrhs);
+    std::vector<Scalar> a1(static_cast<size_t>(n) * n), b1(static_cast<size_t>(n) * nrhs);
     for (int it = 0; it < batch; ++it) {
         if (!identical || it == 0) {
             const int shift = n > 1 ? 1 + int(gen() % unsigned(n - 1)) : 0;
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < n; ++i) {
                     const auto x = d(gen), y = d(gen);
-                    const T v = (i == j) ? MatrixView<T, MatrixFormat::Dense>::make(R(3) * R(n) * (x >= 0 ? R(1) : R(-1)), y)
-                                         : MatrixView<T, MatrixFormat::Dense>::make(x, y);
+                    const Scalar v = (i == j) ? MatrixView<Scalar, MatrixFormat::Dense>::make(R(3) * R(n) * (x >= 0 ? R(1) : R(-1)), y)
+                                         : MatrixView<Scalar, MatrixFormat::Dense>::make(x, y);
                     a1[(i + shift) % n + size_t(j) * n] = v;
                 }
             for (auto& v : b1) {
                 const auto re = d(gen), im = d(gen);
-                v = MatrixView<T, MatrixFormat::Dense>::make(re, im);
+                v = MatrixView<Scalar, MatrixFormat::Dense>::make(re, im);
             }
         }
         for (int j = 0; j < n; ++j)
@@ -117,18 +117,18 @@ Sys<T> make_sys(int n, int nrhs, int batch, unsigned seed, bool identical = fals
 }
 
 // ||A X - B||_F / (||A||_F ||X||_F) against the pristine A, worst over the first and last item.
-template <typename T>
-double residual(Queue& ctx, const Sys<T>& p) {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+double residual(Queue& ctx, const Sys<Scalar>& p) {
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     const int items[] = {0, p.batch - 1};
-    return MV::solve_residual(ctx, MV(const_cast<T*>(p.a0.data()), p.n, p.n, p.lda, p.stra, p.batch),
-                              MV(const_cast<T*>(p.b.data()), p.n, p.nrhs, p.ldb, p.strb, p.batch),
-                              MV(const_cast<T*>(p.b0.data()), p.n, p.nrhs, p.ldb, p.strb, p.batch), items);
+    return MV::solve_residual(ctx, MV(const_cast<Scalar*>(p.a0.data()), p.n, p.n, p.lda, p.stra, p.batch),
+                              MV(const_cast<Scalar*>(p.b.data()), p.n, p.nrhs, p.ldb, p.strb, p.batch),
+                              MV(const_cast<Scalar*>(p.b0.data()), p.n, p.nrhs, p.ldb, p.strb, p.batch), items);
 }
 
 // The GPU arms pack 1-based int32 pivots into the int64 span (docs/developer/agent-guide.md §9).
-template <typename T>
-int32_t piv32(const Sys<T>& p, int it, int i) {
+template <typename Scalar>
+int32_t piv32(const Sys<Scalar>& p, int it, int i) {
     return reinterpret_cast<const int32_t*>(p.piv.data())[size_t(it) * p.n + i];
 }
 
@@ -187,9 +187,9 @@ struct TableGuard {
     ~TableGuard() { select::testing::use_embedded_tables(); }
 };
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;

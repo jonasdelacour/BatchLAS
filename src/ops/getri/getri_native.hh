@@ -18,30 +18,30 @@ namespace batchlas::ops::getri {
 
 // Zero is the expected answer. Runs under BumpAllocator::measuring(): no workspace
 // access, no kernel launch, no A.data_ptr() dereference -- metadata only.
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API std::size_t getri_blocked_buffer_size(Queue& ctx,
-                                                            const MatrixView<T, MatrixFormat::Dense>& A);
+                                                            const MatrixView<Scalar, MatrixFormat::Dense>& A);
 
 // Must be the public trsm -- a native trsm entry point called from a driver TU
 // bypasses trsm's selection (src/ops/trsm). alpha comes THIRD, not last. Absent injection throws.
-template <typename T>
+template <typename Scalar>
 using GetriSolveTrsm = std::function<Event(
     Queue&,
-    const MatrixView<T, MatrixFormat::Dense>&,
-    const MatrixView<T, MatrixFormat::Dense>&,
-    T, Side, Uplo, Transpose, Diag)>;
+    const MatrixView<Scalar, MatrixFormat::Dense>&,
+    const MatrixView<Scalar, MatrixFormat::Dense>&,
+    Scalar, Side, Uplo, Transpose, Diag)>;
 
 // Reachable without choose(), so it must re-check every clause of can_run(Blocked)
 // (src/ops/getri/getri.cc) and throw. A is read-only, A == C is
 // unsupported, and info is exact-zero semantics, not a tolerance. pivots keep getrf's
 // format: a 1-based interchange list, int32 packed into the int64 span on CUDA/ROCm.
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API Event getri_blocked_dispatch(Queue& ctx,
-                                                   const MatrixView<T, MatrixFormat::Dense>& A,
-                                                   const MatrixView<T, MatrixFormat::Dense>& C,
+                                                   const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                                   const MatrixView<Scalar, MatrixFormat::Dense>& C,
                                                    Span<int64_t> pivots,
                                                    Span<std::byte> workspace,
                                                    Span<int32_t> info,
-                                                   GetriSolveTrsm<T> solve_trsm = {});
+                                                   GetriSolveTrsm<Scalar> solve_trsm = {});
 
 }  // namespace batchlas::ops::getri

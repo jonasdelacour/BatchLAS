@@ -28,11 +28,11 @@ namespace ops::hemm {
 
 using select::overloaded;
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
-template <typename T>
-select::Key key_of(const MV<T>& C) {
+template <typename Scalar>
+select::Key key_of(const MV<Scalar>& C) {
     return {{"m", C.rows()}, {"n", C.cols()}, {"batch", C.batch_size()}};
 }
 
@@ -42,9 +42,9 @@ select::Key key_of(const MV<T>& C) {
 // batch (grid z, scratch budget), so it refuses only an item whose own scratch does not fit.
 // rocBLAS has no ?hemm wrapper, so on ROCm only Mirror and Expand (over rocBLAS gemm) run. Mirror's
 // terms are symm's: its launch, chunked over the batch.
-template <Backend B, typename T>
-bool can_run(const HemmChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
-             const MV<T>& C) {
+template <Backend B, typename Scalar>
+bool can_run(const HemmChoice& c, const select::Device& d, Queue& q, const MV<Scalar>& A, const MV<Scalar>& Bm,
+             const MV<Scalar>& C) {
     // Mirror and Expand honour a batch mask; the vendor's per-item loop cannot skip an item.
     const bool masked = batchlas::detail::any_batch_mask(A, Bm, C);
     constexpr bool kWired = select::native_gpu_backend<B> || B == Backend::ROCM;
@@ -52,39 +52,40 @@ bool can_run(const HemmChoice& c, const select::Device& d, Queue& q, const MV<T>
     return std::visit(overloaded{
         [&](Mirror) {
             return kWired && d.is_gpu && homogeneous && d.max_wg >= mirror::kWg && C.rows() >= 1 && C.cols() >= 1 &&
-                   A.batch_size() >= 1 && d.slm_budget_for(mirror::kWg) >= mirror::slm_bytes<T>() &&
-                   (C.rows() + mirror::tile<T>() - 1) / mirror::tile<T>() <= d.max_groups_yz;
+                   A.batch_size() >= 1 && d.slm_budget_for(mirror::kWg) >= mirror::slm_bytes<Scalar>() &&
+                   (C.rows() + mirror::tile<Scalar>() - 1) / mirror::tile<Scalar>() <= d.max_groups_yz;
         },
         [&](Expand) {
             return kWired && d.is_gpu && homogeneous && d.max_wg >= kExpandWg && C.rows() >= 1 && C.cols() >= 1 &&
                    A.batch_size() >= 1 &&
-                   backend::detail::expansion_chunk<T>(q, A.rows(), 1, d.max_groups_yz) >= 1;
+                   backend::detail::expansion_chunk<Scalar>(q, A.rows(), 1, d.max_groups_yz) >= 1;
         },
         [&](Vendor) { return B != Backend::ROCM && d.has_vendor && homogeneous && !masked; },
     }, c);
 }
 
-template <Backend B, typename T>
-Event launch(Queue& q, const HemmChoice& c, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta,
+template <Backend B, typename Scalar>
+Event launch(Queue& q, const HemmChoice& c, const MV<Scalar>& A, const MV<Scalar>& Bm, const MV<Scalar>& C,
+             Scalar alpha, Scalar beta,
              Side side, Uplo uplo) {
     return std::visit(overloaded{
         [&](Mirror) -> Event {
             if constexpr (select::native_gpu_backend<B> || B == Backend::ROCM)
-                return ops::symm::symm_mirror<T, /*Herm=*/true>(q, A, Bm, C, alpha, beta, side, uplo,
-                                                                level3::grid_chunk<B>(q));
+                return ops::symm::symm_mirror<Scalar, /*Herm=*/true>(q, A, Bm, C, alpha, beta, side, uplo,
+                                                                     level3::grid_chunk<B>(q));
             else
                 throw batchlas::internal_error("hemm: mirror is wired for GPU backends only");  // can_run refuses it
         },
         [&](Expand) -> Event {
             if constexpr (select::native_gpu_backend<B> || B == Backend::ROCM)
-                return level3::expand_gemm<B, T, /*Conjugate=*/true>(q, A, Bm, C, alpha, beta, side, uplo);
+                return level3::expand_gemm<B, Scalar, /*Conjugate=*/true>(q, A, Bm, C, alpha, beta, side, uplo);
             else
                 throw batchlas::internal_error("hemm: expand is wired for GPU backends only");  // can_run refuses it
         },
         [&](Vendor) -> Event {
             if constexpr (B != Backend::ROCM && select::has_library<B>(spec.vendor))
-                return backend::hemm_vendor<B, T>(q, A, Bm, C, alpha, beta, side, uplo);
-            else select::no_vendor<B, T>(spec);
+                return backend::hemm_vendor<B, Scalar>(q, A, Bm, C, alpha, beta, side, uplo);
+            else select::no_vendor<B, Scalar>(spec);
         },
     }, c);
 }

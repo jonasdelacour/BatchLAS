@@ -16,10 +16,10 @@ using namespace batchlas;
 namespace {
 
 // The default device may lack fp64 (Metal): double instances run on the CPU device instead.
-template <typename T>
+template <typename Scalar>
 sycl::queue queue_for() {
     sycl::queue q;
-    if constexpr (std::is_same_v<typename philox::real_of<T>::type, double>)
+    if constexpr (std::is_same_v<typename philox::real_of<Scalar>::type, double>)
         if (!q.get_device().has(sycl::aspect::fp64)) return sycl::queue{sycl::cpu_selector_v};
     return q;
 }
@@ -119,7 +119,7 @@ TEST(PhiloxTest, DrawPutsSeedInTheKeyAndIndexStreamInTheCounter) {
     for (int w = 0; w < 4; ++w) EXPECT_EQ(got.w[w], kKats[2].want.w[w]) << "word " << w;
 }
 
-template <typename R>
+template <typename Real>
 class PhiloxRealTest : public ::testing::Test {};
 using RealTypes = ::testing::Types<float, double>;
 TYPED_TEST_SUITE(PhiloxRealTest, RealTypes);
@@ -172,7 +172,7 @@ TYPED_TEST(PhiloxRealTest, IndexStreamSeedAndComponentsAreUncorrelated) {
                 0.0, tol);
 }
 
-template <typename T>
+template <typename Scalar>
 class PhiloxScalarTest : public ::testing::Test {};
 using ScalarTypes = ::testing::Types<float, double, std::complex<float>, std::complex<double>>;
 TYPED_TEST_SUITE(PhiloxScalarTest, ScalarTypes);

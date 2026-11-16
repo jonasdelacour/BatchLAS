@@ -24,25 +24,25 @@ namespace ops::gemv {
 
 using select::overloaded;
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
 // y's length (out) and x's length (red) swap with transA; A's extents are as stored.
-template <typename T>
-std::int64_t out_len(const MV<T>& A, Transpose t) {
+template <typename Scalar>
+std::int64_t out_len(const MV<Scalar>& A, Transpose t) {
     return t == Transpose::NoTrans ? A.rows() : A.cols();
 }
-template <typename T>
-std::int64_t red_len(const MV<T>& A, Transpose t) {
+template <typename Scalar>
+std::int64_t red_len(const MV<Scalar>& A, Transpose t) {
     return t == Transpose::NoTrans ? A.cols() : A.rows();
 }
 
 // ConjTrans folds to T: the transposed bodies differ only in a conjugation.
-template <typename T>
-select::Key key_of(const MV<T>& A, Transpose transA) {
+template <typename Scalar>
+select::Key key_of(const MV<Scalar>& A, Transpose transA) {
     return {{"trans", transA == Transpose::NoTrans ? "N" : "T"},
-            {"out", out_len<T>(A, transA)},
-            {"red", red_len<T>(A, transA)},
+            {"out", out_len<Scalar>(A, transA)},
+            {"red", red_len<Scalar>(A, transA)},
             {"batch", A.batch_size()}};
 }
 
@@ -53,13 +53,13 @@ select::Key key_of(const MV<T>& A, Transpose transA) {
 // call (defect 13 fixed). m == 0 or n == 0 is legal; the drivers quick-return.
 // evidence: docs/design/known-defects.md#defect-1-orthos-transposed-arm-builds-a-view-that-does-not-describe-the-memory
 // evidence: docs/design/known-defects.md#defect-13-complexdouble-cublas-calls-segfault-inside-cublaslt
-template <Backend B, typename T>
-bool can_run(const GemvChoice& c, const select::Device& d, const MV<T>& A, const VectorView<T>& X,
-             const VectorView<T>& Y, Transpose transA) {
+template <Backend B, typename Scalar>
+bool can_run(const GemvChoice& c, const select::Device& d, const MV<Scalar>& A, const VectorView<Scalar>& X,
+             const VectorView<Scalar>& Y, Transpose transA) {
     if (std::holds_alternative<Vendor>(c) && batchlas::detail::any_batch_mask(A, X, Y)) return false;  // strided
     const bool native = !A.is_heterogeneous() && A.rows() >= 0 && A.cols() >= 0 && A.batch_size() >= 1 &&
                         X.batch_size() == A.batch_size() && Y.batch_size() == A.batch_size() &&
-                        X.size() == red_len<T>(A, transA) && Y.size() == out_len<T>(A, transA);
+                        X.size() == red_len<Scalar>(A, transA) && Y.size() == out_len<Scalar>(A, transA);
     if (!device_allows(c, d, transA != Transpose::NoTrans)) return false;
     return std::visit(overloaded{
         [&](Cta) { return native; },
@@ -68,16 +68,17 @@ bool can_run(const GemvChoice& c, const select::Device& d, const MV<T>& A, const
     }, c);
 }
 
-template <Backend B, typename T>
-Event launch(Queue& q, const GemvChoice& c, const MV<T>& A, const VectorView<T>& X, const VectorView<T>& Y,
-             T alpha, T beta, Transpose transA) {
+template <Backend B, typename Scalar>
+Event launch(Queue& q, const GemvChoice& c, const MV<Scalar>& A, const VectorView<Scalar>& X,
+             const VectorView<Scalar>& Y,
+             Scalar alpha, Scalar beta, Transpose transA) {
     return std::visit(overloaded{
-        [&](Cta) { return ops::gemv::gemv_native_cta<T>(q, A, X, Y, alpha, beta, transA); },
-        [&](Direct) { return ops::gemv::gemv_native_direct<T>(q, A, X, Y, alpha, beta, transA); },
+        [&](Cta) { return ops::gemv::gemv_native_cta<Scalar>(q, A, X, Y, alpha, beta, transA); },
+        [&](Direct) { return ops::gemv::gemv_native_direct<Scalar>(q, A, X, Y, alpha, beta, transA); },
         [&](Vendor) -> Event {
             if constexpr (select::has_library<B>(spec.vendor))
-                return backend::gemv_vendor<B, T>(q, A, X, Y, alpha, beta, transA);
-            else select::no_vendor<B, T>(spec);
+                return backend::gemv_vendor<B, Scalar>(q, A, X, Y, alpha, beta, transA);
+            else select::no_vendor<B, Scalar>(spec);
         },
     }, c);
 }
@@ -85,20 +86,22 @@ Event launch(Queue& q, const GemvChoice& c, const MV<T>& A, const VectorView<T>&
 }  // namespace ops::gemv
 
 // gemv takes no workspace (no gemv_buffer_size), so R5 has nothing to size.
-template <Backend Back, typename T>
-Event gemv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const VectorView<T>& X, const VectorView<T>& Y,
-           T alpha, T beta, Transpose transA) {
+template <Backend Back, typename Scalar>
+Event gemv(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, const VectorView<Scalar>& X,
+           const VectorView<Scalar>& Y,
+           Scalar alpha, Scalar beta, Transpose transA) {
     (void)batchlas::detail::call_mask("gemv", A, X, Y);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key, as before: m, n are A's stored extents, k repeats m.
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = A.rows(), .batch = A.batch_size(),
                                 .transA = transA};
-    const select::Key key = ops::gemv::key_of<T>(A, transA);
-    return select::run<Back, T>(
-        ops::gemv::spec, ctx, key, ops::gemv::candidates<T>(),
-        [&](const auto& c, const auto& d) { return ops::gemv::can_run<Back, T>(c, d, A, X, Y, transA); }, shape, key,
-        [&](const auto& c) { return ops::gemv::launch<Back, T>(ctx, c, A, X, Y, alpha, beta, transA); });
+    const select::Key key = ops::gemv::key_of<Scalar>(A, transA);
+    return select::run<Back, Scalar>(
+        ops::gemv::spec, ctx, key, ops::gemv::candidates<Scalar>(),
+        [&](const auto& c,
+            const auto& d) { return ops::gemv::can_run<Back, Scalar>(c, d, A, X, Y, transA); }, shape, key,
+        [&](const auto& c) { return ops::gemv::launch<Back, Scalar>(ctx, c, A, X, Y, alpha, beta, transA); });
 }
 
 #define GEMV_INSTANTIATE(B_, fp) BATCHLAS_INSTANTIATE_OP(B_, fp, gemv)

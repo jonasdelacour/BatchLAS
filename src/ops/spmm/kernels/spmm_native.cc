@@ -60,24 +60,24 @@ inline bool spmm_pair_aligned(const void* a, const void* b, const void* c) {
     return dev_is_complex_v<D> && !mis(a) && !mis(b) && !mis(c);
 }
 
-template <typename T, int NC, bool Pair> class SpmmGatherKernel;
-template <typename T> class SpmmScaleKernel;
-template <typename T> class SpmmScatterKernel;
+template <typename Scalar, int NC, bool Pair> class SpmmGatherKernel;
+template <typename Scalar> class SpmmScaleKernel;
+template <typename Scalar> class SpmmScatterKernel;
 
 // Gather arm (transA == NoTrans):
 //   C[i, c] = alpha * sum_{p in row i of A} A_val[p] * op(B)[A_ci[p], c]
 //             + beta * C[i, c]
 // One work-item per (batch item, row i, block of NC output columns), flattened
 // rows-fastest. The item owns every element it writes: no atomic, no barrier.
-template <typename T, int NC, bool Pair>
+template <typename Scalar, int NC, bool Pair>
 Event spmm_gather(Queue& ctx,
-                  const MatrixView<T, MatrixFormat::CSR>& A,
-                  const MatrixView<T, MatrixFormat::Dense>& B_mat,
-                  const MatrixView<T, MatrixFormat::Dense>& C,
-                  T alpha, T beta, Transpose transB, const std::uint8_t* mask) {
-    using D = typename DevMap<T>::type;
+                  const MatrixView<Scalar, MatrixFormat::CSR>& A,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& B_mat,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                  Scalar alpha, Scalar beta, Transpose transB, const std::uint8_t* mask) {
+    using D = typename DevMap<Scalar>::type;
     using Ar = device::arith_t<device::arith::Fma, D>;  // sycl_device::fma_acc's chain, bit for bit
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     const int m = A.rows();
     const int nrhs = C.cols();
@@ -120,8 +120,8 @@ Event spmm_gather(Queue& ctx,
 
         // beta == 0 means C is NOT read -- the contract, not an optimisation:
         // callers pass unzeroed BumpAllocator memory as C.
-        const bool alpha_zero = (alpha == T(0));
-        const bool beta_zero = (beta == T(0));
+        const bool alpha_zero = (alpha == Scalar(0));
+        const bool beta_zero = (beta == Scalar(0));
         const bool b_notrans = (transB == Transpose::NoTrans);
         const bool conj_b = (transB == Transpose::ConjTrans);
 
@@ -130,7 +130,7 @@ Event spmm_gather(Queue& ctx,
         const int64_t rowblocks = rc;
         const int64_t total = items;
 
-        batchlas::impl::parallel_for<SpmmGatherKernel<T, NC, Pair>>(h,
+        batchlas::impl::parallel_for<SpmmGatherKernel<Scalar, NC, Pair>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(groups) * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
@@ -166,30 +166,30 @@ Event spmm_gather(Queue& ctx,
     return ctx.get_event();
 }
 
-template <typename T, int NC>
+template <typename Scalar, int NC>
 Event spmm_gather_pair(Queue& ctx,
-                       const MatrixView<T, MatrixFormat::CSR>& A,
-                       const MatrixView<T, MatrixFormat::Dense>& B_mat,
-                       const MatrixView<T, MatrixFormat::Dense>& C,
-                       T alpha, T beta, Transpose transB, const std::uint8_t* mask) {
-    using D = typename DevMap<T>::type;
+                       const MatrixView<Scalar, MatrixFormat::CSR>& A,
+                       const MatrixView<Scalar, MatrixFormat::Dense>& B_mat,
+                       const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                       Scalar alpha, Scalar beta, Transpose transB, const std::uint8_t* mask) {
+    using D = typename DevMap<Scalar>::type;
     if constexpr (dev_is_complex_v<D>) {
         if (spmm_pair_aligned<D>(A.data_ptr(), B_mat.data_ptr(), C.data_ptr())) {
-            return spmm_gather<T, NC, true>(ctx, A, B_mat, C, alpha, beta, transB, mask);
+            return spmm_gather<Scalar, NC, true>(ctx, A, B_mat, C, alpha, beta, transB, mask);
         }
     }
-    return spmm_gather<T, NC, false>(ctx, A, B_mat, C, alpha, beta, transB, mask);
+    return spmm_gather<Scalar, NC, false>(ctx, A, B_mat, C, alpha, beta, transB, mask);
 }
 
 // Scale arm: runs only ahead of the scatter, which cannot fold beta into its
 // accumulation -- no item owns an output element, so beta*C_old must land exactly
 // once before any atomic. At beta == 0 it stores zero rather than reading C.
-template <typename T>
+template <typename Scalar>
 Event spmm_scale(Queue& ctx,
-                 const MatrixView<T, MatrixFormat::Dense>& C,
-                 T beta, int out_rows, int batch, const std::uint8_t* mask) {
-    using D = typename DevMap<T>::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+                 const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                 Scalar beta, int out_rows, int batch, const std::uint8_t* mask) {
+    using D = typename DevMap<Scalar>::type;
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     const int nrhs = C.cols();
     const int64_t per = static_cast<int64_t>(out_rows) * nrhs;
@@ -209,13 +209,13 @@ Event spmm_scale(Queue& ctx,
 
         D beta_d;
         __builtin_memcpy(&beta_d, &beta, sizeof(D));
-        const bool beta_zero = (beta == T(0));
+        const bool beta_zero = (beta == Scalar(0));
 
         const int rows_out = out_rows;
         const int64_t stride_out = per;
         const int64_t total = elems;
 
-        batchlas::impl::parallel_for<SpmmScaleKernel<T>>(h,
+        batchlas::impl::parallel_for<SpmmScaleKernel<Scalar>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(groups) * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
@@ -242,15 +242,15 @@ Event spmm_scale(Queue& ctx,
 // reads one row of op(B) and pushes into many rows of C. NCS is fixed at 4; this
 // arm has no in-tree callers. The unsigned range guard on j is not optional: out
 // of range here is an out-of-range ATOMIC WRITE into uninitialised nnz padding.
-template <typename T>
+template <typename Scalar>
 Event spmm_scatter(Queue& ctx,
-                   const MatrixView<T, MatrixFormat::CSR>& A,
-                   const MatrixView<T, MatrixFormat::Dense>& B_mat,
-                   const MatrixView<T, MatrixFormat::Dense>& C,
-                   T alpha, int out_rows, bool conjugate_a, Transpose transB, const std::uint8_t* mask) {
-    using D = typename DevMap<T>::type;
+                   const MatrixView<Scalar, MatrixFormat::CSR>& A,
+                   const MatrixView<Scalar, MatrixFormat::Dense>& B_mat,
+                   const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                   Scalar alpha, int out_rows, bool conjugate_a, Transpose transB, const std::uint8_t* mask) {
+    using D = typename DevMap<Scalar>::type;
     using Ar = device::arith_t<device::arith::Fma, D>;  // sycl_device::dev_mul, bit for bit
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     // Rows of the STORED A, which under Trans/ConjTrans is the REDUCTION extent.
     const int red_rows = A.rows();
@@ -262,7 +262,7 @@ Event spmm_scatter(Queue& ctx,
 
     // A host-side skip, not an in-kernel early return: the scale has already
     // written C = beta*C, and this body only ever adds the alpha term.
-    if (alpha == T(0)) return ctx.get_event();
+    if (alpha == Scalar(0)) return ctx.get_event();
 
     const auto dev = ctx.device();
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
@@ -299,7 +299,7 @@ Event spmm_scatter(Queue& ctx,
 
         constexpr int NCS = 4;
 
-        batchlas::impl::parallel_for<SpmmScatterKernel<T>>(h,
+        batchlas::impl::parallel_for<SpmmScatterKernel<Scalar>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(groups) * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
@@ -329,13 +329,13 @@ Event spmm_scatter(Queue& ctx,
 
 }  // namespace
 
-template <typename T>
+template <typename Scalar>
 Event spmm_native_csr(Queue& ctx,
-                      const MatrixView<T, MatrixFormat::CSR>& A,
-                      const MatrixView<T, MatrixFormat::Dense>& B_mat,
-                      const MatrixView<T, MatrixFormat::Dense>& C,
-                      T alpha, T beta, Transpose transA, Transpose transB) {
-    using D = typename DevMap<T>::type;
+                      const MatrixView<Scalar, MatrixFormat::CSR>& A,
+                      const MatrixView<Scalar, MatrixFormat::Dense>& B_mat,
+                      const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                      Scalar alpha, Scalar beta, Transpose transA, Transpose transB) {
+    using D = typename DevMap<Scalar>::type;
 
     const bool a_notrans = (transA == Transpose::NoTrans);
     const int out_rows = a_notrans ? A.rows() : A.cols();
@@ -350,17 +350,17 @@ Event spmm_native_csr(Queue& ctx,
     if (a_notrans) {
         // nrhs <= 2 is the lanczos shape; everything else gets the full block.
         if (nrhs <= 2) {
-            return spmm_gather_pair<T, 2>(ctx, A, B_mat, C, alpha, beta, transB, mask);
+            return spmm_gather_pair<Scalar, 2>(ctx, A, B_mat, C, alpha, beta, transB, mask);
         }
-        return spmm_gather_pair<T, kNCmax<D>>(ctx, A, B_mat, C, alpha, beta, transB, mask);
+        return spmm_gather_pair<Scalar, kNCmax<D>>(ctx, A, B_mat, C, alpha, beta, transB, mask);
     }
 
     // Ordered: the scale must complete before the first atomic. The default queue
     // is in_order; an out-of-order one pays one host wait here.
-    (void)spmm_scale<T>(ctx, C, beta, out_rows, batch, mask);
+    (void)spmm_scale<Scalar>(ctx, C, beta, out_rows, batch, mask);
     if (!ctx.in_order()) ctx.wait();
-    return spmm_scatter<T>(ctx, A, B_mat, C, alpha, out_rows,
-                           transA == Transpose::ConjTrans, transB, mask);
+    return spmm_scatter<Scalar>(ctx, A, B_mat, C, alpha, out_rows,
+                                transA == Transpose::ConjTrans, transB, mask);
 }
 
 #define BATCHLAS_SPMM_NATIVE_INSTANTIATE(fp)                                   \

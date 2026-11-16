@@ -10,7 +10,7 @@ using namespace batchlas;
 namespace {
 
 // Batched GEMM benchmark
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_TRMM(minibench::State& state) {
     const size_t m = state.range(0);
     const size_t n = state.range(1);
@@ -18,15 +18,15 @@ void BM_TRMM(minibench::State& state) {
     const size_t batch = state.range(3);
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B, false);
-    auto C = Matrix<T>::Random(m, n, false, batch);
-    auto Bm = Matrix<T>::Random(k, n, false, batch);
-    auto A = Matrix<T>::RandomTriangular(n, Uplo::Lower, Diag::NonUnit, batch);
+    auto C = Matrix<Scalar>::Random(m, n, false, batch);
+    auto Bm = Matrix<Scalar>::Random(k, n, false, batch);
+    auto A = Matrix<Scalar>::RandomTriangular(n, Uplo::Lower, Diag::NonUnit, batch);
 
     state.SetKernel(q,
                     std::move(A),
                     std::move(Bm),
                     bench::pristine(C),
-                    T(1),
+                    Scalar(1),
                     Side::Left,
                     Uplo::Lower,
                     Transpose::NoTrans,

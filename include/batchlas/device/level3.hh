@@ -36,17 +36,17 @@ template <Transpose TR, int R, int C> inline constexpr int op_cols = TR == Trans
 // innermost per (i, j) with Ops::mac into a zero accumulator, then one epilogue store per
 // element (Shape: epi::Sum default; see arith.hh store).
 template <Transpose TA = Transpose::NoTrans, Transpose TB = Transpose::NoTrans, class Shape = epi::Sum, class Ops = arith::Explicit,
-          class AS, class BS, class T, int AR, int AC, int BR, int BC, int M, int N>
-BATCHLAS_DEVICE_INLINE void gemm(const Thread&, AS alpha, const Tile<T, AR, AC>& A, const Tile<T, BR, BC>& B, BS beta, Tile<T, M, N>& C) {
+          class AS, class BS, class Scalar, int AR, int AC, int BR, int BC, int M, int N>
+BATCHLAS_DEVICE_INLINE void gemm(const Thread&, AS alpha, const Tile<Scalar, AR, AC>& A, const Tile<Scalar, BR, BC>& B, BS beta, Tile<Scalar, M, N>& C) {
     constexpr int K = detail::op_cols<TA, AR, AC>;
     static_assert(detail::op_rows<TA, AR, AC> == M && detail::op_cols<TB, BR, BC> == N && detail::op_rows<TB, BR, BC> == K,
                   "gemm (register tile): op(A) is M x K, op(B) is K x N, C is M x N");
-    using Ar = ops_arith_t<Ops, T>;
+    using Ar = ops_arith_t<Ops, Scalar>;
 #pragma unroll
     for (int j = 0; j < N; ++j)
 #pragma unroll
         for (int i = 0; i < M; ++i) {
-            T acc = Ar::zero();
+            Scalar acc = Ar::zero();
 #pragma unroll
             for (int k = 0; k < K; ++k) Ar::mac(acc, detail::tile_op<TA>(A, i, k), detail::tile_op<TB>(B, k, j));
             store_epi<Shape, Ops>(alpha, acc, beta, C(i, j));
@@ -57,10 +57,10 @@ BATCHLAS_DEVICE_INLINE void gemm(const Thread&, AS alpha, const Tile<T, AR, AC>&
 // two-rounding hand form; arith::Fma: one fused msub). A = a(x, k) (M x K) and B = b(k, y)
 // (K x N) are Tiles or any operands (local or global memory, a masked view): both are staged into
 // registers first (for k: A's column k, then B's row k), then K rank-1 steps in k order.
-template <int K, class Ops = arith::Explicit, class MA, class MB, class T, int M, int N>
-BATCHLAS_DEVICE_INLINE void gemm_sub(const Thread&, const MA& a, const MB& b, Tile<T, M, N>& c) {
-    using Ar = ops_arith_t<Ops, T>;
-    T at[M][K], bt[K][N];
+template <int K, class Ops = arith::Explicit, class MA, class MB, class Scalar, int M, int N>
+BATCHLAS_DEVICE_INLINE void gemm_sub(const Thread&, const MA& a, const MB& b, Tile<Scalar, M, N>& c) {
+    using Ar = ops_arith_t<Ops, Scalar>;
+    Scalar at[M][K], bt[K][N];
 BATCHLAS_UNROLL_FULL
     for (int k = 0; k < K; ++k) {
 BATCHLAS_UNROLL_FULL
@@ -75,8 +75,8 @@ BATCHLAS_UNROLL_FULL
 BATCHLAS_UNROLL_FULL
             for (int y = 0; y < N; ++y) Ar::msub(c(x, y), at[x][k], bt[k][y]);
 }
-template <class Ops = arith::Explicit, class T, int M, int K, int N>
-BATCHLAS_DEVICE_INLINE void gemm_sub(const Thread& ex, const Tile<T, M, K>& A, const Tile<T, K, N>& B, Tile<T, M, N>& C) {
+template <class Ops = arith::Explicit, class Scalar, int M, int K, int N>
+BATCHLAS_DEVICE_INLINE void gemm_sub(const Thread& ex, const Tile<Scalar, M, K>& A, const Tile<Scalar, K, N>& B, Tile<Scalar, M, N>& C) {
     gemm_sub<K, Ops>(ex, A, B, C);
 }
 
@@ -85,9 +85,9 @@ BATCHLAS_DEVICE_INLINE void gemm_sub(const Thread& ex, const Tile<T, M, K>& A, c
 // A(i, k) once, for every column). UL names the STORED triangle of A (the other is not read);
 // DG = Unit never reads the diagonal. Each element's terms run in the reference BLAS order
 // (dtrsm), so a real Ops::msub chain matches it term by term.
-template <Side SD, Uplo UL, Transpose TR, Diag DG, class Ops = arith::Explicit, class AS, class MA, class T, int M, int N>
-BATCHLAS_DEVICE_INLINE void trsm(const Thread&, AS alpha_, const MA& A, Tile<T, M, N>& B) {
-    using Ar = ops_arith_t<Ops, T>;
+template <Side SD, Uplo UL, Transpose TR, Diag DG, class Ops = arith::Explicit, class AS, class MA, class Scalar, int M, int N>
+BATCHLAS_DEVICE_INLINE void trsm(const Thread&, AS alpha_, const MA& A, Tile<Scalar, M, N>& B) {
+    using Ar = ops_arith_t<Ops, Scalar>;
     const auto alpha = as_tag(alpha_);
     if constexpr (!std::is_same_v<std::remove_cv_t<decltype(alpha)>, One>) {
 #pragma unroll
@@ -104,7 +104,7 @@ BATCHLAS_UNROLL_FULL
             for (int i = 0; i < M; ++i) {
 BATCHLAS_UNROLL_FULL
                 for (int k = 0; k < i; ++k) {
-                    const T aik = detail::tile_op<TR>(A, i, k);
+                    const Scalar aik = detail::tile_op<TR>(A, i, k);
 BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < N; ++j) Ar::msub(B(i, j), aik, B(k, j));
                 }

@@ -19,8 +19,8 @@ template <Mem M = Mem::Global, class T> BATCHLAS_DEVICE_INLINE Vec<T, Dyn, Unit,
     assert(v.inc() == 1);
     return {v.data_ptr(), Dyn{v.size()}};
 }
-template <Mem M = Mem::Global, class T>
-BATCHLAS_DEVICE_INLINE Mat<T, Dyn, Dyn, Dyn, M> mat(const KernelMatrixView<T, MatrixFormat::Dense>& a) {
+template <Mem M = Mem::Global, class Scalar>
+BATCHLAS_DEVICE_INLINE Mat<Scalar, Dyn, Dyn, Dyn, M> mat(const KernelMatrixView<Scalar, MatrixFormat::Dense>& a) {
     return {a.data(), Dyn{a.rows()}, Dyn{a.cols()}, Dyn{a.ld()}};
 }
 
@@ -58,13 +58,13 @@ template <class M> struct SubOf {
 // one index expression per element with the batch term formed lazily (no pointer is moved).
 // With the extents given, the active_rows/active_cols load of a heterogeneous view is skipped
 // (stedc: Q.batch_item costs one LDG).
-template <class T> struct ItemMat {
-    using value_type = std::remove_cv_t<T>;
+template <class Scalar> struct ItemMat {
+    using value_type = std::remove_cv_t<Scalar>;
     using layout = Cyclic;
     static constexpr Mem mem = Mem::Global;
-    T* p;
+    Scalar* p;
     int b, stride, ld, m, n;
-    BATCHLAS_DEVICE_INLINE T& operator()(int i, int j) const { return p[static_cast<int64_t>(b) * stride + j * ld + i]; }
+    BATCHLAS_DEVICE_INLINE Scalar& operator()(int i, int j) const { return p[static_cast<int64_t>(b) * stride + j * ld + i]; }
     BATCHLAS_DEVICE_INLINE int rows() const { return m; }
     BATCHLAS_DEVICE_INLINE int cols() const { return n; }
     // Column j, row i, the m x n block at (r0, c0): each element through operator() above.
@@ -83,10 +83,11 @@ template <class T> struct ItemVec {
     }
     BATCHLAS_DEVICE_INLINE int size() const { return n; }
 };
-template <class T> BATCHLAS_DEVICE_INLINE ItemMat<T> item(const KernelMatrixView<T, MatrixFormat::Dense>& a, int b) {
+template <class Scalar> BATCHLAS_DEVICE_INLINE ItemMat<Scalar> item(const KernelMatrixView<Scalar,
+                                                                    MatrixFormat::Dense>& a, int b) {
     return {a.data(), b, a.stride(), a.ld(), a.rows(b), a.cols(b)};
 }
-template <class T> BATCHLAS_DEVICE_INLINE ItemMat<T> item(const KernelMatrixView<T, MatrixFormat::Dense>& a, int b, int m, int n) {
+template <class Scalar> BATCHLAS_DEVICE_INLINE ItemMat<Scalar> item(const KernelMatrixView<Scalar, MatrixFormat::Dense>& a, int b, int m, int n) {
     return {a.data(), b, a.stride(), a.ld(), m, n};
 }
 template <class T> BATCHLAS_DEVICE_INLINE ItemVec<T> item(const VectorView<T>& v, int b) {

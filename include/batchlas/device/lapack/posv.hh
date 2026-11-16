@@ -43,16 +43,16 @@ template <Uplo UL> struct posv {
 };
 }  // namespace routine
 
-template <Uplo UL, int NB, class Alg, class T> struct tier_info<routine::posv<UL>, tier::Blocked<NB, Alg>, T> {
+template <Uplo UL, int NB, class Alg, class Scalar> struct tier_info<routine::posv<UL>, tier::Blocked<NB, Alg>, Scalar> {
     static constexpr int wg_size = detail::kBlockedWg;
     static constexpr int sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
-    static constexpr bool admits(int n) { return n >= 0 && NB <= detail::reg_max_n<T>; }
-    static constexpr WorkspaceSize buffer_size(int) { return detail::PotrfBlockedPlan<T, NB>::make().size; }
+    static constexpr bool admits(int n) { return n >= 0 && NB <= detail::reg_max_n<Scalar>; }
+    static constexpr WorkspaceSize buffer_size(int) { return detail::PotrfBlockedPlan<Scalar, NB>::make().size; }
 };
-template <Uplo UL, class T> struct tiers<routine::posv<UL>, T> {
-    using type = tier::list<tier::Blocked<(detail::reg_max_n<T> >= 32 ? 32 : 16)>>;
+template <Uplo UL, class Scalar> struct tiers<routine::posv<UL>, Scalar> {
+    using type = tier::list<tier::Blocked<(detail::reg_max_n<Scalar> >= 32 ? 32 : 16)>>;
 };
 
 // A := its Cholesky factor (UL triangle read and overwritten, the other neither read nor written),

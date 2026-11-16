@@ -18,25 +18,26 @@ using namespace device_core_test;
 
 namespace {
 
-template <class T> class DeviceCoreLevel2Test : public DeviceCoreTest<T> {};
+template <class Scalar> class DeviceCoreLevel2Test : public DeviceCoreTest<Scalar> {};
 TYPED_TEST_SUITE(DeviceCoreLevel2Test, AllTypes);
 
-template <class T> T nan_of() {
-    using R = real_of<T>;
-    if constexpr (is_cplx<T>) return T(std::numeric_limits<R>::quiet_NaN(), std::numeric_limits<R>::quiet_NaN());
+template <class Scalar> Scalar nan_of() {
+    using R = real_of<Scalar>;
+    if constexpr (is_cplx<Scalar>) return Scalar(std::numeric_limits<R>::quiet_NaN(),
+                                                 std::numeric_limits<R>::quiet_NaN());
     else return std::numeric_limits<R>::quiet_NaN();
 }
 // m x n column-major with ld = m + 3; the pad rows poisoned.
-template <class T> std::vector<T> padded(int m, int n, std::uint64_t seed) {
+template <class Scalar> std::vector<Scalar> padded(int m, int n, std::uint64_t seed) {
     const int ld = m + 3;
-    std::vector<T> a(std::size_t(ld) * n, nan_of<T>());
-    const auto v = vals<T>(std::size_t(m) * n, seed);
+    std::vector<Scalar> a(std::size_t(ld) * n, nan_of<Scalar>());
+    const auto v = vals<Scalar>(std::size_t(m) * n, seed);
     for (int j = 0; j < n; ++j)
         for (int i = 0; i < m; ++i) a[j * ld + i] = v[j * m + i];
     return a;
 }
-template <class T> LD<T> cj(LD<T> v) {
-    if constexpr (is_cplx<T>) return std::conj(v);
+template <class Scalar> LD<Scalar> cj(LD<Scalar> v) {
+    if constexpr (is_cplx<Scalar>) return std::conj(v);
     else return v;
 }
 

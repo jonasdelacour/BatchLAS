@@ -341,14 +341,14 @@ void emit(const Cfg& c, const Arm& a, std::FILE* csv) {
 }
 
 // ------------------------------------------------------------- driver
-template <typename T>
+template <typename Scalar>
 int run(const Cfg& c) {
 #if !BATCHLAS_HAS_GPU_BACKEND
     (void)c;
     throw batchlas::unsupported("factor_bench measures a GPU backend; this build has none");
 #else
     auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
     const int m = c.m, n = c.n, nrhs = c.nrhs, batch = c.batch;
     const int pad = ld_pad();
@@ -360,9 +360,9 @@ int run(const Cfg& c) {
     const bool needs_factor = (c.op == OpKind::getrs || c.op == OpKind::orgqr);
 
     const size_t nbatch = size_t(batch);
-    UnifiedVector<T> A0(sa * nbatch), A(sa * nbatch);
+    UnifiedVector<Scalar> A0(sa * nbatch), A(sa * nbatch);
     // THESE ARE VIEWS OVER THE CALLER'S BUFFERS, never Matrix: Matrix's
-    // (const T*, ...) constructor COPIES into its own storage, so factorising a
+    // (const Scalar*, ...) constructor COPIES into its own storage, so factorising a
     // Matrix built that way leaves the array this program checks untouched --
     // which reads as "info == 0 with a huge residual", a wrong-answer report for
     // a correct kernel.
@@ -370,7 +370,7 @@ int run(const Cfg& c) {
     // data_ptrs(ctx) and throw "data_ptrs target is null" on a view built
     // without one, and sharing a single array between two views is a recorded
     // aliasing trap.
-    UnifiedVector<T*> pA0(nbatch), pA(nbatch);
+    UnifiedVector<Scalar*> pA0(nbatch), pA(nbatch);
     MV A0v(A0.data(), m, n, lda, int(sa), batch, pA0.data());
     MV Av(A.data(), m, n, lda, int(sa), batch, pA.data());
 
@@ -380,12 +380,12 @@ int run(const Cfg& c) {
     // (src/ops/getrf/getrf_native.hh), min(m, n) per item.
     const int* pivi = reinterpret_cast<const int*>(piv.data());
     const int pstride = kmin;
-    UnifiedVector<T> tau(size_t(kmin) * nbatch);
+    UnifiedVector<Scalar> tau(size_t(kmin) * nbatch);
 
     const bool has_rhs = (c.op == OpKind::getrs) || is_solve_op(c.op);
     const size_t bsz = has_rhs ? sb * nbatch : size_t(1);
-    UnifiedVector<T> B0(bsz), X(bsz);
-    UnifiedVector<T*> pB0(nbatch), pX(nbatch);
+    UnifiedVector<Scalar> B0(bsz), X(bsz);
+    UnifiedVector<Scalar*> pB0(nbatch), pX(nbatch);
     MV B0v, Xv;
     if (has_rhs) {
         B0v = MV(B0.data(), n, nrhs, ldb, int(sb), batch, pB0.data());
@@ -421,22 +421,22 @@ int run(const Cfg& c) {
     // through the public entry point under the AUTOMATIC route, and keep a host
     // copy, so both arms are handed byte-identical input every rep.
     const size_t fsz = needs_factor ? sa * nbatch : size_t(1);
-    UnifiedVector<T> F(fsz);
+    UnifiedVector<Scalar> F(fsz);
     if (needs_factor) {
         reset_A();
         if (c.op == OpKind::getrs) {
-            const size_t fw = getrf_buffer_size<kBackend, T>(*q, Av);
+            const size_t fw = getrf_buffer_size<kBackend, Scalar>(*q, Av);
             const size_t fwsz = fw ? fw : size_t(1);
             UnifiedVector<std::byte> fws(fwsz);
-            (void)getrf<kBackend, T>(*q, Av, piv.to_span(), fws.to_span(), info.to_span());
+            (void)getrf<kBackend, Scalar>(*q, Av, piv.to_span(), fws.to_span(), info.to_span());
         } else {
-            const size_t gw = geqrf_buffer_size<kBackend, T>(*q, Av, tau.to_span());
+            const size_t gw = geqrf_buffer_size<kBackend, Scalar>(*q, Av, tau.to_span());
             const size_t gwsz = gw ? gw : size_t(1);
             UnifiedVector<std::byte> gws(gwsz);
-            (void)geqrf<kBackend, T>(*q, Av, tau.to_span(), gws.to_span());
+            (void)geqrf<kBackend, Scalar>(*q, Av, tau.to_span(), gws.to_span());
         }
         q->wait();
-        std::memcpy(F.data(), A.data(), sa * nbatch * sizeof(T));
+        std::memcpy(F.data(), A.data(), sa * nbatch * sizeof(Scalar));
     }
 
     // FACTORIZATION IS DESTRUCTIVE, so the input is restored before EVERY rep.
@@ -444,7 +444,7 @@ int run(const Cfg& c) {
     // right-hand side; for orgqr it restores the packed reflectors.
     auto reset = [&] {
         if (c.op == OpKind::getrs) { (void)MV::copy(*q, Xv, B0v); q->wait(); }
-        else if (c.op == OpKind::orgqr) { std::memcpy(A.data(), F.data(), sa * nbatch * sizeof(T)); }
+        else if (c.op == OpKind::orgqr) { std::memcpy(A.data(), F.data(), sa * nbatch * sizeof(Scalar)); }
         // A fused solve overwrites A with the factor AND B with X, so both are restored.
         else if (is_solve_op(c.op)) { reset_A(); (void)MV::copy(*q, Xv, B0v); q->wait(); }
         else reset_A();
@@ -466,8 +466,8 @@ int run(const Cfg& c) {
         }
         a.pin = (pin == "native" && !c.route_pin.empty()) ? c.route_pin : pin;
         if (is_solve_op(c.op)) {
-            a.sub_pins = composed_pins(c.op, pin, n <= ops::potrf::potrf_tiny_max_n<T>(), n <= ops::trsm::trsm_cta_max_n<T>(),
-                                       n <= ops::getrf::getrf_tiny_max_n<T>());
+            a.sub_pins = composed_pins(c.op, pin, n <= ops::potrf::potrf_tiny_max_n<Scalar>(), n <= ops::trsm::trsm_cta_max_n<Scalar>(),
+                                       n <= ops::getrf::getrf_tiny_max_n<Scalar>());
             if (a.pin == pin) a.pin = solve_outer_pin(pin);
         }
         arms.push_back(a);
@@ -487,13 +487,13 @@ int run(const Cfg& c) {
         size_t need = 0;
         try {
             switch (c.op) {
-                case OpKind::potrf: need = potrf_buffer_size<kBackend, T>(*q, Acall, up_of(c)); break;
-                case OpKind::getrf: need = getrf_buffer_size<kBackend, T>(*q, Acall); break;
-                case OpKind::getrs: need = getrs_buffer_size<kBackend, T>(*q, Acall, Xcall, c.trans); break;
-                case OpKind::geqrf: need = geqrf_buffer_size<kBackend, T>(*q, Acall, tau.to_span()); break;
-                case OpKind::orgqr: need = orgqr_buffer_size<kBackend, T>(*q, Acall, tau.to_span()); break;
-                case OpKind::gesv: need = gesv_buffer_size<kBackend, T>(*q, Acall, Xcall); break;
-                case OpKind::posv: need = posv_buffer_size<kBackend, T>(*q, Acall, Xcall, up_of(c)); break;
+                case OpKind::potrf: need = potrf_buffer_size<kBackend, Scalar>(*q, Acall, up_of(c)); break;
+                case OpKind::getrf: need = getrf_buffer_size<kBackend, Scalar>(*q, Acall); break;
+                case OpKind::getrs: need = getrs_buffer_size<kBackend, Scalar>(*q, Acall, Xcall, c.trans); break;
+                case OpKind::geqrf: need = geqrf_buffer_size<kBackend, Scalar>(*q, Acall, tau.to_span()); break;
+                case OpKind::orgqr: need = orgqr_buffer_size<kBackend, Scalar>(*q, Acall, tau.to_span()); break;
+                case OpKind::gesv: need = gesv_buffer_size<kBackend, Scalar>(*q, Acall, Xcall); break;
+                case OpKind::posv: need = posv_buffer_size<kBackend, Scalar>(*q, Acall, Xcall, up_of(c)); break;
             }
         } catch (const std::invalid_argument& e) {
             refuse(arms[i], e);
@@ -505,16 +505,18 @@ int run(const Cfg& c) {
 
     auto call = [&] {
         switch (c.op) {
-            case OpKind::potrf: (void)potrf<kBackend, T>(*q, Acall, up_of(c), ws.to_span(), info.to_span()); break;
-            case OpKind::getrf: (void)getrf<kBackend, T>(*q, Acall, piv.to_span(), ws.to_span(), info.to_span()); break;
-            case OpKind::getrs: (void)getrs<kBackend, T>(*q, Acall, Xcall, c.trans, piv.to_span(), ws.to_span()); break;
-            case OpKind::geqrf: (void)geqrf<kBackend, T>(*q, Acall, tau.to_span(), ws.to_span()); break;
-            case OpKind::orgqr: (void)orgqr<kBackend, T>(*q, Acall, tau.to_span(), ws.to_span()); break;
+            case OpKind::potrf: (void)potrf<kBackend, Scalar>(*q, Acall, up_of(c), ws.to_span(), info.to_span()); break;
+            case OpKind::getrf: (void)getrf<kBackend, Scalar>(*q, Acall, piv.to_span(), ws.to_span(),
+                                                              info.to_span()); break;
+            case OpKind::getrs: (void)getrs<kBackend, Scalar>(*q, Acall, Xcall, c.trans, piv.to_span(),
+                                                              ws.to_span()); break;
+            case OpKind::geqrf: (void)geqrf<kBackend, Scalar>(*q, Acall, tau.to_span(), ws.to_span()); break;
+            case OpKind::orgqr: (void)orgqr<kBackend, Scalar>(*q, Acall, tau.to_span(), ws.to_span()); break;
             case OpKind::gesv:
-                (void)gesv<kBackend, T>(*q, Acall, Xcall, piv.to_span(), ws.to_span(), info.to_span());
+                (void)gesv<kBackend, Scalar>(*q, Acall, Xcall, piv.to_span(), ws.to_span(), info.to_span());
                 break;
             case OpKind::posv:
-                (void)posv<kBackend, T>(*q, Acall, Xcall, up_of(c), ws.to_span(), info.to_span());
+                (void)posv<kBackend, Scalar>(*q, Acall, Xcall, up_of(c), ws.to_span(), info.to_span());
                 break;
         }
         q->wait();
@@ -594,13 +596,13 @@ int run(const Cfg& c) {
         switch (c.op) {
             case OpKind::potrf:
                 a.residual = MV::potrf_residual(*q, A0v, Av, up_of(c), items);
-                within = verify::within<T>(Check::factorization, n, a.residual);
+                within = verify::within<Scalar>(Check::factorization, n, a.residual);
                 break;
             case OpKind::getrf: {
                 // Packed 1-based int32 pivots, min(m, n) per item, in the first half of the int64 span.
                 VectorView<int32_t> pivv(reinterpret_cast<int32_t*>(piv.data()), kmin, batch, 1, pstride);
                 a.residual = MV::getrf_residual(*q, A0v, Av, pivv, items);
-                within = verify::within<T>(Check::factorization, n, a.residual);
+                within = verify::within<Scalar>(Check::factorization, n, a.residual);
                 // The discriminating oracle: pivots elementwise against host xGETRF.
                 int mism = 0;
                 std::vector<int32_t> hp;
@@ -621,11 +623,11 @@ int run(const Cfg& c) {
             case OpKind::posv:
             case OpKind::getrs:
                 a.residual = MV::solve_residual(*q, A0v, c.trans, Xv, B0v, items);
-                within = verify::within<T>(Check::solve, n, a.residual);
+                within = verify::within<Scalar>(Check::solve, n, a.residual);
                 break;
             case OpKind::geqrf: {
                 using QV = MatrixView<typename MV::promoted_type, MatrixFormat::Dense>;
-                VectorView<T> tauv(tau.data(), kmin, batch, 1, kmin);
+                VectorView<Scalar> tauv(tau.data(), kmin, batch, 1, kmin);
                 a.residual = MV::qr_residual(*q, A0v, Av, tauv, items);
                 double orth = 0;
                 for (int b : items) {
@@ -633,14 +635,14 @@ int run(const Cfg& c) {
                     orth = verify::nanmax(orth, QV::orthogonality(*q, Q));
                 }
                 a.extra = orth;
-                within = verify::within<T>(Check::factorization, n, a.residual);
-                if (!verify::within<T>(Check::orthogonality, m, orth)) flag(a, "orthogonality");
+                within = verify::within<Scalar>(Check::factorization, n, a.residual);
+                if (!verify::within<Scalar>(Check::orthogonality, m, orth)) flag(a, "orthogonality");
                 break;
             }
             case OpKind::orgqr: {
                 a.residual = MV::orthogonality(*q, Av, items);
                 a.extra = a.residual;
-                within = verify::within<T>(Check::orthogonality, m, a.residual);
+                within = verify::within<Scalar>(Check::orthogonality, m, a.residual);
                 break;
             }
         }

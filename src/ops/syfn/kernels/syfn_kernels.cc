@@ -18,47 +18,47 @@
 
 namespace batchlas::ops::syfn {
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 struct WeightsKernel {};
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 struct InfoKernel {};
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 struct ScaleKernel {};
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 struct ZeroKernel {};
 
-template <typename R>
-inline bool out_of_domain(SyfnKind k, R w) {
+template <typename Real>
+inline bool out_of_domain(SyfnKind k, Real w) {
     switch (k) {
-        case SyfnKind::InvSqrt: return w <= R(0);
-        case SyfnKind::Sqrt: return w < R(0);
-        case SyfnKind::Inverse: return w == R(0);
+        case SyfnKind::InvSqrt: return w <= Real(0);
+        case SyfnKind::Sqrt: return w < Real(0);
+        case SyfnKind::Inverse: return w == Real(0);
         default: return false;
     }
 }
 
 // The column scale: sqrt(f(w)) for the rank-k form, f(w) otherwise; 0 out of the domain.
-template <typename R>
-inline R column_scale(SyfnKind k, R w, R weight) {
-    if (out_of_domain(k, w)) return R(0);
+template <typename Real>
+inline Real column_scale(SyfnKind k, Real w, Real weight) {
+    if (out_of_domain(k, w)) return Real(0);
     switch (k) {
-        case SyfnKind::InvSqrt: return R(1) / sycl::sqrt(sycl::sqrt(w));
+        case SyfnKind::InvSqrt: return Real(1) / sycl::sqrt(sycl::sqrt(w));
         case SyfnKind::Sqrt: return sycl::sqrt(sycl::sqrt(w));
-        case SyfnKind::Exp: return sycl::exp(w * R(0.5));
-        case SyfnKind::Inverse: return R(1) / w;
+        case SyfnKind::Exp: return sycl::exp(w * Real(0.5));
+        case SyfnKind::Inverse: return Real(1) / w;
         default: return weight;
     }
 }
 
-template <Backend B, typename T>
-void launch_info(Queue& q, const MV<T>& V, Span<float_t<T>> W, SyfnKind kind, Span<int32_t> info,
+template <Backend B, typename Scalar>
+void launch_info(Queue& q, const MV<Scalar>& V, Span<float_t<Scalar>> W, SyfnKind kind, Span<int32_t> info,
                  Span<int32_t> syev_info, const std::uint8_t* mask) {
-    using R = float_t<T>;
+    using R = float_t<Scalar>;
     const int64_t n = V.rows(), m = V.cols(), batch = V.batch_size();
     const R* wp = W.data();
     int32_t* ip = info.data();
     const int32_t* sp = syev_info.empty() ? nullptr : syev_info.data();
-    q->parallel_for<InfoKernel<B, T>>(sycl::range<1>(size_t(batch)), [=](sycl::id<1> id) {
+    q->parallel_for<InfoKernel<B, Scalar>>(sycl::range<1>(size_t(batch)), [=](sycl::id<1> id) {
         const int64_t b = int64_t(id[0]);
         if (mask && !mask[b]) return;  // I3
         if (sp && sp[b] != 0) {
@@ -71,12 +71,12 @@ void launch_info(Queue& q, const MV<T>& V, Span<float_t<T>> W, SyfnKind kind, Sp
     });
 }
 
-template <Backend B, typename T>
-Event launch_zero(Queue& q, const MV<T>& V, const MV<T>& F, const std::uint8_t* mask) {
+template <Backend B, typename Scalar>
+Event launch_zero(Queue& q, const MV<Scalar>& V, const MV<Scalar>& F, const std::uint8_t* mask) {
     const int64_t n = V.rows(), batch = V.batch_size();
-    T* fp = F.data_ptr();
+    Scalar* fp = F.data_ptr();
     const int64_t ldf = F.ld(), sf = F.stride();
-    q->parallel_for<ZeroKernel<B, T>>(sycl::range<1>(size_t(n * n * batch)), [=](sycl::id<1> id) {
+    q->parallel_for<ZeroKernel<B, Scalar>>(sycl::range<1>(size_t(n * n * batch)), [=](sycl::id<1> id) {
         const int64_t l = int64_t(id[0]), b = l / (n * n), e = l % (n * n);
         if (mask && !mask[b]) return;  // I3
         device::laset(device::ElemAt<true>{int(e % n), int(e / n)}, device::Zero{}, device::Zero{},
@@ -85,24 +85,25 @@ Event launch_zero(Queue& q, const MV<T>& V, const MV<T>& F, const std::uint8_t* 
     return q.get_event();
 }
 
-template <Backend B, typename T>
-void launch_scale(Queue& q, const MV<T>& V, Span<float_t<T>> W, SyfnFunction<float_t<T>> fn, const Core<T>& ws,
+template <Backend B, typename Scalar>
+void launch_scale(Queue& q, const MV<Scalar>& V, Span<float_t<Scalar>> W, SyfnFunction<float_t<Scalar>> fn,
+                  const Core<Scalar>& ws,
                   const std::uint8_t* mask) {
-    using R = float_t<T>;
+    using R = float_t<Scalar>;
     const int64_t n = V.rows(), m = V.cols(), batch = V.batch_size();
     const SyfnKind kind = fn.kind;
     const R* wp = W.data();
     const R* up = fn.weights.data();
     R* gp = ws.g.data();
-    q->parallel_for<WeightsKernel<B, T>>(sycl::range<1>(size_t(m * batch)), [=](sycl::id<1> id) {
+    q->parallel_for<WeightsKernel<B, Scalar>>(sycl::range<1>(size_t(m * batch)), [=](sycl::id<1> id) {
         const size_t k = id[0];
         if (mask && !mask[k / size_t(m)]) return;  // I3
         gp[k] = column_scale(kind, wp[k], kind == SyfnKind::Weights ? up[k] : R(0));
     });
-    const T* vp = V.data_ptr();
+    const Scalar* vp = V.data_ptr();
     const int64_t ldv = V.ld(), sv = V.stride();
-    T* yp = ws.y.data();
-    q->parallel_for<ScaleKernel<B, T>>(sycl::range<1>(size_t(n * m * batch)), [=](sycl::id<1> id) {
+    Scalar* yp = ws.y.data();
+    q->parallel_for<ScaleKernel<B, Scalar>>(sycl::range<1>(size_t(n * m * batch)), [=](sycl::id<1> id) {
         const int64_t l = int64_t(id[0]), b = l / (n * m), e = l % (n * m), i = e % n, j = e / n;
         if (mask && !mask[b]) return;  // I3
         device::dgmm<Side::Right>(device::ElemAt<true>{int(i), int(j)}, device::vec(gp + b * m, int(m)),

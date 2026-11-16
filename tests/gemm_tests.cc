@@ -90,7 +90,7 @@ bool reg_tile_fits_or_is_refused(Queue& ctx, const char* word, int m, int n, int
 
 // The same for a wide pin: complex<double> wide v2 64x64x16 asks for 64 KiB, over acpp's 48 KiB
 // and any 64 KiB device's budget, so the refusal is checked wherever it does not fit.
-template <typename T>
+template <typename Scalar>
 bool WideTileFitsOrIsRefused(Queue& ctx, const char* word) {
     int m = 0, n = 0, k = 0;
     if (std::sscanf(word, "wide:m=%d:n=%d:k=%d", &m, &n, &k) != 3 || !NativePinsRun(ctx)) return true;
@@ -99,8 +99,8 @@ bool WideTileFitsOrIsRefused(Queue& ctx, const char* word) {
     if (cfg == ops::gemm::wide_configs.end()) return true;
     const std::int64_t budget =
         select::describe(ctx.device(), ctx.backend(), false).slm_budget_for(cfg->threads());
-    if (ops::gemm::wide_slm_bytes<T>(*cfg) <= budget) return true;
-    expect_pin_refused<T>(ctx, word, 100, 70, 90, Transpose::NoTrans, Transpose::NoTrans);
+    if (ops::gemm::wide_slm_bytes<Scalar>(*cfg) <= budget) return true;
+    expect_pin_refused<Scalar>(ctx, word, 100, 70, 90, Transpose::NoTrans, Transpose::NoTrans);
     return false;
 }
 #define SKIP_UNLESS_WIDE_FITS(T, ctx, word) \
@@ -112,37 +112,39 @@ bool WideTileFitsOrIsRefused(Queue& ctx, const char* word) {
 // The comparisons this replaced used an absolute tolerance of tol_scale * the old vendor-comparison bound against a
 // vendor result, tighter than the relative bound at large k in float. The Slack keeps that power: factor <= 1 so
 // that factor * bound * (largest denominator over the checked items) is at most the old absolute tolerance.
-template <typename T>
+template <typename Scalar>
 constexpr double vendor_comparison_tolerance() {  // the old test_utils::tolerance vendor-comparison bound
-    if constexpr (batchlas::is_std_complex_v<T>) return std::is_same_v<batchlas::float_t<T>, float> ? 2e-5 : 2e-10;
-    else return std::is_same_v<T, float> ? 1e-5 : 1e-10;
+    if constexpr (batchlas::is_std_complex_v<Scalar>) return std::is_same_v<batchlas::float_t<Scalar>, float> ? 2e-5 : 2e-10;
+    else return std::is_same_v<Scalar, float> ? 1e-5 : 1e-10;
 }
 
-template <typename T, typename VA, typename VB, typename VC0, typename VC>
+template <typename Scalar, typename VA, typename VB, typename VC0, typename VC>
 ::testing::AssertionResult GemmMatchesDefinition(Queue& ctx, const VA& A, Transpose ta, const VB& B, Transpose tb, const VC0& C0,
-                                                 const VC& C, T alpha, T beta, int k, double tol_scale = 100) {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+                                                 const VC& C, Scalar alpha, Scalar beta, int k,
+                                                 double tol_scale = 100) {
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     const double err = MV::gemm_backward_error(ctx, A, ta, B, tb, C0, C, MV::up(alpha), MV::up(beta), C.all_items());
     const double den = MV::gemm_max_denominator(ctx, A, ta, B, tb, C0, MV::up(alpha), MV::up(beta), C.all_items());
-    const double abs_tol = vendor_comparison_tolerance<T>() * tol_scale;
+    const double abs_tol = vendor_comparison_tolerance<Scalar>() * tol_scale;
     const batchlas::verify::Slack slack{
-        std::min(1.0, abs_tol / (std::max(den, 1e-300) * batchlas::verify::bound<T>(batchlas::verify::Check::blas, k))),
+        std::min(1.0,
+                 abs_tol / (std::max(den, 1e-300) * batchlas::verify::bound<Scalar>(batchlas::verify::Check::blas, k))),
         "the old absolute tolerance against the vendor, kept"};
-    return test_utils::verify_pass<T>(batchlas::verify::Check::blas, k, err, slack);
+    return test_utils::verify_pass<Scalar>(batchlas::verify::Check::blas, k, err, slack);
 }
 
 // Small-integer data makes every product and sum exact, so the answer must be bit-exact.
-template <typename T, typename VA, typename VB, typename VC0, typename VC>
-void expect_gemm_exact(Queue& ctx, const VA& A, Transpose ta, const VB& B, Transpose tb, const VC0& C0, const VC& C, T alpha,
-                       T beta) {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar, typename VA, typename VB, typename VC0, typename VC>
+void expect_gemm_exact(Queue& ctx, const VA& A, Transpose ta, const VB& B, Transpose tb, const VC0& C0, const VC& C, Scalar alpha,
+                       Scalar beta) {
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     EXPECT_EQ(MV::gemm_backward_error(ctx, A, ta, B, tb, C0, C, MV::up(alpha), MV::up(beta)), 0.0);
 }
 
 // Item b of M over its active extent, as a single-item view (the checks take no heterogeneous view).
-template <typename T>
-auto active_item(const Matrix<T>& M, int b, int rows, int cols) {
-    return MatrixView<T, MatrixFormat::Dense>(M.data_ptr() + static_cast<std::ptrdiff_t>(b) * M.stride(), rows, cols, M.ld());
+template <typename Scalar>
+auto active_item(const Matrix<Scalar>& M, int b, int rows, int cols) {
+    return MatrixView<Scalar, MatrixFormat::Dense>(M.data_ptr() + static_cast<std::ptrdiff_t>(b) * M.stride(), rows, cols, M.ld());
 }
 
 // Everything of the parent outside the rows [r0, r0 + m) x columns [0, n) sub-block is bit for bit as it was:
@@ -199,9 +201,9 @@ void run_forced_sycl_gemm_kernel_check(Queue& ctx,
 
 }  // namespace
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct TestConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 

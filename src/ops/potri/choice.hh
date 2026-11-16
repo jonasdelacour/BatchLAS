@@ -28,9 +28,9 @@ struct Blocked {
 using PotriChoice = std::variant<Cta, Blocked>;
 
 // Tie-break order (§6.3): cta first; nb = 128 for float only. evidence: docs/perf/potri.md#potri-selection
-template <class T>
+template <class Scalar>
 constexpr auto candidates() {
-    if constexpr (std::is_same_v<T, float>)
+    if constexpr (std::is_same_v<Scalar, float>)
         return std::array<PotriChoice, 3>{Cta{}, Blocked{64}, Blocked{128}};
     else
         return std::array<PotriChoice, 2>{Cta{}, Blocked{64}};

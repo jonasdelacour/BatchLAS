@@ -38,16 +38,16 @@ struct PermutedCopyParams {
     std::pair<int32_t, int32_t> work_group_size_range = {-1, -1}; // Use default
 };
 
-template <typename T, typename K>
-Event permuted_copy(Queue& ctx, const Matrix<T, MatrixFormat::Dense>& src, const Matrix<T, MatrixFormat::Dense>& dst, const Vector<K>& indices, const PermutedCopyParams& params = {}) {
+template <typename Scalar, typename K>
+Event permuted_copy(Queue& ctx, const Matrix<Scalar, MatrixFormat::Dense>& src, const Matrix<Scalar, MatrixFormat::Dense>& dst, const Vector<K>& indices, const PermutedCopyParams& params = {}) {
     return permuted_copy(ctx, src, dst, VectorView<K>(indices), params);
 }
 
-template <typename T, typename K>
+template <typename Scalar, typename K>
 struct PermutedCopyKernel {};
 
-template <typename T, typename K>
-Event permuted_copy(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, const MatrixView<T, MatrixFormat::Dense>& dst, const VectorView<K>& indices, const PermutedCopyParams& params = {}) {
+template <typename Scalar, typename K>
+Event permuted_copy(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& src, const MatrixView<Scalar, MatrixFormat::Dense>& dst, const VectorView<K>& indices, const PermutedCopyParams& params = {}) {
     auto n = src.rows();
     auto batch_size = src.batch_size();
     if (src.inc() != 1 || dst.inc() != 1 || indices.inc() != 1) {
@@ -68,7 +68,7 @@ Event permuted_copy(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, c
         auto src_view = src.kernel_view();
         auto dst_view = dst.kernel_view();
         auto cols = src.cols();
-        batchlas::impl::parallel_for<PermutedCopyKernel<T, K>>(h, sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
+        batchlas::impl::parallel_for<PermutedCopyKernel<Scalar, K>>(h, sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
             auto gid = it.get_global_linear_id();
             for (int index = gid; index < total_work_items; index += it.get_global_range()[0]) {
                 int batch_id = index / (cols * n);
@@ -84,14 +84,14 @@ Event permuted_copy(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, c
 }
 
 // Out of place permutation
-template <typename T, typename K>
-Event permute(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& data, const MatrixView<T, MatrixFormat::Dense>& temp_storage, const VectorView<K>& indices, const PermutedCopyParams& params = {}) {
-    (void)MatrixView<T>::copy(ctx, temp_storage, data);
+template <typename Scalar, typename K>
+Event permute(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& data, const MatrixView<Scalar, MatrixFormat::Dense>& temp_storage, const VectorView<K>& indices, const PermutedCopyParams& params = {}) {
+    (void)MatrixView<Scalar>::copy(ctx, temp_storage, data);
     return permuted_copy(ctx, temp_storage, data, indices, params);
 }
 
-template <typename T, typename K>
-Event permute(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& data, const VectorView<K>& indices) {
+template <typename Scalar, typename K>
+Event permute(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& data, const VectorView<K>& indices) {
     auto n = data.rows();
     auto batch_size = data.batch_size();
     if (data.inc() != 1 || indices.inc() != 1) {
@@ -100,7 +100,7 @@ Event permute(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& data, const 
 
     ctx->submit([&](sycl::handler& h) {
         auto temp_indices = sycl::local_accessor<K, 1>(sycl::range<1>(n), h);
-        auto temp_vec = sycl::local_accessor<T, 1>(sycl::range<1>(n), h);
+        auto temp_vec = sycl::local_accessor<Scalar, 1>(sycl::range<1>(n), h);
         auto data_view = data.kernel_view();
         batchlas::impl::parallel_for(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> it) {
             auto cta = it.get_group();
@@ -152,8 +152,8 @@ Event permute(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& data, const 
     return ctx.get_event();
 }
 
-template <typename T, typename K>
-Event argsort(Queue& ctx, VectorView<T> data, VectorView<K> indices, SortOrder order, bool fill_indices) {
+template <typename Real, typename K>
+Event argsort(Queue& ctx, VectorView<Real> data, VectorView<K> indices, SortOrder order, bool fill_indices) {
     auto n = data.size();
     auto batch_size = data.batch_size();
     if (data.inc() != 1 || indices.inc() != 1) {
@@ -162,7 +162,7 @@ Event argsort(Queue& ctx, VectorView<T> data, VectorView<K> indices, SortOrder o
 
     ctx->submit([&](sycl::handler& h) {
         auto local_indices = sycl::local_accessor<K, 1>(sycl::range<1>(n), h);
-        auto local_values = sycl::local_accessor<T, 1>(sycl::range<1>(n), h);
+        auto local_values = sycl::local_accessor<Real, 1>(sycl::range<1>(n), h);
 
         batchlas::impl::parallel_for(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> it) {
             auto bid = it.get_group_linear_id();
@@ -224,33 +224,33 @@ Event argsort(Queue& ctx, VectorView<T> data, VectorView<K> indices, SortOrder o
 
 // permute() needs unit increments. A solver that sorts last calls this before its first launch:
 // a throw with its passes still in flight frees the caller's buffers under them.
-template <typename T>
-void require_sortable(const VectorView<T>& eigs) {
+template <typename Real>
+void require_sortable(const VectorView<Real>& eigs) {
     if (eigs.inc() != 1) {
         throw batchlas::invalid_argument("sort: eigenvalues must have unit increment (inc=1), got inc=" +
                                          std::to_string(eigs.inc()));
     }
 }
 
-template <typename T>
-Event sort(Queue& ctx, const VectorView<T>& eigs, const MatrixView<T, MatrixFormat::Dense>& eigvects, JobType jobz, SortOrder order, Span<std::byte> workspace) {
+template <typename Real>
+Event sort(Queue& ctx, const VectorView<Real>& eigs, const MatrixView<Real, MatrixFormat::Dense>& eigvects, JobType jobz, SortOrder order, Span<std::byte> workspace) {
     require_sortable(eigs);  // before anything is enqueued
     auto pool = BumpAllocator(workspace);
-    const VectorView<T>& eigs_unit = eigs;
+    const VectorView<Real>& eigs_unit = eigs;
     auto permutation = VectorView<int32_t>(pool.allocate<int32_t>(ctx, eigs.size() * eigs.batch_size()).data(), eigs.size(), eigs.batch_size(), 1, eigs.size());
     // (void) on an Event: deliberate. This Queue is in-order, so the next submission
     // is already ordered after this one and the Event carries nothing the caller needs.
     (void)argsort(ctx, eigs_unit, permutation, order, true);
     (void)permute(ctx, eigs, permutation);
     if (jobz == JobType::EigenVectors) {
-        auto temp_eigvects = MatrixView<T, MatrixFormat::Dense>(pool.allocate<T>(ctx, eigvects.rows() * eigvects.cols() * eigvects.batch_size()).data(), eigvects.rows(), eigvects.cols(), eigvects.rows(), eigvects.rows() * eigvects.cols(), eigvects.batch_size());
+        auto temp_eigvects = MatrixView<Real, MatrixFormat::Dense>(pool.allocate<Real>(ctx, eigvects.rows() * eigvects.cols() * eigvects.batch_size()).data(), eigvects.rows(), eigvects.cols(), eigvects.rows(), eigvects.rows() * eigvects.cols(), eigvects.batch_size());
         (void)permute(ctx, eigvects, temp_eigvects, permutation);
     }
     return ctx.get_event();
 }
 
-template <typename T>
-Event sort(Queue& ctx, Span<T> W, const MatrixView<T, MatrixFormat::Dense>& V, JobType jobz, SortOrder order, Span<std::byte> workspace) {
+template <typename Real>
+Event sort(Queue& ctx, Span<Real> W, const MatrixView<Real, MatrixFormat::Dense>& V, JobType jobz, SortOrder order, Span<std::byte> workspace) {
     const auto batch_size = V.batch_size();
     const auto n_total = W.size();
     if (batch_size <= 0 || (n_total % batch_size) != 0) {
@@ -258,15 +258,15 @@ Event sort(Queue& ctx, Span<T> W, const MatrixView<T, MatrixFormat::Dense>& V, J
     }
     const auto n = n_total / batch_size;
     // W adopts V's mask: a view rebuilt from a raw pointer starts unmasked.
-    return sort(ctx, VectorView<T>(W.data(), static_cast<int>(n), batch_size, 1, static_cast<int>(n)).with_batch_mask(V.batch_mask()),
+    return sort(ctx, VectorView<Real>(W.data(), static_cast<int>(n), batch_size, 1, static_cast<int>(n)).with_batch_mask(V.batch_mask()),
                 V, jobz, order, workspace);
 }
 
-template <typename T>
-size_t sort_buffer_size(Queue& ctx, Span<T> W, const MatrixView<T, MatrixFormat::Dense>& V, JobType jobz) {
+template <typename Real>
+size_t sort_buffer_size(Queue& ctx, Span<Real> W, const MatrixView<Real, MatrixFormat::Dense>& V, JobType jobz) {
     // Workspace used by `sort(...)` in this header:
     // - permutation indices: int32_t[n * batch]
-    // - optional temp eigenvectors matrix: T[rows * cols * batch]
+    // - optional temp eigenvectors matrix: Real[rows * cols * batch]
     //
     // Workspace used by sort is sized by (n, batch) and does not depend on any padding
     // that may exist in the underlying eigenvalue storage.
@@ -291,8 +291,8 @@ size_t sort_buffer_size(Queue& ctx, Span<T> W, const MatrixView<T, MatrixFormat:
     size_t size = 0;
     size += BumpAllocator::allocation_size<int32_t>(ctx, static_cast<size_t>(n_total));
     if (jobz == JobType::EigenVectors) {
-        size += BumpAllocator::allocation_size<T>(ctx,
-                                                  static_cast<size_t>(V.rows()) * static_cast<size_t>(V.cols()) * static_cast<size_t>(batch));
+        size += BumpAllocator::allocation_size<Real>(ctx,
+                                                     static_cast<size_t>(V.rows()) * static_cast<size_t>(V.cols()) * static_cast<size_t>(batch));
     }
     return size;
 }

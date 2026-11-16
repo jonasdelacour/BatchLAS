@@ -34,8 +34,8 @@ constexpr int kRandom = 1;
 
 // Deterministic, never near zero: no accidental structural zeros, and beta = 1
 // accumulation stays well scaled.
-template <typename T>
-T spmm_value(std::uint64_t h) {
+template <typename Scalar>
+Scalar spmm_value(std::uint64_t h) {
     const auto unit = [](std::uint64_t x) {
         x ^= x >> 33;
         x *= 0xff51afd7ed558ccdull;
@@ -44,25 +44,25 @@ T spmm_value(std::uint64_t h) {
         x ^= x >> 33;
         const double u = static_cast<double>(x >> 11) * (1.0 / 9007199254740992.0);
         const double mag = 0.25 + 0.5 * u;
-        return static_cast<batchlas::float_t<T>>((x & 1ull) ? mag : -mag);
+        return static_cast<batchlas::float_t<Scalar>>((x & 1ull) ? mag : -mag);
     };
-    if constexpr (std::is_same_v<T, std::complex<float>> ||
-                  std::is_same_v<T, std::complex<double>>) {
-        return T(unit(h), unit(h ^ 0x9e3779b97f4a7c15ull));
+    if constexpr (std::is_same_v<Scalar, std::complex<float>> ||
+                  std::is_same_v<Scalar, std::complex<double>>) {
+        return Scalar(unit(h), unit(h ^ 0x9e3779b97f4a7c15ull));
     } else {
-        return T(unit(h));
+        return Scalar(unit(h));
     }
 }
 
 // Banded CSR, EXACTLY nnz_per_row sorted entries per row: boundary rows reuse the
 // first/last band rather than being short, so nnz stays m*r and per-row work uniform.
 // Host-written straight into the USM buffers -- safe only because nothing is enqueued yet.
-template <typename T>
-Matrix<T, MatrixFormat::CSR> make_banded_csr(int m, int nnz_per_row, int batch) {
+template <typename Scalar>
+Matrix<Scalar, MatrixFormat::CSR> make_banded_csr(int m, int nnz_per_row, int batch) {
     const int r = std::clamp(nnz_per_row, 1, m);
     const int nnz = m * r;
 
-    Matrix<T, MatrixFormat::CSR> A(m, m, NonZeros{nnz}, batch);
+    Matrix<Scalar, MatrixFormat::CSR> A(m, m, NonZeros{nnz}, batch);
     auto offsets = A.row_offsets();
     auto cols = A.col_indices();
     auto vals = A.data();
@@ -80,9 +80,9 @@ Matrix<T, MatrixFormat::CSR> make_banded_csr(int m, int nnz_per_row, int batch) 
                                       static_cast<std::size_t>(i) * static_cast<std::size_t>(r) +
                                       static_cast<std::size_t>(d);
                 cols[p] = start + d;
-                vals[p] = spmm_value<T>((static_cast<std::uint64_t>(b) << 40) ^
-                                        (static_cast<std::uint64_t>(i) << 12) ^
-                                        static_cast<std::uint64_t>(start + d));
+                vals[p] = spmm_value<Scalar>((static_cast<std::uint64_t>(b) << 40) ^
+                                             (static_cast<std::uint64_t>(i) << 12) ^
+                                             static_cast<std::uint64_t>(start + d));
             }
         }
     }
@@ -90,18 +90,18 @@ Matrix<T, MatrixFormat::CSR> make_banded_csr(int m, int nnz_per_row, int batch) 
 }
 
 // RandomSparseHermitian targets a density, so nnz per row lands within one of the request.
-template <typename T>
-Matrix<T, MatrixFormat::CSR> make_random_csr(int m, int nnz_per_row, int batch) {
+template <typename Scalar>
+Matrix<Scalar, MatrixFormat::CSR> make_random_csr(int m, int nnz_per_row, int batch) {
     const float density = static_cast<float>(nnz_per_row) / static_cast<float>(m);
-    return Matrix<T, MatrixFormat::CSR>::RandomSparseHermitian(
-        m, density, batch, /*seed=*/42u, /*diagonal_boost=*/batchlas::float_t<T>(1),
+    return Matrix<Scalar, MatrixFormat::CSR>::RandomSparseHermitian(
+        m, density, batch, /*seed=*/42u, /*diagonal_boost=*/batchlas::float_t<Scalar>(1),
         /*shared_pattern=*/true);
 }
 
-template <typename T>
-Matrix<T, MatrixFormat::CSR> make_csr(int m, int nnz_per_row, int batch, int pattern) {
-    return pattern == kBanded ? make_banded_csr<T>(m, nnz_per_row, batch)
-                              : make_random_csr<T>(m, nnz_per_row, batch);
+template <typename Scalar>
+Matrix<Scalar, MatrixFormat::CSR> make_csr(int m, int nnz_per_row, int batch, int pattern) {
+    return pattern == kBanded ? make_banded_csr<Scalar>(m, nnz_per_row, batch)
+                              : make_random_csr<Scalar>(m, nnz_per_row, batch);
 }
 
 // Ideal traffic for one item, one pass over A: values plus 32-bit column indices, the row
@@ -120,49 +120,49 @@ double ideal_bytes_per_item(std::size_t elem_size, int m, int nnz, int nrhs,
 
 enum class Arm { Warm, Cold };
 
-template <typename T, Backend B, Arm A>
+template <typename Scalar, Backend B, Arm A>
 void run_spmm(minibench::State& state) {
     const int m = state.range(0);
     const int nnz_per_row = state.range(1);
     const int nrhs = state.range(2);
     const int batch = state.range(3);
     const auto transB = state.range(4) == 0 ? Transpose::NoTrans : Transpose::Trans;
-    const T beta = T(static_cast<batchlas::float_t<T>>(state.range(5)));
+    const Scalar beta = Scalar(static_cast<batchlas::float_t<Scalar>>(state.range(5)));
     const int pattern = state.range(6);
     // state.range() returns 0 for an index no sizer supplied, so arg7 -- which no sizer
     // passes -- stays NoTrans; A is square, so transA changes no extent, only which body runs.
     const auto transA = state.range(7) == 0   ? Transpose::NoTrans
                       : state.range(7) == 1   ? Transpose::Trans
                                               : Transpose::ConjTrans;
-    const T alpha = T(1);
+    const Scalar alpha = Scalar(1);
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
-    auto Amat = std::make_shared<Matrix<T, MatrixFormat::CSR>>(
-        make_csr<T>(m, nnz_per_row, batch, pattern));
+    auto Amat = std::make_shared<Matrix<Scalar, MatrixFormat::CSR>>(
+        make_csr<Scalar>(m, nnz_per_row, batch, pattern));
     // op(B) must be k x nrhs with k = m, so the stored shape flips with transB.
-    auto Bmat = std::make_shared<Matrix<T>>(
-        transB == Transpose::NoTrans ? Matrix<T>::Random(m, nrhs, false, batch)
-                                     : Matrix<T>::Random(nrhs, m, false, batch));
-    auto Cmat = std::make_shared<Matrix<T>>(Matrix<T>::Zeros(m, nrhs, batch));
+    auto Bmat = std::make_shared<Matrix<Scalar>>(
+        transB == Transpose::NoTrans ? Matrix<Scalar>::Random(m, nrhs, false, batch)
+                                     : Matrix<Scalar>::Random(nrhs, m, false, batch));
+    auto Cmat = std::make_shared<Matrix<Scalar>>(Matrix<Scalar>::Zeros(m, nrhs, batch));
 
     // The warm arm reuses these, so the lazy cuSPARSE descriptors are built once below.
-    auto Av = std::make_shared<MatrixView<T, MatrixFormat::CSR>>(Amat->view());
-    auto Bv = std::make_shared<MatrixView<T>>(Bmat->view());
-    auto Cv = std::make_shared<MatrixView<T>>(Cmat->view());
+    auto Av = std::make_shared<MatrixView<Scalar, MatrixFormat::CSR>>(Amat->view());
+    auto Bv = std::make_shared<MatrixView<Scalar>>(Bmat->view());
+    auto Cv = std::make_shared<MatrixView<Scalar>>(Cmat->view());
 
-    const std::size_t ws_size = spmm_buffer_size<B, T, MatrixFormat::CSR>(
+    const std::size_t ws_size = spmm_buffer_size<B, Scalar, MatrixFormat::CSR>(
         *q, *Av, *Bv, *Cv, alpha, beta, transA, transB);
     auto ws = std::make_shared<UnifiedVector<std::byte>>(ws_size);
 
     auto kernel_once = [q, Av, Bv, Cv, Amat, Bmat, Cmat, ws, alpha, beta, transA, transB] {
         if constexpr (A == Arm::Warm) {
-            (void)spmm<B, T, MatrixFormat::CSR>(*q, *Av, *Bv, *Cv, alpha, beta,
+            (void)spmm<B, Scalar, MatrixFormat::CSR>(*q, *Av, *Bv, *Cv, alpha, beta,
                                            transA, transB, ws->to_span());
         } else {
             // The Matrix overload builds a fresh MatrixView -- and so a fresh descriptor
             // triple that is never destroyed -- per call. Never compare a native kernel to it.
-            (void)spmm<B, T, MatrixFormat::CSR>(*q, *Amat, *Bmat, *Cmat, alpha, beta,
+            (void)spmm<B, Scalar, MatrixFormat::CSR>(*q, *Amat, *Bmat, *Cmat, alpha, beta,
                                            transA, transB, ws->to_span());
         }
     };
@@ -197,11 +197,11 @@ void run_spmm(minibench::State& state) {
 
     // The real per-item non-zero count; Matrix::nnz() with no argument is a capacity.
     const int nnz = Amat->nnz(0);
-    constexpr bool complex_type = std::is_same_v<T, std::complex<float>> ||
-                                  std::is_same_v<T, std::complex<double>>;
+    constexpr bool complex_type = std::is_same_v<Scalar, std::complex<float>> ||
+                                  std::is_same_v<Scalar, std::complex<double>>;
     const double flops = (complex_type ? 8.0 : 2.0) * static_cast<double>(nnz) *
                          static_cast<double>(nrhs);
-    const double bytes = ideal_bytes_per_item(sizeof(T), m, nnz, nrhs, state.range(5) != 0);
+    const double bytes = ideal_bytes_per_item(sizeof(Scalar), m, nnz, nrhs, state.range(5) != 0);
 
     state.SetMetric("GFLOPS", static_cast<double>(batch) * 1e-9 * flops, minibench::Rate);
     state.SetMetric("GB/s", static_cast<double>(batch) * 1e-9 * bytes, minibench::Rate);
@@ -226,20 +226,20 @@ void run_spmm(minibench::State& state) {
 
 // --------------------------------------------------------------- registered families
 
-template <typename T, Backend B>
-void BM_SPMM_Cells(minibench::State& state) { run_spmm<T, B, Arm::Warm>(state); }
+template <typename Scalar, Backend B>
+void BM_SPMM_Cells(minibench::State& state) { run_spmm<Scalar, B, Arm::Warm>(state); }
 
-template <typename T, Backend B>
-void BM_SPMM_Grid(minibench::State& state) { run_spmm<T, B, Arm::Warm>(state); }
+template <typename Scalar, Backend B>
+void BM_SPMM_Grid(minibench::State& state) { run_spmm<Scalar, B, Arm::Warm>(state); }
 
-template <typename T, Backend B>
-void BM_SPMM_Lanczos(minibench::State& state) { run_spmm<T, B, Arm::Warm>(state); }
+template <typename Scalar, Backend B>
+void BM_SPMM_Lanczos(minibench::State& state) { run_spmm<Scalar, B, Arm::Warm>(state); }
 
-template <typename T, Backend B>
-void BM_SPMM_ColdCells(minibench::State& state) { run_spmm<T, B, Arm::Cold>(state); }
+template <typename Scalar, Backend B>
+void BM_SPMM_ColdCells(minibench::State& state) { run_spmm<Scalar, B, Arm::Cold>(state); }
 
-template <typename T, Backend B>
-void BM_SPMM_ColdLanczos(minibench::State& state) { run_spmm<T, B, Arm::Cold>(state); }
+template <typename Scalar, Backend B>
+void BM_SPMM_ColdLanczos(minibench::State& state) { run_spmm<Scalar, B, Arm::Cold>(state); }
 
 // ------------------------------------------------------------------------- sizers
 

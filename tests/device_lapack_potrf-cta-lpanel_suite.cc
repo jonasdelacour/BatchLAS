@@ -41,9 +41,9 @@ using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename device::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
-template <class T> using DevT = typename sycl_device::DevMap<T>::type;
+template <class Scalar> using real_of = typename device::Arith<Scalar>::real_t;
+template <class Scalar> constexpr bool is_cplx = device::Arith<Scalar>::is_complex;
+template <class Scalar> using DevT = typename sycl_device::DevMap<Scalar>::type;
 
 constexpr int kBatch = 1024;
 constexpr int kPeriod = 3;
@@ -54,26 +54,26 @@ std::uint64_t mix(std::uint64_t x) {
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
     return x ^ (x >> 31);
 }
-template <class R> R uval(std::uint64_t i) { return static_cast<R>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
-template <class T> T val(std::uint64_t i) {
-    if constexpr (is_cplx<T>) return T(uval<real_of<T>>(2 * i), uval<real_of<T>>(2 * i + 1));
-    else return uval<T>(i);
+template <class Real> Real uval(std::uint64_t i) { return static_cast<Real>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
+template <class Scalar> Scalar val(std::uint64_t i) {
+    if constexpr (is_cplx<Scalar>) return Scalar(uval<real_of<Scalar>>(2 * i), uval<real_of<Scalar>>(2 * i + 1));
+    else return uval<Scalar>(i);
 }
-template <class T> T poison() {
-    if constexpr (is_cplx<T>) return T(real_of<T>(1e6), real_of<T>(-1e6));
-    else return T(1e6);
+template <class Scalar> Scalar poison() {
+    if constexpr (is_cplx<Scalar>) return Scalar(real_of<Scalar>(1e6), real_of<Scalar>(-1e6));
+    else return Scalar(1e6);
 }
 template <class T> bool same_bits(const T& a, const T& b) { return std::memcmp(&a, &b, sizeof(T)) == 0; }
 
-template <class T> using LD = std::conditional_t<is_cplx<T>, std::complex<long double>, long double>;
-template <class T> LD<T> wide(T v) { return LD<T>(v); }
+template <class Scalar> using LD = std::conditional_t<is_cplx<Scalar>, std::complex<long double>, long double>;
+template <class Scalar> LD<Scalar> wide(Scalar v) { return LD<Scalar>(v); }
 template <class V> V cj(V v) {
     if constexpr (std::is_same_v<V, std::complex<long double>>) return std::conj(v);
     else return v;
 }
-template <class T> real_of<T> im_of(T v) {
-    if constexpr (is_cplx<T>) return v.imag();
-    else return real_of<T>(0);
+template <class Scalar> real_of<Scalar> im_of(Scalar v) {
+    if constexpr (is_cplx<Scalar>) return v.imag();
+    else return real_of<Scalar>(0);
 }
 double rel_err(long double d, long double scale) {
     if (std::isnan(d)) return std::numeric_limits<double>::infinity();
@@ -111,12 +111,12 @@ struct Dev {
     std::vector<void*> ptrs;
 };
 
-template <class T> class DeviceLapackPotrfCtaTest : public ::testing::Test {
+template <class Scalar> class DeviceLapackPotrfCtaTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx) GTEST_SKIP() << "no SYCL device visible";
         if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "the potrf ops launch sub-group size 32";
-        if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
+        if (test_utils::lacks_fp64<Scalar>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
 };
@@ -191,38 +191,38 @@ TYPED_TEST(DeviceLapackPotrfCtaTest, ArithIsBitIdenticalToDeviceScalar) {
 // the `upper` (or lower) triangle; the other strict triangle and the pad rows hold poison, and
 // Im(diag) is nonzero (it must be ignored). Representative 1 has A(kf1, kf1) = -1000 (info
 // kf1 + 1), representative 2 has A(kf2, kf2) = NaN (info kf2 + 1). a holds the true matrices.
-template <class T> struct HpdBatch {
+template <class Scalar> struct HpdBatch {
     int n, ld;
     bool upper;
-    std::vector<T> h;
-    std::array<std::vector<LD<T>>, kPeriod> a;
+    std::vector<Scalar> h;
+    std::array<std::vector<LD<Scalar>>, kPeriod> a;
     std::array<int, kPeriod> info{};
 };
-template <class T> HpdBatch<T> make_hpd(int n, int ld, bool upper, int kf1, int kf2, std::uint64_t seed) {
-    using R = real_of<T>;
-    HpdBatch<T> m{n, ld, upper, std::vector<T>(std::size_t(kBatch) * ld * n), {}, {}};
+template <class Scalar> HpdBatch<Scalar> make_hpd(int n, int ld, bool upper, int kf1, int kf2, std::uint64_t seed) {
+    using R = real_of<Scalar>;
+    HpdBatch<Scalar> m{n, ld, upper, std::vector<Scalar>(std::size_t(kBatch) * ld * n), {}, {}};
     for (int b = 0; b < kPeriod; ++b) {
-        std::vector<LD<T>> bm(std::size_t(n) * n), am(std::size_t(n) * n);
-        for (int i = 0; i < n * n; ++i) bm[i] = wide(val<T>(seed + 1000003u * b + i));
+        std::vector<LD<Scalar>> bm(std::size_t(n) * n), am(std::size_t(n) * n);
+        for (int i = 0; i < n * n; ++i) bm[i] = wide(val<Scalar>(seed + 1000003u * b + i));
         for (int i = 0; i < n; ++i)
             for (int c = 0; c < n; ++c) {
-                LD<T> s = 0;
+                LD<Scalar> s = 0;
                 for (int k = 0; k < n; ++k) s += bm[i + k * n] * cj(bm[c + k * n]);
-                am[i + c * n] = s / static_cast<long double>(n) + (i == c ? LD<T>(1) : LD<T>(0));
+                am[i + c * n] = s / static_cast<long double>(n) + (i == c ? LD<Scalar>(1) : LD<Scalar>(0));
             }
-        for (int c = 0; c < n; ++c) am[c + c * n] = LD<T>(std::real(am[c + c * n]));
-        T* p = m.h.data() + std::size_t(b) * ld * n;
+        for (int c = 0; c < n; ++c) am[c + c * n] = LD<Scalar>(std::real(am[c + c * n]));
+        Scalar* p = m.h.data() + std::size_t(b) * ld * n;
         for (int c = 0; c < n; ++c)
-            for (int i = 0; i < ld; ++i) p[i + c * ld] = poison<T>();
+            for (int i = 0; i < ld; ++i) p[i + c * ld] = poison<Scalar>();
         for (int c = 0; c < n; ++c)
             for (int i = c; i < n; ++i) {
-                T v = static_cast<T>(am[i + c * n]);
+                Scalar v = static_cast<Scalar>(am[i + c * n]);
                 if (i == c) {
-                    if (b == 1 && c == kf1) v = T(R(-1000));
-                    if (b == 2 && c == kf2) v = T(std::numeric_limits<R>::quiet_NaN());
-                    if constexpr (is_cplx<T>) v = T(v.real(), R(0.375));
+                    if (b == 1 && c == kf1) v = Scalar(R(-1000));
+                    if (b == 2 && c == kf2) v = Scalar(std::numeric_limits<R>::quiet_NaN());
+                    if constexpr (is_cplx<Scalar>) v = Scalar(v.real(), R(0.375));
                 }
-                if (upper) p[c + i * ld] = is_cplx<T> ? static_cast<T>(cj(wide(v))) : v;
+                if (upper) p[c + i * ld] = is_cplx<Scalar> ? static_cast<Scalar>(cj(wide(v))) : v;
                 else p[i + c * ld] = v;
             }
         m.a[b] = am;
@@ -277,9 +277,9 @@ template <class T> void check_factor(const HpdBatch<T>& m, const std::vector<T>&
 // ---- CTA: lacpy_herm_lower, tri_tile_prefix_init, potf2_sg_slm, trsm_rowfrag, herk_tiles, composed
 // as potrf_cta_body does (core scal and lacpy around them), on RtGroup at both scopes ------------
 
-template <class T, class D, int NB, int TS, int WG>
-void run_cta(Dev& dev, const HpdBatch<T>& m, std::vector<T>& out, std::vector<int>& info) {
-    using R = real_of<T>;
+template <class Scalar, class D, int NB, int TS, int WG>
+void run_cta(Dev& dev, const HpdBatch<Scalar>& m, std::vector<Scalar>& out, std::vector<int>& info) {
+    using R = real_of<Scalar>;
     constexpr device::Scope kScope = WG == 32 ? device::Scope::Sub : device::Scope::Group;
     const int n = m.n, ldg = m.ld, lda = n + 2;
     const int Rt0 = ((n > NB ? n - NB : 0) + TS - 1) / TS;
@@ -330,16 +330,16 @@ void run_cta(Dev& dev, const HpdBatch<T>& m, std::vector<T>& out, std::vector<in
         else device::lacpy<device::Part::Lower>(ex, A.sub(0, 0, n, n), G);
         if (ex.leader()) inf[b] = *fail;
     });
-    out = dev.down(reinterpret_cast<const T*>(a), m.h.size());
+    out = dev.down(reinterpret_cast<const Scalar*>(a), m.h.size());
     info = dev.down(inf, kBatch);
 }
 
-template <class T, int TS, int WG> void cta_case(Dev& dev, int n, bool upper) {
-    const auto m = make_hpd<T>(n, n + 3, upper, n / 2, std::min(n - 1, 9), 11 + n);
-    std::vector<T> out, out_dev;
+template <class Scalar, int TS, int WG> void cta_case(Dev& dev, int n, bool upper) {
+    const auto m = make_hpd<Scalar>(n, n + 3, upper, n / 2, std::min(n - 1, 9), 11 + n);
+    std::vector<Scalar> out, out_dev;
     std::vector<int> info, info_dev;
-    run_cta<T, T, 8, TS, WG>(dev, m, out, info);
-    run_cta<T, DevT<T>, 8, TS, WG>(dev, m, out_dev, info_dev);
+    run_cta<Scalar, Scalar, 8, TS, WG>(dev, m, out, info);
+    run_cta<Scalar, DevT<Scalar>, 8, TS, WG>(dev, m, out_dev, info_dev);
     const std::string where = std::string("cta ") + (upper ? "upper" : "lower") + " WG=" + std::to_string(WG);
     check_factor(m, out, info, where.c_str());
     int cxdiff = 0;
@@ -498,8 +498,8 @@ TYPED_TEST(DeviceLapackPotrfCtaTest, HerkTilesLowerThroughRescaledPrefix) {
 // EdgeZeroPad> of conj_view, gemv_n_slm_bcast, frag_store_row_herm_lower, potf2_panel_rows) on a
 // Slot<> narrower than the work-group (the packed-G case) ------------------------------------
 
-template <class T, class D, int NB, int WG, int SLOT>
-void run_lpanel(Dev& dev, const HpdBatch<T>& m, std::vector<T>& out, std::vector<int>& info) {
+template <class Scalar, class D, int NB, int WG, int SLOT>
+void run_lpanel(Dev& dev, const HpdBatch<Scalar>& m, std::vector<Scalar>& out, std::vector<int>& info) {
     static_assert(WG % SLOT == 0, "whole slots");
     constexpr int G = WG / SLOT;
     const int n = m.n, ldg = m.ld, slda = n + 1;
@@ -519,7 +519,7 @@ void run_lpanel(Dev& dev, const HpdBatch<T>& m, std::vector<T>& out, std::vector
             it, tid, SLOT, true, sA, slda, sB, fail, a + std::ptrdiff_t(b) * ldg * n, ldg, n);
         if (tid == 0) inf[b] = r;
     });
-    out = dev.down(reinterpret_cast<const T*>(a), m.h.size());
+    out = dev.down(reinterpret_cast<const Scalar*>(a), m.h.size());
     info = dev.down(inf, kBatch);
 }
 

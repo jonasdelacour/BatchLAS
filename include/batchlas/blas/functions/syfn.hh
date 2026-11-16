@@ -58,34 +58,34 @@ struct SyfnFunction {
 // Signature aliases for explicit instantiation (BATCHLAS_INSTANTIATE in
 // src/util/template-instantiations.hh); keep in sync with the declarations below.
 namespace sig {
-template <typename T>
+template <typename Scalar>
 using syfn = Event(Queue&,
-                   const MatrixView<T, MatrixFormat::Dense>&,
-                   const MatrixView<T, MatrixFormat::Dense>&,
-                   SyfnFunction<typename base_type<T>::type>,
+                   const MatrixView<Scalar, MatrixFormat::Dense>&,
+                   const MatrixView<Scalar, MatrixFormat::Dense>&,
+                   SyfnFunction<typename base_type<Scalar>::type>,
                    Uplo, Span<std::byte>, Span<int32_t>);
 
-template <typename T>
+template <typename Scalar>
 using syfn_buffer_size = size_t(Queue&,
-                                const MatrixView<T, MatrixFormat::Dense>&,
-                                const MatrixView<T, MatrixFormat::Dense>&,
-                                SyfnFunction<typename base_type<T>::type>,
+                                const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                SyfnFunction<typename base_type<Scalar>::type>,
                                 Uplo);
 
-template <typename T>
+template <typename Scalar>
 using syfn_from_eigen = Event(Queue&,
-                              const MatrixView<T, MatrixFormat::Dense>&,
-                              Span<typename base_type<T>::type>,
-                              const MatrixView<T, MatrixFormat::Dense>&,
-                              SyfnFunction<typename base_type<T>::type>,
+                              const MatrixView<Scalar, MatrixFormat::Dense>&,
+                              Span<typename base_type<Scalar>::type>,
+                              const MatrixView<Scalar, MatrixFormat::Dense>&,
+                              SyfnFunction<typename base_type<Scalar>::type>,
                               Span<std::byte>, Span<int32_t>);
 
-template <typename T>
+template <typename Scalar>
 using syfn_from_eigen_buffer_size = size_t(Queue&,
-                                           const MatrixView<T, MatrixFormat::Dense>&,
-                                           Span<typename base_type<T>::type>,
-                                           const MatrixView<T, MatrixFormat::Dense>&,
-                                           SyfnFunction<typename base_type<T>::type>);
+                                           const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                           Span<typename base_type<Scalar>::type>,
+                                           const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                           SyfnFunction<typename base_type<Scalar>::type>);
 }  // namespace sig
 
 namespace detail {
@@ -99,9 +99,9 @@ namespace detail {
 /// @param[in] fn  the function, and its weights for SyfnKind::Weights
 /// @param[in] m   eigenvalues per item: \f$n\f$ for syfn(), `V.cols()` for syfn_from_eigen()
 /// @throws batchlas::invalid_argument if any check fails
-template <typename T, typename Real>
-inline void syfn_check_common(const char* op, const MatrixView<T, MatrixFormat::Dense>& X,
-                              const MatrixView<T, MatrixFormat::Dense>& F, SyfnFunction<Real> fn, int64_t m) {
+template <typename Scalar, typename Real>
+inline void syfn_check_common(const char* op, const MatrixView<Scalar, MatrixFormat::Dense>& X,
+                              const MatrixView<Scalar, MatrixFormat::Dense>& F, SyfnFunction<Real> fn, int64_t m) {
     const std::string o(op);
     if (X.is_heterogeneous() || F.is_heterogeneous()) {
         throw batchlas::invalid_argument(o + ": heterogeneous batches are not supported");
@@ -128,22 +128,22 @@ inline void syfn_check_common(const char* op, const MatrixView<T, MatrixFormat::
 /// @brief Address span of the storage a view addresses over its whole batch.
 /// @param[in] X  the view; nothing is dereferenced
 /// @return `{first element, one past the last}` as addresses, or `{0, 0}` when X addresses no element
-template <typename T>
-inline std::pair<std::uintptr_t, std::uintptr_t> syfn_storage_span(const MatrixView<T, MatrixFormat::Dense>& X) {
+template <typename Scalar>
+inline std::pair<std::uintptr_t, std::uintptr_t> syfn_storage_span(const MatrixView<Scalar, MatrixFormat::Dense>& X) {
     if (X.rows() == 0 || X.cols() == 0 || X.batch_size() == 0) return {0, 0};
     const auto lo = reinterpret_cast<std::uintptr_t>(X.data_ptr());
     const size_t last = size_t(X.batch_size() - 1) * size_t(X.stride()) + size_t(X.cols() - 1) * size_t(X.ld()) +
                         size_t(X.rows());
-    return {lo, lo + last * sizeof(T)};
+    return {lo, lo + last * sizeof(Scalar)};
 }
 
 /// @brief Whether the storage spans of two views intersect (see syfn_storage_span()).
 /// @param[in] X  first view; nothing is dereferenced
 /// @param[in] Y  second view; nothing is dereferenced
 /// @return true when both spans are nonempty and overlap
-template <typename T>
-inline bool syfn_storage_overlaps(const MatrixView<T, MatrixFormat::Dense>& X,
-                                  const MatrixView<T, MatrixFormat::Dense>& Y) {
+template <typename Scalar>
+inline bool syfn_storage_overlaps(const MatrixView<Scalar, MatrixFormat::Dense>& X,
+                                  const MatrixView<Scalar, MatrixFormat::Dense>& Y) {
     const auto [xl, xh] = syfn_storage_span(X);
     const auto [yl, yh] = syfn_storage_span(Y);
     return xl != xh && yl != yh && xl < yh && yl < xh;
@@ -160,9 +160,9 @@ inline bool syfn_storage_overlaps(const MatrixView<T, MatrixFormat::Dense>& X,
 /// @param[in] uplo  triangle of A that holds the matrix
 /// @throws batchlas::invalid_argument if any check fails
 /// @ingroup api_eigen_lowlevel
-template <typename T>
-inline void syfn_validate_params(const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& F,
-                                 SyfnFunction<typename base_type<T>::type> fn, Uplo uplo) {
+template <typename Scalar>
+inline void syfn_validate_params(const MatrixView<Scalar, MatrixFormat::Dense>& A, const MatrixView<Scalar, MatrixFormat::Dense>& F,
+                                 SyfnFunction<typename base_type<Scalar>::type> fn, Uplo uplo) {
     if (A.rows() != A.cols()) {
         throw batchlas::invalid_argument("syfn: A must be square, got " + std::to_string(A.rows()) + "x" +
                                          std::to_string(A.cols()));
@@ -185,11 +185,11 @@ inline void syfn_validate_params(const MatrixView<T, MatrixFormat::Dense>& A, co
 /// @param[in] fn           the function, and its weights for SyfnKind::Weights
 /// @throws batchlas::invalid_argument if any check fails
 /// @ingroup api_eigen_lowlevel
-template <typename T>
-inline void syfn_from_eigen_validate_params(const MatrixView<T, MatrixFormat::Dense>& V,
-                                            Span<typename base_type<T>::type> eigenvalues,
-                                            const MatrixView<T, MatrixFormat::Dense>& F,
-                                            SyfnFunction<typename base_type<T>::type> fn) {
+template <typename Scalar>
+inline void syfn_from_eigen_validate_params(const MatrixView<Scalar, MatrixFormat::Dense>& V,
+                                            Span<typename base_type<Scalar>::type> eigenvalues,
+                                            const MatrixView<Scalar, MatrixFormat::Dense>& F,
+                                            SyfnFunction<typename base_type<Scalar>::type> fn) {
     if (V.cols() > V.rows()) {
         throw batchlas::invalid_argument("syfn_from_eigen: V has more columns (" + std::to_string(V.cols()) +
                                          ") than rows (" + std::to_string(V.rows()) + ")");
@@ -219,7 +219,7 @@ inline void syfn_from_eigen_validate_params(const MatrixView<T, MatrixFormat::De
 ///
 /// Asynchronous: F and @p info are readable after the returned event is waited on.
 /// @tparam B  backend
-/// @tparam T  float, double, std::complex<float> or std::complex<double>
+/// @tparam Scalar  float, double, std::complex<float> or std::complex<double>
 /// @param[in]  ctx       queue the work is enqueued on
 /// @param[in]  A         batch of \f$n \times n\f$ Hermitian matrices; only the @p uplo triangle is read; A is not modified unless @p F is A
 /// @param[out] F         batch of \f$n \times n\f$ results \f$f(A)\f$, written in full; may be A
@@ -236,11 +236,11 @@ inline void syfn_from_eigen_validate_params(const MatrixView<T, MatrixFormat::De
 /// @throws batchlas::workspace_error if @p workspace is too short
 /// @throws batchlas::NoRouteError if syev(), herk()/syrk() or gemm() has no route (vendor-free CPU)
 /// @ingroup api_eigen
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event syfn(Queue& ctx,
-                        const MatrixView<T, MatrixFormat::Dense>& A,
-                        const MatrixView<T, MatrixFormat::Dense>& F,
-                        SyfnFunction<typename base_type<T>::type> fn,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& F,
+                        SyfnFunction<typename base_type<Scalar>::type> fn,
                         Uplo uplo,
                         Span<std::byte> workspace,
                         Span<int32_t> info);
@@ -255,11 +255,11 @@ BATCHLAS_API Event syfn(Queue& ctx,
 /// @throws batchlas::invalid_argument if syfn_validate_params() rejects the operands
 /// @throws batchlas::NoRouteError if syev() has no route (it sizes syev's workspace; vendor-free CPU)
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t syfn_buffer_size(Queue& ctx,
-                                     const MatrixView<T, MatrixFormat::Dense>& A,
-                                     const MatrixView<T, MatrixFormat::Dense>& F,
-                                     SyfnFunction<typename base_type<T>::type> fn,
+                                     const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                     const MatrixView<Scalar, MatrixFormat::Dense>& F,
+                                     SyfnFunction<typename base_type<Scalar>::type> fn,
                                      Uplo uplo);
 
 /// @brief Batched \f$ F = V \operatorname{diag}(f(w)) V^H \f$ from given eigenpairs.
@@ -273,7 +273,7 @@ BATCHLAS_API size_t syfn_buffer_size(Queue& ctx,
 ///
 /// Asynchronous: F and @p info are readable after the returned event is waited on.
 /// @tparam B  backend
-/// @tparam T  float, double, std::complex<float> or std::complex<double>
+/// @tparam Scalar  float, double, std::complex<float> or std::complex<double>
 /// @param[in]  ctx         queue the work is enqueued on
 /// @param[in]  V           batch of \f$n \times m\f$ eigenvectors; read only
 /// @param[in]  eigenvalues \f$m\f$ real values \f$w_j\f$ per item, packed (\f$m \cdot \mathrm{batch}\f$); any order
@@ -286,12 +286,12 @@ BATCHLAS_API size_t syfn_buffer_size(Queue& ctx,
 ///         weights are host memory on a GPU queue
 /// @throws batchlas::workspace_error if @p workspace is too short
 /// @ingroup api_eigen
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event syfn_from_eigen(Queue& ctx,
-                                   const MatrixView<T, MatrixFormat::Dense>& V,
-                                   Span<typename base_type<T>::type> eigenvalues,
-                                   const MatrixView<T, MatrixFormat::Dense>& F,
-                                   SyfnFunction<typename base_type<T>::type> fn,
+                                   const MatrixView<Scalar, MatrixFormat::Dense>& V,
+                                   Span<typename base_type<Scalar>::type> eigenvalues,
+                                   const MatrixView<Scalar, MatrixFormat::Dense>& F,
+                                   SyfnFunction<typename base_type<Scalar>::type> fn,
                                    Span<std::byte> workspace,
                                    Span<int32_t> info);
 
@@ -304,12 +304,12 @@ BATCHLAS_API Event syfn_from_eigen(Queue& ctx,
 /// @return workspace size in bytes
 /// @throws batchlas::invalid_argument if syfn_from_eigen_validate_params() rejects the operands
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t syfn_from_eigen_buffer_size(Queue& ctx,
-                                                const MatrixView<T, MatrixFormat::Dense>& V,
-                                                Span<typename base_type<T>::type> eigenvalues,
-                                                const MatrixView<T, MatrixFormat::Dense>& F,
-                                                SyfnFunction<typename base_type<T>::type> fn);
+                                                const MatrixView<Scalar, MatrixFormat::Dense>& V,
+                                                Span<typename base_type<Scalar>::type> eigenvalues,
+                                                const MatrixView<Scalar, MatrixFormat::Dense>& F,
+                                                SyfnFunction<typename base_type<Scalar>::type> fn);
 
 BATCHLAS_DISPATCH_ON_QUEUE(syfn)
 BATCHLAS_DISPATCH_ON_QUEUE(syfn_buffer_size)

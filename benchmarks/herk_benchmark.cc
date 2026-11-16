@@ -18,16 +18,16 @@ namespace {
 // syrk_benchmark so the two families read on the same scale. The GEMM route
 // does twice that arithmetic -- it computes both triangles of the product and
 // keeps one -- which is exactly what the rate is meant to expose.
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_HERK(minibench::State& state) {
-    using real_t = typename base_type<T>::type;
+    using real_t = typename base_type<Scalar>::type;
     const size_t n = state.range(0);
     const size_t k = state.range(1);
     const size_t batch = state.range(3);
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    auto A = Matrix<T>::Random(n, k, false, batch);
-    auto C = Matrix<T>::Random(n, n, false, batch);
+    auto A = Matrix<Scalar>::Random(n, k, false, batch);
+    auto C = Matrix<Scalar>::Random(n, n, false, batch);
 
     state.SetKernel(q,
                     std::move(A),

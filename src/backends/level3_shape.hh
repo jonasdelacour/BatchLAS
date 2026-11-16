@@ -48,11 +48,11 @@ inline void check_batch(const char* op, int batch_a, int batch_b, int batch_c) {
 
 // symm / hemm / trmm: C <- alpha * A * B or alpha * B * A, with A square and B
 // and C both m x n. Check order (square, batch, shapes) is part of the contract.
-template <typename E, typename T>
+template <typename E, typename Scalar>
 inline ProductShape validate_product(const char* op,
-                                     const MatrixView<T, MatrixFormat::Dense>& A,
-                                     const MatrixView<T, MatrixFormat::Dense>& B,
-                                     const MatrixView<T, MatrixFormat::Dense>& C,
+                                     const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                     const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                                     const MatrixView<Scalar, MatrixFormat::Dense>& C,
                                      Side side) {
     if (A.rows() != A.cols()) {
         throw E(std::string(op) + ": A must be square");
@@ -72,10 +72,10 @@ inline ProductShape validate_product(const char* op,
 // syrk / herk: C <- alpha * op(A) * op(A)^T-or-^H + beta * C, C square.
 //
 // `hermitian` rejects Transpose::Trans: A * A^T would be complex-symmetric.
-template <typename E, typename T>
+template <typename E, typename Scalar>
 inline RankShape validate_rank_k(const char* op,
-                                 const MatrixView<T, MatrixFormat::Dense>& A,
-                                 const MatrixView<T, MatrixFormat::Dense>& C,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& C,
                                  Transpose transA,
                                  bool hermitian) {
     if (C.rows() != C.cols()) {
@@ -99,11 +99,11 @@ inline RankShape validate_rank_k(const char* op,
 
 // syr2k / her2k: as the rank-k form, with B carrying the second term and
 // required to have op(A)'s shape.
-template <typename E, typename T>
+template <typename E, typename Scalar>
 inline RankShape validate_rank_2k(const char* op,
-                                  const MatrixView<T, MatrixFormat::Dense>& A,
-                                  const MatrixView<T, MatrixFormat::Dense>& B,
-                                  const MatrixView<T, MatrixFormat::Dense>& C,
+                                  const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                  const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                                  const MatrixView<Scalar, MatrixFormat::Dense>& C,
                                   Transpose transA,
                                   bool hermitian) {
     if (C.rows() != C.cols()) {

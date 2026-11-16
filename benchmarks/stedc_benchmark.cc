@@ -38,7 +38,7 @@ void StedcBenchSizesNetlib(Benchmark* b) {
 }
 
 // Batched STEDC benchmark
-template <typename T, Backend B>
+template <typename Real, Backend B>
 void BM_STEDC(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
@@ -53,10 +53,10 @@ void BM_STEDC(minibench::State& state) {
     const auto algorithm = static_cast<StedcAlgorithm>(state.range(6));
     JobType jobz = JobType::EigenVectors;
 
-    auto diags = Vector<T>::random(n, batch);
-    auto off_diags = Vector<T>::random(n - 1, batch);
+    auto diags = Vector<Real>::random(n, batch);
+    auto off_diags = Vector<Real>::random(n - 1, batch);
 
-    StedcParams<T> params;
+    StedcParams<Real> params;
     params.recursion_threshold = rec_threshold;
     params.merge_variant = merge_variant;
     params.secular_threads_per_root = threads_per_root;
@@ -64,8 +64,8 @@ void BM_STEDC(minibench::State& state) {
     params.algorithm = algorithm;
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    auto eigvals = Vector<T>::zeros(n, batch);
-    auto eigvects = Matrix<T>::Identity(n, batch);
+    auto eigvals = Vector<Real>::zeros(n, batch);
+    auto eigvects = Matrix<Real>::Identity(n, batch);
     UnifiedVector<std::byte> ws(stedc_buffer_size(*q, n, batch, jobz, params));
 
     auto kernel = [q](auto& diags,
@@ -73,11 +73,11 @@ void BM_STEDC(minibench::State& state) {
                             auto& eigvals,
                             auto& ws,
                             JobType jobz,
-                            StedcParams<T> params,
+                            StedcParams<Real> params,
                             auto& eigvects) {
-        auto d = static_cast<VectorView<T>>(diags);
-        auto e = static_cast<VectorView<T>>(off_diags);
-        auto w = static_cast<VectorView<T>>(eigvals);
+        auto d = static_cast<VectorView<Real>>(diags);
+        auto e = static_cast<VectorView<Real>>(off_diags);
+        auto w = static_cast<VectorView<Real>>(eigvals);
         auto Z = eigvects.view();
         return stedc(*q, d, e, w, ws.to_span(), jobz, params, Z);
     };

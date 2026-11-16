@@ -20,13 +20,13 @@
 
 namespace test_support {
 
-template <typename T>
-using MV = batchlas::MatrixView<T, batchlas::MatrixFormat::Dense>;
+template <typename Scalar>
+using MV = batchlas::MatrixView<Scalar, batchlas::MatrixFormat::Dense>;
 
 /// The typed-test configuration test_utils::backend_types and BatchLASTest expect.
-template <typename T, batchlas::Backend B>
+template <typename Scalar, batchlas::Backend B>
 struct Config {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr batchlas::Backend BackendVal = B;
 };
 
@@ -38,18 +38,18 @@ bool same_bits(const T& a, const T& b) {
 }
 
 /// The one poison: in range, large and finite (a kernel consumes it rather than discarding it),
-/// with a nonzero imaginary part for complex T.
-template <typename T>
-T poison() {
-    return MV<T>::make(9.0e3, -7.0e3);
+/// with a nonzero imaginary part for complex Scalar.
+template <typename Scalar>
+Scalar poison() {
+    return MV<Scalar>::make(9.0e3, -7.0e3);
 }
 
 /// rows x cols items at ld = rows + ld_pad and stride ld * cols + gap, every element poison.
-template <typename T>
-batchlas::Matrix<T> padded(int rows, int cols, int batch, int ld_pad = 3, int gap = 5) {
+template <typename Scalar>
+batchlas::Matrix<Scalar> padded(int rows, int cols, int batch, int ld_pad = 3, int gap = 5) {
     const int ld = rows + ld_pad;
-    batchlas::Matrix<T> m(rows, cols, batch, ld, ld * cols + gap);
-    std::fill_n(m.data_ptr(), static_cast<std::size_t>(m.stride()) * batch, poison<T>());
+    batchlas::Matrix<Scalar> m(rows, cols, batch, ld, ld * cols + gap);
+    std::fill_n(m.data_ptr(), static_cast<std::size_t>(m.stride()) * batch, poison<Scalar>());
     return m;
 }
 
@@ -73,9 +73,9 @@ struct Live {
 
 /// Copies src's elements inside `live` into dst; item b from src's item b, or from item 0 for
 /// every b when src holds one item (the saturating-batch shape). The rest of dst is untouched.
-template <typename T>
-void store(const MV<T>& dst, const MV<T>& src, Live live = Live::block()) {
-    T* p = dst.data_ptr();
+template <typename Scalar>
+void store(const MV<Scalar>& dst, const MV<Scalar>& src, Live live = Live::block()) {
+    Scalar* p = dst.data_ptr();
     for (int b = 0; b < dst.batch_size(); ++b)
         for (int j = 0; j < dst.cols(); ++j)
             for (int i = 0; i < dst.rows(); ++i)
@@ -86,29 +86,30 @@ void store(const MV<T>& dst, const MV<T>& src, Live live = Live::block()) {
 
 /// Writes the poison everywhere in dst's storage outside `live`: the other triangle, the ld pads
 /// and the item gaps (after an upstream call that may have written them).
-template <typename T>
-void poison_outside(const MV<T>& dst, Live live) {
-    T* p = dst.data_ptr();
+template <typename Scalar>
+void poison_outside(const MV<Scalar>& dst, Live live) {
+    Scalar* p = dst.data_ptr();
     for (int b = 0; b < dst.batch_size(); ++b)
         for (int o = 0; o < dst.stride(); ++o)
             if (!live.contains(o % dst.ld(), o / dst.ld(), dst.rows(), dst.cols()))
-                p[static_cast<std::size_t>(b) * dst.stride() + o] = poison<T>();
+                p[static_cast<std::size_t>(b) * dst.stride() + o] = poison<Scalar>();
 }
 
 /// The whole Hermitian (real: symmetric) matrix of v's uplo triangle per item, packed. The diagonal
 /// is taken as stored, so a non-real one still reaches a residual; `real_diagonal` drops its
 /// imaginary part instead (an op's output whose diagonal carries rounding-level imaginary parts).
-template <typename T>
-batchlas::Matrix<T> hermitian(const MV<T>& v, batchlas::Uplo uplo, bool real_diagonal = false) {
-    batchlas::Matrix<T> h(v.rows(), v.cols(), v.batch_size());
+template <typename Scalar>
+batchlas::Matrix<Scalar> hermitian(const MV<Scalar>& v, batchlas::Uplo uplo, bool real_diagonal = false) {
+    batchlas::Matrix<Scalar> h(v.rows(), v.cols(), v.batch_size());
     const Live own = Live::triangle(uplo);
     for (int b = 0; b < v.batch_size(); ++b)
         for (int j = 0; j < v.cols(); ++j)
             for (int i = 0; i < v.rows(); ++i)
-                h(i, j, b) = own.contains(i, j, v.rows(), v.cols()) ? T(v(i, j, b)) : MV<T>::conj(T(v(j, i, b)));
+                h(i, j, b) = own.contains(i, j, v.rows(),
+                                          v.cols()) ? Scalar(v(i, j, b)) : MV<Scalar>::conj(Scalar(v(j, i, b)));
     if (real_diagonal)
         for (int b = 0; b < v.batch_size(); ++b)
-            for (int i = 0; i < std::min(v.rows(), v.cols()); ++i) h(i, i, b) = MV<T>::make(std::real(T(h(i, i, b))), 0.0);
+            for (int i = 0; i < std::min(v.rows(), v.cols()); ++i) h(i, i, b) = MV<Scalar>::make(std::real(Scalar(h(i, i, b))), 0.0);
     return h;
 }
 
@@ -122,10 +123,11 @@ inline std::vector<int> items_or_all(std::span<const int> items, int batch) {
     return all;
 }
 
-template <typename T>
-::testing::AssertionResult first_write(const MV<T>& got, Live live, const T* ref, std::span<const int> items) {
-    const T* p = got.data_ptr();
-    const T bad = poison<T>();
+template <typename Scalar>
+::testing::AssertionResult first_write(const MV<Scalar>& got, Live live, const Scalar* ref,
+                                       std::span<const int> items) {
+    const Scalar* p = got.data_ptr();
+    const Scalar bad = poison<Scalar>();
     for (int b : items_or_all(items, got.batch_size()))
         for (int o = 0; o < got.stride(); ++o) {
             const int i = o % got.ld(), j = o / got.ld();
@@ -141,14 +143,14 @@ template <typename T>
 
 /// Every element of got's storage (stride() per item) outside `live` still holds the poison, bit
 /// for bit, over `items` (empty: all); the failure names the first write.
-template <typename T>
-::testing::AssertionResult unwritten_outside(const MV<T>& got, Live live, std::span<const int> items = {}) {
-    return detail::first_write(got, live, static_cast<const T*>(nullptr), items);
+template <typename Scalar>
+::testing::AssertionResult unwritten_outside(const MV<Scalar>& got, Live live, std::span<const int> items = {}) {
+    return detail::first_write(got, live, static_cast<const Scalar*>(nullptr), items);
 }
 
 /// The same against a snapshot `before` in got's layout (a clone() taken before the call).
-template <typename T>
-::testing::AssertionResult unwritten_outside(const MV<T>& got, Live live, const MV<T>& before, std::span<const int> items = {}) {
+template <typename Scalar>
+::testing::AssertionResult unwritten_outside(const MV<Scalar>& got, Live live, const MV<Scalar>& before, std::span<const int> items = {}) {
     if (before.ld() != got.ld() || before.stride() != got.stride() || before.batch_size() != got.batch_size())
         return ::testing::AssertionFailure() << "the snapshot's layout differs from the storage's";
     return detail::first_write(got, live, before.data_ptr(), items);
@@ -156,8 +158,8 @@ template <typename T>
 
 /// Item b of got bit-identical to item b of want over the whole stride, for each of `items`
 /// (empty: all): the item-against-a-clean-batch comparison.
-template <typename T>
-::testing::AssertionResult items_bit_identical_to(const MV<T>& got, const MV<T>& want, std::span<const int> items = {}) {
+template <typename Scalar>
+::testing::AssertionResult items_bit_identical_to(const MV<Scalar>& got, const MV<Scalar>& want, std::span<const int> items = {}) {
     if (want.ld() != got.ld() || want.stride() != got.stride() || want.batch_size() < got.batch_size())
         return ::testing::AssertionFailure() << "the reference's layout differs from the storage's";
     const std::size_t s = static_cast<std::size_t>(got.stride());
@@ -170,8 +172,8 @@ template <typename T>
 
 /// Every item of v bit-identical to item `ref` over the whole stride (a saturating batch of
 /// identical inputs: a race shows as a differing item).
-template <typename T>
-::testing::AssertionResult items_bit_identical(const MV<T>& v, int ref = 0) {
+template <typename Scalar>
+::testing::AssertionResult items_bit_identical(const MV<Scalar>& v, int ref = 0) {
     if (ref < 0 || ref >= v.batch_size()) return ::testing::AssertionFailure() << "reference item " << ref << " outside the batch";
     const std::size_t s = static_cast<std::size_t>(v.stride());
     for (int b = 0; b < v.batch_size(); ++b)

@@ -25,18 +25,18 @@ namespace {
 
 namespace HM = ops::hemm;
 
-template <typename T>
+template <typename Scalar>
 struct HemmProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     int m, n, batch, lda, ldb;
     std::size_t sa, sb;
-    T alpha, beta;
-    UnifiedVector<T> A, B, C0, C;
+    Scalar alpha, beta;
+    UnifiedVector<Scalar> A, B, C0, C;
 
     HemmProblem(Queue& q_, int m_, int n_, int batch_, int pad)
         : q(q_), m(m_), n(n_), batch(batch_), lda(m_ + pad), ldb(m_ + pad), sa(std::size_t(lda) * std::size_t(m_)),
-          sb(std::size_t(ldb) * std::size_t(n_)), alpha(T(1.25, -0.5)), beta(T(0.75, 0.25)),
+          sb(std::size_t(ldb) * std::size_t(n_)), alpha(Scalar(1.25, -0.5)), beta(Scalar(0.75, 0.25)),
           A(sa * std::size_t(batch_)), B(sb * std::size_t(batch_)), C0(sb * std::size_t(batch_)),
           C(sb * std::size_t(batch_)) {
         (void)view(A, m, m, lda, sa).fill_random(q, false, 5051);
@@ -45,12 +45,13 @@ struct HemmProblem {
         q.wait();
         for (int b = 0; b < batch; ++b)
             for (int c = 0; c < m; ++c) {
-                T* col = A.data() + std::size_t(b) * sa + std::size_t(c) * std::size_t(lda);
-                col[c] = T(col[c].real(), 1e3);
-                for (int r = 0; r < c; ++r) col[r] = T(1e6, -1e6);
+                Scalar* col = A.data() + std::size_t(b) * sa + std::size_t(c) * std::size_t(lda);
+                col[c] = Scalar(col[c].real(), 1e3);
+                for (int r = 0; r < c; ++r) col[r] = Scalar(1e6, -1e6);
             }
     }
-    MV view(UnifiedVector<T>& v, int r, int c, int ld, std::size_t s) { return MV(v.data(), r, c, ld, int(s), batch); }
+    MV view(UnifiedVector<Scalar>& v, int r, int c, int ld,
+            std::size_t s) { return MV(v.data(), r, c, ld, int(s), batch); }
     void reset() {  // beta != 0 accumulates into C
         (void)MV::copy(q, view(C, m, n, ldb, sb), view(C0, m, n, ldb, sb));
         q.wait();
@@ -62,16 +63,16 @@ struct HemmProblem {
     }
     void clear_info() {}
     void run(Span<std::byte>) {
-        (void)hemm<kBackend, T>(q, view(A, m, m, lda, sa), view(B, m, n, ldb, sb), view(C, m, n, ldb, sb), alpha,
-                                beta, Side::Left, Uplo::Lower);
+        (void)hemm<kBackend, Scalar>(q, view(A, m, m, lda, sa), view(B, m, n, ldb, sb), view(C, m, n, ldb, sb), alpha,
+                                     beta, Side::Left, Uplo::Lower);
         q.wait();
     }
     std::pair<double, int> verify() {
         const MV av = view(A, m, m, lda, sa);
         const auto items = av.default_items();
-        auto a = av.template astype<T>(items);
-        auto b = view(B, m, n, ldb, sb).template astype<T>(items), c0 = view(C0, m, n, ldb, sb).template astype<T>(items),
-             c = view(C, m, n, ldb, sb).template astype<T>(items);
+        auto a = av.template astype<Scalar>(items);
+        auto b = view(B, m, n, ldb, sb).template astype<Scalar>(items), c0 = view(C0, m, n, ldb, sb).template astype<Scalar>(items),
+             c = view(C, m, n, ldb, sb).template astype<Scalar>(items);
         (void)a.hermitize(q, Uplo::Lower);
         q.wait();
         const Transpose nt = Transpose::NoTrans;

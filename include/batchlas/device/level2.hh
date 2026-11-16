@@ -31,10 +31,10 @@ template <class Alg, class Default> using pick_t = std::conditional_t<std::is_vo
 // forms acc * alpha first (then beta's term as a One-alpha store).
 template <class S> inline constexpr bool is_scalar_value_v = false;
 template <class T> inline constexpr bool is_scalar_value_v<Scalar<T>> = true;
-template <class Shape, class Ops, Side AlphaSide, class AS, class T, class BS, class Ref>
-BATCHLAS_DEVICE_INLINE void gemv_put(AS alpha, T acc, BS beta, Ref&& y) {
+template <class Shape, class Ops, Side AlphaSide, class AS, class Scalar, class BS, class Ref>
+BATCHLAS_DEVICE_INLINE void gemv_put(AS alpha, Scalar acc, BS beta, Ref&& y) {
     if constexpr (AlphaSide == Side::Right && is_scalar_value_v<AS>) {
-        store_epi<Shape, Ops>(One{}, arith_t<Ops, T>::mul(acc, static_cast<T>(alpha.v)), beta, y);
+        store_epi<Shape, Ops>(One{}, arith_t<Ops, Scalar>::mul(acc, static_cast<Scalar>(alpha.v)), beta, y);
     } else {
         store_epi<Shape, Ops>(alpha, acc, beta, y);
     }
@@ -260,25 +260,27 @@ BATCHLAS_DEVICE_INLINE void ger(const Ex& ex, AS alpha, const X& x, const Y& y, 
     geru<Alg, Ops>(ex, alpha, x, y, a);
 }
 // TR: Trans a[j] += xr alpha y(j) (ger), ConjTrans a[j] += xr alpha conj(y(j)) (gerc).
-template <Transpose TR = Transpose::Trans, class Ops = arith::Explicit, class AS, class T, class Y, int N>
-BATCHLAS_DEVICE_INLINE void ger_row(AS alpha_, const T& xr, const Y& y, Frag<T, N, RowFrag>& arow, int live = N) {
+template <Transpose TR = Transpose::Trans, class Ops = arith::Explicit, class AS, class Scalar, class Y, int N>
+BATCHLAS_DEVICE_INLINE void ger_row(AS alpha_, const Scalar& xr, const Y& y, Frag<Scalar, N, RowFrag>& arow,
+                                    int live = N) {
     static_assert(TR != Transpose::NoTrans, "ger_row: TR is Trans (x y^T) or ConjTrans (x y^H)");
     constexpr bool conj = TR == Transpose::ConjTrans;
-    using Ar = arith_t<Ops, T>;
+    using Ar = arith_t<Ops, Scalar>;
     const auto alpha = as_tag(alpha_);
 #pragma unroll
     for (int j = 0; j < N; ++j) {
         if (j >= live) continue;
-        const T yj = tag_mul(alpha, conj ? Ar::conj(static_cast<T>(y(j))) : static_cast<T>(y(j)));
+        const Scalar yj = tag_mul(alpha, conj ? Ar::conj(static_cast<Scalar>(y(j))) : static_cast<Scalar>(y(j)));
         Ar::mac(arow[j], xr, yj);
     }
 }
 
 // Register-tile form on the Thread executor: A := x y^T + A, one Ops::mac per entry, row by row
 // (x, y register Frags: the memory-operand forms above read y per column).
-template <class Ops = arith::Explicit, class T, int R, int C, class L1, class L2>
-BATCHLAS_DEVICE_INLINE void ger(const Thread&, const Frag<T, R, L1>& x, const Frag<T, C, L2>& y, Tile<T, R, C>& a) {
-    using Ar = arith_t<Ops, T>;
+template <class Ops = arith::Explicit, class Scalar, int R, int C, class L1, class L2>
+BATCHLAS_DEVICE_INLINE void ger(const Thread&, const Frag<Scalar, R, L1>& x, const Frag<Scalar, C, L2>& y, Tile<Scalar,
+                                R, C>& a) {
+    using Ar = arith_t<Ops, Scalar>;
 BATCHLAS_UNROLL_FULL
     for (int i = 0; i < R; ++i) {
 BATCHLAS_UNROLL_FULL
@@ -289,12 +291,12 @@ BATCHLAS_UNROLL_FULL
 // ---- the guarded diagonal step of trsv's RowFrag block form ----------------------------------
 // The diagonal of row lid(): its reciprocal, divide = any reciprocal in the partition is
 // non-finite (a bit_or team_reduce, shuffles only), unit = the diagonal is not applied.
-template <class T> struct GuardedRecip {
-    T d, rinv;
+template <class Scalar> struct GuardedRecip {
+    Scalar d, rinv;
     bool divide, unit;
 };
-template <class Ar, int P, class T> BATCHLAS_DEVICE_INLINE GuardedRecip<T> guarded_recip(const Partition<P>& ex, T d, bool unit) {
-    const T rinv = Ar::recip(d);
+template <class Ar, int P, class Scalar> BATCHLAS_DEVICE_INLINE GuardedRecip<Scalar> guarded_recip(const Partition<P>& ex, Scalar d, bool unit) {
+    const Scalar rinv = Ar::recip(d);
     int bad = Ar::isfinite(rinv) ? 0 : 1;
     bad = ex.team_reduce(bad, sycl::bit_or<int>());
     return {d, rinv, bad != 0, unit};
@@ -357,10 +359,10 @@ template <class X> constexpr int tri_cap_of(const X*) { return 0; }
 template <class T, int N, class L> constexpr int tri_cap_of(const Frag<T, N, L>*) { return N; }
 
 // Element (i, j) of op(A) for a stored UL triangle; called only inside op(A)'s triangle.
-template <Transpose TR, class T, class MA> BATCHLAS_DEVICE_INLINE T op_at(const MA& a, int i, int j) {
+template <Transpose TR, class Scalar, class MA> BATCHLAS_DEVICE_INLINE Scalar op_at(const MA& a, int i, int j) {
     if constexpr (TR == Transpose::NoTrans) return a(i, j);
     else if constexpr (TR == Transpose::Trans) return a(j, i);
-    else return Arith<T>::conj(static_cast<T>(a(j, i)));
+    else return Arith<Scalar>::conj(static_cast<Scalar>(a(j, i)));
 }
 template <class A> inline constexpr bool is_split_dot_v = false;
 template <int W> inline constexpr bool is_split_dot_v<alg::SplitDot<W>> = true;
@@ -374,17 +376,17 @@ template <class T> inline constexpr int pack16_elems = static_cast<int>(sizeof(P
 // alg::SplitDot<W>, trsv (Solve) and trmv: x_i combines column i of A with the other entries of
 // x (Below: p < i, else p > i); Solve: x_i = (x_i - sum) / a_ii, else x_i = a_ii x_i + sum. In
 // place, so i is visited before every entry whose sum still needs it.
-template <bool Below, bool Solve, bool Conj, int W, class Ops, class T, int N, class L, class MA>
-BATCHLAS_DEVICE_INLINE void split_dot_tri(const MA& a, Frag<T, N, L>& x, int n) {
+template <bool Below, bool Solve, bool Conj, int W, class Ops, class Scalar, int N, class L, class MA>
+BATCHLAS_DEVICE_INLINE void split_dot_tri(const MA& a, Frag<Scalar, N, L>& x, int n) {
     static_assert(W > 0 && (W & (W - 1)) == 0, "trsv / trmv alg::SplitDot<W>: W is a power of two");
-    using A = Arith<T>;
-    using Ar = arith_t<Ops, T>;
-    constexpr int V = pack16_elems<T>;
+    using A = Arith<Scalar>;
+    using Ar = arith_t<Ops, Scalar>;
+    constexpr int V = pack16_elems<Scalar>;
     constexpr int K = static_extent_v<std::remove_cv_t<decltype(a.n)>>;  // -1: a run-time extent
     constexpr int Trip = K > 0 ? K : N;
     static_assert(Trip <= N, "trsv / trmv alg::SplitDot<W>: the extent exceeds the fragment");
     constexpr bool ascending = Below == Solve;
-    auto step = [&](T& acc, const T& aij, const T& xj) BATCHLAS_DEVICE_BODY {
+    auto step = [&](Scalar& acc, const Scalar& aij, const Scalar& xj) BATCHLAS_DEVICE_BODY {
         if constexpr (Solve) Ar::msub(acc, Conj ? A::conj(aij) : aij, xj);  // acc - op(a) x
         else if constexpr (Conj) Ar::mac_conj(acc, aij, xj);
         else Ar::mac(acc, aij, xj);
@@ -393,14 +395,14 @@ BATCHLAS_DEVICE_INLINE void split_dot_tri(const MA& a, Frag<T, N, L>& x, int n) 
     for (int s = 0; s < Trip; ++s) {
         const int i = ascending ? s : Trip - 1 - s;
         if (i < n) {
-            T acc[W];
+            Scalar acc[W];
             BATCHLAS_UNROLL_FULL
             for (int k = 0; k < W; ++k) acc[k] = A::zero();
-            const T* const line = &a(0, i);  // column i of A
+            const Scalar* const line = &a(0, i);  // column i of A
             if constexpr (Below) {
                 BATCHLAS_UNROLL_FULL
                 for (int p0 = 0; p0 < i; p0 += V) {
-                    const Pack16<T> pk = *reinterpret_cast<const Pack16<T>*>(line + p0);
+                    const Pack16<Scalar> pk = *reinterpret_cast<const Pack16<Scalar>*>(line + p0);
                     BATCHLAS_UNROLL_FULL
                     for (int u = 0; u < V; ++u)
                         if (p0 + u < i) step(acc[(p0 + u) % W], pk.e[u], x[p0 + u]);
@@ -409,7 +411,7 @@ BATCHLAS_DEVICE_INLINE void split_dot_tri(const MA& a, Frag<T, N, L>& x, int n) 
                 BATCHLAS_UNROLL_FULL
                 for (int p0 = (i + 1) / V * V; p0 < Trip; p0 += V) {
                     if (p0 >= n) continue;
-                    const Pack16<T> pk = *reinterpret_cast<const Pack16<T>*>(line + p0);
+                    const Pack16<Scalar> pk = *reinterpret_cast<const Pack16<Scalar>*>(line + p0);
                     BATCHLAS_UNROLL_FULL
                     for (int u = 0; u < V; ++u)
                         if (p0 + u > i && p0 + u < n) step(acc[(p0 + u) % W], pk.e[u], x[p0 + u]);
@@ -573,17 +575,18 @@ BATCHLAS_DEVICE_INLINE void her2(const Ex& ex, AS alpha_, const X& xp, const Y& 
 //   alg::LanePerRowRolled  the RowFrag form with the step loop rolled (A's row indexed at run
 //                      time: local memory, fewer registers)
 namespace detail {
-template <Diag DG, class Div, class Ar, class T, class D> BATCHLAS_DEVICE_INLINE T trsv_diag_apply(T xi, const D& aii) {
+template <Diag DG, class Div, class Ar, class Scalar, class D> BATCHLAS_DEVICE_INLINE Scalar trsv_diag_apply(Scalar xi, const D& aii) {
     if constexpr (DG == Diag::Unit) return xi;
     else if constexpr (std::is_same_v<Div, alg::Div>) return Ar::div(xi, aii);
     else if constexpr (std::is_same_v<Div, alg::Recip>) return Ar::mul(xi, Ar::recip(aii));
     else {
         static_assert(std::is_same_v<Div, alg::RealDiv>, "trsv: alg::Div, alg::Recip, alg::RealDiv or alg::DiagApply");
-        if constexpr (std::is_same_v<D, real_t<T>>) return Ar::div_real(xi, aii);
+        if constexpr (std::is_same_v<D, real_t<Scalar>>) return Ar::div_real(xi, aii);
         else return Ar::div_real(xi, Ar::re(aii));
     }
 }
-template <class Upd, class Ar, class T> BATCHLAS_DEVICE_INLINE void trsv_update(T& x, const T& a, const T& xj) {
+template <class Upd, class Ar, class Scalar> BATCHLAS_DEVICE_INLINE void trsv_update(Scalar& x, const Scalar& a,
+                                                                                     const Scalar& xj) {
     if constexpr (std::is_same_v<Upd, alg::Fused>) Ar::msub(x, a, xj);
     else if constexpr (std::is_same_v<Upd, alg::UnfusedRight>) x = Ar::sub(x, Ar::mul(xj, a));
     else {
@@ -596,7 +599,7 @@ template <int R> inline constexpr int serial_rows_v<alg::SerialRows<R>> = R;
 template <class X> inline constexpr bool is_row_frag_v = false;
 template <class T, int N> inline constexpr bool is_row_frag_v<Frag<T, N, RowFrag>> = true;
 // alg::DiagApply's step: x_i := d.apply<Ar>(i, x_i).
-template <class Ar, class D, class T> BATCHLAS_DEVICE_INLINE T trsv_step(const D& d, int i, T v) { return d.template apply<Ar>(i, v); }
+template <class Ar, class D, class Scalar> BATCHLAS_DEVICE_INLINE Scalar trsv_step(const D& d, int i, Scalar v) { return d.template apply<Ar>(i, v); }
 // trsv's element type: A's (an OpView has no value_type), or a row Frag's (the RowFrag form).
 template <class MA> struct trsv_value {
     using type = std::remove_cvref_t<decltype(std::declval<const MA&>()(0, 0))>;

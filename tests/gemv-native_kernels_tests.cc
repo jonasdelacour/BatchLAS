@@ -35,9 +35,9 @@ using Fma = device::arith::Fma;
 
 namespace {
 
-template <class T> using real_of = typename device::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
-template <class T> using Dv = typename sycl_device::DevMap<T>::type;
+template <class Scalar> using real_of = typename device::Arith<Scalar>::real_t;
+template <class Scalar> constexpr bool is_cplx = device::Arith<Scalar>::is_complex;
+template <class Scalar> using Dv = typename sycl_device::DevMap<Scalar>::type;
 // The kernels' shift_reduce op: Arith add (sycl::plus has no Cx operator+).
 struct AddOf {
     template <class D> D operator()(D u, D w) const { return device::Arith<D>::add(u, w); }
@@ -53,24 +53,25 @@ std::uint64_t mix(std::uint64_t x) {
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
     return x ^ (x >> 31);
 }
-template <class R> R uval(std::uint64_t i) { return static_cast<R>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
-template <class T> T val(std::uint64_t i) {
-    if constexpr (is_cplx<T>) return T(uval<real_of<T>>(2 * i), uval<real_of<T>>(2 * i + 1));
-    else return uval<T>(i);
+template <class Real> Real uval(std::uint64_t i) { return static_cast<Real>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
+template <class Scalar> Scalar val(std::uint64_t i) {
+    if constexpr (is_cplx<Scalar>) return Scalar(uval<real_of<Scalar>>(2 * i), uval<real_of<Scalar>>(2 * i + 1));
+    else return uval<Scalar>(i);
 }
 // kPeriod representatives, item b a copy of representative b % kPeriod.
-template <class T> std::vector<T> batched(int per_item, std::uint64_t seed, int items = kItems) {
-    std::vector<T> h(static_cast<std::size_t>(items) * per_item);
+template <class Scalar> std::vector<Scalar> batched(int per_item, std::uint64_t seed, int items = kItems) {
+    std::vector<Scalar> h(static_cast<std::size_t>(items) * per_item);
     for (int b = 0; b < std::min(kPeriod, items); ++b)
-        for (int i = 0; i < per_item; ++i) h[std::size_t(b) * per_item + i] = val<T>(seed + std::uint64_t(b) * 1000003u + i);
+        for (int i = 0; i < per_item; ++i) h[std::size_t(b) * per_item + i] = val<Scalar>(seed + std::uint64_t(b) * 1000003u + i);
     for (int b = kPeriod; b < items; ++b)
         std::copy_n(h.data() + std::size_t(b % kPeriod) * per_item, per_item, h.data() + std::size_t(b) * per_item);
     return h;
 }
-template <class T> bool same_bits(const T& a, const T& b) { return std::memcmp(&a, &b, sizeof(T)) == 0; }
-template <class T> Dv<T> to_dev(T v) {
-    Dv<T> d;
-    std::memcpy(&d, &v, sizeof(T));
+template <class Scalar> bool same_bits(const Scalar& a,
+                                       const Scalar& b) { return std::memcmp(&a, &b, sizeof(Scalar)) == 0; }
+template <class Scalar> Dv<Scalar> to_dev(Scalar v) {
+    Dv<Scalar> d;
+    std::memcpy(&d, &v, sizeof(Scalar));
     return d;
 }
 
@@ -80,15 +81,15 @@ struct Dev {
                                    ? std::optional<Queue>(std::in_place, Device::default_device())
                                    : std::nullopt;
     sycl::queue& q() { return sycl_queue(*ctx); }
-    template <class T> T* up(const std::vector<T>& h) {
-        T* p = sycl::malloc_device<T>(h.size(), q());
-        q().memcpy(p, h.data(), h.size() * sizeof(T)).wait();
+    template <class Scalar> Scalar* up(const std::vector<Scalar>& h) {
+        Scalar* p = sycl::malloc_device<Scalar>(h.size(), q());
+        q().memcpy(p, h.data(), h.size() * sizeof(Scalar)).wait();
         ptrs.push_back(p);
         return p;
     }
-    template <class T> std::vector<T> down(const T* p, std::size_t n) {
-        std::vector<T> h(n);
-        q().memcpy(h.data(), p, n * sizeof(T)).wait();
+    template <class Scalar> std::vector<Scalar> down(const Scalar* p, std::size_t n) {
+        std::vector<Scalar> h(n);
+        q().memcpy(h.data(), p, n * sizeof(Scalar)).wait();
         return h;
     }
     // kWG-item work-groups; f(it, unit) with unit = the work-item (PerSg false) or the sub-group
@@ -108,12 +109,12 @@ struct Dev {
     std::vector<void*> ptrs;
 };
 
-template <class T> class GemvNativeKernelsTest : public ::testing::Test {
+template <class Scalar> class GemvNativeKernelsTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx) GTEST_SKIP() << "no SYCL device visible";
         if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "the gemv ops shuffle a 32-lane sub-group";
-        if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
+        if (test_utils::lacks_fp64<Scalar>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
 };
@@ -121,38 +122,38 @@ protected:
 using Types = ::testing::Types<float, double, std::complex<float>, std::complex<double>>;
 TYPED_TEST_SUITE(GemvNativeKernelsTest, Types);
 
-template <class T> using LD = std::conditional_t<is_cplx<T>, std::complex<long double>, long double>;
-template <class T> LD<T> wide(T v) { return LD<T>(v); }
-template <class T> T conj_h(T v) {
-    if constexpr (is_cplx<T>) return std::conj(v);
+template <class Scalar> using LD = std::conditional_t<is_cplx<Scalar>, std::complex<long double>, long double>;
+template <class Scalar> LD<Scalar> wide(Scalar v) { return LD<Scalar>(v); }
+template <class Scalar> Scalar conj_h(Scalar v) {
+    if constexpr (is_cplx<Scalar>) return std::conj(v);
     else return v;
 }
-template <class T> double rel(T got, LD<T> ref, long double scale) {
-    const long double d = std::abs(LD<T>(got) - ref);
+template <class Scalar> double rel(Scalar got, LD<Scalar> ref, long double scale) {
+    const long double d = std::abs(LD<Scalar>(got) - ref);
     if (std::isnan(d)) return std::numeric_limits<double>::infinity();
-    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<T>>::min()));
+    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<Scalar>>::min()));
 }
 
 // The documented rounding, emulated on the host.
-template <class T> void host_mac(T& acc, T a, T b) {
-    if constexpr (is_cplx<T>) {
-        real_of<T> re = acc.real(), im = acc.imag();
+template <class Scalar> void host_mac(Scalar& acc, Scalar a, Scalar b) {
+    if constexpr (is_cplx<Scalar>) {
+        real_of<Scalar> re = acc.real(), im = acc.imag();
         re = std::fma(a.real(), b.real(), re);
         re = std::fma(-a.imag(), b.imag(), re);
         im = std::fma(a.real(), b.imag(), im);
         im = std::fma(a.imag(), b.real(), im);
-        acc = T(re, im);
+        acc = Scalar(re, im);
     } else {
         acc = std::fma(a, b, acc);
     }
 }
 // Shift-down fold of 32 lane values: lane l += lane l + stride*w for w = Count/2 .. 1 while the
 // source lane exists (beyond it the device value is unspecified and no head lane reads it).
-template <class T> std::vector<T> host_fold(std::vector<T> v, int count, int stride) {
+template <class Scalar> std::vector<Scalar> host_fold(std::vector<Scalar> v, int count, int stride) {
     for (int w = count / 2; w >= 1; w >>= 1) {
-        std::vector<T> nv = v;
+        std::vector<Scalar> nv = v;
         for (int l = 0; l + stride * w < kSg; ++l) {
-            if constexpr (is_cplx<T>) nv[l] = T(v[l].real() + v[l + stride * w].real(), v[l].imag() + v[l + stride * w].imag());
+            if constexpr (is_cplx<Scalar>) nv[l] = Scalar(v[l].real() + v[l + stride * w].real(), v[l].imag() + v[l + stride * w].imag());
             else nv[l] = v[l] + v[l + stride * w];
         }
         v = nv;

@@ -12,21 +12,21 @@ namespace batchlas {
 // Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
 // src/util/template-instantiations.hh. Keep in sync with the declarations below.
 namespace sig {
-template <typename T>
+template <typename Scalar>
 using trmm = Event(Queue&,
-                   const MatrixView<T, MatrixFormat::Dense>&,
-                   const MatrixView<T, MatrixFormat::Dense>&,
-                   const MatrixView<T, MatrixFormat::Dense>&,
-                   T, Side, Uplo, Transpose, Diag);
+                   const MatrixView<Scalar, MatrixFormat::Dense>&,
+                   const MatrixView<Scalar, MatrixFormat::Dense>&,
+                   const MatrixView<Scalar, MatrixFormat::Dense>&,
+                   Scalar, Side, Uplo, Transpose, Diag);
 
 // Spelled out, not aliased to sig::trmm: a vendor parameter order may differ
 // from the public one (trsm's alpha is last).
-template <typename T>
+template <typename Scalar>
 using trmm_vendor = Event(Queue&,
-                          const MatrixView<T, MatrixFormat::Dense>&,
-                          const MatrixView<T, MatrixFormat::Dense>&,
-                          const MatrixView<T, MatrixFormat::Dense>&,
-                          T,
+                          const MatrixView<Scalar, MatrixFormat::Dense>&,
+                          const MatrixView<Scalar, MatrixFormat::Dense>&,
+                          const MatrixView<Scalar, MatrixFormat::Dense>&,
+                          Scalar,
                           Side,
                           Uplo,
                           Transpose,
@@ -45,7 +45,7 @@ using trmm_vendor = Event(Queue&,
 ///
 /// Unlike reference BLAS `?trmm`, which overwrites `B`, this writes the product
 /// into `C` and leaves `B` unmodified. trsm, by contrast, is in place.
-/// Also callable as `trmm(ctx, A, B, C, TrmmOptions<T>{...})`, with owning
+/// Also callable as `trmm(ctx, A, B, C, TrmmOptions<Scalar>{...})`, with owning
 /// `Matrix` arguments, and without `Ba` (taken from `ctx.backend()`).
 ///
 /// Each call takes a kernel family from the tuned table for its shape (@ref selection_tables):
@@ -55,7 +55,7 @@ using trmm_vendor = Event(Queue&,
 /// `BATCHLAS_TRMM_ROUTE` = `auto` | `native` | `vendor` | `triangular` | `expand`.
 ///
 /// @tparam Ba  backend the call is compiled for; must match `ctx`'s device
-/// @tparam T   scalar type: `float`, `double`, `std::complex<float>` or `std::complex<double>`
+/// @tparam Scalar   scalar type: `float`, `double`, `std::complex<float>` or `std::complex<double>`
 /// @param[in] ctx     queue the work is enqueued on
 /// @param[in] A       batch of triangular matrices, \f$m \times m\f$ (Left) or \f$n \times n\f$ (Right);
 ///                    only the `uplo` triangle is read
@@ -69,7 +69,7 @@ using trmm_vendor = Event(Queue&,
 /// @return event of the last enqueued kernel; `C` is valid once it completes
 /// @pre All operands have the same batch size and conforming shapes per item.
 /// @throws std::invalid_argument if the shapes do not conform, or if `BATCHLAS_TRMM_ROUTE` names
-///         a family that is not compiled for `T` or cannot run this call (`native` and `vendor`
+///         a family that is not compiled for `Scalar` or cannot run this call (`native` and `vendor`
 ///         instead fall back to the tuned choice with a warning)
 /// @throws std::runtime_error if no family can run the call in a build with the vendor BLAS
 ///         (a heterogeneous batch: every family takes one \f$(n, k)\f$ per launch)
@@ -79,12 +79,12 @@ using trmm_vendor = Event(Queue&,
 ///         both chunk the batch (@ref md_docs_2perf_2level3).
 /// @see trsm, TrmmOptions, @ref md_docs_2cpp-api
 /// @ingroup api_blas3
-template <Backend Ba, typename T>
+template <Backend Ba, typename Scalar>
 BATCHLAS_API Event trmm(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& A,
-                             const MatrixView<T, MatrixFormat::Dense>& B,
-                             const MatrixView<T, MatrixFormat::Dense>& C,
-                             T alpha,
+                             const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                             const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                             const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                             Scalar alpha,
                              Side side,
                              Uplo uplo,
                              Transpose transA,
@@ -101,7 +101,7 @@ namespace batchlas::backend {
 ///
 /// Not an entry point: batchlas::trmm calls it. Same arguments and semantics.
 /// @tparam Back  backend
-/// @tparam T     scalar type: `float`, `double`, `std::complex<float>` or `std::complex<double>`
+/// @tparam Scalar     scalar type: `float`, `double`, `std::complex<float>` or `std::complex<double>`
 /// @param[in] ctx     queue the vendor call is enqueued on
 /// @param[in] A       batch of triangular matrices; only the `uplo` triangle is read
 /// @param[in] B       batch of \f$m \times n\f$ input matrices; not modified
@@ -113,12 +113,12 @@ namespace batchlas::backend {
 /// @param[in] diag    whether `A` has an implicit unit diagonal
 /// @return event of the last enqueued kernel
 /// @ingroup api_dispatch
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 BATCHLAS_API Event trmm_vendor(Queue& ctx,
-                               const MatrixView<T, MatrixFormat::Dense>& A,
-                               const MatrixView<T, MatrixFormat::Dense>& B,
-                               const MatrixView<T, MatrixFormat::Dense>& C,
-                               T alpha,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                               Scalar alpha,
                                Side side,
                                Uplo uplo,
                                Transpose transA,

@@ -16,10 +16,10 @@
 
 namespace batchlas {
 
-template <typename T>
+template <typename Scalar>
 struct SyevxInstrumentation;
 
-template <typename T>
+template <typename Real>
 struct StedcParams;
 
 /// @addtogroup api_eigen
@@ -32,35 +32,35 @@ struct StedcParams;
 /// range fields (`select`, `il`, `iu`, `vl`, `vu`, `abstol`, `order`) mirror LAPACK
 /// `?syevx`'s RANGE, IL/IU, VL/VU and ABSTOL arguments.
 ///
-/// @tparam T scalar type of the matrix (real or complex); tolerances on the real type
+/// @tparam Scalar scalar type of the matrix (real or complex); tolerances on the real type
 /// @see @ref design_syevx_range for the range semantics, @ref perf_syevx for routing
-template <typename T>
+template <typename Scalar>
 struct SyevxParams {
-    using float_type = typename base_type<T>::type;
+    using float_type = typename base_type<Scalar>::type;
     SyevxAlgorithm method = SyevxAlgorithm::Auto;      ///< Algorithm family; `Auto` defers to syevx_select_algorithm().
     OrthoAlgorithm algorithm = OrthoAlgorithm::Chol2;  ///< Orthogonalisation used inside the iterative solvers.
     size_t ortho_iterations = 2;                       ///< Orthogonalisation passes per use.
     size_t iterations = 100;                           ///< Cap on outer iterations of LOBPCG / Filtered.
     size_t extra_directions = 0;                       ///< Extra search directions carried beyond `neigs`.
     bool find_largest = true;                          ///< Extremal selection: largest (`true`) or smallest (`false`) eigenpairs.
-    T absolute_tolerance = T(std::numeric_limits<float_type>::epsilon());  ///< Absolute residual tolerance of the iterative paths.
-    T relative_tolerance = T(std::numeric_limits<float_type>::epsilon());  ///< Relative residual tolerance of the iterative paths.
+    Scalar absolute_tolerance = Scalar(std::numeric_limits<float_type>::epsilon());  ///< Absolute residual tolerance of the iterative paths.
+    Scalar relative_tolerance = Scalar(std::numeric_limits<float_type>::epsilon());  ///< Relative residual tolerance of the iterative paths.
     /// Caller-owned ILU(k) factor used as preconditioner, or nullptr.
     /// ILU(k) approximates \f$ A^{-1} \f$, so it is valid only for the SMALLEST
     /// eigenpairs: `find_largest = true` with a preconditioner is rejected, not ignored.
-    const ILUKPreconditioner<T>* preconditioner = nullptr;
+    const ILUKPreconditioner<Scalar>* preconditioner = nullptr;
     /// Preconditioner family. `Auto`: ILU(k) when a factor is supplied or requested,
     /// otherwise none (unless `BATCHLAS_SYEVX_PRECONDITIONER` names a default).
     SyevxPreconditioner preconditioner_type = SyevxPreconditioner::Auto;
     /// Build the ILU(k) factor inside syevx from the caller's workspace. Requires a CSR
     /// `A` and `find_largest = false`; mutually exclusive with #preconditioner.
     bool build_preconditioner = false;
-    ILUKParams<T> iluk_params{};                       ///< Parameters of the factor built under #build_preconditioner.
+    ILUKParams<Scalar> iluk_params{};                       ///< Parameters of the factor built under #build_preconditioner.
     size_t filter_degree = 0;                          ///< Chebyshev degree for SyevxAlgorithm::Filtered; 0 selects a default.
     /// LOBPCG only: power-iteration steps on the random start block; -1 selects the
     /// default, 0 disables. Ignored unless #find_largest is true.
     int init_power_iterations = -1;
-    const SyevxInstrumentation<T>* instrumentation = nullptr;  ///< Optional convergence-history sink; nullptr records nothing.
+    const SyevxInstrumentation<Scalar>* instrumentation = nullptr;  ///< Optional convergence-history sink; nullptr records nothing.
 
     SyevxSelect select = SyevxSelect::Extremal;        ///< Range kind: `Extremal` (with #find_largest), `Index` or `Value`.
 
@@ -85,9 +85,9 @@ struct SyevxParams {
 /// Every history span is laid out `[iter][batch][eig]`. With `iteration_stride` and
 /// `batch_stride` zero the strides default to `batch_size * neigs` and `neigs`. Empty
 /// spans and null pointers record nothing. Passed through SyevxParams::instrumentation.
-template <typename T>
+template <typename Scalar>
 struct SyevxInstrumentation {
-    using float_type = typename base_type<T>::type;
+    using float_type = typename base_type<Scalar>::type;
 
     Span<float_type> best_residual_history{};         ///< Best residual norm seen so far, per eigenpair.
     Span<float_type> current_residual_history{};      ///< Residual norm of the current iterate (needs #store_current_residual).
@@ -135,9 +135,9 @@ struct LanczosParams {
 /// @param[in]     algo      orthogonalisation algorithm (see OrthoAlgorithm)
 /// @return event of the last enqueued kernel
 /// @note The workspace depends on `algo`: size it with the algorithm the call runs.
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event ortho(Queue& ctx,
-                     const MatrixView<T, MatrixFormat::Dense>& A, // A is overwritten with orthogonal vectors
+                     const MatrixView<Scalar, MatrixFormat::Dense>& A, // A is overwritten with orthogonal vectors
                      Transpose transA,
                      Span<std::byte> workspace,
                      OrthoAlgorithm algo = OrthoAlgorithm::Chol2);
@@ -160,10 +160,10 @@ BATCHLAS_API Event ortho(Queue& ctx,
 /// @pre `M`'s vectors are orthonormal, and the vector counts of `A` and `M` sum to at
 ///      most the vector length.
 /// @throws batchlas::invalid_argument if the vector counts exceed the vector length
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event ortho(Queue& ctx,
-                     const MatrixView<T, MatrixFormat::Dense>& A, // A is overwritten with orthogonal vectors
-                     const MatrixView<T, MatrixFormat::Dense>& M, // External metric
+                     const MatrixView<Scalar, MatrixFormat::Dense>& A, // A is overwritten with orthogonal vectors
+                     const MatrixView<Scalar, MatrixFormat::Dense>& M, // External metric
                      Transpose transA,
                      Transpose transM,
                      Span<std::byte> workspace,
@@ -177,9 +177,9 @@ BATCHLAS_API Event ortho(Queue& ctx,
 /// @param[in] algo   orthogonalisation algorithm the call will run
 /// @return the workspace size in bytes
 /// @ingroup api_qr_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t ortho_buffer_size(Queue& ctx,
-                     const MatrixView<T, MatrixFormat::Dense>& A,
+                     const MatrixView<Scalar, MatrixFormat::Dense>& A,
                      Transpose transA,
                      OrthoAlgorithm algo = OrthoAlgorithm::Chol2);
 
@@ -193,10 +193,10 @@ BATCHLAS_API size_t ortho_buffer_size(Queue& ctx,
 /// @param[in] iterations number of project-then-orthonormalise passes
 /// @return the workspace size in bytes
 /// @ingroup api_qr_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t ortho_buffer_size(Queue& ctx,
-                     const MatrixView<T, MatrixFormat::Dense>& A,
-                     const MatrixView<T, MatrixFormat::Dense>& M,
+                     const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                     const MatrixView<Scalar, MatrixFormat::Dense>& M,
                      Transpose transA,
                      Transpose transM,
                      OrthoAlgorithm algo = OrthoAlgorithm::Chol2,
@@ -238,15 +238,15 @@ BATCHLAS_API size_t ortho_buffer_size(Queue& ctx,
 ///         an ILU(k) or `Jacobi` preconditioner with `find_largest`, or conflicting
 ///         preconditioner fields.
 /// @see @ref perf_syevx, @ref design_syevx_range
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 BATCHLAS_API Event syevx(Queue& ctx,
-                         const MatrixView<T, MFormat>& A,
-                         Span<typename base_type<T>::type> W,
+                         const MatrixView<Scalar, MFormat>& A,
+                         Span<typename base_type<Scalar>::type> W,
                          size_t neigs,
                          Span<std::byte> workspace,
                          JobType jobz = JobType::NoEigenVectors,
-                         const MatrixView<T, MatrixFormat::Dense>& V = MatrixView<T, MatrixFormat::Dense>(),
-                         const SyevxParams<T>& params = SyevxParams<T>(),
+                         const MatrixView<Scalar, MatrixFormat::Dense>& V = MatrixView<Scalar, MatrixFormat::Dense>(),
+                         const SyevxParams<Scalar>& params = SyevxParams<Scalar>(),
                          Span<int32_t> info = Span<int32_t>());
 
 /// @brief syevx() on an owning `A` without eigenvectors: no `V` argument.
@@ -259,16 +259,16 @@ BATCHLAS_API Event syevx(Queue& ctx,
 /// @param[in]  params    selection range and algorithm parameters
 /// @param[out] info      per-item convergence status, or empty; see @ref md_docs_2cpp-api
 /// @return event of the last enqueued kernel
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 inline Event syevx(Queue& ctx,
-            const Matrix<T, MFormat>& A,
-            Span<typename base_type<T>::type> W,
+            const Matrix<Scalar, MFormat>& A,
+            Span<typename base_type<Scalar>::type> W,
             size_t neigs,
             Span<std::byte> workspace,
             JobType jobz = JobType::NoEigenVectors,
-            const SyevxParams<T>& params = SyevxParams<T>(),
+            const SyevxParams<Scalar>& params = SyevxParams<Scalar>(),
             Span<int32_t> info = Span<int32_t>()) {
-    return syevx<B, T, MFormat>(ctx, MatrixView<T, MFormat>(A), W, neigs, workspace, jobz, MatrixView<T, MatrixFormat::Dense>(), params, info);
+    return syevx<B, Scalar, MFormat>(ctx, MatrixView<Scalar, MFormat>(A), W, neigs, workspace, jobz, MatrixView<Scalar, MatrixFormat::Dense>(), params, info);
 }
 
 /// @brief syevx() with a per-batch-item count of eigenpairs actually found.
@@ -297,16 +297,16 @@ inline Event syevx(Queue& ctx,
 /// @trap Unambiguous against the `m`-less forms only because `Span`'s scalar
 ///       constructor is `explicit`; a bare `{}` in positions 4-6 matches both and is
 ///       ambiguous.
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 BATCHLAS_API Event syevx(Queue& ctx,
-                         const MatrixView<T, MFormat>& A,
-                         Span<typename base_type<T>::type> W,
+                         const MatrixView<Scalar, MFormat>& A,
+                         Span<typename base_type<Scalar>::type> W,
                          Span<int32_t> m,
                          size_t neigs,
                          Span<std::byte> workspace,
                          JobType jobz = JobType::NoEigenVectors,
-                         const MatrixView<T, MatrixFormat::Dense>& V = MatrixView<T, MatrixFormat::Dense>(),
-                         const SyevxParams<T>& params = SyevxParams<T>(),
+                         const MatrixView<Scalar, MatrixFormat::Dense>& V = MatrixView<Scalar, MatrixFormat::Dense>(),
+                         const SyevxParams<Scalar>& params = SyevxParams<Scalar>(),
                          Span<int32_t> info = Span<int32_t>());
 
 /// @brief The `m`-reporting syevx() on an owning `A` without eigenvectors.
@@ -321,17 +321,17 @@ BATCHLAS_API Event syevx(Queue& ctx,
 /// @param[in]  params    selection range and algorithm parameters
 /// @param[out] info      per-item convergence status, or empty; see @ref md_docs_2cpp-api
 /// @return event of the last enqueued kernel
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 inline Event syevx(Queue& ctx,
-            const Matrix<T, MFormat>& A,
-            Span<typename base_type<T>::type> W,
+            const Matrix<Scalar, MFormat>& A,
+            Span<typename base_type<Scalar>::type> W,
             Span<int32_t> m,
             size_t neigs,
             Span<std::byte> workspace,
             JobType jobz = JobType::NoEigenVectors,
-            const SyevxParams<T>& params = SyevxParams<T>(),
+            const SyevxParams<Scalar>& params = SyevxParams<Scalar>(),
             Span<int32_t> info = Span<int32_t>()) {
-    return syevx<B, T, MFormat>(ctx, MatrixView<T, MFormat>(A), W, m, neigs, workspace, jobz, MatrixView<T, MatrixFormat::Dense>(), params, info);
+    return syevx<B, Scalar, MFormat>(ctx, MatrixView<Scalar, MFormat>(A), W, m, neigs, workspace, jobz, MatrixView<Scalar, MatrixFormat::Dense>(), params, info);
 }
 
 /// @brief Required workspace, in bytes, for syevx(); arguments as for the call minus
@@ -346,14 +346,14 @@ inline Event syevx(Queue& ctx,
 /// @param[in] params selection range and algorithm parameters of the call
 /// @return the workspace size in bytes
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 BATCHLAS_API size_t syevx_buffer_size(Queue& ctx,
-                         const MatrixView<T, MFormat>& A,
-                         Span<typename base_type<T>::type> W,
+                         const MatrixView<Scalar, MFormat>& A,
+                         Span<typename base_type<Scalar>::type> W,
                          size_t neigs,
                          JobType jobz = JobType::NoEigenVectors,
-                         const MatrixView<T, MatrixFormat::Dense>& V = MatrixView<T, MatrixFormat::Dense>(),
-                         const SyevxParams<T>& params = SyevxParams<T>());
+                         const MatrixView<Scalar, MatrixFormat::Dense>& V = MatrixView<Scalar, MatrixFormat::Dense>(),
+                         const SyevxParams<Scalar>& params = SyevxParams<Scalar>());
 
 /// @brief syevx_buffer_size() on an owning `A` without eigenvectors.
 /// @param[in] ctx    queue the call will run on
@@ -364,14 +364,14 @@ BATCHLAS_API size_t syevx_buffer_size(Queue& ctx,
 /// @param[in] params selection range and algorithm parameters of the call
 /// @return the workspace size in bytes
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 inline size_t syevx_buffer_size(Queue& ctx,
-            const Matrix<T, MFormat>& A,
-            Span<typename base_type<T>::type> W,
+            const Matrix<Scalar, MFormat>& A,
+            Span<typename base_type<Scalar>::type> W,
             size_t neigs,
             JobType jobz = JobType::NoEigenVectors,
-            const SyevxParams<T>& params = SyevxParams<T>()) {
-    return syevx_buffer_size<B, T, MFormat>(ctx, MatrixView<T, MFormat>(A), W, neigs, jobz, MatrixView<T, MatrixFormat::Dense>(), params);
+            const SyevxParams<Scalar>& params = SyevxParams<Scalar>()) {
+    return syevx_buffer_size<B, Scalar, MFormat>(ctx, MatrixView<Scalar, MFormat>(A), W, neigs, jobz, MatrixView<Scalar, MatrixFormat::Dense>(), params);
 }
 
 /// @brief syevx_buffer_size() with the solve's `m` argument, which is ACCEPTED AND
@@ -386,17 +386,17 @@ inline size_t syevx_buffer_size(Queue& ctx,
 /// @param[in] params selection range and algorithm parameters of the call
 /// @return the workspace size in bytes
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 inline size_t syevx_buffer_size(Queue& ctx,
-            const MatrixView<T, MFormat>& A,
-            Span<typename base_type<T>::type> W,
+            const MatrixView<Scalar, MFormat>& A,
+            Span<typename base_type<Scalar>::type> W,
             Span<int32_t> m,
             size_t neigs,
             JobType jobz = JobType::NoEigenVectors,
-            const MatrixView<T, MatrixFormat::Dense>& V = MatrixView<T, MatrixFormat::Dense>(),
-            const SyevxParams<T>& params = SyevxParams<T>()) {
+            const MatrixView<Scalar, MatrixFormat::Dense>& V = MatrixView<Scalar, MatrixFormat::Dense>(),
+            const SyevxParams<Scalar>& params = SyevxParams<Scalar>()) {
     (void)m;
-    return syevx_buffer_size<B, T, MFormat>(ctx, A, W, neigs, jobz, V, params);
+    return syevx_buffer_size<B, Scalar, MFormat>(ctx, A, W, neigs, jobz, V, params);
 }
 
 /// @brief The `m`-taking syevx_buffer_size() on an owning `A`; `m` is ignored.
@@ -409,16 +409,16 @@ inline size_t syevx_buffer_size(Queue& ctx,
 /// @param[in] params selection range and algorithm parameters of the call
 /// @return the workspace size in bytes
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 inline size_t syevx_buffer_size(Queue& ctx,
-            const Matrix<T, MFormat>& A,
-            Span<typename base_type<T>::type> W,
+            const Matrix<Scalar, MFormat>& A,
+            Span<typename base_type<Scalar>::type> W,
             Span<int32_t> m,
             size_t neigs,
             JobType jobz = JobType::NoEigenVectors,
-            const SyevxParams<T>& params = SyevxParams<T>()) {
+            const SyevxParams<Scalar>& params = SyevxParams<Scalar>()) {
     (void)m;
-    return syevx_buffer_size<B, T, MFormat>(ctx, MatrixView<T, MFormat>(A), W, neigs, jobz, MatrixView<T, MatrixFormat::Dense>(), params);
+    return syevx_buffer_size<B, Scalar, MFormat>(ctx, MatrixView<Scalar, MFormat>(A), W, neigs, jobz, MatrixView<Scalar, MatrixFormat::Dense>(), params);
 }
 
 /// @brief Resolved, algorithm-independent description of the caller's request.
@@ -462,10 +462,10 @@ BATCHLAS_API SyevxResolvedRange syevx_resolve_range(int64_t n,
 /// @param[in] params source of `select`, `find_largest`, `il`, `iu` and `order`
 /// @return the normalised request
 /// @ingroup api_eigen_lowlevel
-template <typename T>
+template <typename Scalar>
 inline SyevxResolvedRange syevx_resolve_range(int64_t n,
                                               size_t neigs,
-                                              const SyevxParams<T>& params) {
+                                              const SyevxParams<Scalar>& params) {
     return syevx_resolve_range(n, neigs, params.select, params.find_largest,
                                params.il, params.iu, params.order);
 }
@@ -519,16 +519,16 @@ BATCHLAS_API SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
 /// @param[out] info      per-item convergence status, or empty; see @ref md_docs_2cpp-api
 /// @return event of the last enqueued kernel
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 BATCHLAS_API Event syevx_direct(Queue& ctx,
-                         const MatrixView<T, MFormat>& A,
-                         Span<typename base_type<T>::type> W,
+                         const MatrixView<Scalar, MFormat>& A,
+                         Span<typename base_type<Scalar>::type> W,
                          Span<int32_t> m,
                          size_t neigs,
                          Span<std::byte> workspace,
                          JobType jobz,
-                         const MatrixView<T, MatrixFormat::Dense>& V,
-                         const SyevxParams<T>& params,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& V,
+                         const SyevxParams<Scalar>& params,
                          Span<int32_t> info = Span<int32_t>());
 
 /// @brief `syevx_direct` without the `m` output; `Extremal` and `Index` only.
@@ -544,18 +544,18 @@ BATCHLAS_API Event syevx_direct(Queue& ctx,
 /// @param[out] info      per-item convergence status, or empty; see @ref md_docs_2cpp-api
 /// @return event of the last enqueued kernel
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 inline Event syevx_direct(Queue& ctx,
-            const MatrixView<T, MFormat>& A,
-            Span<typename base_type<T>::type> W,
+            const MatrixView<Scalar, MFormat>& A,
+            Span<typename base_type<Scalar>::type> W,
             size_t neigs,
             Span<std::byte> workspace,
             JobType jobz,
-            const MatrixView<T, MatrixFormat::Dense>& V,
-            const SyevxParams<T>& params,
+            const MatrixView<Scalar, MatrixFormat::Dense>& V,
+            const SyevxParams<Scalar>& params,
             Span<int32_t> info = Span<int32_t>()) {
-    return syevx_direct<B, T, MFormat>(ctx, A, W, Span<int32_t>(), neigs, workspace,
-                                       jobz, V, params, info);
+    return syevx_direct<B, Scalar, MFormat>(ctx, A, W, Span<int32_t>(), neigs, workspace,
+                                            jobz, V, params, info);
 }
 
 /// @brief Required workspace, in bytes, for syevx_direct(). Takes no `m`: sizing writes
@@ -569,14 +569,14 @@ inline Event syevx_direct(Queue& ctx,
 /// @param[in] params selection range and algorithm parameters of the call
 /// @return the workspace size in bytes
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 BATCHLAS_API size_t syevx_direct_buffer_size(Queue& ctx,
-                         const MatrixView<T, MFormat>& A,
-                         Span<typename base_type<T>::type> W,
+                         const MatrixView<Scalar, MFormat>& A,
+                         Span<typename base_type<Scalar>::type> W,
                          size_t neigs,
                          JobType jobz,
-                         const MatrixView<T, MatrixFormat::Dense>& V,
-                         const SyevxParams<T>& params);
+                         const MatrixView<Scalar, MatrixFormat::Dense>& V,
+                         const SyevxParams<Scalar>& params);
 
 /// @brief Partial eigensolve by two-stage reduction plus a subset tridiagonal solve
 ///        (`stebz` + `stein`) and a narrowed back-transform. Real scalars and dense
@@ -607,16 +607,16 @@ BATCHLAS_API size_t syevx_direct_buffer_size(Queue& ctx,
 ///         \f$\mathit{vl} \ge \mathit{vu}\f$, a too-short `m`, or an out-of-order Queue
 /// @see syevx_direct_subset_supported()
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 BATCHLAS_API Event syevx_direct_subset(Queue& ctx,
-                         const MatrixView<T, MFormat>& A,
-                         Span<typename base_type<T>::type> W,
+                         const MatrixView<Scalar, MFormat>& A,
+                         Span<typename base_type<Scalar>::type> W,
                          Span<int32_t> m,
                          size_t neigs,
                          Span<std::byte> workspace,
                          JobType jobz,
-                         const MatrixView<T, MatrixFormat::Dense>& V,
-                         const SyevxParams<T>& params,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& V,
+                         const SyevxParams<Scalar>& params,
                          Span<int32_t> info = Span<int32_t>());
 
 /// @brief `syevx_direct_subset` without the `m` output; arity-disambiguated as above.
@@ -632,18 +632,18 @@ BATCHLAS_API Event syevx_direct_subset(Queue& ctx,
 /// @param[out] info      per-item convergence status, or empty; see @ref md_docs_2cpp-api
 /// @return event of the last enqueued kernel
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 inline Event syevx_direct_subset(Queue& ctx,
-            const MatrixView<T, MFormat>& A,
-            Span<typename base_type<T>::type> W,
+            const MatrixView<Scalar, MFormat>& A,
+            Span<typename base_type<Scalar>::type> W,
             size_t neigs,
             Span<std::byte> workspace,
             JobType jobz,
-            const MatrixView<T, MatrixFormat::Dense>& V,
-            const SyevxParams<T>& params,
+            const MatrixView<Scalar, MatrixFormat::Dense>& V,
+            const SyevxParams<Scalar>& params,
             Span<int32_t> info = Span<int32_t>()) {
-    return syevx_direct_subset<B, T, MFormat>(ctx, A, W, Span<int32_t>(), neigs, workspace,
-                                              jobz, V, params, info);
+    return syevx_direct_subset<B, Scalar, MFormat>(ctx, A, W, Span<int32_t>(), neigs, workspace,
+                                                   jobz, V, params, info);
 }
 
 /// @brief Required workspace, in bytes, for syevx_direct_subset().
@@ -659,23 +659,23 @@ inline Event syevx_direct_subset(Queue& ctx,
 /// @param[in] params selection range and algorithm parameters of the call
 /// @return the workspace size in bytes
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 BATCHLAS_API size_t syevx_direct_subset_buffer_size(Queue& ctx,
-                         const MatrixView<T, MFormat>& A,
-                         Span<typename base_type<T>::type> W,
+                         const MatrixView<Scalar, MFormat>& A,
+                         Span<typename base_type<Scalar>::type> W,
                          size_t neigs,
                          JobType jobz,
-                         const MatrixView<T, MatrixFormat::Dense>& V,
-                         const SyevxParams<T>& params);
+                         const MatrixView<Scalar, MatrixFormat::Dense>& V,
+                         const SyevxParams<Scalar>& params);
 
 /// @brief Whether `syevx_direct_subset` supports this scalar type and format.
-/// @tparam T       scalar type
+/// @tparam Scalar       scalar type
 /// @tparam MFormat matrix format
-/// @return true for real `T` with `MatrixFormat::Dense`
+/// @return true for real `Scalar` with `MatrixFormat::Dense`
 /// @ingroup api_eigen_lowlevel
-template <typename T, MatrixFormat MFormat>
+template <typename Scalar, MatrixFormat MFormat>
 inline constexpr bool syevx_direct_subset_supported() {
-    return MFormat == MatrixFormat::Dense && std::is_same_v<T, typename base_type<T>::type>;
+    return MFormat == MatrixFormat::Dense && std::is_same_v<Scalar, typename base_type<Scalar>::type>;
 }
 
 /// @brief Partial eigensolve by LOBPCG (locally optimal block preconditioned conjugate
@@ -696,15 +696,15 @@ inline constexpr bool syevx_direct_subset_supported() {
 /// @param[out] info      per-item convergence status, or empty; see @ref md_docs_2cpp-api
 /// @return event of the last enqueued kernel
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 BATCHLAS_API Event syevx_lobpcg(Queue& ctx,
-                         const MatrixView<T, MFormat>& A,
-                         Span<typename base_type<T>::type> W,
+                         const MatrixView<Scalar, MFormat>& A,
+                         Span<typename base_type<Scalar>::type> W,
                          size_t neigs,
                          Span<std::byte> workspace,
                          JobType jobz,
-                         const MatrixView<T, MatrixFormat::Dense>& V,
-                         const SyevxParams<T>& params,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& V,
+                         const SyevxParams<Scalar>& params,
                          Span<int32_t> info = Span<int32_t>());
 
 /// @brief Required workspace, in bytes, for syevx_lobpcg().
@@ -717,14 +717,14 @@ BATCHLAS_API Event syevx_lobpcg(Queue& ctx,
 /// @param[in] params parameters of the call
 /// @return the workspace size in bytes
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 BATCHLAS_API size_t syevx_lobpcg_buffer_size(Queue& ctx,
-                         const MatrixView<T, MFormat>& A,
-                         Span<typename base_type<T>::type> W,
+                         const MatrixView<Scalar, MFormat>& A,
+                         Span<typename base_type<Scalar>::type> W,
                          size_t neigs,
                          JobType jobz,
-                         const MatrixView<T, MatrixFormat::Dense>& V,
-                         const SyevxParams<T>& params);
+                         const MatrixView<Scalar, MatrixFormat::Dense>& V,
+                         const SyevxParams<Scalar>& params);
 
 /// @brief Chebyshev-filtered subspace iteration: amplifies the wanted end of the
 ///        spectrum, then Rayleigh-Ritz. Needs only matvecs; dense and CSR input,
@@ -744,15 +744,15 @@ BATCHLAS_API size_t syevx_lobpcg_buffer_size(Queue& ctx,
 /// @param[out] info      per-item convergence status, or empty; see @ref md_docs_2cpp-api
 /// @return event of the last enqueued kernel
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 BATCHLAS_API Event syevx_filtered(Queue& ctx,
-                         const MatrixView<T, MFormat>& A,
-                         Span<typename base_type<T>::type> W,
+                         const MatrixView<Scalar, MFormat>& A,
+                         Span<typename base_type<Scalar>::type> W,
                          size_t neigs,
                          Span<std::byte> workspace,
                          JobType jobz,
-                         const MatrixView<T, MatrixFormat::Dense>& V,
-                         const SyevxParams<T>& params,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& V,
+                         const SyevxParams<Scalar>& params,
                          Span<int32_t> info = Span<int32_t>());
 
 /// @brief Required workspace, in bytes, for syevx_filtered().
@@ -765,14 +765,14 @@ BATCHLAS_API Event syevx_filtered(Queue& ctx,
 /// @param[in] params parameters of the call
 /// @return the workspace size in bytes
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 BATCHLAS_API size_t syevx_filtered_buffer_size(Queue& ctx,
-                         const MatrixView<T, MFormat>& A,
-                         Span<typename base_type<T>::type> W,
+                         const MatrixView<Scalar, MFormat>& A,
+                         Span<typename base_type<Scalar>::type> W,
                          size_t neigs,
                          JobType jobz,
-                         const MatrixView<T, MatrixFormat::Dense>& V,
-                         const SyevxParams<T>& params);
+                         const MatrixView<Scalar, MatrixFormat::Dense>& V,
+                         const SyevxParams<Scalar>& params);
 
 /// @brief All eigenvalues, and optionally eigenvectors, of a batch of symmetric/Hermitian
 ///        matrices by a full-length Lanczos tridiagonalisation.
@@ -858,14 +858,14 @@ BATCHLAS_API size_t lanczos_buffer_size(Queue& ctx,
 /// @throws batchlas::convergence_error if an eigenvalue of any item does not deflate
 ///         within 30 QR steps
 /// @note steqr() and stedc() are the maintained tridiagonal solvers.
-template <Backend B, typename T>
+template <Backend B, typename Real>
 BATCHLAS_API Event tridiagonal_solver(Queue& ctx,
-                 Span<T> alphas,
-                 Span<T> betas,
-                 Span<typename base_type<T>::type> W,
+                 Span<Real> alphas,
+                 Span<Real> betas,
+                 Span<typename base_type<Real>::type> W,
                  Span<std::byte> workspace,
                  JobType jobz,
-                 const MatrixView<T, MatrixFormat::Dense>& Q,
+                 const MatrixView<Real, MatrixFormat::Dense>& Q,
                  size_t n,
                  size_t batch_size);
 
@@ -876,7 +876,7 @@ BATCHLAS_API Event tridiagonal_solver(Queue& ctx,
 /// @param[in] jobz       whether the call will compute eigenvectors
 /// @return the workspace size in bytes
 /// @ingroup api_tridiag_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Real>
 BATCHLAS_API size_t tridiagonal_solver_buffer_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz);
 
 // Convention in the tridiagonal group below: `VectorView<T>` for one vector per batch
@@ -891,16 +891,16 @@ enum class EigenRangeType {
 };
 
 /// @brief Parameters for stebz() (bisection on a symmetric tridiagonal matrix).
-template <typename T>
+template <typename Real>
 struct StebzParams {
     EigenRangeType range = EigenRangeType::All;  ///< Which eigenvalues to compute.
     int64_t il = 0;    ///< First wanted index (0-based, inclusive), range == Index
     int64_t iu = -1;   ///< Last wanted index (0-based, inclusive), range == Index; \f$< 0\f$ means \f$n-1\f$
-    T vl = T(0);       ///< Lower bound (exclusive), range == Value
-    T vu = T(0);       ///< Upper bound (inclusive), range == Value
+    Real vl = Real(0);       ///< Lower bound (exclusive), range == Value
+    Real vu = Real(0);       ///< Upper bound (inclusive), range == Value
     /// Absolute tolerance on each eigenvalue. Non-positive means
     /// \f$ \varepsilon \lVert T \rVert \f$, i.e. full working precision.
-    T abstol = T(0);
+    Real abstol = Real(0);
     SortOrder order = SortOrder::Ascending;  ///< Output order of `w`.
     /// Safety cap on bisection steps per eigenvalue; the loop also exits on
     /// interval convergence.
@@ -921,40 +921,40 @@ struct StebzParams {
 /// @return event to track operation completion
 /// @throws batchlas::invalid_argument for \f$n < 1\f$, a short `e`, `m` or `w`, or an invalid
 ///         index range
-template <Backend B, typename T>
+template <Backend B, typename Real>
 BATCHLAS_API Event stebz(Queue& ctx,
-                         const VectorView<T>& d,
-                         const VectorView<T>& e,
-                         const VectorView<T>& w,
+                         const VectorView<Real>& d,
+                         const VectorView<Real>& e,
+                         const VectorView<Real>& w,
                          Span<int32_t> m,
                          const Span<std::byte>& ws,
-                         StebzParams<T> params = StebzParams<T>());
+                         StebzParams<Real> params = StebzParams<Real>());
 
 /// @brief Required workspace size, in bytes, for stebz().
 ///
-/// @trap `params` is REQUIRED, not defaulted: it is the only argument carrying `T`, and
-///       defaulting it silently drops the queue-deducing overload. Pass `StebzParams<T>{}`.
+/// @trap `params` is REQUIRED, not defaulted: it is the only argument carrying `Real`, and
+///       defaulting it silently drops the queue-deducing overload. Pass `StebzParams<Real>{}`.
 /// @param[in] ctx        queue the call will run on
 /// @param[in] n          order of each tridiagonal matrix
 /// @param[in] batch_size number of batch items
 /// @param[in] params     selection range, tolerance and ordering of the call
 /// @return the workspace size in bytes
 /// @ingroup api_tridiag_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Real>
 BATCHLAS_API size_t stebz_buffer_size(Queue& ctx,
                                       size_t n,
                                       size_t batch_size,
-                                      StebzParams<T> params);
+                                      StebzParams<Real> params);
 
 /// @brief Parameters for stein() (inverse iteration on a symmetric tridiagonal).
-template <typename T>
+template <typename Real>
 struct SteinParams {
     /// Fixed number of inverse-iteration steps; two or three suffice for eigenvalues
     /// accurate to working precision. No convergence test is made.
     int32_t max_iterations = 3;
     /// Eigenvalues closer than \f$\mathit{ortho\_threshold} \cdot \lVert T \rVert\f$ form one cluster and have their
     /// vectors explicitly reorthogonalised (LAPACK dstein uses \f$10^{-3}\f$).
-    T ortho_threshold = T(1e-3);
+    Real ortho_threshold = Real(1e-3);
     uint32_t seed = 0x5eed1234u;  ///< Seed of the random starting vectors.
 };
 
@@ -972,15 +972,15 @@ struct SteinParams {
 /// @param[in]  params iteration count and clustering threshold
 /// @return event to track operation completion
 /// @throws batchlas::invalid_argument for \f$n < 1\f$, \f$k < 1\f$, or a short `e`, `w` or `Z`
-template <Backend B, typename T>
+template <Backend B, typename Real>
 BATCHLAS_API Event stein(Queue& ctx,
-                         const VectorView<T>& d,
-                         const VectorView<T>& e,
-                         const VectorView<T>& w,
+                         const VectorView<Real>& d,
+                         const VectorView<Real>& e,
+                         const VectorView<Real>& w,
                          size_t k,
-                         const MatrixView<T, MatrixFormat::Dense>& Z,
+                         const MatrixView<Real, MatrixFormat::Dense>& Z,
                          const Span<std::byte>& ws,
-                         SteinParams<T> params = SteinParams<T>());
+                         SteinParams<Real> params = SteinParams<Real>());
 
 /// @brief Sentinel meaning: every batch item has all `k` eigenvalues valid.
 ///
@@ -1013,22 +1013,22 @@ inline constexpr Span<const int32_t> stein_all_counts{};
 ///
 /// @throws batchlas::invalid_argument additionally if a non-empty `counts` is shorter
 ///         than the batch
-template <Backend B, typename T>
+template <Backend B, typename Real>
 BATCHLAS_API Event stein(Queue& ctx,
-                         const VectorView<T>& d,
-                         const VectorView<T>& e,
-                         const VectorView<T>& w,
+                         const VectorView<Real>& d,
+                         const VectorView<Real>& e,
+                         const VectorView<Real>& w,
                          size_t k,
                          Span<const int32_t> counts,
-                         const MatrixView<T, MatrixFormat::Dense>& Z,
+                         const MatrixView<Real, MatrixFormat::Dense>& Z,
                          const Span<std::byte>& ws,
-                         SteinParams<T> params = SteinParams<T>());
+                         SteinParams<Real> params = SteinParams<Real>());
 
 /// @brief Required workspace size, in bytes, for stein().
 ///
 /// Sizes on the capacity `k`, so the `counts` overload needs no sizing entry of its own.
 /// @trap `params` is REQUIRED, as for stebz_buffer_size(): it is the only argument
-///       carrying `T`.
+///       carrying `Real`.
 /// @param[in] ctx        queue the call will run on
 /// @param[in] n          order of each tridiagonal matrix
 /// @param[in] k          capacity: eigenvectors per item
@@ -1036,12 +1036,12 @@ BATCHLAS_API Event stein(Queue& ctx,
 /// @param[in] params     iteration count and clustering threshold of the call
 /// @return the workspace size in bytes
 /// @ingroup api_tridiag_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Real>
 BATCHLAS_API size_t stein_buffer_size(Queue& ctx,
                                       size_t n,
                                       size_t k,
                                       size_t batch_size,
-                                      SteinParams<T> params);
+                                      SteinParams<Real> params);
 
 /// @brief Shift used by the CTA STEQR's implicit QR/QL steps. @see @ref algo_steqr
 enum class SteqrShiftStrategy {
@@ -1050,7 +1050,7 @@ enum class SteqrShiftStrategy {
 };
 
 /// @brief Parameters for steqr() and steqr_cta(), and for stedc()'s leaf solves.
-template <typename T>
+template <typename Scalar>
 struct SteqrParams {
     /// Rotations are applied in blocks of this size; larger means excess FLOPs but
     /// better memory reuse. 1 fully serialises them.
@@ -1084,7 +1084,7 @@ struct SteqrParams {
 /// @brief Eigenvalues, and optionally eigenvectors, of a batch of symmetric tridiagonal
 ///        matrices by implicit QR/QL iteration (LAPACK `?steqr`).
 ///
-/// Real `T` only. Runs the CTA kernel (steqr_cta()) when \f$n\f$ is at most the device's
+/// Real types only. Runs the CTA kernel (steqr_cta()) when \f$n\f$ is at most the device's
 /// largest sub-group size (never on ROCm) and the work-group kernel otherwise;
 /// steqr_buffer_size() returns the larger of the two needs.
 ///
@@ -1105,11 +1105,11 @@ struct SteqrParams {
 /// @throws batchlas::convergence_error as steqr_cta() does, when the CTA kernel runs
 /// @return event of the last enqueued kernel
 /// @see @ref algo_steqr
-template <Backend B, typename T>
-BATCHLAS_API Event steqr(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
-                         const VectorView<T>& eigenvalues, const Span<std::byte>& ws, JobType jobz = JobType::NoEigenVectors, SteqrParams<T> params = SteqrParams<T>(),
-                         const MatrixView<T, MatrixFormat::Dense>& eigvects = MatrixView<T, MatrixFormat::Dense>(),
-                         Span<int32_t> info = Span<int32_t>());
+template <Backend B, typename Real>
+BATCHLAS_API Event steqr(Queue& ctx, const VectorView<Real>& d, const VectorView<Real>& e,
+                         const VectorView<Real>& eigenvalues, const Span<std::byte>& ws, JobType jobz = JobType::NoEigenVectors, SteqrParams<Real> params = SteqrParams<Real>(),
+                         const MatrixView<Real, MatrixFormat::Dense>& eigvects = MatrixView<Real,
+                         MatrixFormat::Dense>(), Span<int32_t> info = Span<int32_t>());
 
 /// @brief steqr() pinned to the CTA kernel: one sub-group partition per matrix, for small
 ///        \f$n\f$ (runtime-dispatched to compile-time specialised kernels). Parameters as for
@@ -1129,13 +1129,13 @@ BATCHLAS_API Event steqr(Queue& ctx, const VectorView<T>& d, const VectorView<T>
 /// @throws batchlas::convergence_error if `BATCHLAS_STEQR_CTA_CHECK` is set and an item
 ///         ran out of sweeps (the check waits on the queue; unset, nothing is thrown)
 /// @ingroup api_tridiag_lowlevel
-template <Backend B, typename T>
-BATCHLAS_API Event steqr_cta(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
-                             const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
+template <Backend B, typename Real>
+BATCHLAS_API Event steqr_cta(Queue& ctx, const VectorView<Real>& d, const VectorView<Real>& e,
+                             const VectorView<Real>& eigenvalues, const Span<std::byte>& ws,
                              JobType jobz = JobType::NoEigenVectors,
-                             SteqrParams<T> params = SteqrParams<T>(),
-                             const MatrixView<T, MatrixFormat::Dense>& eigvects = MatrixView<T, MatrixFormat::Dense>(),
-                             Span<int32_t> info = Span<int32_t>());
+                             SteqrParams<Real> params = SteqrParams<Real>(),
+                             const MatrixView<Real, MatrixFormat::Dense>& eigvects = MatrixView<Real,
+                             MatrixFormat::Dense>(), Span<int32_t> info = Span<int32_t>());
 
 /// @brief Required workspace, in bytes, for steqr(); arguments as for the call.
 /// @param[in] ctx         queue the call will run on
@@ -1146,9 +1146,9 @@ BATCHLAS_API Event steqr_cta(Queue& ctx, const VectorView<T>& d, const VectorVie
 /// @param[in] params      parameters of the call
 /// @return the workspace size in bytes
 /// @ingroup api_tridiag_lowlevel
-template <typename T>
-BATCHLAS_API size_t steqr_buffer_size(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
-                                     const VectorView<T>& eigenvalues, JobType jobz = JobType::NoEigenVectors, SteqrParams<T> params = SteqrParams<T>());
+template <typename Real>
+BATCHLAS_API size_t steqr_buffer_size(Queue& ctx, const VectorView<Real>& d, const VectorView<Real>& e,
+                                     const VectorView<Real>& eigenvalues, JobType jobz = JobType::NoEigenVectors, SteqrParams<Real> params = SteqrParams<Real>());
 
 /// @brief Required workspace, in bytes, for steqr_cta(); arguments as for the call.
 /// @param[in] ctx         queue the call will run on
@@ -1159,9 +1159,9 @@ BATCHLAS_API size_t steqr_buffer_size(Queue& ctx, const VectorView<T>& d, const 
 /// @param[in] params      parameters of the call
 /// @return the workspace size in bytes
 /// @ingroup api_tridiag_lowlevel
-template <typename T>
-BATCHLAS_API size_t steqr_cta_buffer_size(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
-                                          const VectorView<T>& eigenvalues, JobType jobz = JobType::NoEigenVectors, SteqrParams<T> params = SteqrParams<T>());
+template <typename Real>
+BATCHLAS_API size_t steqr_cta_buffer_size(Queue& ctx, const VectorView<Real>& d, const VectorView<Real>& e,
+                                          const VectorView<Real>& eigenvalues, JobType jobz = JobType::NoEigenVectors, SteqrParams<Real> params = SteqrParams<Real>());
 
 /// @}
 
@@ -1184,12 +1184,12 @@ BATCHLAS_API size_t steqr_cta_buffer_size(Queue& ctx, const VectorView<T>& d, co
 /// @param[in]     cta_wg_size_multiplier multiplier on the baseline work-group size
 /// @return event of the last enqueued kernel
 /// @ingroup api_tridiag_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event sytrd_cta(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& a_in,
-                             const VectorView<T>& d_out,
-                             const VectorView<T>& e_out,
-                             const VectorView<T>& tau_out,
+                             const MatrixView<Scalar, MatrixFormat::Dense>& a_in,
+                             const VectorView<Scalar>& d_out,
+                             const VectorView<Scalar>& e_out,
+                             const VectorView<Scalar>& tau_out,
                              Uplo uplo,
                              const Span<std::byte>& ws,
                              size_t cta_wg_size_multiplier = 1);
@@ -1214,12 +1214,12 @@ BATCHLAS_API Event sytrd_cta(Queue& ctx,
 ///                                     kernel
 /// @return event of the last enqueued kernel
 /// @ingroup api_tridiag_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event latrd_lower_panel(Queue& ctx,
-                                     const MatrixView<T, MatrixFormat::Dense>& a_in,
-                                     const VectorView<T>& e_out,
-                                     const VectorView<T>& tau_out,
-                                     const MatrixView<T, MatrixFormat::Dense>& w_in,
+                                     const MatrixView<Scalar, MatrixFormat::Dense>& a_in,
+                                     const VectorView<Scalar>& e_out,
+                                     const VectorView<Scalar>& tau_out,
+                                     const MatrixView<Scalar, MatrixFormat::Dense>& w_in,
                                      int32_t j0,
                                      int32_t ib,
                                      int32_t wg_hint = 0,
@@ -1245,12 +1245,12 @@ BATCHLAS_API Event latrd_lower_panel(Queue& ctx,
 ///                                     kernel
 /// @return event of the last enqueued kernel
 /// @ingroup api_tridiag_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event latrd_lower_panel(Queue& ctx,
-                                     const MatrixView<T, MatrixFormat::Dense>& a_panel_in,
-                                     const VectorView<T>& e_panel_out,
-                                     const VectorView<T>& tau_panel_out,
-                                     const MatrixView<T, MatrixFormat::Dense>& w_panel_in,
+                                     const MatrixView<Scalar, MatrixFormat::Dense>& a_panel_in,
+                                     const VectorView<Scalar>& e_panel_out,
+                                     const VectorView<Scalar>& tau_panel_out,
+                                     const MatrixView<Scalar, MatrixFormat::Dense>& w_panel_in,
                                      int32_t wg_hint = 0,
                                      bool fuse_trailing_update = false);
 
@@ -1280,12 +1280,12 @@ BATCHLAS_API Event latrd_lower_panel(Queue& ctx,
 /// @throws batchlas::invalid_argument on a non-square A, short d/e/tau, a batch mismatch or
 ///         an out-of-order `ctx`
 /// @throws batchlas::unsupported for `Uplo::Upper` (only Lower is implemented)
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event sytrd_blocked(Queue& ctx,
-                                 const MatrixView<T, MatrixFormat::Dense>& a_in,
-                                 const VectorView<T>& d_out,
-                                 const VectorView<T>& e_out,
-                                 const VectorView<T>& tau_out,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& a_in,
+                                 const VectorView<Scalar>& d_out,
+                                 const VectorView<Scalar>& e_out,
+                                 const VectorView<Scalar>& tau_out,
                                  Uplo uplo,
                                  const Span<std::byte>& ws,
                                  int32_t block_size = 0);
@@ -1300,12 +1300,12 @@ BATCHLAS_API Event sytrd_blocked(Queue& ctx,
 /// @param[in] block_size panel width the call will use (0 selects the default)
 /// @return the workspace size in bytes
 /// @ingroup api_tridiag_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t sytrd_blocked_buffer_size(Queue& ctx,
-                                              const MatrixView<T, MatrixFormat::Dense>& a,
-                                              const VectorView<T>& d,
-                                              const VectorView<T>& e,
-                                              const VectorView<T>& tau,
+                                              const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                                              const VectorView<Scalar>& d,
+                                              const VectorView<Scalar>& e,
+                                              const VectorView<Scalar>& tau,
                                               Uplo uplo,
                                               int32_t block_size = 0);
 
@@ -1327,11 +1327,11 @@ BATCHLAS_API size_t sytrd_blocked_buffer_size(Queue& ctx,
 /// @param[out]    ws      scratch of at least sytrd_sy2sb_buffer_size() bytes; contents undefined on return
 /// @return event of the last enqueued kernel
 /// @ingroup api_tridiag_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event sytrd_sy2sb(Queue& ctx,
-                               const MatrixView<T, MatrixFormat::Dense>& a_in,
-                               const MatrixView<T, MatrixFormat::Dense>& ab_out,
-                               const VectorView<T>& tau_out,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& a_in,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& ab_out,
+                               const VectorView<Scalar>& tau_out,
                                Uplo uplo,
                                int32_t kd,
                                const Span<std::byte>& ws);
@@ -1345,11 +1345,11 @@ BATCHLAS_API Event sytrd_sy2sb(Queue& ctx,
 /// @param[in] kd      semibandwidth of the band
 /// @return the workspace size in bytes
 /// @ingroup api_tridiag_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t sytrd_sy2sb_buffer_size(Queue& ctx,
-                                            const MatrixView<T, MatrixFormat::Dense>& a_in,
-                                            const MatrixView<T, MatrixFormat::Dense>& ab_out,
-                                            const VectorView<T>& tau_out,
+                                            const MatrixView<Scalar, MatrixFormat::Dense>& a_in,
+                                            const MatrixView<Scalar, MatrixFormat::Dense>& ab_out,
+                                            const VectorView<Scalar>& tau_out,
                                             Uplo uplo,
                                             int32_t kd);
 
@@ -1370,12 +1370,12 @@ BATCHLAS_API size_t sytrd_sy2sb_buffer_size(Queue& ctx,
 /// @param[in]  block_size accepted for API symmetry; currently unused
 /// @return event of the last enqueued kernel
 /// @ingroup api_tridiag_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event sytrd_sb2st(Queue& ctx,
-                               const MatrixView<T, MatrixFormat::Dense>& ab_in,
-                               const VectorView<typename base_type<T>::type>& d_out,
-                               const VectorView<typename base_type<T>::type>& e_out,
-                               const VectorView<T>& tau_out,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& ab_in,
+                               const VectorView<typename base_type<Scalar>::type>& d_out,
+                               const VectorView<typename base_type<Scalar>::type>& e_out,
+                               const VectorView<Scalar>& tau_out,
                                Uplo uplo,
                                int32_t kd,
                                const Span<std::byte>& ws,
@@ -1392,12 +1392,12 @@ BATCHLAS_API Event sytrd_sb2st(Queue& ctx,
 /// @param[in] block_size accepted for API symmetry; currently unused
 /// @return the workspace size in bytes
 /// @ingroup api_tridiag_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t sytrd_sb2st_buffer_size(Queue& ctx,
-                                            const MatrixView<T, MatrixFormat::Dense>& ab_in,
-                                            const VectorView<typename base_type<T>::type>& d_out,
-                                            const VectorView<typename base_type<T>::type>& e_out,
-                                            const VectorView<T>& tau_out,
+                                            const MatrixView<Scalar, MatrixFormat::Dense>& ab_in,
+                                            const VectorView<typename base_type<Scalar>::type>& d_out,
+                                            const VectorView<typename base_type<Scalar>::type>& e_out,
+                                            const VectorView<Scalar>& tau_out,
                                             Uplo uplo,
                                             int32_t kd,
                                             int32_t block_size);
@@ -1439,12 +1439,12 @@ struct SytrdBandReductionParams {
 ///                        contents undefined on return
 /// @param[in]  block_size block size used for every sweep
 /// @return event of the last enqueued kernel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event sytrd_band_reduction(Queue& ctx,
-                                        const MatrixView<T, MatrixFormat::Dense>& ab_in,
-                                        const VectorView<typename base_type<T>::type>& d_out,
-                                        const VectorView<typename base_type<T>::type>& e_out,
-                                        const VectorView<T>& tau_out,
+                                        const MatrixView<Scalar, MatrixFormat::Dense>& ab_in,
+                                        const VectorView<typename base_type<Scalar>::type>& d_out,
+                                        const VectorView<typename base_type<Scalar>::type>& e_out,
+                                        const VectorView<Scalar>& tau_out,
                                         Uplo uplo,
                                         int32_t kd,
                                         const Span<std::byte>& ws,
@@ -1462,21 +1462,21 @@ BATCHLAS_API Event sytrd_band_reduction(Queue& ctx,
 ///                     contents undefined on return
 /// @param[in]  params  per-sweep schedule
 /// @return event of the last enqueued kernel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event sytrd_band_reduction(Queue& ctx,
-                                        const MatrixView<T, MatrixFormat::Dense>& ab_in,
-                                        const VectorView<typename base_type<T>::type>& d_out,
-                                        const VectorView<typename base_type<T>::type>& e_out,
-                                        const VectorView<T>& tau_out,
+                                        const MatrixView<Scalar, MatrixFormat::Dense>& ab_in,
+                                        const VectorView<typename base_type<Scalar>::type>& d_out,
+                                        const VectorView<typename base_type<Scalar>::type>& e_out,
+                                        const VectorView<Scalar>& tau_out,
                                         Uplo uplo,
                                         int32_t kd,
                                         const Span<std::byte>& ws,
                                         SytrdBandReductionParams params);
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event sytrd_band_reduction_single_step(Queue& ctx,
-                                                    const MatrixView<T, MatrixFormat::Dense>& ab_in,
-                                                    const MatrixView<T, MatrixFormat::Dense>& abw_out,
+                                                    const MatrixView<Scalar, MatrixFormat::Dense>& ab_in,
+                                                    const MatrixView<Scalar, MatrixFormat::Dense>& abw_out,
                                                     Uplo uplo,
                                                     int32_t kd,
                                                     const Span<std::byte>& ws,
@@ -1493,12 +1493,12 @@ BATCHLAS_API Event sytrd_band_reduction_single_step(Queue& ctx,
 /// @param[in] block_size block size of the call
 /// @return the workspace size in bytes
 /// @ingroup api_tridiag_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t sytrd_band_reduction_buffer_size(Queue& ctx,
-                                                     const MatrixView<T, MatrixFormat::Dense>& ab_in,
-                                                     const VectorView<typename base_type<T>::type>& d_out,
-                                                     const VectorView<typename base_type<T>::type>& e_out,
-                                                     const VectorView<T>& tau_out,
+                                                     const MatrixView<Scalar, MatrixFormat::Dense>& ab_in,
+                                                     const VectorView<typename base_type<Scalar>::type>& d_out,
+                                                     const VectorView<typename base_type<Scalar>::type>& e_out,
+                                                     const VectorView<Scalar>& tau_out,
                                                      Uplo uplo,
                                                      int32_t kd,
                                                      int32_t block_size);
@@ -1514,20 +1514,20 @@ BATCHLAS_API size_t sytrd_band_reduction_buffer_size(Queue& ctx,
 /// @param[in] params  per-sweep schedule of the call
 /// @return the workspace size in bytes
 /// @ingroup api_tridiag_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t sytrd_band_reduction_buffer_size(Queue& ctx,
-                                                     const MatrixView<T, MatrixFormat::Dense>& ab_in,
-                                                     const VectorView<typename base_type<T>::type>& d_out,
-                                                     const VectorView<typename base_type<T>::type>& e_out,
-                                                     const VectorView<T>& tau_out,
+                                                     const MatrixView<Scalar, MatrixFormat::Dense>& ab_in,
+                                                     const VectorView<typename base_type<Scalar>::type>& d_out,
+                                                     const VectorView<typename base_type<Scalar>::type>& e_out,
+                                                     const VectorView<Scalar>& tau_out,
                                                      Uplo uplo,
                                                      int32_t kd,
                                                      SytrdBandReductionParams params);
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t sytrd_band_reduction_single_step_buffer_size(Queue& ctx,
-                                                                 const MatrixView<T, MatrixFormat::Dense>& ab_in,
-                                                                 const MatrixView<T, MatrixFormat::Dense>& abw_out,
+                                                                 const MatrixView<Scalar, MatrixFormat::Dense>& ab_in,
+                                                                 const MatrixView<Scalar, MatrixFormat::Dense>& abw_out,
                                                                  Uplo uplo,
                                                                  int32_t kd,
                                                                  SytrdBandReductionParams params);
@@ -1546,10 +1546,10 @@ BATCHLAS_API size_t sytrd_band_reduction_single_step_buffer_size(Queue& ctx,
 /// @param[in]  params  schedule; `kd_work` and `max_steps` are read
 /// @return event of the last enqueued kernel
 /// @ingroup api_tridiag_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event sytrd_band_reduction_single_step(Queue& ctx,
-                                                    const MatrixView<T, MatrixFormat::Dense>& ab_in,
-                                                    const MatrixView<T, MatrixFormat::Dense>& abw_out,
+                                                    const MatrixView<Scalar, MatrixFormat::Dense>& ab_in,
+                                                    const MatrixView<Scalar, MatrixFormat::Dense>& abw_out,
                                                     Uplo uplo,
                                                     int32_t kd,
                                                     const Span<std::byte>& ws,
@@ -1564,10 +1564,10 @@ BATCHLAS_API Event sytrd_band_reduction_single_step(Queue& ctx,
 /// @param[in] params  schedule of the call
 /// @return the workspace size in bytes
 /// @ingroup api_tridiag_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t sytrd_band_reduction_single_step_buffer_size(Queue& ctx,
-                                                                 const MatrixView<T, MatrixFormat::Dense>& ab_in,
-                                                                 const MatrixView<T, MatrixFormat::Dense>& abw_out,
+                                                                 const MatrixView<Scalar, MatrixFormat::Dense>& ab_in,
+                                                                 const MatrixView<Scalar, MatrixFormat::Dense>& abw_out,
                                                                  Uplo uplo,
                                                                  int32_t kd,
                                                                  SytrdBandReductionParams params);
@@ -1602,14 +1602,14 @@ BATCHLAS_API size_t sytrd_band_reduction_single_step_buffer_size(Queue& ctx,
 /// @return event of the last enqueued kernel
 /// @see @ref perf_syev (small-n kernel choice)
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event syev_cta(Queue& ctx,
-                            const MatrixView<T, MatrixFormat::Dense>& a_in,
-                            Span<typename base_type<T>::type> eigenvalues,
+                            const MatrixView<Scalar, MatrixFormat::Dense>& a_in,
+                            Span<typename base_type<Scalar>::type> eigenvalues,
                             JobType jobz,
                             Uplo uplo,
                             const Span<std::byte>& ws,
-                            SteqrParams<T> steqr_params = SteqrParams<T>(),
+                            SteqrParams<Scalar> steqr_params = SteqrParams<Scalar>(),
                             size_t cta_wg_size_multiplier = 0,
                             Span<int32_t> info = Span<int32_t>());
 
@@ -1620,11 +1620,11 @@ BATCHLAS_API Event syev_cta(Queue& ctx,
 /// @param[in] steqr_params parameters of the call's tridiagonal solve
 /// @return the workspace size in bytes
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t syev_cta_buffer_size(Queue& ctx,
-                                         const MatrixView<T, MatrixFormat::Dense>& a,
+                                         const MatrixView<Scalar, MatrixFormat::Dense>& a,
                                          JobType jobz,
-                                         SteqrParams<T> steqr_params = SteqrParams<T>());
+                                         SteqrParams<Scalar> steqr_params = SteqrParams<Scalar>());
 
 /// @brief Fused (single-kernel) variant of syev_cta.
 ///
@@ -1646,14 +1646,14 @@ BATCHLAS_API size_t syev_cta_buffer_size(Queue& ctx,
 /// @param[out]    info                   per-item convergence status, or empty; see @ref md_docs_2cpp-api
 /// @return event of the kernel
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event syev_cta_fused(Queue& ctx,
-                                  const MatrixView<T, MatrixFormat::Dense>& a_in,
-                                  Span<typename base_type<T>::type> eigenvalues,
+                                  const MatrixView<Scalar, MatrixFormat::Dense>& a_in,
+                                  Span<typename base_type<Scalar>::type> eigenvalues,
                                   JobType jobz,
                                   Uplo uplo,
                                   const Span<std::byte>& ws = Span<std::byte>(),
-                                  SteqrParams<T> steqr_params = SteqrParams<T>(),
+                                  SteqrParams<Scalar> steqr_params = SteqrParams<Scalar>(),
                                   size_t cta_wg_size_multiplier = 0,
                                   Span<int32_t> info = Span<int32_t>());
 
@@ -1664,16 +1664,16 @@ BATCHLAS_API Event syev_cta_fused(Queue& ctx,
 /// @param[in] steqr_params parameters of the call
 /// @return the workspace size in bytes
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t syev_cta_fused_buffer_size(Queue& ctx,
-                                               const MatrixView<T, MatrixFormat::Dense>& a,
+                                               const MatrixView<Scalar, MatrixFormat::Dense>& a,
                                                JobType jobz,
-                                               SteqrParams<T> steqr_params = SteqrParams<T>());
+                                               SteqrParams<Scalar> steqr_params = SteqrParams<Scalar>());
 
 /// @brief Parameters for syev_jacobi_cta() (cyclic two-sided Jacobi).
-template <typename T>
+template <typename Scalar>
 struct JacobiParams {
-    using Real = typename base_type<T>::type;
+    using Real = typename base_type<Scalar>::type;
 
     /// A rotation is applied to pivot pair \f$(p, q)\f$ only when
     /// \f$ \lvert a_{pq} \rvert > \mathrm{tol\_multiplier} \cdot n \varepsilon \sqrt{\lvert a_{pp} \rvert \, \lvert a_{qq} \rvert} \f$.
@@ -1713,14 +1713,14 @@ struct JacobiParams {
 /// @param[out]    info        per-item convergence status, or empty; see @ref md_docs_2cpp-api
 /// @return event of the kernel
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event syev_jacobi_cta(Queue& ctx,
-                                   const MatrixView<T, MatrixFormat::Dense>& a_in,
-                                   Span<typename base_type<T>::type> eigenvalues,
+                                   const MatrixView<Scalar, MatrixFormat::Dense>& a_in,
+                                   Span<typename base_type<Scalar>::type> eigenvalues,
                                    JobType jobz,
                                    Uplo uplo,
                                    const Span<std::byte>& ws = Span<std::byte>(),
-                                   JacobiParams<T> params = JacobiParams<T>(),
+                                   JacobiParams<Scalar> params = JacobiParams<Scalar>(),
                                    Span<int32_t> info = Span<int32_t>());
 
 /// @brief Required workspace, in bytes, for syev_jacobi_cta().
@@ -1730,11 +1730,11 @@ BATCHLAS_API Event syev_jacobi_cta(Queue& ctx,
 /// @param[in] params parameters of the call
 /// @return the workspace size in bytes
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t syev_jacobi_cta_buffer_size(Queue& ctx,
-                                                const MatrixView<T, MatrixFormat::Dense>& a,
+                                                const MatrixView<Scalar, MatrixFormat::Dense>& a,
                                                 JobType jobz,
-                                                JacobiParams<T> params = JacobiParams<T>());
+                                                JacobiParams<Scalar> params = JacobiParams<Scalar>());
 
 /// @brief Blocked symmetric/Hermitian eigen-solver (SYEV-like) for medium/large \f$n\f$:
 ///        sytrd_blocked \f$\to\f$ stedc \f$\to\f$ ormqr_blocked. Overwrites A with eigenvectors when
@@ -1754,14 +1754,14 @@ BATCHLAS_API size_t syev_jacobi_cta_buffer_size(Queue& ctx,
 /// @param[out]    info         per-item convergence status, or empty; see @ref md_docs_2cpp-api
 /// @return event of the last enqueued kernel
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event syev_blocked(Queue& ctx,
-                                const MatrixView<T, MatrixFormat::Dense>& a_in,
-                                Span<typename base_type<T>::type> eigenvalues,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& a_in,
+                                Span<typename base_type<Scalar>::type> eigenvalues,
                                 JobType jobz,
                                 Uplo uplo,
                                 const Span<std::byte>& ws,
-                                StedcParams<typename base_type<T>::type> stedc_params = StedcParams<typename base_type<T>::type>(),
+                                StedcParams<typename base_type<Scalar>::type> stedc_params = StedcParams<typename base_type<Scalar>::type>(),
                                 Span<int32_t> info = Span<int32_t>());
 
 /// @brief Required workspace, in bytes, for syev_blocked(); the same for either `uplo`.
@@ -1772,12 +1772,12 @@ BATCHLAS_API Event syev_blocked(Queue& ctx,
 /// @param[in] stedc_params parameters of the call's tridiagonal solve
 /// @return the workspace size in bytes
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t syev_blocked_buffer_size(Queue& ctx,
-                                             const MatrixView<T, MatrixFormat::Dense>& a,
+                                             const MatrixView<Scalar, MatrixFormat::Dense>& a,
                                              JobType jobz,
                                              Uplo uplo,
-                                             StedcParams<typename base_type<T>::type> stedc_params = StedcParams<typename base_type<T>::type>());
+                                             StedcParams<typename base_type<Scalar>::type> stedc_params = StedcParams<typename base_type<Scalar>::type>());
 
 /// @brief Two-stage symmetric/Hermitian eigen-solver (SYEV-like) for large \f$n\f$:
 ///        sytrd_sy2sb \f$\to\f$ sytrd_sb2st \f$\to\f$ stedc, then phase/sign recovery and a reflector
@@ -1799,14 +1799,14 @@ BATCHLAS_API size_t syev_blocked_buffer_size(Queue& ctx,
 /// @return event of the last enqueued kernel
 /// @see @ref perf_syev for where syev() routes to it
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event syev_two_stage(Queue& ctx,
-                                  const MatrixView<T, MatrixFormat::Dense>& a_in,
-                                  Span<typename base_type<T>::type> eigenvalues,
+                                  const MatrixView<Scalar, MatrixFormat::Dense>& a_in,
+                                  Span<typename base_type<Scalar>::type> eigenvalues,
                                   JobType jobz,
                                   Uplo uplo,
                                   const Span<std::byte>& ws,
-                                  StedcParams<typename base_type<T>::type> stedc_params = StedcParams<typename base_type<T>::type>(),
+                                  StedcParams<typename base_type<Scalar>::type> stedc_params = StedcParams<typename base_type<Scalar>::type>(),
                                   Span<int32_t> info = Span<int32_t>());
 
 /// @brief Required workspace, in bytes, for syev_two_stage().
@@ -1817,12 +1817,12 @@ BATCHLAS_API Event syev_two_stage(Queue& ctx,
 /// @param[in] stedc_params parameters of the call's tridiagonal solve
 /// @return the workspace size in bytes
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t syev_two_stage_buffer_size(Queue& ctx,
-                                               const MatrixView<T, MatrixFormat::Dense>& a,
+                                               const MatrixView<Scalar, MatrixFormat::Dense>& a,
                                                JobType jobz,
                                                Uplo uplo,
-                                               StedcParams<typename base_type<T>::type> stedc_params = StedcParams<typename base_type<T>::type>());
+                                               StedcParams<typename base_type<Scalar>::type> stedc_params = StedcParams<typename base_type<Scalar>::type>());
 
 /// @}
 
@@ -1845,13 +1845,13 @@ BATCHLAS_API size_t syev_two_stage_buffer_size(Queue& ctx,
 /// @return event of the last enqueued kernel
 /// @see @ref perf_gesvd (where the unblocked form stops paying)
 /// @ingroup api_svd_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event gebrd_unblocked(Queue& ctx,
-                                   const MatrixView<T, MatrixFormat::Dense>& a,
-                                   const VectorView<typename base_type<T>::type>& d,
-                                   const VectorView<typename base_type<T>::type>& e,
-                                   const VectorView<T>& tauq,
-                                   const VectorView<T>& taup);
+                                   const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                                   const VectorView<typename base_type<Scalar>::type>& d,
+                                   const VectorView<typename base_type<Scalar>::type>& e,
+                                   const VectorView<Scalar>& tauq,
+                                   const VectorView<Scalar>& taup);
 
 /// @brief CTA-parallel small-matrix GEBRD for real square matrices, \f$1 \le n \le 32\f$,
 ///        where one CTA cooperatively reduces one matrix to upper bidiagonal form.
@@ -1866,13 +1866,13 @@ BATCHLAS_API Event gebrd_unblocked(Queue& ctx,
 /// @param[in]     cta_wg_size_multiplier multiplier on the baseline work-group size
 /// @return event of the kernel
 /// @ingroup api_svd_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event gebrd_cta(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& a,
-                             const VectorView<typename base_type<T>::type>& d,
-                             const VectorView<typename base_type<T>::type>& e,
-                             const VectorView<T>& tauq,
-                             const VectorView<T>& taup,
+                             const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                             const VectorView<typename base_type<Scalar>::type>& d,
+                             const VectorView<typename base_type<Scalar>::type>& e,
+                             const VectorView<Scalar>& tauq,
+                             const VectorView<Scalar>& taup,
                              size_t cta_wg_size_multiplier = 1);
 
 /// @brief Blocked GEBRD for real square dense matrices: DLABRD-style panel + GEMM.
@@ -1888,13 +1888,13 @@ BATCHLAS_API Event gebrd_cta(Queue& ctx,
 /// @param[in]     block_size panel width
 /// @return event of the last enqueued kernel
 /// @ingroup api_svd_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event gebrd_blocked(Queue& ctx,
-                                 const MatrixView<T, MatrixFormat::Dense>& a,
-                                 const VectorView<typename base_type<T>::type>& d,
-                                 const VectorView<typename base_type<T>::type>& e,
-                                 const VectorView<T>& tauq,
-                                 const VectorView<T>& taup,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                                 const VectorView<typename base_type<Scalar>::type>& d,
+                                 const VectorView<typename base_type<Scalar>::type>& e,
+                                 const VectorView<Scalar>& tauq,
+                                 const VectorView<Scalar>& taup,
                                  const Span<std::byte>& ws,
                                  int32_t block_size = 16);
 
@@ -1908,13 +1908,13 @@ BATCHLAS_API Event gebrd_blocked(Queue& ctx,
 /// @param[in] block_size panel width of the call
 /// @return the workspace size in bytes
 /// @ingroup api_svd_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t gebrd_blocked_buffer_size(Queue& ctx,
-                                              const MatrixView<T, MatrixFormat::Dense>& a,
-                                              const VectorView<typename base_type<T>::type>& d,
-                                              const VectorView<typename base_type<T>::type>& e,
-                                              const VectorView<T>& tauq,
-                                              const VectorView<T>& taup,
+                                              const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                                              const VectorView<typename base_type<Scalar>::type>& d,
+                                              const VectorView<typename base_type<Scalar>::type>& e,
+                                              const VectorView<Scalar>& tauq,
+                                              const VectorView<Scalar>& taup,
                                               int32_t block_size = 16);
 
 /// @brief Bidiagonal QR iteration for a real upper bidiagonal matrix. The matrix
@@ -1933,11 +1933,11 @@ BATCHLAS_API size_t gebrd_blocked_buffer_size(Queue& ctx,
 /// @throws batchlas::convergence_error if an item does not converge and `info` is empty or
 ///         shorter than the batch (with `info`, the status is reported per item instead)
 /// @ingroup api_svd_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Real>
 BATCHLAS_API Event bdsqr(Queue& ctx,
-                         const VectorView<T>& d,
-                         const VectorView<T>& e,
-                         Span<T> singular_values_out,
+                         const VectorView<Real>& d,
+                         const VectorView<Real>& e,
+                         Span<Real> singular_values_out,
                          const Span<std::byte>& ws,
                          bool sort_desc = true,
                          Span<int32_t> info = Span<int32_t>());
@@ -1960,14 +1960,14 @@ BATCHLAS_API Event bdsqr(Queue& ctx,
 /// @throws batchlas::convergence_error if an item does not converge and `info` is empty or
 ///         shorter than the batch (with `info`, the status is reported per item instead)
 /// @ingroup api_svd_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Real>
 BATCHLAS_API Event bdsqr(Queue& ctx,
-                         const VectorView<T>& d,
-                         const VectorView<T>& e,
-                         Span<T> singular_values_out,
+                         const VectorView<Real>& d,
+                         const VectorView<Real>& e,
+                         Span<Real> singular_values_out,
                          const Span<std::byte>& ws,
-                         const MatrixView<T, MatrixFormat::Dense>& u,
-                         const MatrixView<T, MatrixFormat::Dense>& vh,
+                         const MatrixView<Real, MatrixFormat::Dense>& u,
+                         const MatrixView<Real, MatrixFormat::Dense>& vh,
                          bool sort_desc = true,
                          Span<int32_t> info = Span<int32_t>());
 
@@ -1978,11 +1978,11 @@ BATCHLAS_API Event bdsqr(Queue& ctx,
 /// @param[in] singular_values_out singular-value output the call will use; not written
 /// @return the workspace size in bytes
 /// @ingroup api_svd_lowlevel
-template <typename T>
+template <typename Real>
 BATCHLAS_API size_t bdsqr_buffer_size(Queue& ctx,
-                                      const VectorView<T>& d,
-                                      const VectorView<T>& e,
-                                      Span<T> singular_values_out);
+                                      const VectorView<Real>& d,
+                                      const VectorView<Real>& e,
+                                      Span<Real> singular_values_out);
 
 /// @brief bdsqr_buffer_size() for the vector-accumulating form; `u` and `vh` do not change it.
 /// @param[in] ctx                 queue the call will run on
@@ -1993,13 +1993,13 @@ BATCHLAS_API size_t bdsqr_buffer_size(Queue& ctx,
 /// @param[in] vh                  ignored
 /// @return the workspace size in bytes
 /// @ingroup api_svd_lowlevel
-template <typename T>
+template <typename Real>
 inline size_t bdsqr_buffer_size(Queue& ctx,
-                                const VectorView<T>& d,
-                                const VectorView<T>& e,
-                                Span<T> singular_values_out,
-                                const MatrixView<T, MatrixFormat::Dense>& u,
-                                const MatrixView<T, MatrixFormat::Dense>& vh) {
+                                const VectorView<Real>& d,
+                                const VectorView<Real>& e,
+                                Span<Real> singular_values_out,
+                                const MatrixView<Real, MatrixFormat::Dense>& u,
+                                const MatrixView<Real, MatrixFormat::Dense>& vh) {
     (void)u;
     (void)vh;
     return bdsqr_buffer_size(ctx, d, e, singular_values_out);
@@ -2025,11 +2025,11 @@ inline size_t bdsqr_buffer_size(Queue& ctx,
 /// @return event of the last enqueued kernel
 /// @see @ref design_gesvd, section "gesvd design: why bdsdc goes through Golub-Kahan"
 /// @ingroup api_svd_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Real>
 BATCHLAS_API Event bdsdc(Queue& ctx,
-                         const VectorView<T>& d,
-                         const VectorView<T>& e,
-                         Span<T> singular_values_out,
+                         const VectorView<Real>& d,
+                         const VectorView<Real>& e,
+                         Span<Real> singular_values_out,
                          const Span<std::byte>& ws,
                          bool sort_desc = true,
                          Span<int32_t> info = Span<int32_t>());
@@ -2049,14 +2049,14 @@ BATCHLAS_API Event bdsdc(Queue& ctx,
 /// @param[out] info                per-item convergence status, or empty; see @ref md_docs_2cpp-api
 /// @return event of the last enqueued kernel
 /// @ingroup api_svd_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Real>
 BATCHLAS_API Event bdsdc(Queue& ctx,
-                         const VectorView<T>& d,
-                         const VectorView<T>& e,
-                         Span<T> singular_values_out,
+                         const VectorView<Real>& d,
+                         const VectorView<Real>& e,
+                         Span<Real> singular_values_out,
                          const Span<std::byte>& ws,
-                         const MatrixView<T, MatrixFormat::Dense>& u,
-                         const MatrixView<T, MatrixFormat::Dense>& vh,
+                         const MatrixView<Real, MatrixFormat::Dense>& u,
+                         const MatrixView<Real, MatrixFormat::Dense>& vh,
                          bool sort_desc = true,
                          Span<int32_t> info = Span<int32_t>());
 
@@ -2068,11 +2068,11 @@ BATCHLAS_API Event bdsdc(Queue& ctx,
 /// @param[in] want_vectors        true to size the overload that writes `u` and `vh`
 /// @return the workspace size in bytes
 /// @ingroup api_svd_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Real>
 BATCHLAS_API size_t bdsdc_buffer_size(Queue& ctx,
-                                      const VectorView<T>& d,
-                                      const VectorView<T>& e,
-                                      Span<T> singular_values_out,
+                                      const VectorView<Real>& d,
+                                      const VectorView<Real>& e,
+                                      Span<Real> singular_values_out,
                                       bool want_vectors);
 
 /// @brief ORMBR/UNMBR-style application of bidiagonal reduction reflectors. Supports
@@ -2098,14 +2098,14 @@ BATCHLAS_API size_t bdsdc_buffer_size(Queue& ctx,
 /// @pre `tau` is unit-stride and packed by batch
 /// @throws batchlas::invalid_argument on mismatched batch sizes or orders, a `vect`
 ///         other than `'Q'`/`'P'`, or a short or strided `tau`
-/// @throws batchlas::unsupported for `Transpose::Trans` with complex `T` and `'P'`
+/// @throws batchlas::unsupported for `Transpose::Trans` with complex `Scalar` and `'P'`
 ///         (use `ConjTrans`)
 /// @ingroup api_svd_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event ormbr(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& a,
-                         const VectorView<T>& tau,
-                         const MatrixView<T, MatrixFormat::Dense>& c,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                         const VectorView<Scalar>& tau,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& c,
                          char vect,
                          Side side,
                          Transpose trans,
@@ -2123,11 +2123,11 @@ BATCHLAS_API Event ormbr(Queue& ctx,
 /// @param[in] block_size block size of the call
 /// @return the workspace size in bytes
 /// @ingroup api_svd_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t ormbr_buffer_size(Queue& ctx,
-                                      const MatrixView<T, MatrixFormat::Dense>& a,
-                                      const VectorView<T>& tau,
-                                      const MatrixView<T, MatrixFormat::Dense>& c,
+                                      const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                                      const VectorView<Scalar>& tau,
+                                      const MatrixView<Scalar, MatrixFormat::Dense>& c,
                                       char vect,
                                       Side side,
                                       Transpose trans,
@@ -2152,12 +2152,12 @@ BATCHLAS_API size_t ormbr_buffer_size(Queue& ctx,
 /// @throws batchlas::invalid_argument for an out-of-order Queue or mis-shaped outputs
 /// @throws batchlas::unsupported for complex input (use the Hermitian overload)
 /// @ingroup api_svd_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event gesvd_blocked(Queue& ctx,
-                                 const MatrixView<T, MatrixFormat::Dense>& a_in,
-                                 Span<typename base_type<T>::type> singular_values,
-                                 const MatrixView<T, MatrixFormat::Dense>& u_out,
-                                 const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& a_in,
+                                 Span<typename base_type<Scalar>::type> singular_values,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& u_out,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& vh_out,
                                  SvdVectors jobu,
                                  SvdVectors jobvh,
                                  const Span<std::byte>& ws,
@@ -2179,12 +2179,12 @@ BATCHLAS_API Event gesvd_blocked(Queue& ctx,
 /// @param[out]    info            per-item convergence status, or empty; see @ref md_docs_2cpp-api
 /// @return event of the last enqueued kernel
 /// @ingroup api_svd_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event gesvd_blocked(Queue& ctx,
-                                 const MatrixView<T, MatrixFormat::Dense>& a_in,
-                                 Span<typename base_type<T>::type> singular_values,
-                                 const MatrixView<T, MatrixFormat::Dense>& u_out,
-                                 const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& a_in,
+                                 Span<typename base_type<Scalar>::type> singular_values,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& u_out,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& vh_out,
                                  SvdVectors jobu,
                                  SvdVectors jobvh,
                                  Uplo hermitian_uplo,
@@ -2201,12 +2201,12 @@ BATCHLAS_API Event gesvd_blocked(Queue& ctx,
 /// @param[in] jobvh           which rows of \f$V^H\f$ the call computes
 /// @return the workspace size in bytes
 /// @ingroup api_svd_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t gesvd_blocked_buffer_size(Queue& ctx,
-                                              const MatrixView<T, MatrixFormat::Dense>& a,
-                                              Span<typename base_type<T>::type> singular_values,
-                                              const MatrixView<T, MatrixFormat::Dense>& u_out,
-                                              const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                                              const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                                              Span<typename base_type<Scalar>::type> singular_values,
+                                              const MatrixView<Scalar, MatrixFormat::Dense>& u_out,
+                                              const MatrixView<Scalar, MatrixFormat::Dense>& vh_out,
                                               SvdVectors jobu,
                                               SvdVectors jobvh);
 
@@ -2221,12 +2221,12 @@ BATCHLAS_API size_t gesvd_blocked_buffer_size(Queue& ctx,
 /// @param[in] hermitian_uplo  triangle the call will read
 /// @return the workspace size in bytes
 /// @ingroup api_svd_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t gesvd_blocked_buffer_size(Queue& ctx,
-                                              const MatrixView<T, MatrixFormat::Dense>& a,
-                                              Span<typename base_type<T>::type> singular_values,
-                                              const MatrixView<T, MatrixFormat::Dense>& u_out,
-                                              const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                                              const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                                              Span<typename base_type<Scalar>::type> singular_values,
+                                              const MatrixView<Scalar, MatrixFormat::Dense>& u_out,
+                                              const MatrixView<Scalar, MatrixFormat::Dense>& vh_out,
                                               SvdVectors jobu,
                                               SvdVectors jobvh,
                                               Uplo hermitian_uplo);
@@ -2255,12 +2255,12 @@ BATCHLAS_API size_t gesvd_blocked_buffer_size(Queue& ctx,
 /// @throws batchlas::unsupported for complex input (use the Hermitian overload)
 /// @see @ref perf_gesvd
 /// @ingroup api_svd_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event gesvd_cta(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& a_in,
-                             Span<typename base_type<T>::type> singular_values,
-                             const MatrixView<T, MatrixFormat::Dense>& u_out,
-                             const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                             const MatrixView<Scalar, MatrixFormat::Dense>& a_in,
+                             Span<typename base_type<Scalar>::type> singular_values,
+                             const MatrixView<Scalar, MatrixFormat::Dense>& u_out,
+                             const MatrixView<Scalar, MatrixFormat::Dense>& vh_out,
                              SvdVectors jobu,
                              SvdVectors jobvh,
                              const Span<std::byte>& ws,
@@ -2281,12 +2281,12 @@ BATCHLAS_API Event gesvd_cta(Queue& ctx,
 /// @param[out]    info            per-item convergence status, or empty; see @ref md_docs_2cpp-api
 /// @return event of the last enqueued kernel
 /// @ingroup api_svd_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event gesvd_cta(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& a_in,
-                             Span<typename base_type<T>::type> singular_values,
-                             const MatrixView<T, MatrixFormat::Dense>& u_out,
-                             const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                             const MatrixView<Scalar, MatrixFormat::Dense>& a_in,
+                             Span<typename base_type<Scalar>::type> singular_values,
+                             const MatrixView<Scalar, MatrixFormat::Dense>& u_out,
+                             const MatrixView<Scalar, MatrixFormat::Dense>& vh_out,
                              SvdVectors jobu,
                              SvdVectors jobvh,
                              Uplo hermitian_uplo,
@@ -2303,12 +2303,12 @@ BATCHLAS_API Event gesvd_cta(Queue& ctx,
 /// @param[in] jobvh           which rows of \f$V^H\f$ the call computes
 /// @return the workspace size in bytes
 /// @ingroup api_svd_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t gesvd_cta_buffer_size(Queue& ctx,
-                                          const MatrixView<T, MatrixFormat::Dense>& a,
-                                          Span<typename base_type<T>::type> singular_values,
-                                          const MatrixView<T, MatrixFormat::Dense>& u_out,
-                                          const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                                          const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                                          Span<typename base_type<Scalar>::type> singular_values,
+                                          const MatrixView<Scalar, MatrixFormat::Dense>& u_out,
+                                          const MatrixView<Scalar, MatrixFormat::Dense>& vh_out,
                                           SvdVectors jobu,
                                           SvdVectors jobvh);
 
@@ -2323,12 +2323,12 @@ BATCHLAS_API size_t gesvd_cta_buffer_size(Queue& ctx,
 /// @param[in] hermitian_uplo  triangle the call will read
 /// @return the workspace size in bytes
 /// @ingroup api_svd_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t gesvd_cta_buffer_size(Queue& ctx,
-                                          const MatrixView<T, MatrixFormat::Dense>& a,
-                                          Span<typename base_type<T>::type> singular_values,
-                                          const MatrixView<T, MatrixFormat::Dense>& u_out,
-                                          const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                                          const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                                          Span<typename base_type<Scalar>::type> singular_values,
+                                          const MatrixView<Scalar, MatrixFormat::Dense>& u_out,
+                                          const MatrixView<Scalar, MatrixFormat::Dense>& vh_out,
                                           SvdVectors jobu,
                                           SvdVectors jobvh,
                                           Uplo hermitian_uplo);
@@ -2338,9 +2338,9 @@ BATCHLAS_API size_t gesvd_cta_buffer_size(Queue& ctx,
 /// @trap Deliberately NOT a reuse of JacobiParams: its `sort_order` defaults to
 ///       Ascending while gesvd admits exactly one order (descending), so reuse invites
 ///       a silent flip.
-template <typename T>
+template <typename Scalar>
 struct GesvdjParams {
-    using Real = typename base_type<T>::type;
+    using Real = typename base_type<Scalar>::type;
 
     /// A rotation is applied to pivot pair \f$(p, q)\f$ only when
     /// \f$ \lvert a_{pq} \rvert > \mathrm{tol\_multiplier} \cdot n \varepsilon \sqrt{\lvert a_{pp} \rvert \, \lvert a_{qq} \rvert} \f$
@@ -2390,16 +2390,16 @@ struct GesvdjParams {
 /// @throws batchlas::unsupported if the device has no sub-group size 32
 /// @see @ref design_gesvd, @ref perf_gesvd
 /// @ingroup api_svd_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event gesvdj_cta(Queue& ctx,
-                              const MatrixView<T, MatrixFormat::Dense>& a_in,
-                              Span<typename base_type<T>::type> singular_values,
-                              const MatrixView<T, MatrixFormat::Dense>& u_out,
-                              const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                              const MatrixView<Scalar, MatrixFormat::Dense>& a_in,
+                              Span<typename base_type<Scalar>::type> singular_values,
+                              const MatrixView<Scalar, MatrixFormat::Dense>& u_out,
+                              const MatrixView<Scalar, MatrixFormat::Dense>& vh_out,
                               SvdVectors jobu,
                               SvdVectors jobvh,
                               const Span<std::byte>& ws = Span<std::byte>(),
-                              GesvdjParams<T> params = GesvdjParams<T>(),
+                              GesvdjParams<Scalar> params = GesvdjParams<Scalar>(),
                               Span<int32_t> info = Span<int32_t>());
 
 /// @brief Required workspace, in bytes, for gesvdj_cta() (currently 0: all state is in local memory).
@@ -2413,15 +2413,15 @@ BATCHLAS_API Event gesvdj_cta(Queue& ctx,
 /// @param[in] params          parameters of the call
 /// @return the workspace size in bytes
 /// @ingroup api_svd_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t gesvdj_cta_buffer_size(Queue& ctx,
-                                           const MatrixView<T, MatrixFormat::Dense>& a,
-                                           Span<typename base_type<T>::type> singular_values,
-                                           const MatrixView<T, MatrixFormat::Dense>& u_out,
-                                           const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                                           const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                                           Span<typename base_type<Scalar>::type> singular_values,
+                                           const MatrixView<Scalar, MatrixFormat::Dense>& u_out,
+                                           const MatrixView<Scalar, MatrixFormat::Dense>& vh_out,
                                            SvdVectors jobu,
                                            SvdVectors jobvh,
-                                           GesvdjParams<T> params = GesvdjParams<T>());
+                                           GesvdjParams<Scalar> params = GesvdjParams<Scalar>());
 
 /// @}
 
@@ -2445,11 +2445,11 @@ BATCHLAS_API size_t gesvdj_cta_buffer_size(Queue& ctx,
 /// @param[in]     cta_wg_size_multiplier multiplier on the baseline work-group size
 /// @return event of the kernel
 /// @ingroup api_qr_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event ormqx_cta(Queue& ctx,
-                            const MatrixView<T, MatrixFormat::Dense>& a_in,
-                            const VectorView<T>& tau_in,
-                            const MatrixView<T, MatrixFormat::Dense>& c_in,
+                            const MatrixView<Scalar, MatrixFormat::Dense>& a_in,
+                            const VectorView<Scalar>& tau_in,
+                            const MatrixView<Scalar, MatrixFormat::Dense>& c_in,
                             Uplo factorization,
                             Side side,
                             Transpose trans,
@@ -2478,11 +2478,11 @@ enum class StedcAlgorithm {
 /// @brief Parameters for stedc(). Every tuning knob at 0 (or `Auto`) takes the value
 ///        from the checked-in tuning tables.
 /// @see @ref perf_stedc, section "stedc: current tuning values"
-template <typename T>
+template <typename Real>
 struct StedcParams {
     int64_t recursion_threshold = 0; ///< Leaf size; \f$\le 0\f$ uses BatchLAS tuning, otherwise this exact threshold
     StedcAlgorithm algorithm = StedcAlgorithm::Auto;               ///< Merge-tree driver.
-    SteqrParams<T> leaf_steqr_params = SteqrParams<T>();           ///< Parameters of the leaf steqr() solves.
+    SteqrParams<Real> leaf_steqr_params = SteqrParams<Real>();           ///< Parameters of the leaf steqr() solves.
 
     StedcMergeVariant merge_variant = StedcMergeVariant::Auto;     ///< Merge-step dispatch.
     int merge_threads = 128;       ///< work-group size for fused kernel
@@ -2513,9 +2513,9 @@ struct StedcParams {
 ///                            by a leaf steqr() that runs out of sweeps.
 /// @return event of the last enqueued kernel
 /// @see @ref perf_stedc
-template <Backend B, typename T>
-BATCHLAS_API Event stedc(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
-                     JobType jobz, StedcParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects,
+template <Backend B, typename Real>
+BATCHLAS_API Event stedc(Queue& ctx, const VectorView<Real>& d, const VectorView<Real>& e, const VectorView<Real>& eigenvalues, const Span<std::byte>& ws,
+                     JobType jobz, StedcParams<Real> params, const MatrixView<Real, MatrixFormat::Dense>& eigvects,
                      Span<int32_t> info = Span<int32_t>());
 
 /// @brief Required workspace, in bytes, for stedc().
@@ -2526,8 +2526,8 @@ BATCHLAS_API Event stedc(Queue& ctx, const VectorView<T>& d, const VectorView<T>
 /// @param[in] params     leaf size, merge driver and tuning overrides of the call
 /// @return the workspace size in bytes
 /// @ingroup api_tridiag_lowlevel
-template <Backend B, typename T>
-BATCHLAS_API size_t stedc_buffer_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<T> params);
+template <Backend B, typename Real>
+BATCHLAS_API size_t stedc_buffer_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<Real> params);
 
 /// @}
 
@@ -2546,11 +2546,11 @@ BATCHLAS_API size_t stedc_buffer_size(Queue& ctx, size_t n, size_t batch_size, J
 /// @param[out] workspace scratch of at least ritz_values_buffer_size() bytes; contents undefined on return
 /// @return event to track operation completion
 /// @see @ref guide_ritz_values
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 BATCHLAS_API Event ritz_values(Queue& ctx,
-                               const MatrixView<T, MFormat>& A,
-                               const MatrixView<T, MatrixFormat::Dense>& V,
-                               const VectorView<typename base_type<T>::type>& ritz_vals,
+                               const MatrixView<Scalar, MFormat>& A,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& V,
+                               const VectorView<typename base_type<Scalar>::type>& ritz_vals,
                                Span<std::byte> workspace);
 
 /// @brief ritz_values() returning a new `Vector` of `V.cols()` Ritz values per item.
@@ -2562,19 +2562,19 @@ BATCHLAS_API Event ritz_values(Queue& ctx,
 /// @param[in] V   trial vectors, \f$n \times k\f$ dense per item
 /// @return a `Vector` of \f$k\f$ (= `V.cols()`) real Ritz values per item
 /// @see @ref guide_ritz_values
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 inline auto ritz_values(Queue& ctx,
-                        const MatrixView<T, MFormat>& A,
-                        const MatrixView<T, MatrixFormat::Dense>& V) {
-    using float_type = typename base_type<T>::type;
+                        const MatrixView<Scalar, MFormat>& A,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& V) {
+    using float_type = typename base_type<Scalar>::type;
     size_t nRitz = V.cols();
     Vector<float_type> ritz_vals(nRitz, V.batch_size());
-    size_t workspace_size = ritz_values_buffer_size<B, T, MFormat>(ctx, A, V, static_cast<VectorView<float_type>>(ritz_vals));
+    size_t workspace_size = ritz_values_buffer_size<B, Scalar, MFormat>(ctx, A, V, static_cast<VectorView<float_type>>(ritz_vals));
     UnifiedVector<std::byte> workspace(workspace_size);
     ctx.wait();
     // (void) on an Event: deliberate. This Queue is in-order, so the next submission
     // is already ordered after this one and the Event carries nothing the caller needs.
-    (void)ritz_values<B, T, MFormat>(ctx, A, V, static_cast<VectorView<float_type>>(ritz_vals), workspace);
+    (void)ritz_values<B, Scalar, MFormat>(ctx, A, V, static_cast<VectorView<float_type>>(ritz_vals), workspace);
     ctx.wait();
     return ritz_vals;
 }
@@ -2586,11 +2586,11 @@ inline auto ritz_values(Queue& ctx,
 /// @param[in] ritz_vals Ritz-value output the call will use; not written
 /// @return the workspace size in bytes
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 BATCHLAS_API size_t ritz_values_buffer_size(Queue& ctx,
-                                          const MatrixView<T, MFormat>& A,
-                                          const MatrixView<T, MatrixFormat::Dense>& V,
-                                          const VectorView<typename base_type<T>::type>& ritz_vals);
+                                          const MatrixView<Scalar, MFormat>& A,
+                                          const MatrixView<Scalar, MatrixFormat::Dense>& V,
+                                          const VectorView<typename base_type<Scalar>::type>& ritz_vals);
 
 /// @}
 
@@ -2608,10 +2608,10 @@ BATCHLAS_API size_t ritz_values_buffer_size(Queue& ctx,
 /// @param[out] Ainv      the inverses \f$A^{-1}\f$, \f$n \times n\f$ per item
 /// @param[out] workspace scratch of at least inv_buffer_size() bytes; contents undefined on return
 /// @return event to track operation completion
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event inv(Queue& ctx,
-                 const MatrixView<T, MatrixFormat::Dense>& A,
-                 const MatrixView<T, MatrixFormat::Dense>& Ainv,
+                 const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                 const MatrixView<Scalar, MatrixFormat::Dense>& Ainv,
                  Span<std::byte> workspace);
 
 /// @brief Required workspace size, in bytes, for inv().
@@ -2619,18 +2619,18 @@ BATCHLAS_API Event inv(Queue& ctx,
 /// @param[in] A   matrices the call will invert (shape only)
 /// @return the workspace size in bytes
 /// @ingroup api_extra_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t inv_buffer_size(Queue& ctx,
-                 const MatrixView<T, MatrixFormat::Dense>& A);
+                 const MatrixView<Scalar, MatrixFormat::Dense>& A);
 
 /// @brief inv() returning a newly allocated result; workspace is leased from the
 ///        Queue's arena. Returns without waiting.
 /// @param[in] ctx queue the work is enqueued on
 /// @param[in] A   matrices to invert, \f$n \times n\f$ per item; read only
 /// @return a new batch holding \f$A^{-1}\f$, \f$n \times n\f$ per item
-template <Backend B, typename T>
-BATCHLAS_API Matrix<T, MatrixFormat::Dense> inv(Queue& ctx,
-                 const MatrixView<T, MatrixFormat::Dense>& A);
+template <Backend B, typename Scalar>
+BATCHLAS_API Matrix<Scalar, MatrixFormat::Dense> inv(Queue& ctx,
+                 const MatrixView<Scalar, MatrixFormat::Dense>& A);
 
 /// @brief Scales `mat` by \f$\mathit{cto} / \mathit{cfrom}\f$ without overflow or underflow (LAPACK `?lascl`).
 ///
@@ -2641,8 +2641,8 @@ BATCHLAS_API Matrix<T, MatrixFormat::Dense> inv(Queue& ctx,
 /// @param[in]     cfrom denominator of the factor; must be nonzero
 /// @param[in]     cto   numerator of the factor
 /// @return event of the last scaling step
-template <MatrixFormat MType, typename T>
-BATCHLAS_API Event lascl(Queue& ctx, const MatrixView<T, MType>& mat, T cfrom, T cto);
+template <MatrixFormat MType, typename Real>
+BATCHLAS_API Event lascl(Queue& ctx, const MatrixView<Real, MType>& mat, Real cfrom, Real cto);
 
 /// @}
 }  // namespace batchlas
@@ -2752,12 +2752,12 @@ struct OrthoAgainstOptions {
 /// @param[out]    workspace scratch of at least ortho_buffer_size() bytes for `opts.algorithm`;
 ///                          contents undefined on return
 /// @return event of the last enqueued kernel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 inline Event ortho(Queue& ctx,
-        const MatrixView<T, MatrixFormat::Dense>& A,
+        const MatrixView<Scalar, MatrixFormat::Dense>& A,
         const OrthoOptions& opts,
         Span<std::byte> workspace) {
-    return ortho<B, T>(ctx, A, opts.transA, workspace, opts.algorithm);
+    return ortho<B, Scalar>(ctx, A, opts.transA, workspace, opts.algorithm);
 }
 
 /// @brief ortho() with an options struct; workspace is leased from the Queue's arena.
@@ -2768,14 +2768,14 @@ inline Event ortho(Queue& ctx,
 /// @param[in,out] A    batch of \f$m \times n\f$ matrices; overwritten with the orthonormal vectors
 /// @param[in]     opts columns or rows, and the orthogonalisation algorithm
 /// @return event of the last enqueued kernel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 inline Event ortho(Queue& ctx,
-        const MatrixView<T, MatrixFormat::Dense>& A,
+        const MatrixView<Scalar, MatrixFormat::Dense>& A,
         const OrthoOptions& opts) {
     // Sized with the algorithm the call actually runs: Chol2, SVQB and the Householder
     // path need different scratch, so a default-algorithm query under-sizes the rest.
-    auto lease = ctx.workspace(ortho_buffer_size<B, T>(ctx, A, opts.transA, opts.algorithm));
-    return ortho<B, T>(ctx, A, opts.transA, lease.span(), opts.algorithm);
+    auto lease = ctx.workspace(ortho_buffer_size<B, Scalar>(ctx, A, opts.transA, opts.algorithm));
+    return ortho<B, Scalar>(ctx, A, opts.transA, lease.span(), opts.algorithm);
 }
 
 /// @brief Backend-deducing ortho() with an options struct and a caller-provided workspace.
@@ -2785,17 +2785,17 @@ inline Event ortho(Queue& ctx,
 /// @param[out]    workspace scratch of at least ortho_buffer_size() bytes for `opts.algorithm`;
 ///                          contents undefined on return
 /// @return event of the last enqueued kernel
-template <typename T>
+template <typename Scalar>
 inline Event ortho(Queue& ctx,
-        const MatrixView<T, MatrixFormat::Dense>& A,
+        const MatrixView<Scalar, MatrixFormat::Dense>& A,
         const OrthoOptions& opts,
         Span<std::byte> workspace) {
     if (detail::pointer_checks_enabled()) {
         detail::require_arg_accessible(ctx, A, "ortho: A");
         detail::require_arg_accessible(ctx, workspace, "ortho: workspace");
     }
-    return with_backend_for<T>(ctx, "ortho",
-                               [&](auto Back) { return ortho<Back.value, T>(ctx, A, opts, workspace); });
+    return with_backend_for<Scalar>(ctx, "ortho",
+                                    [&](auto Back) { return ortho<Back.value, Scalar>(ctx, A, opts, workspace); });
 }
 
 /// @brief Backend-deducing ortho() with an options struct; workspace leased from the arena.
@@ -2804,13 +2804,13 @@ inline Event ortho(Queue& ctx,
 /// @param[in,out] A    batch of \f$m \times n\f$ matrices; overwritten with the orthonormal vectors
 /// @param[in]     opts columns or rows, and the orthogonalisation algorithm
 /// @return event of the last enqueued kernel
-template <typename T>
+template <typename Scalar>
 inline Event ortho(Queue& ctx,
-        const MatrixView<T, MatrixFormat::Dense>& A,
+        const MatrixView<Scalar, MatrixFormat::Dense>& A,
         const OrthoOptions& opts = {}) {
     if (detail::pointer_checks_enabled()) detail::require_arg_accessible(ctx, A, "ortho: A");
-    return with_backend_for<T>(ctx, "ortho",
-                               [&](auto Back) { return ortho<Back.value, T>(ctx, A, opts); });
+    return with_backend_for<Scalar>(ctx, "ortho",
+                                    [&](auto Back) { return ortho<Back.value, Scalar>(ctx, A, opts); });
 }
 
 /// @}
@@ -2826,12 +2826,12 @@ enum class OrthoEmptyBracesAreAmbiguous {};
 /// @addtogroup api_qr
 /// @{
 
-template <Backend B, typename T>
-Event ortho(Queue&, const MatrixView<T, MatrixFormat::Dense>&,
+template <Backend B, typename Scalar>
+Event ortho(Queue&, const MatrixView<Scalar, MatrixFormat::Dense>&,
             detail::OrthoEmptyBracesAreAmbiguous, Span<std::byte>) = delete;
 
-template <typename T>
-Event ortho(Queue&, const MatrixView<T, MatrixFormat::Dense>&,
+template <typename Scalar>
+Event ortho(Queue&, const MatrixView<Scalar, MatrixFormat::Dense>&,
             detail::OrthoEmptyBracesAreAmbiguous, Span<std::byte>) = delete;
 
 // ---- orthogonalisation against an external metric ---------------------------
@@ -2846,14 +2846,14 @@ Event ortho(Queue&, const MatrixView<T, MatrixFormat::Dense>&,
 /// @param[out]    workspace scratch of at least ortho_buffer_size() bytes for the same options;
 ///                          contents undefined on return
 /// @return event of the last enqueued kernel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 inline Event ortho(Queue& ctx,
-        const MatrixView<T, MatrixFormat::Dense>& A,
-        const MatrixView<T, MatrixFormat::Dense>& M,
+        const MatrixView<Scalar, MatrixFormat::Dense>& A,
+        const MatrixView<Scalar, MatrixFormat::Dense>& M,
         const OrthoAgainstOptions& opts,
         Span<std::byte> workspace) {
-    return ortho<B, T>(ctx, A, M, opts.transA, opts.transM, workspace, opts.algorithm,
-                       opts.iterations);
+    return ortho<B, Scalar>(ctx, A, M, opts.transA, opts.transM, workspace, opts.algorithm,
+                            opts.iterations);
 }
 
 /// @brief ortho() against `M` with an options struct; workspace leased from the arena.
@@ -2862,15 +2862,15 @@ inline Event ortho(Queue& ctx,
 /// @param[in]     M    external basis, read only
 /// @param[in]     opts vector orientation of `A` and `M`, algorithm and pass count
 /// @return event of the last enqueued kernel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 inline Event ortho(Queue& ctx,
-        const MatrixView<T, MatrixFormat::Dense>& A,
-        const MatrixView<T, MatrixFormat::Dense>& M,
+        const MatrixView<Scalar, MatrixFormat::Dense>& A,
+        const MatrixView<Scalar, MatrixFormat::Dense>& M,
         const OrthoAgainstOptions& opts) {
-    auto lease = ctx.workspace(ortho_buffer_size<B, T>(ctx, A, M, opts.transA, opts.transM,
-                                                       opts.algorithm, opts.iterations));
-    return ortho<B, T>(ctx, A, M, opts.transA, opts.transM, lease.span(), opts.algorithm,
-                       opts.iterations);
+    auto lease = ctx.workspace(ortho_buffer_size<B, Scalar>(ctx, A, M, opts.transA, opts.transM,
+                                                            opts.algorithm, opts.iterations));
+    return ortho<B, Scalar>(ctx, A, M, opts.transA, opts.transM, lease.span(), opts.algorithm,
+                            opts.iterations);
 }
 
 /// @brief Backend-deducing ortho() against `M` with an options struct and a caller-provided workspace.
@@ -2881,10 +2881,10 @@ inline Event ortho(Queue& ctx,
 /// @param[out]    workspace scratch of at least ortho_buffer_size() bytes for the same options;
 ///                          contents undefined on return
 /// @return event of the last enqueued kernel
-template <typename T>
+template <typename Scalar>
 inline Event ortho(Queue& ctx,
-        const MatrixView<T, MatrixFormat::Dense>& A,
-        const MatrixView<T, MatrixFormat::Dense>& M,
+        const MatrixView<Scalar, MatrixFormat::Dense>& A,
+        const MatrixView<Scalar, MatrixFormat::Dense>& M,
         const OrthoAgainstOptions& opts,
         Span<std::byte> workspace) {
     if (detail::pointer_checks_enabled()) {
@@ -2892,8 +2892,8 @@ inline Event ortho(Queue& ctx,
         detail::require_arg_accessible(ctx, M, "ortho: M");
         detail::require_arg_accessible(ctx, workspace, "ortho: workspace");
     }
-    return with_backend_for<T>(ctx, "ortho",
-                               [&](auto Back) { return ortho<Back.value, T>(ctx, A, M, opts, workspace); });
+    return with_backend_for<Scalar>(ctx, "ortho",
+                                    [&](auto Back) { return ortho<Back.value, Scalar>(ctx, A, M, opts, workspace); });
 }
 
 /// @brief Backend-deducing ortho() against `M` with an options struct; workspace leased from the arena.
@@ -2903,17 +2903,17 @@ inline Event ortho(Queue& ctx,
 /// @param[in]     M    external basis, read only
 /// @param[in]     opts vector orientation of `A` and `M`, algorithm and pass count
 /// @return event of the last enqueued kernel
-template <typename T>
+template <typename Scalar>
 inline Event ortho(Queue& ctx,
-        const MatrixView<T, MatrixFormat::Dense>& A,
-        const MatrixView<T, MatrixFormat::Dense>& M,
+        const MatrixView<Scalar, MatrixFormat::Dense>& A,
+        const MatrixView<Scalar, MatrixFormat::Dense>& M,
         const OrthoAgainstOptions& opts = {}) {
     if (detail::pointer_checks_enabled()) {
         detail::require_arg_accessible(ctx, A, "ortho: A");
         detail::require_arg_accessible(ctx, M, "ortho: M");
     }
-    return with_backend_for<T>(ctx, "ortho",
-                               [&](auto Back) { return ortho<Back.value, T>(ctx, A, M, opts); });
+    return with_backend_for<Scalar>(ctx, "ortho",
+                                    [&](auto Back) { return ortho<Back.value, Scalar>(ctx, A, M, opts); });
 }
 
 /// @}

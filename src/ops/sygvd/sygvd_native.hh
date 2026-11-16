@@ -14,9 +14,9 @@ namespace batchlas::ops::sygvd {
 
 // Both skip item b where a non-null mask has mask[b] == 0 (potrf_info[b] is then never written).
 // Where potrf_info[b] != 0, B's uplo triangle := the identity's (a partial factor may hold NaN).
-template <typename T>
-BATCHLAS_INTERNAL_API Event sygvd_identity_failed(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& B, Uplo uplo,
-                                                  Span<const int32_t> potrf_info, const std::uint8_t* mask);
+template <typename Scalar>
+BATCHLAS_INTERNAL_API Event sygvd_identity_failed(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                                                  Uplo uplo, Span<const int32_t> potrf_info, const std::uint8_t* mask);
 
 // info[b] := n + potrf_info[b] where potrf_info[b] != 0 (LAPACK's ?sygvd convention), else unchanged.
 BATCHLAS_INTERNAL_API Event sygvd_merge_info(Queue& ctx, int n, Span<const int32_t> potrf_info, Span<int32_t> info,
@@ -26,16 +26,16 @@ BATCHLAS_INTERNAL_API Event sygvd_merge_info(Queue& ctx, int n, Span<const int32
 
 namespace batchlas::ops::sygvd {
 
-template <class T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
-template <class T>
-using Real = typename base_type<T>::type;
+template <class Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+template <class Scalar>
+using Real = typename base_type<Scalar>::type;
 
 // Everything one call reads besides the queue and the workspace.
-template <class T>
+template <class Scalar>
 struct Args {
-    MV<T> A, B;
-    Span<Real<T>> w;
+    MV<Scalar> A, B;
+    Span<Real<Scalar>> w;
     int itype;
     JobType jobz;
     Uplo uplo;
@@ -43,9 +43,9 @@ struct Args {
 };
 
 // Compose (kernels/sygvd_compose.cc): workspace bytes, and the child sequence on an in-order queue.
-template <Backend B, class T>
-std::size_t compose_workspace(Queue& q, const Args<T>& a);
-template <Backend B, class T>
-Event compose(Queue& q, const Args<T>& a, Span<std::byte> ws, Span<int32_t> info);
+template <Backend B, class Scalar>
+std::size_t compose_workspace(Queue& q, const Args<Scalar>& a);
+template <Backend B, class Scalar>
+Event compose(Queue& q, const Args<Scalar>& a, Span<std::byte> ws, Span<int32_t> info);
 
 }  // namespace batchlas::ops::sygvd

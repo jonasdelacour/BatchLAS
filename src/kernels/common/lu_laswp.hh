@@ -23,29 +23,29 @@
 
 namespace batchlas::lu_native {
 
-template <typename Tag, typename T> class LuLaswpKernel;
+template <typename Tag, typename Scalar> class LuLaswpKernel;
 
 // Apply pivots k0 .. k1-1 (0-based positions in the list) to the column block at
 // `base`: forward gives P B (?LASWP incx = +1), !forward gives P^T B (incx = -1).
 // Values are GLOBAL 1-BASED rows (getrf_native.hh's pivot contract), so `base`
 // must point at row 0, offset only in COLUMN; `piv_stride` is the order of A.
 // `mask` (null: unmasked) is the batch mask from item 0 of `base`; an inactive item is skipped.
-template <typename Tag, typename T>
+template <typename Tag, typename Scalar>
 Event lu_laswp_launch(Queue& ctx,
-                      T* base, int ld, int stride, int ncols, int batch,
+                      Scalar* base, int ld, int stride, int ncols, int batch,
                       const int* piv, int piv_stride,
                       int k0, int k1, bool forward, const std::uint8_t* mask = nullptr) {
     if (ncols <= 0 || batch <= 0 || k1 <= k0) return ctx.get_event();
 
     // Re-type std::complex at the pointer boundary only; device_scalar.hh's rule.
-    using DM = sycl_device::DevMap<T>;
+    using DM = sycl_device::DevMap<Scalar>;
     using D = typename DM::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     D* const bp = reinterpret_cast<D*>(base);
 
     ctx->submit([&](sycl::handler& h) {
-        batchlas::impl::parallel_for<LuLaswpKernel<Tag, T>>(h,
+        batchlas::impl::parallel_for<LuLaswpKernel<Tag, Scalar>>(h,
             sycl::range<2>(static_cast<std::size_t>(batch),
                            static_cast<std::size_t>(ncols)),
             [=](sycl::item<2> it) {
@@ -70,7 +70,7 @@ Event lu_laswp_launch(Queue& ctx,
 // the blocked driver's P-1 left-side launches, and composes to the same permutation.
 // evidence: docs/perf/lu.md#getrf-deferred-left-gather
 
-template <typename Tag, typename T> class LuLaswpGatherKernel;
+template <typename Tag, typename Scalar> class LuLaswpGatherKernel;
 
 // The tile's share of local memory: bigger buys nothing and costs occupancy.
 constexpr std::size_t kLuLaswpTileCap = 24576;
@@ -79,9 +79,9 @@ constexpr std::size_t kLuLaswpTileCap = 24576;
 // block's own columns. `base` points at row 0 column 0 of item 0; `piv` is the
 // FULL interchange list, global 1-based. Returns false having enqueued NOTHING
 // when the staging tile does not fit -- the caller must then use the walk.
-template <typename Tag, typename T>
+template <typename Tag, typename Scalar>
 bool lu_laswp_deferred_left_launch(Queue& ctx,
-                                   T* base, int ld, int stride, int batch,
+                                   Scalar* base, int ld, int stride, int batch,
                                    const int* piv, int piv_stride,
                                    int n, int nb,
                                    std::size_t slm_budget, int max_wg,
@@ -92,9 +92,9 @@ bool lu_laswp_deferred_left_launch(Queue& ctx,
     const int nblk = P - 1;                 // blocks that receive anything
     if (nblk <= 0) return true;             // a single panel defers nothing
 
-    using DM = sycl_device::DevMap<T>;
+    using DM = sycl_device::DevMap<Scalar>;
     using D = typename DM::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     // r = 0 carries the longest suffix and sizes the allocation for every group.
     const int rmax = n - nb;
@@ -137,7 +137,7 @@ bool lu_laswp_deferred_left_launch(Queue& ctx,
             sycl::range<1>(2u * static_cast<std::size_t>(rmax)), h);
         sycl::local_accessor<D, 1> tile(sycl::range<1>(tile_elems), h);
 
-        batchlas::impl::parallel_for<LuLaswpGatherKernel<Tag, T>>(h,
+        batchlas::impl::parallel_for<LuLaswpGatherKernel<Tag, Scalar>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(nblk) *
                                              static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
@@ -196,25 +196,25 @@ bool lu_laswp_deferred_left_launch(Queue& ctx,
     return true;
 }
 
-template <typename Tag, typename T> class LuLaswpRightGatherKernel;
+template <typename Tag, typename Scalar> class LuLaswpRightGatherKernel;
 
 // The in-loop RIGHT-hand interchange as the same gather: pivots [k0, k0 + L) applied to
 // columns [c_begin, c_begin + ncols), rows [k0, k0 + R). One group per (column tile, item),
 // so it is parallel over columns as well as batch; only rows the permutation MOVES are
 // written back. Returns false having enqueued nothing when a column does not fit.
 // evidence: docs/perf/lu.md#the-right-hand-gather
-template <typename Tag, typename T>
+template <typename Tag, typename Scalar>
 bool lu_laswp_right_gather_launch(Queue& ctx,
-                                  T* base, int ld, int stride, int batch,
+                                  Scalar* base, int ld, int stride, int batch,
                                   const int* piv, int piv_stride,
                                   int k0, int L, int R, int c_begin, int ncols,
                                   std::size_t slm_budget, int max_wg,
                                   const std::uint8_t* mask = nullptr) {
     if (batch <= 0 || ncols <= 0 || L <= 0 || R <= 0) return true;
 
-    using DM = sycl_device::DevMap<T>;
+    using DM = sycl_device::DevMap<Scalar>;
     using D = typename DM::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     const int ldt = R | 1;
     const std::size_t int_bytes = static_cast<std::size_t>(R) * sizeof(int);
@@ -238,7 +238,7 @@ bool lu_laswp_right_gather_launch(Queue& ctx,
         sycl::local_accessor<int, 1> idxs(sycl::range<1>(static_cast<std::size_t>(R)), h);
         sycl::local_accessor<D, 1> tile(sycl::range<1>(tile_elems), h);
 
-        batchlas::impl::parallel_for<LuLaswpRightGatherKernel<Tag, T>>(h,
+        batchlas::impl::parallel_for<LuLaswpRightGatherKernel<Tag, Scalar>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(ntile) *
                                              static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),

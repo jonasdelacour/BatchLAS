@@ -24,21 +24,22 @@ namespace detail {
 
 // x1 conj(y1) + x2 conj(y2): one term of a rank-2 Hermitian update. Real: one expression, so
 // it contracts to fma(x1, y1, x2 * y2) as the hand kernel's did.
-template <class Ops, class T> BATCHLAS_DEVICE_INLINE T her2_term(const T& x1, const T& y1, const T& x2, const T& y2) {
-    using Ar = arith_t<Ops, T>;
+template <class Ops, class Scalar> BATCHLAS_DEVICE_INLINE Scalar her2_term(const Scalar& x1, const Scalar& y1,
+                                                                           const Scalar& x2, const Scalar& y2) {
+    using Ar = arith_t<Ops, Scalar>;
     if constexpr (Ar::is_complex) return Ar::add(Ar::mul(x1, Ar::conj(y1)), Ar::mul(x2, Ar::conj(y2)));
     else return x1 * y1 + x2 * y2;
 }
 
 // y(r) := (A x)(r) * alpha with item r computing output row r (core gemv's RowOwner without
 // the loop); x is read across owners. alpha multiplies on the right, as `y *= tau` did.
-template <class Ops, class Ex, class T, class MA, class X, class Y>
-BATCHLAS_DEVICE_INLINE void gemv_rows(const Fit<Ex>& ex, const T& alpha, const MA& a, const Published<X>& xp, const Y& y) {
-    using Ar = arith_t<Ops, T>;
+template <class Ops, class Ex, class Scalar, class MA, class X, class Y>
+BATCHLAS_DEVICE_INLINE void gemv_rows(const Fit<Ex>& ex, const Scalar& alpha, const MA& a, const Published<X>& xp, const Y& y) {
+    using Ar = arith_t<Ops, Scalar>;
     const auto& x = xp.v;
     const int m = a.rows(), n = a.cols(), r = ex.lid();
     if (r >= 0 && r < m) {
-        T acc = Ar::zero();
+        Scalar acc = Ar::zero();
         for (int c = 0; c < n; ++c) Ar::mac(acc, a(r, c), x(c));
         y(r) = Ar::mul(acc, alpha);
     }
@@ -155,26 +156,27 @@ template <class T> BATCHLAS_DEVICE_INLINE typename local_mptr<T>::pointer decora
 template <class T> BATCHLAS_DEVICE_INLINE T* decorated_ptr(T* p) { return p; }
 
 // sytd2<Upper> on the full Hermitian tile (ld LDA, zero past n) at A_local[base_a]; returns
-// tau(lane), 0 for lane >= n-1. The inliner declines this body for complex T, so the call
+// tau(lane), 0 for lane >= n-1. The inliner declines this body for complex Scalar, so the call
 // carries decorated local pointers by value: an accessor taken by reference is copied to the
 // stack (cf/cd Upper STACK 0->344).
-template <typename T, int32_t LDA, size_t P, bool M>
-inline T sytd2_upper_tile(const SubGroupPartition<P, M>& part, typename local_mptr<T>::pointer A_local, int32_t base_a,
-                          typename local_mptr<T>::pointer V_local, int32_t base_v, typename local_mptr<T>::pointer W_local,
-                          int32_t base_w, int32_t n) {
-    using LP = typename local_mptr<T>::pointer;
-    using Tile = Mat<T, Dyn, Dyn, Ext<LDA>, Mem::Local, Cyclic, LP>;
-    using Col = Vec<T, Dyn, Unit, Mem::Local, Cyclic, LP>;
+template <typename Scalar, int32_t LDA, size_t P, bool M>
+inline Scalar sytd2_upper_tile(const SubGroupPartition<P, M>& part, typename local_mptr<Scalar>::pointer A_local,
+                               int32_t base_a,
+                               typename local_mptr<Scalar>::pointer V_local, int32_t base_v, typename local_mptr<Scalar>::pointer W_local,
+                               int32_t base_w, int32_t n) {
+    using LP = typename local_mptr<Scalar>::pointer;
+    using Tile = Mat<Scalar, Dyn, Dyn, Ext<LDA>, Mem::Local, Cyclic, LP>;
+    using Col = Vec<Scalar, Dyn, Unit, Mem::Local, Cyclic, LP>;
     return sytd2<Uplo::Upper>(wrap(part), Tile{A_local, Dyn{n}, Dyn{n}, {}, base_a}, Col{V_local, Dyn{n}, {}, base_v},
                               Col{W_local, Dyn{n}, {}, base_w}, n);
 }
 
 // The CTA tier's one body (P x P tile, ld P): the Hermitian tile from A's UL triangle, sytd2,
 // d / e / tau out, the reduced tile back to A. Buf is the local memory's base (a
-// sycl::local_accessor<T, 1>, or a decorated pointer) and base_* the element offsets of this
+// sycl::local_accessor<Scalar, 1>, or a decorated pointer) and base_* the element offsets of this
 // problem's tile, v and w. live == false (a masked-off item) reduces a zero tile and stores
 // nothing. The host sytrd_cta kernel and device::sytrd<UL, tier::Cta<P>> both run it.
-template <Uplo UL, class T, size_t P, bool M, class Buf, class MA, class DV, class EV, class TV>
+template <Uplo UL, class Scalar, size_t P, bool M, class Buf, class MA, class DV, class EV, class TV>
 BATCHLAS_DEVICE_INLINE void sytrd_cta_run(const SubGroupPartition<P, M>& part, const Buf& A_local, int32_t base_a,
                                        const Buf& V_local, int32_t base_v, const Buf& W_local, int32_t base_w,
                                        const MA& A, DV D_prob, EV E_prob, TV TAU_prob, int32_t n, bool live) {
@@ -182,8 +184,8 @@ BATCHLAS_DEVICE_INLINE void sytrd_cta_run(const SubGroupPartition<P, M>& part, c
     const auto ex = wrap(part);
     const int32_t lane = static_cast<int32_t>(part.get_local_linear_id());
     // Views with the local base itself: the uniform base keeps [R.X4+UR] addressing.
-    using Tile = Mat<T, Ext<kP>, Ext<kP>, Ext<kP>, Mem::Local, Cyclic, Buf>;
-    using Col = Vec<T, Dyn, Unit, Mem::Local, Cyclic, Buf>;
+    using Tile = Mat<Scalar, Ext<kP>, Ext<kP>, Ext<kP>, Mem::Local, Cyclic, Buf>;
+    using Col = Vec<Scalar, Dyn, Unit, Mem::Local, Cyclic, Buf>;
     const Tile tile{A_local, {}, {}, {}, base_a};
 
     // Item r loads row r of the named triangle (coalesced); Im(diag) dropped; zero past n.
@@ -191,8 +193,9 @@ BATCHLAS_DEVICE_INLINE void sytrd_cta_run(const SubGroupPartition<P, M>& part, c
     group_barrier(part);
 
     if constexpr (UL == Uplo::Upper) {
-        const T tau_lane = sytd2_upper_tile<T, kP>(part, decorated_ptr(A_local), base_a, decorated_ptr(V_local), base_v,
-                                                   decorated_ptr(W_local), base_w, n);
+        const Scalar tau_lane = sytd2_upper_tile<Scalar, kP>(part, decorated_ptr(A_local), base_a,
+                                                             decorated_ptr(V_local), base_v,
+                                                             decorated_ptr(W_local), base_w, n);
         // The tridiagonal straight off the reduced tile.
         if (live && lane < n) {
             D_prob(lane) = A_local[base_a + lane + lane * kP];
@@ -205,7 +208,7 @@ BATCHLAS_DEVICE_INLINE void sytrd_cta_run(const SubGroupPartition<P, M>& part, c
         // d(i), e(i), tau(i) leave as reflector i is formed (d(i) is final by then). live by
         // value: a flag the nested lambda takes by reference can land in local memory.
         sytd2<Uplo::Lower>(ex, tile, Col{V_local, Dyn{n}, Unit{}, base_v}, Col{W_local, Dyn{n}, Unit{}, base_w}, n,
-                           [&, live](int32_t i, const T& beta, const T& taui) {
+                           [&, live](int32_t i, const Scalar& beta, const Scalar& taui) {
                                if (live) {
                                    E_prob(i) = beta;
                                    TAU_prob(i) = taui;
@@ -224,12 +227,13 @@ BATCHLAS_DEVICE_INLINE void sytrd_cta_run(const SubGroupPartition<P, M>& part, c
 }
 
 // The CTA tier's workspace: the N x N tile (ld N), then v and w (N each), all local.
-template <int N, class T> struct sytrd_cta_plan {
+template <int N, class Scalar> struct sytrd_cta_plan {
     Plan plan{};
-    WsSlot<T> a{}, v{}, w{};
+    WsSlot<Scalar> a{}, v{}, w{};
     constexpr sytrd_cta_plan()
-        : a(plan.take<T>(WsSpace::Local, static_cast<std::size_t>(N) * N)), v(plan.take<T>(WsSpace::Local, N)),
-          w(plan.take<T>(WsSpace::Local, N)) {}
+        : a(plan.take<Scalar>(WsSpace::Local, static_cast<std::size_t>(N) * N)), v(plan.take<Scalar>(WsSpace::Local,
+                                                                                                     N)),
+          w(plan.take<Scalar>(WsSpace::Local, N)) {}
 };
 
 // ---- xLATRD, Lower: one work-group, A in global memory ------------------------------------------
@@ -271,10 +275,10 @@ BATCHLAS_DEVICE_INLINE void latrd_col_update_run(const AB& Ab, const WB& Wb, con
 // is formed. Ab / Wb: (r, c), data(), ld(). v / wcol: n elements each in memory VM, shared by the
 // work-group; vip / wip: ib elements of local memory. The hand kernel's expressions (std::complex
 // operators, Native and ExplicitInline policies). Ends on a global barrier. COLLECTIVE.
-template <int WG, Mem VM = Mem::Local, class T, class AB, class WB, class Loc, class F>
-BATCHLAS_DEVICE_INLINE void latrd_lower_run(const WorkGroup<WG>& ex, const AB& Ab, const WB& Wb, int n, int ib, T* v_ptr, T* wcol_ptr,
+template <int WG, Mem VM = Mem::Local, class Scalar, class AB, class WB, class Loc, class F>
+BATCHLAS_DEVICE_INLINE void latrd_lower_run(const WorkGroup<WG>& ex, const AB& Ab, const WB& Wb, int n, int ib, Scalar* v_ptr, Scalar* wcol_ptr,
                                          const Loc& vip_local, const Loc& wip_local, F&& on_reflector) {
-    using Real = real_t<T>;
+    using Real = real_t<Scalar>;
     using arith::Native;
     const int lid = ex.lid();
     const sycl::group<1> g = ex.it.get_group();
@@ -288,7 +292,7 @@ BATCHLAS_DEVICE_INLINE void latrd_lower_run(const WorkGroup<WG>& ex, const AB& A
 
         if (lid < i) {
             const int p = lid;
-            vip_local[p] = (i == p + 1) ? T(1) : Ab(i, p);
+            vip_local[p] = (i == p + 1) ? Scalar(1) : Ab(i, p);
             wip_local[p] = Wb(i, p);
         }
         ex.barrier(Mem::Local);
@@ -299,8 +303,8 @@ BATCHLAS_DEVICE_INLINE void latrd_lower_run(const WorkGroup<WG>& ex, const AB& A
         // Householder reflector of A(i+1:, i); |x|^2 as re*re + im*im of the element in place.
         const auto x = A.col(i).tail(i + 2);
         const Real sumsq = reduce<Scope::Group>(ex, x.size(), [&](int k) {
-            const T& xk = x(k);
-            if constexpr (Arith<T>::is_complex) {
+            const Scalar& xk = x(k);
+            if constexpr (Arith<Scalar>::is_complex) {
                 const Real re = xk.real();
                 const Real im = xk.imag();
                 return re * re + im * im;
@@ -308,14 +312,14 @@ BATCHLAS_DEVICE_INLINE void latrd_lower_run(const WorkGroup<WG>& ex, const AB& A
                 return xk * xk;
             }
         });
-        T alpha = T(0);
+        Scalar alpha = Scalar(0);
         if (lid == 0 && i + 1 < n) {
             alpha = Ab(i + 1, i);
         }
         alpha = ::batchlas::portable::group_broadcast(g, alpha);
 
-        T tau_i = T(0);
-        T scale = T(0);
+        Scalar tau_i = Scalar(0);
+        Scalar scale = Scalar(0);
 
         if (lid == 0) {
             // xLARFG scalars, alg::PhaseN1: a complex alpha reflects at the last column too.
@@ -323,13 +327,13 @@ BATCHLAS_DEVICE_INLINE void latrd_lower_run(const WorkGroup<WG>& ex, const AB& A
             tau_i = h.tau;
             scale = h.scale;
             on_reflector(i, h.beta, tau_i);
-            Ab(i + 1, i) = T(1);
+            Ab(i + 1, i) = Scalar(1);
         }
 
         tau_i = ::batchlas::portable::group_broadcast(g, tau_i);
         scale = ::batchlas::portable::group_broadcast(g, scale);
 
-        if (tau_i != T(0)) scal<Native>(ex, scale, x);
+        if (tau_i != Scalar(0)) scal<Native>(ex, scale, x);
         ex.barrier(Mem::Global);
 
         // w = tau (A v - V W^H v - W V^H v), w -= tau/2 (v^H w) v.
@@ -337,7 +341,7 @@ BATCHLAS_DEVICE_INLINE void latrd_lower_run(const WorkGroup<WG>& ex, const AB& A
         const auto w = wfull.tail(i + 1);
         // i by value: on AdaptiveCpp (Metal and its CPU device) a by-reference capture of this
         // barrier loop's counter gives NaN eigenvalues (syev_blocked Upper n = 96).
-        for_each_owned(ex, i + 1, n, [&, i](int r) { vfull(r) = (r == i + 1) ? T(1) : A(r, i); });
+        for_each_owned(ex, i + 1, n, [&, i](int r) { vfull(r) = (r == i + 1) ? Scalar(1) : A(r, i); });
         hemv<Uplo::Lower, alg::RowOwnerSplitStoredDiag, arith::ExplicitInline>(
             ex, One{}, trailing(Ab, i + 1, n), ex.publish(trailing(vfull, i + 1)), Zero{}, trailing(wfull, i + 1));
 
@@ -345,13 +349,14 @@ BATCHLAS_DEVICE_INLINE void latrd_lower_run(const WorkGroup<WG>& ex, const AB& A
             const auto vcol = unit_head(A.col(p), p + 1).tail(i + 1);
             const auto wcol = W.col(p).tail(i + 1);
             const auto gd = dot_many<Transpose::ConjTrans, Scope::Group, Native>(ex, v, wcol, vcol);
-            const T gamma = gd[0], delta = gd[1];
-            map(ex, w, [&](T wr, T vrp, T wrp) { return wr - (vrp * gamma + wrp * delta); }, w, vcol, wcol);
+            const Scalar gamma = gd[0], delta = gd[1];
+            map(ex, w, [&](Scalar wr, Scalar vrp, Scalar wrp) { return wr - (vrp * gamma + wrp * delta); }, w, vcol,
+                wcol);
         }
 
         scal<Native>(ex, tau_i, w);
-        const T dot = dotc<Scope::Group, Native>(ex, v, w);
-        axpy<Native>(ex, T(-0.5) * tau_i * dot, v, w);
+        const Scalar dot = dotc<Scope::Group, Native>(ex, v, w);
+        axpy<Native>(ex, Scalar(-0.5) * tau_i * dot, v, w);
         copy(ex, w, W.col(i).tail(i + 1));
         ex.barrier(Mem::Global);
     }
@@ -359,26 +364,27 @@ BATCHLAS_DEVICE_INLINE void latrd_lower_run(const WorkGroup<WG>& ex, const AB& A
 
 // ---- the Blocked tier ---------------------------------------------------------------------------
 // A column-major matrix in global memory as latrd_lower_run reads it.
-template <class T> struct ColView {
-    T* p;
+template <class Scalar> struct ColView {
+    Scalar* p;
     int ld_;
-    BATCHLAS_DEVICE_INLINE T& operator()(int r, int c) const { return p[r + c * ld_]; }
-    BATCHLAS_DEVICE_INLINE T* data() const { return p; }
+    BATCHLAS_DEVICE_INLINE Scalar& operator()(int r, int c) const { return p[r + c * ld_]; }
+    BATCHLAS_DEVICE_INLINE Scalar* data() const { return p; }
     BATCHLAS_DEVICE_INLINE int ld() const { return ld_; }
 };
 
 // The trailing update's tile: the in-group L3 preset the device_lapack_l3 tests cover (256 items).
-template <class T> using blocked_cfg = l3::cfg::RegTiled<T, 32, 32, 8, 2, 2>;
+template <class Scalar> using blocked_cfg = l3::cfg::RegTiled<Scalar, 32, 32, 8, 2, 2>;
 
 // The Blocked tier's workspace: W (n x NB, ld n), v and wcol (n each) in global memory; vip, wip
 // (NB each) and the L3 stage in local memory. O(NB) local bytes, so any n fits.
-template <int NB, class T> struct sytrd_blocked_plan {
+template <int NB, class Scalar> struct sytrd_blocked_plan {
     Plan plan{};
-    WsSlot<T> w{}, v{}, wc{}, vip{}, wip{}, smem{};
+    WsSlot<Scalar> w{}, v{}, wc{}, vip{}, wip{}, smem{};
     constexpr explicit sytrd_blocked_plan(int n)
-        : w(plan.take<T>(WsSpace::Global, static_cast<std::size_t>(n) * NB)), v(plan.take<T>(WsSpace::Global, n)),
-          wc(plan.take<T>(WsSpace::Global, n)), vip(plan.take<T>(WsSpace::Local, NB)), wip(plan.take<T>(WsSpace::Local, NB)),
-          smem(plan.take<T>(WsSpace::Local, l3::smem_elems<blocked_cfg<T>>())) {}
+        : w(plan.take<Scalar>(WsSpace::Global, static_cast<std::size_t>(n) * NB)), v(plan.take<Scalar>(WsSpace::Global,
+                                                                                                       n)),
+          wc(plan.take<Scalar>(WsSpace::Global, n)), vip(plan.take<Scalar>(WsSpace::Local, NB)), wip(plan.take<Scalar>(WsSpace::Local, NB)),
+          smem(plan.take<Scalar>(WsSpace::Local, l3::smem_elems<blocked_cfg<Scalar>>())) {}
 };
 
 // xSYTRD UPLO = 'L' on one n x n matrix per work-group (the host sytrd_blocked's panel loop): per
@@ -386,43 +392,45 @@ template <int NB, class T> struct sytrd_blocked_plan {
 // the in-group her2k (Lower triangle only, Im(diag) := 0); finally d(i) = A(i,i) and e(i) back
 // into A(i+1, i) and A(i, i+1) = conj(e(i)) (the host restore_tridiag_lower). Im(diag) of the
 // input is dropped first. The strictly upper triangle past the superdiagonal is not referenced.
-template <int NB, int WG, class T, class DV, class EV, class TV>
-BATCHLAS_DEVICE_INLINE void sytrd_blocked_run(const WorkGroup<WG>& ex, const l3::Global<T>& a, const DV& d, const EV& e, const TV& tau,
+template <int NB, int WG, class Scalar, class DV, class EV, class TV>
+BATCHLAS_DEVICE_INLINE void sytrd_blocked_run(const WorkGroup<WG>& ex, const l3::Global<Scalar>& a, const DV& d, const EV& e, const TV& tau,
                                            const Workspace& ws) {
-    using Cfg = blocked_cfg<T>;
-    using Ar = Arith<T>;
+    using Cfg = blocked_cfg<Scalar>;
+    using Ar = Arith<Scalar>;
     const int n = a.m, lda = a.ld;
-    const sytrd_blocked_plan<NB, T> plan(n);
-    T* const wp = carve_global(ws, plan.w);
-    T* const vp = carve_global(ws, plan.v);
-    T* const wcp = carve_global(ws, plan.wc);
+    const sytrd_blocked_plan<NB, Scalar> plan(n);
+    Scalar* const wp = carve_global(ws, plan.w);
+    Scalar* const vp = carve_global(ws, plan.v);
+    Scalar* const wcp = carve_global(ws, plan.wc);
     const auto vip = carve_local(ws, plan.vip).get();
     const auto wip = carve_local(ws, plan.wip).get();
     const Workspace sm = sub_workspace(ws, plan.smem);
 
     if constexpr (Ar::is_complex) {
-        for_each_owned(ex, n, [&](int i) BATCHLAS_DEVICE_BODY { a(i, i) = Ar::make(Ar::re(a(i, i)), real_t<T>(0)); });
+        for_each_owned(ex, n,
+                       [&](int i) BATCHLAS_DEVICE_BODY { a(i, i) = Ar::make(Ar::re(a(i, i)), real_t<Scalar>(0)); });
         ex.barrier(Mem::Global);
     }
     const int k = n - 1;
     for (int j0 = 0; j0 < k; j0 += NB) {
         const int ib = std::min(NB, k - j0);
         const int j2 = j0 + ib, n2 = n - j2;
-        const ColView<T> ap{a.p + j0 + j0 * lda, lda};
-        const ColView<T> wv{wp + j0, n};
+        const ColView<Scalar> ap{a.p + j0 + j0 * lda, lda};
+        const ColView<Scalar> wv{wp + j0, n};
         latrd_lower_run<WG, Mem::Global>(ex, ap, wv, n - j0, ib, vp, wcp, vip, wip,
-                                         [&, j0](int i, const T& beta, const T& t) BATCHLAS_DEVICE_BODY {  // j0 by value: see the latrd i
+                                         [&, j0](int i, const Scalar& beta, const Scalar& t) BATCHLAS_DEVICE_BODY {  // j0 by value: see the latrd i
                                              e(j0 + i) = beta;
                                              tau(j0 + i) = t;
                                          });
         if (n2 > 0)
-            her2k<Uplo::Lower, Transpose::NoTrans, Cfg>(ex, NegOne{}, l3::Global<T>{a.p + j2 + j0 * lda, lda, n2, ib},
-                                                         l3::Global<T>{wp + j2, n, n2, ib}, One{}, l3::Global<T>{a.p + j2 + j2 * lda, lda, n2, n2}, sm);
+            her2k<Uplo::Lower, Transpose::NoTrans, Cfg>(ex, NegOne{},
+                                                        l3::Global<Scalar>{a.p + j2 + j0 * lda, lda, n2, ib},
+                                                         l3::Global<Scalar>{wp + j2, n, n2, ib}, One{}, l3::Global<Scalar>{a.p + j2 + j2 * lda, lda, n2, n2}, sm);
     }
     for_each_owned(ex, n, [&](int i) BATCHLAS_DEVICE_BODY {
         d(i) = a(i, i);
         if (i < n - 1) {
-            const T ei = e(i);
+            const Scalar ei = e(i);
             a(i + 1, i) = ei;
             a(i, i + 1) = ::batchlas::device::conj(ei);
         }
@@ -439,26 +447,26 @@ template <Uplo UL> struct sytrd {
 };
 }  // namespace routine
 
-template <Uplo UL, int N, class Alg, class T> struct tier_info<routine::sytrd<UL>, tier::Cta<N, Alg>, T> {
+template <Uplo UL, int N, class Alg, class Scalar> struct tier_info<routine::sytrd<UL>, tier::Cta<N, Alg>, Scalar> {
     static_assert(N == 4 || N == 8 || N == 16 || N == 32, "sytrd: tier::Cta<N> has N in {4, 8, 16, 32}");
     static constexpr int wg_size = 32;  // the smallest launch: one sub-group, 32 / N problems
     static constexpr int sg_size = 32;
     using executor = SgpPartition<N>;
     static constexpr int per_group = wg_size / N;
     static constexpr bool admits(int n) { return n >= 1 && n <= N; }
-    static constexpr WorkspaceSize buffer_size(int) { return detail::sytrd_cta_plan<N, T>{}.plan.size(); }
+    static constexpr WorkspaceSize buffer_size(int) { return detail::sytrd_cta_plan<N, Scalar>{}.plan.size(); }
 };
 // tier::Blocked<NB>: Uplo::Lower only (the host sytrd_blocked's restriction; mirror an Upper input
 // with core mirror<Uplo::Upper, Transpose::ConjTrans> first, as syev_blocked does).
-template <int NB, class Alg, class T> struct tier_info<routine::sytrd<Uplo::Lower>, tier::Blocked<NB, Alg>, T> {
-    static constexpr int wg_size = detail::blocked_cfg<T>::threads;  // 256: the her2k tile's items
+template <int NB, class Alg, class Scalar> struct tier_info<routine::sytrd<Uplo::Lower>, tier::Blocked<NB, Alg>, Scalar> {
+    static constexpr int wg_size = detail::blocked_cfg<Scalar>::threads;  // 256: the her2k tile's items
     static constexpr int sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 1; }
-    static constexpr WorkspaceSize buffer_size(int n) { return detail::sytrd_blocked_plan<NB, T>(n).plan.size(); }
+    static constexpr WorkspaceSize buffer_size(int n) { return detail::sytrd_blocked_plan<NB, Scalar>(n).plan.size(); }
 };
-template <Uplo UL, class T> struct tiers<routine::sytrd<UL>, T> {
+template <Uplo UL, class Scalar> struct tiers<routine::sytrd<UL>, Scalar> {
     using cta = tier::list<tier::Cta<4>, tier::Cta<8>, tier::Cta<16>, tier::Cta<32>>;
     using type = std::conditional_t<UL == Uplo::Lower, tier::list<tier::Cta<4>, tier::Cta<8>, tier::Cta<16>, tier::Cta<32>, tier::Blocked<32>>, cta>;
 };

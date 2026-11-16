@@ -24,36 +24,36 @@ namespace batchlas::device {
 
 namespace detail {
 
-template <class Tier, class T> struct sy2sb_cfg_of;  // only tier::Blocked<NB> is a sy2sb tier
-template <int NB, class A, class T> struct sy2sb_cfg_of<tier::Blocked<NB, A>, T> {
+template <class Tier, class Scalar> struct sy2sb_cfg_of;  // only tier::Blocked<NB> is a sy2sb tier
+template <int NB, class A, class Scalar> struct sy2sb_cfg_of<tier::Blocked<NB, A>, Scalar> {
     static_assert(NB == 32 || NB == 64, "sy2sb: tier::Blocked<NB> with NB = 32 or 64 (the Level 3 tile)");
-    using type = l3::cfg::RegTiled<T, NB, NB, 8, NB / 16, NB / 16>;
+    using type = l3::cfg::RegTiled<Scalar, NB, NB, 8, NB / 16, NB / 16>;
 };
-template <class Tier, class T> using cfg_t = typename sy2sb_cfg_of<Tier, T>::type;
+template <class Tier, class Scalar> using cfg_t = typename sy2sb_cfg_of<Tier, Scalar>::type;
 
 // One matrix's workspace (kd > 0 and n > kd; else none), sized for the first panel (pn0 x pk0),
 // which bounds every later one: the tile staging (local), then (global) the panel's tau, its
 // unit-lower V, P = V T, Y = A22 P, T, and the pk x kd products M1, M2.
-template <class T> struct Sy2sbLayout {
-    WsSlot<T> smem, taup, v, p, y, tf, m1, m2;
+template <class Scalar> struct Sy2sbLayout {
+    WsSlot<Scalar> smem, taup, v, p, y, tf, m1, m2;
     WorkspaceSize size;
 };
-template <class Tier, class T> constexpr Sy2sbLayout<T> panel_layout(int n, int kd) {
-    Sy2sbLayout<T> l{};
+template <class Tier, class Scalar> constexpr Sy2sbLayout<Scalar> panel_layout(int n, int kd) {
+    Sy2sbLayout<Scalar> l{};
     Plan p;
     if (kd > 0 && n > kd) {
         constexpr WsSpace g = WsSpace::Global;
         const std::size_t pn0 = static_cast<std::size_t>(n - kd);
         const std::size_t kdz = static_cast<std::size_t>(kd);
         const std::size_t pk0 = pn0 < kdz ? pn0 : kdz;
-        l.smem = p.take<T>(WsSpace::Local, static_cast<std::size_t>(l3::smem_elems<cfg_t<Tier, T>>()));
-        l.taup = p.take<T>(g, pk0);
-        l.v = p.take<T>(g, pn0 * pk0);
-        l.p = p.take<T>(g, pn0 * pk0);
-        l.y = p.take<T>(g, pn0 * pk0);
-        l.tf = p.take<T>(g, pk0 * pk0);
-        l.m1 = p.take<T>(g, pk0 * kdz);
-        l.m2 = p.take<T>(g, pk0 * kdz);
+        l.smem = p.take<Scalar>(WsSpace::Local, static_cast<std::size_t>(l3::smem_elems<cfg_t<Tier, Scalar>>()));
+        l.taup = p.take<Scalar>(g, pk0);
+        l.v = p.take<Scalar>(g, pn0 * pk0);
+        l.p = p.take<Scalar>(g, pn0 * pk0);
+        l.y = p.take<Scalar>(g, pn0 * pk0);
+        l.tf = p.take<Scalar>(g, pk0 * pk0);
+        l.m1 = p.take<Scalar>(g, pk0 * kdz);
+        l.m2 = p.take<Scalar>(g, pk0 * kdz);
     }
     l.size = p.size();
     return l;
@@ -67,9 +67,9 @@ template <class Ex, class MA, class MB> BATCHLAS_DEVICE_INLINE void copy_band_co
     copy(ex, a.col(j).tail(j).head(lk), ab.col(j).head(lk));
 }
 
-template <class T> constexpr T minus_half() {
-    if constexpr (Arith<T>::is_complex) return Arith<T>::make(real_t<T>(-0.5), real_t<T>(0));
-    else return T(-0.5);
+template <class Scalar> constexpr Scalar minus_half() {
+    if constexpr (Arith<Scalar>::is_complex) return Arith<Scalar>::make(real_t<Scalar>(-0.5), real_t<Scalar>(0));
+    else return Scalar(-0.5);
 }
 
 // A := H^H A H on the lower triangle for the panel's H = diag(I, I - W T W^H): the strip left of
@@ -113,18 +113,18 @@ template <Uplo UL, int KDMax> struct sy2sb {
 
 // buffer_size(n, kd): ONE matrix's workspace at (n, kd), zero when nothing is reduced (kd == 0 or
 // n <= kd); buffer_size(n) at the tag's kd_at(n).
-template <Uplo UL, int KDMax, int NB, class A, class T> struct tier_info<routine::sy2sb<UL, KDMax>, tier::Blocked<NB, A>, T> {
-    static constexpr int wg_size = detail::cfg_t<tier::Blocked<NB, A>, T>::threads, sg_size = 32;
+template <Uplo UL, int KDMax, int NB, class A, class Scalar> struct tier_info<routine::sy2sb<UL, KDMax>, tier::Blocked<NB, A>, Scalar> {
+    static constexpr int wg_size = detail::cfg_t<tier::Blocked<NB, A>, Scalar>::threads, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int n, int kd) {
         static_assert(UL == Uplo::Lower, "sy2sb: Uplo::Lower only (as host sytrd_sy2sb)");
-        return detail::panel_layout<tier::Blocked<NB, A>, std::remove_cv_t<T>>(n, kd).size;
+        return detail::panel_layout<tier::Blocked<NB, A>, std::remove_cv_t<Scalar>>(n, kd).size;
     }
     static constexpr WorkspaceSize buffer_size(int n) { return buffer_size(n, routine::sy2sb<UL, KDMax>::kd_at(n)); }
 };
-template <Uplo UL, int KDMax, class T> struct tiers<routine::sy2sb<UL, KDMax>, T> {
+template <Uplo UL, int KDMax, class Scalar> struct tiers<routine::sy2sb<UL, KDMax>, Scalar> {
     using type = tier::list<tier::Blocked<32>>;
 };
 

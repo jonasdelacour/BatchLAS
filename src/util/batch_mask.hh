@@ -76,10 +76,11 @@ void refuse_batch_mask(const char* who, const Views&... v) {
     if (any_batch_mask(v...)) throw batchlas::unsupported(batch_mask_refusal(who));
 }
 
-template <typename T, typename... V>
+template <typename Scalar, typename... V>
 void refuse_batch_mask(Op op, const char* who, Backend backend, const V&... v) {
     (void)call_mask(who, v...);
-    if (any_batch_mask(v...)) throw batchlas::NoRouteError(op, backend, scalar_kind_of<T>, batch_mask_refusal(who));
+    if (any_batch_mask(v...)) throw batchlas::NoRouteError(op, backend, scalar_kind_of<Scalar>,
+                                                           batch_mask_refusal(who));
 }
 
 }  // namespace batchlas::detail

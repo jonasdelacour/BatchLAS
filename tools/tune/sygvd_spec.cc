@@ -24,16 +24,16 @@ namespace {
 
 namespace I = ops::sygvd;
 
-template <typename T>
+template <typename Scalar>
 struct SygvdProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
-    using R = typename base_type<T>::type;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+    using R = typename base_type<Scalar>::type;
     Queue& q;
     int n, batch, ld;
     JobType jobz;
     std::size_t stride;
-    UnifiedVector<T> A0, B0, A, B, P;
-    UnifiedVector<T*> pA0, pB0, pA, pB, pP;
+    UnifiedVector<Scalar> A0, B0, A, B, P;
+    UnifiedVector<Scalar*> pA0, pB0, pA, pB, pP;
     MV A0v, B0v, Av, Bv, Pv;
     UnifiedVector<R> w;
     UnifiedVector<std::int32_t> info;
@@ -51,7 +51,8 @@ struct SygvdProblem {
         (void)B0v.fill_random_spd(q, 12345);
         q.wait();
     }
-    std::size_t workspace() { return sygvd_buffer_size<kBackend, T>(q, Av, Bv, w.to_span(), 1, jobz, Uplo::Upper); }
+    std::size_t workspace() { return sygvd_buffer_size<kBackend, Scalar>(q, Av, Bv, w.to_span(), 1, jobz,
+                                                                         Uplo::Upper); }
     void reset() {
         (void)MV::copy(q, Av, A0v);
         (void)MV::copy(q, Bv, B0v);
@@ -61,7 +62,7 @@ struct SygvdProblem {
         for (int b = 0; b < batch; ++b) info[std::size_t(b)] = 0;
     }
     void run(Span<std::byte> ws) {
-        (void)sygvd<kBackend, T>(q, Av, Bv, w.to_span(), 1, jobz, Uplo::Upper, ws, info.to_span());
+        (void)sygvd<kBackend, Scalar>(q, Av, Bv, w.to_span(), 1, jobz, Uplo::Upper, ws, info.to_span());
         q.wait();
     }
     std::pair<double, int> verify() {
@@ -72,7 +73,7 @@ struct SygvdProblem {
         q.wait();
         for (int b = 0; b < batch; ++b)
             for (int j = 0; j < n; ++j)
-                for (int i = 0; i < n; ++i) Pv(i, j, b) *= T(w[std::size_t(b) * n + j]);
+                for (int i = 0; i < n; ++i) Pv(i, j, b) *= Scalar(w[std::size_t(b) * n + j]);
         return {MV::solve_residual(q, A0v, Av, Pv), bad};
     }
 };

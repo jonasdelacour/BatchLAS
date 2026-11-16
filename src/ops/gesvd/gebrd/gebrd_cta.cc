@@ -20,25 +20,25 @@ namespace batchlas {
 
 namespace {
 
-template <typename T, size_t P>
+template <typename Scalar, size_t P>
 class GebrdCTAKernel;
 
 // The hand kernel's operand (A_view.batch_item(b), addressed by its own operator()) with the host
 // n as its order: device::item would re-form the batch term per element (+2% SASS here).
-template <typename T> struct ItemOfOrder {
-    KernelMatrixView<T, MatrixFormat::Dense> v;
+template <typename Scalar> struct ItemOfOrder {
+    KernelMatrixView<Scalar, MatrixFormat::Dense> v;
     int32_t n;
-    T& operator()(int i, int j) const { return v(i, j); }
+    Scalar& operator()(int i, int j) const { return v(i, j); }
     int rows() const { return n; }
 };
 
-template <typename T, size_t P>
+template <typename Scalar, size_t P>
 inline void gebrd_cta_impl(Queue& ctx,
-                           MatrixView<T, MatrixFormat::Dense>& a,
-                           const VectorView<typename base_type<T>::type>& d,
-                           const VectorView<typename base_type<T>::type>& e,
-                           const VectorView<T>& tauq,
-                           const VectorView<T>& taup,
+                           MatrixView<Scalar, MatrixFormat::Dense>& a,
+                           const VectorView<typename base_type<Scalar>::type>& d,
+                           const VectorView<typename base_type<Scalar>::type>& e,
+                           const VectorView<Scalar>& tauq,
+                           const VectorView<Scalar>& taup,
                            int32_t n,
                            size_t cta_wg_size_multiplier,
                            const std::uint8_t* mask) {
@@ -77,7 +77,7 @@ inline void gebrd_cta_impl(Queue& ctx,
         {
             const std::size_t local_mem_bytes = impl::local_mem_bytes(dev);
             const std::size_t elems_per_prob = static_cast<std::size_t>(P) * static_cast<std::size_t>(P);
-            const std::size_t bytes_per_prob = elems_per_prob * sizeof(T);
+            const std::size_t bytes_per_prob = elems_per_prob * sizeof(Scalar);
             wg_mul = impl::cta_wg_multiplier("gebrd_cta", wg_mul, base_wg_size / static_cast<int32_t>(P),
                                               bytes_per_prob, local_mem_bytes);
             wg_size = base_wg_size * wg_mul;
@@ -88,13 +88,14 @@ inline void gebrd_cta_impl(Queue& ctx,
         const int32_t global_size = num_wg * wg_size;
 
         using Tier = device::tier::Cta<static_cast<int>(P)>;
-        // One matrix's local slice (P x P of T); the accessor holds probs_per_wg of them.
-        constexpr int32_t kSlice = static_cast<int32_t>(device::buffer_size<device::routine::gebrd, Tier, T>(static_cast<int>(P)).local_bytes);
-        static_assert(kSlice == static_cast<int32_t>(P * P * sizeof(T)), "gebrd_cta: the tile slice is P x P of T");
-        auto A_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P * P), cgh);
+        // One matrix's local slice (P x P of Scalar); the accessor holds probs_per_wg of them.
+        constexpr int32_t kSlice = static_cast<int32_t>(device::buffer_size<device::routine::gebrd, Tier, Scalar>(static_cast<int>(P)).local_bytes);
+        static_assert(kSlice == static_cast<int32_t>(P * P * sizeof(Scalar)),
+                      "gebrd_cta: the tile slice is P x P of T");
+        auto A_local = sycl::local_accessor<Scalar, 1>(sycl::range<1>(probs_per_wg * P * P), cgh);
 
         // A thin launcher over device::gebrd<tier::Cta<P>> (lapack/gebrd.hh).
-        batchlas::impl::parallel_for<GebrdCTAKernel<T, P>>(cgh,
+        batchlas::impl::parallel_for<GebrdCTAKernel<Scalar, P>>(cgh,
             sycl::nd_range<1>(global_size, wg_size),
             [=](sycl::nd_item<1> it) {
                 const auto sg = it.get_sub_group();
@@ -125,20 +126,21 @@ inline void gebrd_cta_impl(Queue& ctx,
                                                A_local.template get_multi_ptr<sycl::access::decorated::yes>().get_decorated())) +
                                                part_id * kSlice,
                                            nullptr};
-                device::gebrd<Tier>(ex, it, ItemOfOrder<T>{A_prob, n}, D_prob, E_prob, TAUQ_prob, TAUP_prob, ws, live);
+                device::gebrd<Tier>(ex, it, ItemOfOrder<Scalar>{A_prob, n}, D_prob, E_prob, TAUQ_prob, TAUP_prob, ws,
+                                    live);
             });
     });
 }
 
 }  // namespace
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event gebrd_cta(Queue& ctx,
-                const MatrixView<T, MatrixFormat::Dense>& a_in,
-                const VectorView<typename base_type<T>::type>& d_out,
-                const VectorView<typename base_type<T>::type>& e_out,
-                const VectorView<T>& tauq_out,
-                const VectorView<T>& taup_out,
+                const MatrixView<Scalar, MatrixFormat::Dense>& a_in,
+                const VectorView<typename base_type<Scalar>::type>& d_out,
+                const VectorView<typename base_type<Scalar>::type>& e_out,
+                const VectorView<Scalar>& tauq_out,
+                const VectorView<Scalar>& taup_out,
                 size_t cta_wg_size_multiplier) {
     // The packed kernel folds the mask into `live` (I2): an inactive item's A, d, e and taus are untouched.
     const std::uint8_t* const mask =
@@ -146,7 +148,7 @@ Event gebrd_cta(Queue& ctx,
     if (a_in.rows() != a_in.cols()) {
         throw batchlas::invalid_argument("gebrd_cta: A must be square");
     }
-    if constexpr (detail::is_complex<T>::value) {
+    if constexpr (detail::is_complex<Scalar>::value) {
         throw batchlas::unsupported("gebrd_cta: complex types are not implemented");
     } else {
         const int64_t n64 = a_in.rows();
@@ -164,10 +166,10 @@ Event gebrd_cta(Queue& ctx,
             throw batchlas::unsupported("gebrd_cta: device does not support subgroup size 32 required for CTA kernels");
         }
 
-        auto& a = const_cast<MatrixView<T, MatrixFormat::Dense>&>(a_in);
+        auto& a = const_cast<MatrixView<Scalar, MatrixFormat::Dense>&>(a_in);
         auto launch = [&](auto P_tag) {
             constexpr int32_t P = decltype(P_tag)::value;
-            gebrd_cta_impl<T, P>(ctx, a, d_out, e_out, tauq_out, taup_out, static_cast<int32_t>(n64), cta_wg_size_multiplier, mask);
+            gebrd_cta_impl<Scalar, P>(ctx, a, d_out, e_out, tauq_out, taup_out, static_cast<int32_t>(n64), cta_wg_size_multiplier, mask);
         };
 
         if (n64 <= 4) {

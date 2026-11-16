@@ -27,7 +27,7 @@ struct Vendor : select::NoFields<"vendor"> {};      ///< backend::sygst_vendor: 
 
 using SygstChoice = std::variant<Blocked, TwoSided, Vendor>;  ///< the children select their own kernels
 
-template <class T>  /// Tie-break order (§6.3): native first, vendor last.
+template <class Scalar>  /// Tie-break order (§6.3): native first, vendor last.
 constexpr auto candidates() {
     return std::array<SygstChoice, 6>{Blocked{32}, Blocked{64}, Blocked{128}, Blocked{256}, TwoSided{}, Vendor{}};
 }

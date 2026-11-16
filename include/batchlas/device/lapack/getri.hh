@@ -46,9 +46,9 @@ BATCHLAS_DEVICE_INLINE int permute_identity(const Ex& ex, const MA& a, const P& 
 }  // namespace detail
 
 /// getri's Blocked<NB>: any n; getrf's Blocked executor and local plan (no global workspace).
-template <int NB, class Alg, class T>
-struct tier_info<routine::getri, tier::Blocked<NB, Alg>, T> : tier_info<routine::getrf, tier::Blocked<NB, Alg>, T> {};
-template <class T> struct tiers<routine::getri, T> {
+template <int NB, class Alg, class Scalar>
+struct tier_info<routine::getri, tier::Blocked<NB, Alg>, Scalar> : tier_info<routine::getrf, tier::Blocked<NB, Alg>, Scalar> {};
+template <class Scalar> struct tiers<routine::getri, Scalar> {
     using type = tier::list<tier::Blocked<32>>;
 };
 

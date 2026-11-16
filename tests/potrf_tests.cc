@@ -39,49 +39,49 @@ using namespace batchlas;
 
 namespace {
 
-template <typename T>
-using RealOf = typename batchlas::base_type<T>::type;
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using RealOf = typename batchlas::base_type<Scalar>::type;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
-template <typename T>
-inline T host_rand(std::mt19937& gen) {
-    std::uniform_real_distribution<RealOf<T>> d(RealOf<T>(-1), RealOf<T>(1));
-    if constexpr (test_utils::is_complex<T>::value) {
+template <typename Scalar>
+inline Scalar host_rand(std::mt19937& gen) {
+    std::uniform_real_distribution<RealOf<Scalar>> d(RealOf<Scalar>(-1), RealOf<Scalar>(1));
+    if constexpr (test_utils::is_complex<Scalar>::value) {
         const auto re = d(gen), im = d(gen);
-        return T(re, im);
+        return Scalar(re, im);
     } else return d(gen);
 }
 
 // Column-major Hermitian PD matrix A = (M M^H)/n + shift*I. The shift pins the
 // condition number at O(1), so a residual failure is a bug and not conditioning.
-template <typename T>
-std::vector<T> make_spd(int n, unsigned seed, RealOf<T> shift = RealOf<T>(2)) {
-    using R = RealOf<T>;
+template <typename Scalar>
+std::vector<Scalar> make_spd(int n, unsigned seed, RealOf<Scalar> shift = RealOf<Scalar>(2)) {
+    using R = RealOf<Scalar>;
     std::mt19937 gen(seed);
-    std::vector<T> M(static_cast<size_t>(n) * n);
-    for (auto& v : M) v = host_rand<T>(gen);
+    std::vector<Scalar> M(static_cast<size_t>(n) * n);
+    for (auto& v : M) v = host_rand<Scalar>(gen);
 
-    std::vector<T> A(static_cast<size_t>(n) * n, T{});
+    std::vector<Scalar> A(static_cast<size_t>(n) * n, Scalar{});
     for (int i = 0; i < n; ++i) {
         for (int j = 0; j < n; ++j) {
-            T acc{};
+            Scalar acc{};
             for (int k = 0; k < n; ++k) {
                 acc += M[i + static_cast<size_t>(k) * n] *
-                       MV<T>::conj(M[j + static_cast<size_t>(k) * n]);
+                       MV<Scalar>::conj(M[j + static_cast<size_t>(k) * n]);
             }
-            A[i + static_cast<size_t>(j) * n] = acc / T(R(n));
+            A[i + static_cast<size_t>(j) * n] = acc / Scalar(R(n));
         }
     }
     for (int i = 0; i < n; ++i) {
         A[i + static_cast<size_t>(i) * n] =
-            MV<T>::make(std::real(A[i + static_cast<size_t>(i) * n]) + shift, R(0));
+            MV<Scalar>::make(std::real(A[i + static_cast<size_t>(i) * n]) + shift, R(0));
     }
     // Force exact Hermitian symmetry and an exactly real diagonal: the kernel is
     // contractually allowed to ignore imag(diag(A)), so the reference must too.
     for (int i = 0; i < n; ++i) {
         for (int j = 0; j < i; ++j) {
-            A[j + static_cast<size_t>(i) * n] = MV<T>::conj(A[i + static_cast<size_t>(j) * n]);
+            A[j + static_cast<size_t>(i) * n] = MV<Scalar>::conj(A[i + static_cast<size_t>(j) * n]);
         }
     }
     return A;
@@ -92,19 +92,19 @@ std::vector<T> make_spd(int n, unsigned seed, RealOf<T> shift = RealOf<T>(2)) {
 // The row-prefix normalisation below looks gratuitous and is the point: it makes the
 // ORIGINAL diagonal at the failure column positive, so a kernel reading the STALE pivot
 // cannot name it. `negative_cols` must be sorted; c == 0 never discriminates.
-template <typename T>
-std::vector<T> make_planted_ldl(int n, const std::vector<int>& negative_cols, unsigned seed) {
-    using R = RealOf<T>;
+template <typename Scalar>
+std::vector<Scalar> make_planted_ldl(int n, const std::vector<int>& negative_cols, unsigned seed) {
+    using R = RealOf<Scalar>;
     std::mt19937 gen(seed);
     std::uniform_real_distribution<R> d(R(-0.25), R(0.25));
 
-    std::vector<T> L(static_cast<size_t>(n) * n, T{});
+    std::vector<Scalar> L(static_cast<size_t>(n) * n, Scalar{});
     for (int c = 0; c < n; ++c) {
-        L[c + static_cast<size_t>(c) * n] = MV<T>::make(R(1), R(0));
+        L[c + static_cast<size_t>(c) * n] = MV<Scalar>::make(R(1), R(0));
         for (int i = c + 1; i < n; ++i) {
-            if constexpr (test_utils::is_complex<T>::value) {
+            if constexpr (test_utils::is_complex<Scalar>::value) {
                 const auto re = d(gen), im = d(gen);
-                L[i + static_cast<size_t>(c) * n] = T(re, im);
+                L[i + static_cast<size_t>(c) * n] = Scalar(re, im);
             } else {
                 L[i + static_cast<size_t>(c) * n] = d(gen);
             }
@@ -119,54 +119,55 @@ std::vector<T> make_planted_ldl(int n, const std::vector<int>& negative_cols, un
         if (c < 1 || c >= n) continue;
         R ss = R(0);
         for (int p = 0; p < c; ++p) {
-            const T v = L[c + static_cast<size_t>(p) * n];
+            const Scalar v = L[c + static_cast<size_t>(p) * n];
             ss += std::real(v) * std::real(v) + std::imag(v) * std::imag(v);
         }
         if (ss <= R(0)) continue;
         const R scale = std::sqrt(R(2) / ss);
         for (int p = 0; p < c; ++p) {
             L[c + static_cast<size_t>(p) * n] =
-                MV<T>::make(std::real(L[c + static_cast<size_t>(p) * n]) * scale,
-                               std::imag(L[c + static_cast<size_t>(p) * n]) * scale);
+                MV<Scalar>::make(std::real(L[c + static_cast<size_t>(p) * n]) * scale,
+                                 std::imag(L[c + static_cast<size_t>(p) * n]) * scale);
         }
     }
 
-    std::vector<T> A(static_cast<size_t>(n) * n, T{});
+    std::vector<Scalar> A(static_cast<size_t>(n) * n, Scalar{});
     for (int i = 0; i < n; ++i) {
         for (int j = 0; j < n; ++j) {
-            T acc{};
+            Scalar acc{};
             for (int k = 0; k <= std::min(i, j); ++k) {
-                acc += L[i + static_cast<size_t>(k) * n] * MV<T>::make(D[k], R(0)) *
-                       MV<T>::conj(L[j + static_cast<size_t>(k) * n]);
+                acc += L[i + static_cast<size_t>(k) * n] * MV<Scalar>::make(D[k], R(0)) *
+                       MV<Scalar>::conj(L[j + static_cast<size_t>(k) * n]);
             }
             A[i + static_cast<size_t>(j) * n] = acc;
         }
     }
     for (int i = 0; i < n; ++i) {
         A[i + static_cast<size_t>(i) * n] =
-            MV<T>::make(std::real(A[i + static_cast<size_t>(i) * n]), R(0));
+            MV<Scalar>::make(std::real(A[i + static_cast<size_t>(i) * n]), R(0));
     }
     return A;
 }
 
 // ||A - L L^H||_F / ||A||_F (Lower) or ||A - U^H U||_F / ||A||_F (Upper), read from the stored
 // triangle of the factor F (ld) through batchlas::verify; A is the tight Hermitian reference.
-template <typename T>
-double potrf_error(Queue& ctx, const std::vector<T>& A, const T* F, int ld, int n, Uplo uplo) {
-    return MV<T>::potrf_residual(ctx, MV<T>(const_cast<T*>(A.data()), n, n, n), MV<T>(const_cast<T*>(F), n, n, ld), uplo);
+template <typename Scalar>
+double potrf_error(Queue& ctx, const std::vector<Scalar>& A, const Scalar* F, int ld, int n, Uplo uplo) {
+    return MV<Scalar>::potrf_residual(ctx, MV<Scalar>(const_cast<Scalar*>(A.data()), n, n, n), MV<Scalar>(const_cast<Scalar*>(F), n, n, ld), uplo);
 }
 
-template <typename T>
-double potrf_error(Queue& ctx, const std::vector<T>& A, const Matrix<T, MatrixFormat::Dense>& F, int b, Uplo uplo) {
-    return potrf_error<T>(ctx, A, F.data().data() + static_cast<size_t>(b) * F.stride(), F.ld(), F.rows(), uplo);
+template <typename Scalar>
+double potrf_error(Queue& ctx, const std::vector<Scalar>& A, const Matrix<Scalar, MatrixFormat::Dense>& F, int b,
+                   Uplo uplo) {
+    return potrf_error<Scalar>(ctx, A, F.data().data() + static_cast<size_t>(b) * F.stride(), F.ld(), F.rows(), uplo);
 }
 
 // The CTA leaf's pre-migration bound 4 n eps = 8 n u, a factor 1/2 on the kind's 16 n u.
 inline const verify::Slack kLeafSlack{0.5, "kept from this file's leaf tolerance 4 n eps (docs/perf/potrf.md#potrf-correctness-findings)"};
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct PotrfConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 

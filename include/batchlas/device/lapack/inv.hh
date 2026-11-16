@@ -29,16 +29,16 @@ namespace detail {
 
 // getrf's local slots first (the same offsets getrf carves), then the global copy (ld = n) and
 // its pivots.
-template <class T> struct InvPlan {
-    detail::LuBlockedPlan<T> local;
-    WsSlot<T> lu;
+template <class Scalar> struct InvPlan {
+    detail::LuBlockedPlan<Scalar> local;
+    WsSlot<Scalar> lu;
     WsSlot<int> ipiv;
     WorkspaceSize size;
 };
-template <class T, class Cfg> constexpr InvPlan<T> inv_plan(int n) {
+template <class Scalar, class Cfg> constexpr InvPlan<Scalar> inv_plan(int n) {
     Plan p;
-    const auto local = detail::lu_blocked_take<T, Cfg>(p);
-    const auto lu = p.take<T>(WsSpace::Global, static_cast<std::size_t>(n) * static_cast<std::size_t>(n));
+    const auto local = detail::lu_blocked_take<Scalar, Cfg>(p);
+    const auto lu = p.take<Scalar>(WsSpace::Global, static_cast<std::size_t>(n) * static_cast<std::size_t>(n));
     const auto ipiv = p.take<int>(WsSpace::Global, static_cast<std::size_t>(n));
     return {local, lu, ipiv, p.size()};
 }
@@ -46,16 +46,16 @@ template <class T, class Cfg> constexpr InvPlan<T> inv_plan(int n) {
 }  // namespace detail
 
 /// inv's Blocked<NB>: any n; getrf's Blocked executor and local plan, global n * n + n pivots.
-template <int NB, class Alg, class T> struct tier_info<routine::inv, tier::Blocked<NB, Alg>, T> {
-    using cfg = detail::lu_blocked_cfg_t<T, tier::Blocked<NB, Alg>>;
-    static_assert(std::is_same_v<typename cfg::value_type, T>, "inv: tier::Blocked's l3 configuration is for another scalar type");
+template <int NB, class Alg, class Scalar> struct tier_info<routine::inv, tier::Blocked<NB, Alg>, Scalar> {
+    using cfg = detail::lu_blocked_cfg_t<Scalar, tier::Blocked<NB, Alg>>;
+    static_assert(std::is_same_v<typename cfg::value_type, Scalar>, "inv: tier::Blocked's l3 configuration is for another scalar type");
     static constexpr int wg_size = cfg::threads, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 1; }
-    static constexpr WorkspaceSize buffer_size(int n) { return detail::inv_plan<T, cfg>(n).size; }
+    static constexpr WorkspaceSize buffer_size(int n) { return detail::inv_plan<Scalar, cfg>(n).size; }
 };
-template <class T> struct tiers<routine::inv, T> {
+template <class Scalar> struct tiers<routine::inv, Scalar> {
     using type = tier::list<tier::Blocked<32>>;
 };
 

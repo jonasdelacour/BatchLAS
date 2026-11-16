@@ -52,12 +52,12 @@ namespace gf = batchlas::ops::getrf;
 using C = gf::GetrfChoice;
 using Pin = select::ScopedPin<C>;
 
-template <typename T>
-using RealOf = typename batchlas::base_type<T>::type;
-template <typename T>
-using MVof = MatrixView<T, MatrixFormat::Dense>;
-template <typename T>
-constexpr bool kCx = !std::is_same_v<T, RealOf<T>>;
+template <typename Scalar>
+using RealOf = typename batchlas::base_type<Scalar>::type;
+template <typename Scalar>
+using MVof = MatrixView<Scalar, MatrixFormat::Dense>;
+template <typename Scalar>
+constexpr bool kCx = !std::is_same_v<Scalar, RealOf<Scalar>>;
 
 template <typename T>
 bool same_bits(T a, T b) {
@@ -66,38 +66,38 @@ bool same_bits(T a, T b) {
 
 // A batch with a padded ld, a stride that is not ld*n and poisoned padding: a large finite value
 // any kernel would accept, so a kernel that reads or writes the pad shows it.
-template <typename T>
+template <typename Scalar>
 struct Lu {
     int n = 0, batch = 0, ld = 0, stride = 0;
-    UnifiedVector<T> buf;
-    std::vector<T> a0;
-    UnifiedVector<T*> ptrs;
+    UnifiedVector<Scalar> buf;
+    std::vector<Scalar> a0;
+    UnifiedVector<Scalar*> ptrs;
     UnifiedVector<int64_t> piv;
     UnifiedVector<int32_t> info;
-    MVof<T> A() { return MVof<T>(buf.data(), n, n, ld, stride, batch, ptrs.data()); }
+    MVof<Scalar> A() { return MVof<Scalar>(buf.data(), n, n, ld, stride, batch, ptrs.data()); }
     const int* ip(int b) const { return reinterpret_cast<const int*>(piv.data()) + std::size_t(b) * n; }
 };
 
 // Column-dominant rows, cyclically shifted so every column pivots off the diagonal; complex
 // entries carry an imaginary part. `period` > 0 repeats item it % period (saturating batches).
-template <typename T>
-Lu<T> make_lu(int n, int batch, unsigned seed, int period = 0) {
-    Lu<T> p;
+template <typename Scalar>
+Lu<Scalar> make_lu(int n, int batch, unsigned seed, int period = 0) {
+    Lu<Scalar> p;
     p.n = n, p.batch = batch, p.ld = n + 3, p.stride = p.ld * std::max(n, 1) + 5;
-    p.buf = UnifiedVector<T>(std::size_t(p.stride) * std::max(batch, 1), MVof<T>::make(-9.75e3, 4.5e3));
-    p.ptrs = UnifiedVector<T*>(std::size_t(std::max(batch, 1)), nullptr);
+    p.buf = UnifiedVector<Scalar>(std::size_t(p.stride) * std::max(batch, 1), MVof<Scalar>::make(-9.75e3, 4.5e3));
+    p.ptrs = UnifiedVector<Scalar*>(std::size_t(std::max(batch, 1)), nullptr);
     p.piv = UnifiedVector<int64_t>(std::max<std::size_t>(std::size_t(n) * batch, 1), int64_t(0x0BADBEEF0BADBEEFLL));
     p.info = UnifiedVector<int32_t>(std::size_t(std::max(batch, 1)), int32_t(-12345));
     const int reps = period > 0 ? std::min(period, batch) : batch;
     if (n > 0 && reps > 0) {
-        const auto R = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, reps, seed);
+        const auto R = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, false, reps, seed);
         for (int b = 0; b < batch; ++b)
             for (int j = 0; j < n; ++j)
                 for (int r = 0; r < n; ++r) {
-                    const auto v = MVof<T>::up(R(r, j, period > 0 ? b % period : b));
+                    const auto v = MVof<Scalar>::up(R(r, j, period > 0 ? b % period : b));
                     const double d = r == j ? 4.0 * n : 0.0;
                     p.buf[std::size_t(b) * p.stride + std::size_t(j) * p.ld + (r + 1) % n] =
-                        MVof<T>::make(std::real(v) + d, std::imag(v));
+                        MVof<Scalar>::make(std::real(v) + d, std::imag(v));
                 }
     }
     p.a0.assign(p.buf.begin(), p.buf.end());
@@ -129,37 +129,37 @@ void expect_factored(Queue& ctx, const Lu<T>& p, const std::string& what, bool i
 // an imaginary part, an optional exactly-zero column (its U diagonal is exactly zero, so info is
 // zero_col + 1). The pivot span is exactly min(m, n) * batch int64s; the int32 tail past the packed
 // list is poisoned and must survive.
-template <typename T>
+template <typename Scalar>
 struct Rect {
     int m = 0, n = 0, batch = 0, ld = 0, stride = 0;
-    UnifiedVector<T> buf;
-    std::vector<T> a0;
-    UnifiedVector<T*> ptrs;
+    UnifiedVector<Scalar> buf;
+    std::vector<Scalar> a0;
+    UnifiedVector<Scalar*> ptrs;
     UnifiedVector<int64_t> piv;
     UnifiedVector<int32_t> info;
     int mn() const { return std::min(m, n); }
-    MVof<T> A() { return MVof<T>(buf.data(), m, n, ld, stride, batch, ptrs.data()); }
+    MVof<Scalar> A() { return MVof<Scalar>(buf.data(), m, n, ld, stride, batch, ptrs.data()); }
     Span<int64_t> pivots() { return Span<int64_t>(piv.data(), std::size_t(mn()) * batch); }
     const int* ip(int b) const { return reinterpret_cast<const int*>(piv.data()) + std::size_t(b) * mn(); }
 };
 
-template <typename T>
-Rect<T> make_rect(int m, int n, int batch, unsigned seed, int period = 0, int zero_col = -1) {
-    Rect<T> p;
+template <typename Scalar>
+Rect<Scalar> make_rect(int m, int n, int batch, unsigned seed, int period = 0, int zero_col = -1) {
+    Rect<Scalar> p;
     p.m = m, p.n = n, p.batch = batch, p.ld = m + 3, p.stride = p.ld * n + 5;
-    p.buf = UnifiedVector<T>(std::size_t(p.stride) * batch, MVof<T>::make(-9.75e3, 4.5e3));
-    p.ptrs = UnifiedVector<T*>(std::size_t(batch), nullptr);
+    p.buf = UnifiedVector<Scalar>(std::size_t(p.stride) * batch, MVof<Scalar>::make(-9.75e3, 4.5e3));
+    p.ptrs = UnifiedVector<Scalar*>(std::size_t(batch), nullptr);
     p.piv = UnifiedVector<int64_t>(std::size_t(p.mn()) * batch + 8, int64_t(0x0BADBEEF0BADBEEFLL));
     p.info = UnifiedVector<int32_t>(std::size_t(batch), int32_t(-12345));
     // Continuous random entries: a lattice of values ties magnitudes exactly, and rounding then
     // breaks those ties differently from LAPACKE, which makes the pivot oracle meaningless.
     const int reps = period > 0 ? std::min(period, batch) : batch;
-    const auto R = Matrix<T, MatrixFormat::Dense>::Random(m, n, false, reps, seed);
+    const auto R = Matrix<Scalar, MatrixFormat::Dense>::Random(m, n, false, reps, seed);
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < m; ++i)
                 p.buf[std::size_t(b) * p.stride + std::size_t(j) * p.ld + i] =
-                    j == zero_col ? MVof<T>::make(0.0, 0.0) : R(i, j, period > 0 ? b % period : b);
+                    j == zero_col ? MVof<Scalar>::make(0.0, 0.0) : R(i, j, period > 0 ? b % period : b);
     p.a0.assign(p.buf.begin(), p.buf.end());
     return p;
 }
@@ -223,9 +223,9 @@ struct TableGuard {
     ~TableGuard() { select::testing::use_embedded_tables(); }
 };
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;

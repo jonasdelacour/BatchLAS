@@ -37,7 +37,7 @@ using namespace batchlas;
 namespace {
 
 template <typename T> inline constexpr bool kIsComplex = false;
-template <typename R> inline constexpr bool kIsComplex<std::complex<R>> = true;
+template <typename Real> inline constexpr bool kIsComplex<std::complex<Real>> = true;
 
 // ---------------------------------------------------------------- Gram sizes
 // (m, k, batch). k <= m always; ortho asserts it.
@@ -97,9 +97,9 @@ inline void SquareSizes(minibench::Benchmark* b) {
 }
 inline void SquareSizesNetlib(minibench::Benchmark* b) { SquareSizes(b); }
 
-template <typename T>
+template <typename Scalar>
 constexpr Transpose conj_trans_for() {
-    return kIsComplex<T> ? Transpose::ConjTrans : Transpose::Trans;
+    return kIsComplex<Scalar> ? Transpose::ConjTrans : Transpose::Trans;
 }
 
 // Wires a prepared kernel into the state with event timing, the way
@@ -124,15 +124,15 @@ void install(minibench::State& state,
 
 // ============================================================== Gram: C = A^H A
 
-template <typename T, Backend B, bool UseSpecialised>
+template <typename Scalar, Backend B, bool UseSpecialised>
 void configure_gram(minibench::State& state) {
     const size_t m = state.range(0);
     const size_t k = state.range(1);
     const size_t batch = state.range(2);
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    auto A = std::make_shared<Matrix<T>>(Matrix<T>::Random(m, k, false, batch));
-    auto C = std::make_shared<Matrix<T>>(Matrix<T>::Random(k, k, false, batch));
+    auto A = std::make_shared<Matrix<Scalar>>(Matrix<Scalar>::Random(m, k, false, batch));
+    auto C = std::make_shared<Matrix<Scalar>>(Matrix<Scalar>::Random(k, k, false, batch));
 
     bench::ManagedInputs managed(q);
     managed.prepare(*A);
@@ -144,12 +144,12 @@ void configure_gram(minibench::State& state) {
 
     if constexpr (UseSpecialised) {
         auto kernel = [q, A, C]() mutable {
-            if constexpr (kIsComplex<T>) {
-                using Real = typename T::value_type;
-                (void)herk<B, T>(*q, A->view(), C->view(), Real(1), Real(0),
+            if constexpr (kIsComplex<Scalar>) {
+                using Real = typename Scalar::value_type;
+                (void)herk<B, Scalar>(*q, A->view(), C->view(), Real(1), Real(0),
                            Uplo::Lower, Transpose::ConjTrans);
             } else {
-                (void)syrk<B, T>(*q, A->view(), C->view(), T(1), T(0),
+                (void)syrk<B, Scalar>(*q, A->view(), C->view(), Scalar(1), Scalar(0),
                            Uplo::Lower, Transpose::Trans);
             }
         };
@@ -157,17 +157,17 @@ void configure_gram(minibench::State& state) {
     } else {
         auto kernel = [q, A, C]() mutable {
             (void)gemm<B>(*q, A->view(), A->view(), C->view(),
-                    {.alpha = T(1), .beta = T(0),
-                     .transA = conj_trans_for<T>(), .transB = Transpose::NoTrans});
+                    {.alpha = Scalar(1), .beta = Scalar(0),
+                     .transA = conj_trans_for<Scalar>(), .transB = Transpose::NoTrans});
         };
         install(state, q, managed, std::move(kernel), flops, batch);
     }
 }
 
-template <typename T, Backend B>
-void BM_Gram_gemm(minibench::State& state) { configure_gram<T, B, false>(state); }
-template <typename T, Backend B>
-void BM_Gram_syrk(minibench::State& state) { configure_gram<T, B, true>(state); }
+template <typename Scalar, Backend B>
+void BM_Gram_gemm(minibench::State& state) { configure_gram<Scalar, B, false>(state); }
+template <typename Scalar, Backend B>
+void BM_Gram_syrk(minibench::State& state) { configure_gram<Scalar, B, true>(state); }
 
 // ================================== Trailing: A22 -= V W^H + W V^H  (sytrd)
 
@@ -221,16 +221,16 @@ void BM_Trailing_syr2k_sym(minibench::State& state) { configure_trailing<T, B, 2
 
 // ============================ TW: W2 = T^H W1, T upper triangular (ormqr/ormbr)
 
-template <typename T, Backend B, bool UseTrmm>
+template <typename Scalar, Backend B, bool UseTrmm>
 void configure_tw(minibench::State& state) {
     const size_t ib = state.range(0);
     const size_t nC = state.range(1);
     const size_t batch = state.range(2);
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    auto Tm = std::make_shared<Matrix<T>>(Matrix<T>::Random(ib, ib, false, batch));
-    auto W1 = std::make_shared<Matrix<T>>(Matrix<T>::Random(ib, nC, false, batch));
-    auto W2 = std::make_shared<Matrix<T>>(Matrix<T>::Random(ib, nC, false, batch));
+    auto Tm = std::make_shared<Matrix<Scalar>>(Matrix<Scalar>::Random(ib, ib, false, batch));
+    auto W1 = std::make_shared<Matrix<Scalar>>(Matrix<Scalar>::Random(ib, nC, false, batch));
+    auto W2 = std::make_shared<Matrix<Scalar>>(Matrix<Scalar>::Random(ib, nC, false, batch));
 
     bench::ManagedInputs managed(q);
     managed.prepare(*Tm);
@@ -250,29 +250,29 @@ void configure_tw(minibench::State& state) {
         // measurement, and it inflated every trmm row in that report. The GPU
         // spelling is what these shapes are here to measure, so it is gone.
         auto kernel = [q, Tm, W1, W2]() mutable {
-            (void)trmm<B, T>(*q, Tm->view(), W1->view(), W2->view(), T(1),
-                       Side::Left, Uplo::Upper, conj_trans_for<T>(), Diag::NonUnit);
+            (void)trmm<B, Scalar>(*q, Tm->view(), W1->view(), W2->view(), Scalar(1),
+                       Side::Left, Uplo::Upper, conj_trans_for<Scalar>(), Diag::NonUnit);
         };
         install(state, q, managed, std::move(kernel), flops, batch);
     } else {
         auto kernel = [q, Tm, W1, W2]() mutable {
             (void)gemm<B>(*q, Tm->view(), W1->view(), W2->view(),
-                    {.alpha = T(1), .beta = T(0), .transA = conj_trans_for<T>()});
+                    {.alpha = Scalar(1), .beta = Scalar(0), .transA = conj_trans_for<Scalar>()});
         };
         install(state, q, managed, std::move(kernel), flops, batch);
     }
 }
 
-template <typename T, Backend B>
-void BM_TW_gemm(minibench::State& state) { configure_tw<T, B, false>(state); }
-template <typename T, Backend B>
-void BM_TW_trmm(minibench::State& state) { configure_tw<T, B, true>(state); }
+template <typename Scalar, Backend B>
+void BM_TW_gemm(minibench::State& state) { configure_tw<Scalar, B, false>(state); }
+template <typename Scalar, Backend B>
+void BM_TW_trmm(minibench::State& state) { configure_tw<Scalar, B, true>(state); }
 
 // Same operation, same code, shapes chosen from the other side of the ridge.
-template <typename T, Backend B>
-void BM_Square_gemm(minibench::State& state) { configure_tw<T, B, false>(state); }
-template <typename T, Backend B>
-void BM_Square_trmm(minibench::State& state) { configure_tw<T, B, true>(state); }
+template <typename Scalar, Backend B>
+void BM_Square_gemm(minibench::State& state) { configure_tw<Scalar, B, false>(state); }
+template <typename Scalar, Backend B>
+void BM_Square_trmm(minibench::State& state) { configure_tw<Scalar, B, true>(state); }
 
 }  // namespace
 

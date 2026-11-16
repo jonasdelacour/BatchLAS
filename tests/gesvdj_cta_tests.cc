@@ -39,9 +39,9 @@ using namespace batchlas;
 
 namespace {
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct GesvdjConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 
@@ -61,7 +61,7 @@ struct gesvdj_types {
 using GesvdjTestTypes = typename gesvdj_types<GesvdjConfig>::type;
 
 template <typename T> struct is_cplx_h : std::false_type {};
-template <typename T> struct is_cplx_h<std::complex<T>> : std::true_type {};
+template <typename Real> struct is_cplx_h<std::complex<Real>> : std::true_type {};
 template <typename T> inline constexpr bool is_cplx_v = is_cplx_h<T>::value;
 
 template <typename Config>

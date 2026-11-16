@@ -41,16 +41,16 @@ Transpose trans_of(const std::string& w, bool complex) {
     return complex ? Transpose::ConjTrans : Transpose::Trans;
 }
 
-template <typename T>
+template <typename Scalar>
 struct SpmmProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
-    using SV = MatrixView<T, MatrixFormat::CSR>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+    using SV = MatrixView<Scalar, MatrixFormat::CSR>;
     Queue& q;
     Transpose ta, tb;
     int m, nrhs, batch, r, nnz, br, bc, ldb, ldc;
     std::size_t sb, sc;
-    T alpha, beta;
-    UnifiedVector<T> vals, B, C0, C;
+    Scalar alpha, beta;
+    UnifiedVector<Scalar> vals, B, C0, C;
     UnifiedVector<int> offs, cols;
     SV Av;
     MV Bv, C0v, Cv;
@@ -91,11 +91,11 @@ struct SpmmProblem {
     // A `vendor` pin that can_run refuses (spmm.cc's CUDA vendor terms) is refused by the tuner's
     // strict pin. evidence: docs/design/known-defects.md#defect-17-cusparse-spmm-shapes-refused-in-can_run-and-the-alignment-waiver
     std::size_t workspace() {
-        return spmm_buffer_size<kBackend, T, MatrixFormat::CSR>(q, Av, Bv, Cv, alpha, beta, ta, tb);
+        return spmm_buffer_size<kBackend, Scalar, MatrixFormat::CSR>(q, Av, Bv, Cv, alpha, beta, ta, tb);
     }
     void clear_info() {}
     void run(Span<std::byte> ws) {
-        (void)spmm<kBackend, T, MatrixFormat::CSR>(q, Av, Bv, Cv, alpha, beta, ta, tb, ws);
+        (void)spmm<kBackend, Scalar, MatrixFormat::CSR>(q, Av, Bv, Cv, alpha, beta, ta, tb, ws);
         q.wait();
     }
     std::pair<double, int> verify() {

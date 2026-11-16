@@ -37,8 +37,8 @@ using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename device::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
+template <class Scalar> using real_of = typename device::Arith<Scalar>::real_t;
+template <class Scalar> constexpr bool is_cplx = device::Arith<Scalar>::is_complex;
 
 constexpr int kBatch = 1024;  // saturating batch: items repeat with period kPeriod
 constexpr int kPeriod = 3;
@@ -49,17 +49,17 @@ std::uint64_t mix(std::uint64_t x) {
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
     return x ^ (x >> 31);
 }
-template <class R> R uval(std::uint64_t i) { return static_cast<R>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
-template <class T> T val(std::uint64_t i) {
-    if constexpr (is_cplx<T>) return T(uval<real_of<T>>(2 * i), uval<real_of<T>>(2 * i + 1));
-    else return uval<T>(i);
+template <class Real> Real uval(std::uint64_t i) { return static_cast<Real>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
+template <class Scalar> Scalar val(std::uint64_t i) {
+    if constexpr (is_cplx<Scalar>) return Scalar(uval<real_of<Scalar>>(2 * i), uval<real_of<Scalar>>(2 * i + 1));
+    else return uval<Scalar>(i);
 }
-template <class T> T nan_of() { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }
+template <class Scalar> Scalar nan_of() { return Scalar(std::numeric_limits<real_of<Scalar>>::quiet_NaN()); }
 template <class T> bool same_bits(const T& a, const T& b) { return std::memcmp(&a, &b, sizeof(T)) == 0; }
 
-template <class T> using LD = std::conditional_t<is_cplx<T>, std::complex<long double>, long double>;
-template <class T> LD<T> conj_h(LD<T> v) {
-    if constexpr (is_cplx<T>) return std::conj(v);
+template <class Scalar> using LD = std::conditional_t<is_cplx<Scalar>, std::complex<long double>, long double>;
+template <class Scalar> LD<Scalar> conj_h(LD<Scalar> v) {
+    if constexpr (is_cplx<Scalar>) return std::conj(v);
     else return v;
 }
 
@@ -113,39 +113,39 @@ std::vector<Case> every_fold(Side side) {
 // (Left n x q, Right q x n) with NaN ld gaps. tiny >= 0 (Left Lower NoTrans only): that row of
 // A is d = 1e-309 on the diagonal and 0 to its left, and B's row is d * O(1): the reciprocal
 // overflows while the solution stays O(1).
-template <class T> struct Problem {
+template <class Scalar> struct Problem {
     Case c;
     int n, q, lda, ldb, brows, bcols;
-    T alpha;
-    std::vector<T> a, b;
+    Scalar alpha;
+    std::vector<Scalar> a, b;
     int a_elems() const { return lda * n; }
     int b_elems() const { return ldb * bcols; }
 };
-template <class T> Problem<T> make_problem(const Case& c, int n, int q, std::uint64_t seed, int tiny = -1) {
-    Problem<T> P{c, n, q, n + 3, 0, 0, 0, tiny >= 0 ? T(1) : val<T>(seed + 99), {}, {}};
+template <class Scalar> Problem<Scalar> make_problem(const Case& c, int n, int q, std::uint64_t seed, int tiny = -1) {
+    Problem<Scalar> P{c, n, q, n + 3, 0, 0, 0, tiny >= 0 ? Scalar(1) : val<Scalar>(seed + 99), {}, {}};
     P.brows = c.side == Side::Left ? n : q;
     P.bcols = c.side == Side::Left ? q : n;
     P.ldb = P.brows + (c.side == Side::Left ? 5 : 2);
     P.a.resize(std::size_t(kBatch) * P.a_elems());
     P.b.resize(std::size_t(kBatch) * P.b_elems());
     for (int it = 0; it < kPeriod; ++it) {
-        T* a = P.a.data() + std::size_t(it) * P.a_elems();
-        T* b = P.b.data() + std::size_t(it) * P.b_elems();
+        Scalar* a = P.a.data() + std::size_t(it) * P.a_elems();
+        Scalar* b = P.b.data() + std::size_t(it) * P.b_elems();
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < P.lda; ++i) {
                 const bool tri = i < n && (c.uplo == Uplo::Lower ? i >= j : i <= j);
-                T v = val<T>(seed + std::uint64_t(it) * 1000003u + std::uint64_t(j) * P.lda + i);
-                if (!tri || (i == j && c.diag == Diag::Unit)) v = nan_of<T>();
-                else if (i == j) v = v + T(device::Arith<T>::re(v) >= 0 ? 1.5 : -1.5);
-                else v = v * T(0.5);
-                if (i == tiny && j < tiny) v = T(0);
-                if (i == tiny && j == tiny) v = T(static_cast<real_of<T>>(1e-309));
+                Scalar v = val<Scalar>(seed + std::uint64_t(it) * 1000003u + std::uint64_t(j) * P.lda + i);
+                if (!tri || (i == j && c.diag == Diag::Unit)) v = nan_of<Scalar>();
+                else if (i == j) v = v + Scalar(device::Arith<Scalar>::re(v) >= 0 ? 1.5 : -1.5);
+                else v = v * Scalar(0.5);
+                if (i == tiny && j < tiny) v = Scalar(0);
+                if (i == tiny && j == tiny) v = Scalar(static_cast<real_of<Scalar>>(1e-309));
                 a[i + j * P.lda] = v;
             }
         for (int j = 0; j < P.bcols; ++j)
             for (int i = 0; i < P.ldb; ++i) {
-                T v = i < P.brows ? val<T>(seed + 77777u + std::uint64_t(it) * 1000003u + std::uint64_t(j) * P.ldb + i) : nan_of<T>();
-                if (i == tiny) v = v * T(static_cast<real_of<T>>(1e-309));
+                Scalar v = i < P.brows ? val<Scalar>(seed + 77777u + std::uint64_t(it) * 1000003u + std::uint64_t(j) * P.ldb + i) : nan_of<Scalar>();
+                if (i == tiny) v = v * Scalar(static_cast<real_of<Scalar>>(1e-309));
                 b[i + j * P.ldb] = v;
             }
     }
@@ -156,10 +156,10 @@ template <class T> Problem<T> make_problem(const Case& c, int n, int q, std::uin
     return P;
 }
 
-template <class T> double rel(LD<T> r, long double scale) {
+template <class Scalar> double rel(LD<Scalar> r, long double scale) {
     const long double d = std::abs(r);
     if (std::isnan(d)) return std::numeric_limits<double>::infinity();
-    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<T>>::min()));
+    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<Scalar>>::min()));
 }
 
 // Componentwise backward-error residual |op(A) X - alpha B| / (|op(A)| |X| + |alpha B|) of the
@@ -211,12 +211,12 @@ template <class T> void check_solution(const Problem<T>& P, const std::vector<T>
 
 // V1's shape: RtGroup (width read from the launch), packed Lc in SLM, one rhs per item,
 // staged (TR-row tiles) or direct. Returns X; flags[item] = the division-fallback flag.
-template <class D, int N, int TR, bool Staged, int WG, class T>
-std::vector<T> packed_solve(Dev& dev, const Problem<T>& P, std::vector<int>* flags = nullptr) {
-    static_assert(sizeof(D) == sizeof(T));
+template <class D, int N, int TR, bool Staged, int WG, class Scalar>
+std::vector<Scalar> packed_solve(Dev& dev, const Problem<Scalar>& P, std::vector<int>* flags = nullptr) {
+    static_assert(sizeof(D) == sizeof(Scalar));
     const Canonical can = ops::trsm::canonicalise(P.c.side, P.c.uplo, P.c.trans, P.c.diag);
     const D* a = reinterpret_cast<const D*>(dev.up(P.a));
-    T* bt = dev.up(P.b);
+    Scalar* bt = dev.up(P.b);
     D* b = reinterpret_cast<D*>(bt);
     int* fl = dev.up(std::vector<int>(kBatch, -1));
     const int n = P.n, q = P.q, lda = P.lda, ldb = P.ldb, sa = P.a_elems(), sb = P.b_elems();
@@ -294,12 +294,12 @@ std::vector<T> packed_solve(Dev& dev, const Problem<T>& P, std::vector<int>* fla
 
 // trsm_sg_left's shape: Partition<P> per item (32/P items per sub-group), lane r holds row r,
 // QC rhs per chunk; Unroll = 1 is the rolled step loop.
-template <class D, int P, int QC, int Unroll, class T>
-std::vector<T> rowfrag_solve(Dev& dev, const Problem<T>& Pb, std::vector<int>* flags = nullptr) {
+template <class D, int P, int QC, int Unroll, class Scalar>
+std::vector<Scalar> rowfrag_solve(Dev& dev, const Problem<Scalar>& Pb, std::vector<int>* flags = nullptr) {
     constexpr int kWg = 128, kMpw = 32 / P;
     const Canonical can = ops::trsm::canonicalise(Side::Left, Pb.c.uplo, Pb.c.trans, Pb.c.diag);
     const D* a = reinterpret_cast<const D*>(dev.up(Pb.a));
-    T* bt = dev.up(Pb.b);
+    Scalar* bt = dev.up(Pb.b);
     D* b = reinterpret_cast<D*>(bt);
     int* fl = dev.up(std::vector<int>(kBatch, -1));
     const int n = Pb.n, q = Pb.q, sa = Pb.a_elems(), sb = Pb.b_elems();
@@ -341,11 +341,11 @@ std::vector<T> rowfrag_solve(Dev& dev, const Problem<T>& Pb, std::vector<int>* f
     return dev.down(bt, Pb.b.size());
 }
 
-template <class T> class TrsmKernelsTest : public ::testing::Test {
+template <class Scalar> class TrsmKernelsTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx.device().supports_sub_group_size(32)) GTEST_SKIP() << "trsm kernel tests launch sub-group size 32";
-        if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
+        if (test_utils::lacks_fp64<Scalar>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
 };

@@ -19,14 +19,14 @@ namespace batchlas::ops::posv {
 
 inline constexpr int kPosvTinyMaxRhs = 4;
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API int posv_tiny_max_n();
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API std::size_t posv_tiny_buffer_size(
     Queue& ctx,
-    const MatrixView<T, MatrixFormat::Dense>& A,
-    const MatrixView<T, MatrixFormat::Dense>& B);
+    const MatrixView<Scalar, MatrixFormat::Dense>& A,
+    const MatrixView<Scalar, MatrixFormat::Dense>& B);
 
 template <typename T>
 BATCHLAS_INTERNAL_API Event posv_tiny_dispatch(Queue& ctx,

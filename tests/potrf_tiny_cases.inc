@@ -7,40 +7,40 @@
 // evidence: docs/perf/potrf.md#potrf-the-tiny-tier
 
 // One batch of n x n matrices at an arbitrary (ld, stride), everything outside the `uplo`
-// triangle set to `pad`. Matrix<T>(n,n,batch) cannot express a padded ld or a stride that
+// triangle set to `pad`. Matrix<Scalar>(n,n,batch) cannot express a padded ld or a stride that
 // is not ld*cols, and those are what make an off-by-one store falsifiable.
-template <typename T>
+template <typename Scalar>
 struct TinyProb {
     int n = 0, batch = 0, ld = 0, stride = 0;
-    UnifiedVector<T> buf;
-    std::vector<std::vector<T>> ref;
+    UnifiedVector<Scalar> buf;
+    std::vector<std::vector<Scalar>> ref;
 
-    MatrixView<T, MatrixFormat::Dense> view() {
-        return MatrixView<T, MatrixFormat::Dense>(buf.data(), n, n, ld, stride, batch);
+    MatrixView<Scalar, MatrixFormat::Dense> view() {
+        return MatrixView<Scalar, MatrixFormat::Dense>(buf.data(), n, n, ld, stride, batch);
     }
-    T at(int i, int j, int b) const {
+    Scalar at(int i, int j, int b) const {
         return buf[static_cast<size_t>(b) * stride + i + static_cast<size_t>(j) * ld];
     }
 };
 
-template <typename T>
-double potrf_error(Queue& ctx, const std::vector<T>& A, const TinyProb<T>& p, int b, Uplo uplo) {
-    return potrf_error<T>(ctx, A, p.buf.data() + static_cast<size_t>(b) * p.stride, p.ld, p.n, uplo);
+template <typename Scalar>
+double potrf_error(Queue& ctx, const std::vector<Scalar>& A, const TinyProb<Scalar>& p, int b, Uplo uplo) {
+    return potrf_error<Scalar>(ctx, A, p.buf.data() + static_cast<size_t>(b) * p.stride, p.ld, p.n, uplo);
 }
 
 // `seed_shift` scales item b's matrix so a cross-matrix write changes a value rather
 // than reproducing the neighbour's.
-template <typename T>
-TinyProb<T> make_tiny_prob(int n, int batch, int ld, int stride, Uplo uplo,
-                           unsigned seed, T pad) {
-    using R = RealOf<T>;
-    TinyProb<T> p;
+template <typename Scalar>
+TinyProb<Scalar> make_tiny_prob(int n, int batch, int ld, int stride, Uplo uplo,
+                                unsigned seed, Scalar pad) {
+    using R = RealOf<Scalar>;
+    TinyProb<Scalar> p;
     p.n = n; p.batch = batch; p.ld = ld; p.stride = stride;
-    p.buf = UnifiedVector<T>(static_cast<size_t>(stride) * batch, pad);
+    p.buf = UnifiedVector<Scalar>(static_cast<size_t>(stride) * batch, pad);
     p.ref.resize(batch);
     for (int b = 0; b < batch; ++b) {
-        p.ref[b] = make_spd<T>(n, seed + 31u * static_cast<unsigned>(b),
-                               R(1) + R(b % 5));
+        p.ref[b] = make_spd<Scalar>(n, seed + 31u * static_cast<unsigned>(b),
+                                    R(1) + R(b % 5));
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j < n; ++j) {
                 const bool in_tri = (uplo == Uplo::Lower) ? (i >= j) : (i <= j);

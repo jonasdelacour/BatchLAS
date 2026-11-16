@@ -19,7 +19,7 @@ struct Vendor : select::NoFields<"vendor"> {};  ///< backend::hemm_vendor (cubla
 
 using HemmChoice = std::variant<Mirror, Expand, Vendor>;  ///< fieldless: tiles, expansion ld, chunk and gemm derived
 
-template <typename T>  /// Every compiled choice, in tie-break order: the scratch-free mirror, expand, vendor.
+template <typename Scalar>  /// Every compiled choice, in tie-break order: the scratch-free mirror, expand, vendor.
 constexpr auto candidates() { return select::all_of<HemmChoice>(); }
 
 inline constexpr std::array<std::string_view, 3> last_resort{"mirror", "expand", "vendor"};  ///< nothing in the row runs

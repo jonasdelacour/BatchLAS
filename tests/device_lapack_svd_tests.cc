@@ -70,8 +70,8 @@ using batchlas::verify::Check;
 
 namespace {
 
-template <class T, Backend B> struct ApiConfig {
-    using ScalarType = T;
+template <class Scalar, Backend B> struct ApiConfig {
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 
@@ -85,8 +85,8 @@ std::uint64_t mix(std::uint64_t x) {
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
     return x ^ (x >> 31);
 }
-template <class R> R uval(std::uint64_t i) { return static_cast<R>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
-template <class R> R poison() { return static_cast<R>(7.5e29); }  // finite, in range: a read would be used
+template <class Real> Real uval(std::uint64_t i) { return static_cast<Real>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
+template <class Scalar> Scalar poison() { return static_cast<Scalar>(7.5e29); }  // finite, in range: a read would be used
 
 template <class T> struct DevBuf {
     sycl::queue* q = nullptr;
@@ -113,27 +113,28 @@ template <class T> long first_diff(const std::vector<T>& a, const std::vector<T>
 }
 
 // One batch of gebrd inputs and output slots with non-natural layouts, pads poisoned.
-template <class T> struct GebrdData {
+template <class Real> struct GebrdData {
     int n, ld, sa, sd, se, st;
-    std::vector<T> a, d, e, tq, tp;
+    std::vector<Real> a, d, e, tq, tp;
     explicit GebrdData(int nn) : n(nn), ld(nn + 3), sa((nn + 3) * nn + 7), sd(2 * nn + 5), se(std::max(nn - 1, 0) + 4), st(nn + 2) {
-        a.assign(std::size_t(sa) * kBatch, poison<T>());
+        a.assign(std::size_t(sa) * kBatch, poison<Real>());
         for (int b = 0; b < kBatch; ++b)
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < n; ++i)
-                    a[std::size_t(b) * sa + std::size_t(j) * ld + i] = uval<T>(std::uint64_t(b % kPeriod) * 1000003u + std::uint64_t(j) * n + i);
-        d.assign(std::size_t(sd) * kBatch, poison<T>());
-        e.assign(std::size_t(se) * kBatch, poison<T>());
-        tq.assign(std::size_t(st) * kBatch, poison<T>());
-        tp.assign(std::size_t(st) * kBatch, poison<T>());
+                    a[std::size_t(b) * sa + std::size_t(j) * ld + i] = uval<Real>(std::uint64_t(b % kPeriod) * 1000003u + std::uint64_t(j) * n + i);
+        d.assign(std::size_t(sd) * kBatch, poison<Real>());
+        e.assign(std::size_t(se) * kBatch, poison<Real>());
+        tq.assign(std::size_t(st) * kBatch, poison<Real>());
+        tp.assign(std::size_t(st) * kBatch, poison<Real>());
     }
 };
 
 // ||A0 - Q B P^T||_F / ||A0||_F of item b, in long double: Q = H(0)..H(n-1), H(i) = I - tauq_i v v^T
 // (v(i) = 1, v(i+1:) = A(i+1:, i)); P = G(0)..G(n-2), G(i) = I - taup_i u u^T (u(i+1) = 1,
 // u(i+2:) = A(i, i+2:)); B upper bidiagonal (d, e).
-template <class T> double gebrd_residual(const GebrdData<T>& in, const std::vector<T>& a, const std::vector<T>& d,
-                                         const std::vector<T>& e, const std::vector<T>& tq, const std::vector<T>& tp, int b) {
+template <class Real> double gebrd_residual(const GebrdData<Real>& in, const std::vector<Real>& a,
+                                            const std::vector<Real>& d,
+                                            const std::vector<Real>& e, const std::vector<Real>& tq, const std::vector<Real>& tp, int b) {
     using L = long double;
     const int n = in.n;
     auto A = [&](int i, int j) { return L(a[std::size_t(b) * in.sa + std::size_t(j) * in.ld + i]); };
@@ -189,17 +190,17 @@ protected:
     // The user-style kernel: SgpPartition<P> per matrix, the tier visited by with_tier, the
     // workspace this partition's slice of the work-group's local byte accessor, dead
     // partitions with live = false.
-    template <class R> void device_gebrd(GebrdData<R>& g, DevBuf<R>& a, DevBuf<R>& d, DevBuf<R>& e, DevBuf<R>& tq, DevBuf<R>& tp) {
-        const MatrixView<R, MatrixFormat::Dense> av(a.p, g.n, g.n, g.ld, g.sa, kBatch);
+    template <class Real> void device_gebrd(GebrdData<Real>& g, DevBuf<Real>& a, DevBuf<Real>& d, DevBuf<Real>& e, DevBuf<Real>& tq, DevBuf<Real>& tp) {
+        const MatrixView<Real, MatrixFormat::Dense> av(a.p, g.n, g.n, g.ld, g.sa, kBatch);
         const auto akv = av.kernel_view();
-        const VectorView<R> dvw(d.p, g.n, kBatch, 2, g.sd), evw(e.p, g.n - 1, kBatch, 1, g.se);
-        const VectorView<R> tqv(tq.p, g.n, kBatch, 1, g.st), tpv(tp.p, g.n, kBatch, 1, g.st);
+        const VectorView<Real> dvw(d.p, g.n, kBatch, 2, g.sd), evw(e.p, g.n - 1, kBatch, 1, g.se);
+        const VectorView<Real> tqv(tq.p, g.n, kBatch, 1, g.st), tpv(tp.p, g.n, kBatch, 1, g.st);
         const int n = g.n;
         using CtaTiers = device::tier::list<device::tier::Cta<4>, device::tier::Cta<8>, device::tier::Cta<16>, device::tier::Cta<32>>;
-        device::with_tier<device::routine::gebrd, R, CtaTiers>(q().get_device(), n, [&]<class Tier>(Tier) {
+        device::with_tier<device::routine::gebrd, Real, CtaTiers>(q().get_device(), n, [&]<class Tier>(Tier) {
             constexpr int P = Tier::n_max;
             constexpr int mats = kWg / P;
-            const std::size_t lb = device::buffer_size<device::routine::gebrd, Tier, R>(n).local_bytes;
+            const std::size_t lb = device::buffer_size<device::routine::gebrd, Tier, Real>(n).local_bytes;
             const int groups = (kBatch + mats - 1) / mats;
             q().submit([&](sycl::handler& h) {
                    sycl::local_accessor<std::byte, 1> slm(sycl::range<1>(lb * (mats + 1)), h);
@@ -345,65 +346,67 @@ TYPED_TEST(DeviceApiSvd, UptoAndBufferSizeMatchThePlan) {
 constexpr int kBwg = 256;
 using Blk = device::tier::Blocked<16>;
 using LC = std::complex<long double>;
-template <class T> using real_of = typename device::Arith<T>::real_t;
+template <class Scalar> using real_of = typename device::Arith<Scalar>::real_t;
 
-template <class T> LC lc(const T& v) {
-    if constexpr (device::Arith<T>::is_complex) return LC(v.real(), v.imag());
+template <class Scalar> LC lc(const Scalar& v) {
+    if constexpr (device::Arith<Scalar>::is_complex) return LC(v.real(), v.imag());
     else return LC(static_cast<long double>(v), 0.0L);
 }
-template <class T> T sval(std::uint64_t i) {
-    if constexpr (device::Arith<T>::is_complex) return T(uval<real_of<T>>(i), uval<real_of<T>>(i ^ 0x9e3779b9u));
-    else return uval<T>(i);
+template <class Scalar> Scalar sval(std::uint64_t i) {
+    if constexpr (device::Arith<Scalar>::is_complex) return Scalar(uval<real_of<Scalar>>(i),
+                                                                   uval<real_of<Scalar>>(i ^ 0x9e3779b9u));
+    else return uval<Scalar>(i);
 }
 
 // kBatch column-major m x n matrices at ld = m + 3, stride ld * n + 5, everything poisoned.
-template <class T> struct Mats {
+template <class Scalar> struct Mats {
     int m, n, ld, stride;
-    std::vector<T> h;
+    std::vector<Scalar> h;
     Mats(int mm, int nn) : m(mm), n(nn), ld(std::max(mm, 1) + 3), stride((std::max(mm, 1) + 3) * std::max(nn, 1) + 5),
-                           h(std::size_t(stride) * kBatch, poison<T>()) {}
-    T& at(int b, int i, int j) { return h[std::size_t(b) * stride + std::size_t(j) * ld + i]; }
-    const T& at(int b, int i, int j) const { return h[std::size_t(b) * stride + std::size_t(j) * ld + i]; }
+                           h(std::size_t(stride) * kBatch, poison<Scalar>()) {}
+    Scalar& at(int b, int i, int j) { return h[std::size_t(b) * stride + std::size_t(j) * ld + i]; }
+    const Scalar& at(int b, int i, int j) const { return h[std::size_t(b) * stride + std::size_t(j) * ld + i]; }
     bool inside(std::size_t e) const {
         const std::size_t r = e % std::size_t(stride);
         return int(r / std::size_t(ld)) < n && int(r % std::size_t(ld)) < m;
     }
-    MatrixView<T, MatrixFormat::Dense> view(T* p) const { return MatrixView<T, MatrixFormat::Dense>(p, m, n, ld, stride, kBatch); }
+    MatrixView<Scalar, MatrixFormat::Dense> view(Scalar* p) const { return MatrixView<Scalar, MatrixFormat::Dense>(p, m, n, ld, stride, kBatch); }
     void fill_random(std::uint64_t seed) {
         for (int b = 0; b < kBatch; ++b)
             for (int j = 0; j < n; ++j)
-                for (int i = 0; i < m; ++i) at(b, i, j) = sval<T>(seed + std::uint64_t(b % kPeriod) * 1000003u + std::uint64_t(j) * m + i);
+                for (int i = 0; i < m; ++i) at(b, i, j) = sval<Scalar>(seed + std::uint64_t(b % kPeriod) * 1000003u + std::uint64_t(j) * m + i);
     }
     void fill_identity() {
         for (int b = 0; b < kBatch; ++b)
             for (int j = 0; j < n; ++j)
-                for (int i = 0; i < m; ++i) at(b, i, j) = i == j ? T(1) : T(0);
+                for (int i = 0; i < m; ++i) at(b, i, j) = i == j ? Scalar(1) : Scalar(0);
     }
-    Mats with(std::vector<T> got) const {
+    Mats with(std::vector<Scalar> got) const {
         Mats r = *this;
         r.h = std::move(got);
         return r;
     }
 };
 // Elements outside the m x n matrices that differ from `before`, bit for bit.
-template <class T> long pads_changed(const Mats<T>& before, const Mats<T>& after) {
+template <class Scalar> long pads_changed(const Mats<Scalar>& before, const Mats<Scalar>& after) {
     long bad = 0;
     for (std::size_t e = 0; e < before.h.size(); ++e)
-        if (!before.inside(e) && std::memcmp(&before.h[e], &after.h[e], sizeof(T)) != 0) ++bad;
+        if (!before.inside(e) && std::memcmp(&before.h[e], &after.h[e], sizeof(Scalar)) != 0) ++bad;
     return bad;
 }
 // Items differing from their period representative (r < kPeriod; skip_rep excluded), bit for bit.
-template <class T> long period_diffs(const Mats<T>& M, int skip_rep = -1) {
+template <class Scalar> long period_diffs(const Mats<Scalar>& M, int skip_rep = -1) {
     long bad = 0;
     for (int b = kPeriod; b < kBatch; ++b) {
         if (b % kPeriod == skip_rep) continue;
         for (int j = 0; j < M.n; ++j)
-            for (int i = 0; i < M.m; ++i) bad += std::memcmp(&M.at(b, i, j), &M.at(b % kPeriod, i, j), sizeof(T)) != 0;
+            for (int i = 0; i < M.m; ++i) bad += std::memcmp(&M.at(b, i, j), &M.at(b % kPeriod, i, j),
+                                                             sizeof(Scalar)) != 0;
     }
     return bad;
 }
 // max |(Q^H Q - I)(a, c)| over Q's columns (cols) or |(Q Q^H - I)(a, c)| over its rows.
-template <class T> double unitary_defect(const Mats<T>& Q, int b, bool cols) {
+template <class Scalar> double unitary_defect(const Mats<Scalar>& Q, int b, bool cols) {
     const int p = cols ? Q.n : Q.m, len = cols ? Q.m : Q.n;
     long double worst = 0;
     for (int a = 0; a < p; ++a)
@@ -417,8 +420,9 @@ template <class T> double unitary_defect(const Mats<T>& Q, int b, bool cols) {
 }
 // ||A0 - U diag(s) Vh||_F / ||A0||_F of item b (A0(i, j) m x n) over the leading k columns of U
 // and rows of Vh.
-template <class T, class R, class F>
-double svd_residual(F A0, int m, int n, const Mats<T>& U, const Mats<T>& Vh, const std::vector<R>& s, int ss, int b) {
+template <class Scalar, class Real, class F>
+double svd_residual(F A0, int m, int n, const Mats<Scalar>& U, const Mats<Scalar>& Vh, const std::vector<Real>& s,
+                    int ss, int b) {
     const int k = std::min(m, n);
     long double num = 0, den = 0;
     for (int j = 0; j < n; ++j)
@@ -434,7 +438,7 @@ double svd_residual(F A0, int m, int n, const Mats<T>& U, const Mats<T>& Vh, con
 // Singular values (ascending, long double) of item b's upper bidiagonal (d at inc 2, stride sd; e
 // at stride se): bisection on the Golub-Kahan tridiagonal (zero diagonal, off-diagonal d0 e0 d1
 // ..), whose n largest eigenvalues they are; Sturm counts, so no rotation can mask a difference.
-template <class R> std::vector<long double> bidiag_svals(const std::vector<R>& d, const std::vector<R>& e, int sd, int se, int b, int n) {
+template <class Real> std::vector<long double> bidiag_svals(const std::vector<Real>& d, const std::vector<Real>& e, int sd, int se, int b, int n) {
     std::vector<long double> f(std::size_t(2 * n - 1));
     for (int i = 0; i < n; ++i) {
         f[std::size_t(2 * i)] = d[std::size_t(b) * sd + 2 * i];

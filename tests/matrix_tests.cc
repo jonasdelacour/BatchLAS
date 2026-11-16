@@ -1366,9 +1366,9 @@ TEST(MatrixDenseTest, AstypePackedBatched) {
 // Every case runs on a padded layout (ld > n, stride > ld * n) whose padding holds a poison the
 // fills must leave alone, with batch >= 3 so per-item seeding is visible.
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct FillConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 

@@ -50,8 +50,8 @@ int bench_ld_pad_for(const char* var) {
 
 // A padded matrix must be FILLED, not merely allocated.
 //
-// Matrix<T>(rows, cols, batch, ld) allocates UNINITIALIZED memory
-// (matrix.hh:429-430), while the unpadded arm uses Matrix<T>::Random. Left as
+// Matrix<Scalar>(rows, cols, batch, ld) allocates UNINITIALIZED memory
+// (matrix.hh:429-430), while the unpadded arm uses Matrix<Scalar>::Random. Left as
 // it was, every pad-0-vs-pad-N comparison in this file varied the data content
 // as well as the leading dimension -- so an "ld penalty" could in principle have
 // been a denormal-arithmetic penalty instead. Same-pad comparisons (native vs
@@ -60,44 +60,44 @@ int bench_ld_pad_for(const char* var) {
 //
 // Deterministic and independent of `ld`, so the values a kernel sees do not
 // change when the padding does -- that is the whole point.
-template <typename T>
-Matrix<T> bench_padded(size_t rows, size_t cols, size_t batch, int ld) {
-    Matrix<T> M(static_cast<int>(rows), static_cast<int>(cols),
-                static_cast<int>(batch), ld);
+template <typename Scalar>
+Matrix<Scalar> bench_padded(size_t rows, size_t cols, size_t batch, int ld) {
+    Matrix<Scalar> M(static_cast<int>(rows), static_cast<int>(cols),
+                     static_cast<int>(batch), ld);
     auto host = M.data();
     uint32_t s = 0x9E3779B9u;
     for (size_t i = 0; i < host.size(); ++i) {
         s ^= s << 13; s ^= s >> 17; s ^= s << 5;      // xorshift32
         const double u = static_cast<double>(s) / 4294967296.0 - 0.5;
-        host[i] = static_cast<T>(u);
+        host[i] = static_cast<Scalar>(u);
     }
     return M;
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_GEMM_IMPL(minibench::State& state) {
     const size_t m = state.range(0);
     const size_t n = state.range(1);
     const size_t k = state.range(2);
     const size_t batch = state.range(3);
-    const T beta = static_cast<T>(bench_beta());
+    const Scalar beta = static_cast<Scalar>(bench_beta());
 
     const int pad_a = bench_ld_pad_for("BATCHLAS_BENCH_LD_PAD_A");
     const int pad_b = bench_ld_pad_for("BATCHLAS_BENCH_LD_PAD_B");
     const int pad_c = bench_ld_pad_for("BATCHLAS_BENCH_LD_PAD_C");
-    auto A = pad_a ? bench_padded<T>(m, k, batch, static_cast<int>(m) + pad_a)
-                   : Matrix<T>::Random(m, k, false, batch);
-    auto Bm = pad_b ? bench_padded<T>(k, n, batch, static_cast<int>(k) + pad_b)
-                    : Matrix<T>::Random(k, n, false, batch);
-    auto C = pad_c ? bench_padded<T>(m, n, batch, static_cast<int>(m) + pad_c)
-                   : Matrix<T>::Random(m, n, false, batch);
+    auto A = pad_a ? bench_padded<Scalar>(m, k, batch, static_cast<int>(m) + pad_a)
+                   : Matrix<Scalar>::Random(m, k, false, batch);
+    auto Bm = pad_b ? bench_padded<Scalar>(k, n, batch, static_cast<int>(k) + pad_b)
+                    : Matrix<Scalar>::Random(k, n, false, batch);
+    auto C = pad_c ? bench_padded<Scalar>(m, n, batch, static_cast<int>(m) + pad_c)
+                   : Matrix<Scalar>::Random(m, n, false, batch);
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
     state.SetKernel(q,
                     std::move(A),
                     std::move(Bm),
                     bench::pristine(C),
-                    T(1),
+                    Scalar(1),
                     beta,
                     Transpose::NoTrans,
                     Transpose::NoTrans,
@@ -109,14 +109,14 @@ void BM_GEMM_IMPL(minibench::State& state) {
 }
 
 // Batched GEMM benchmark
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_GEMM(minibench::State& state) {
-    BM_GEMM_IMPL<T, B>(state);
+    BM_GEMM_IMPL<Scalar, B>(state);
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_GEMM_FIXED128(minibench::State& state) {
-    BM_GEMM_IMPL<T, B>(state);
+    BM_GEMM_IMPL<Scalar, B>(state);
 }
 
 }  // namespace

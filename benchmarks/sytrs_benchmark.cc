@@ -22,9 +22,9 @@ using namespace batchlas;
 namespace {
 
 // Real-arithmetic flop counts for every type: sytrs 2 n^2 nrhs, sysv n^3 / 3 + 2 n^2 nrhs.
-template <typename T>
-Matrix<T> symmetric(Queue& q, int n, int batch) {
-    auto A = Matrix<T>::Random(n, n, false, batch, 12345);
+template <typename Scalar>
+Matrix<Scalar> symmetric(Queue& q, int n, int batch) {
+    auto A = Matrix<Scalar>::Random(n, n, false, batch, 12345);
     (void)A.view().symmetrize(q, Uplo::Lower);
     q.wait();
     return A;
@@ -43,35 +43,36 @@ void announce(const char* op) {
     }
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_SYTRS(minibench::State& state) {
     announce("sytrs");
     const int n = int(state.range(0)), nrhs = int(state.range(1)), batch = int(state.range(2));
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    auto A = symmetric<T>(*q, n, batch);
-    auto Bm = Matrix<T>::Random(n, nrhs, false, batch, 777);
+    auto A = symmetric<Scalar>(*q, n, batch);
+    auto Bm = Matrix<Scalar>::Random(n, nrhs, false, batch, 777);
     UnifiedVector<int64_t> piv(size_t(n) * batch, 0);
     {
-        UnifiedVector<std::byte> fws(std::max<size_t>(1, sytrf_buffer_size<B, T>(*q, A.view(), Uplo::Lower)));
-        (void)sytrf<B, T>(*q, A.view(), Uplo::Lower, piv.to_span(), fws.to_span());
+        UnifiedVector<std::byte> fws(std::max<size_t>(1, sytrf_buffer_size<B, Scalar>(*q, A.view(), Uplo::Lower)));
+        (void)sytrf<B, Scalar>(*q, A.view(), Uplo::Lower, piv.to_span(), fws.to_span());
         q->wait();
     }
-    UnifiedVector<std::byte> ws(std::max<size_t>(1, sytrs_buffer_size<B, T>(*q, A.view(), Bm.view(), Uplo::Lower)));
+    UnifiedVector<std::byte> ws(std::max<size_t>(1, sytrs_buffer_size<B,
+                                                 Scalar>(*q, A.view(), Bm.view(), Uplo::Lower)));
     state.SetKernel(q, std::move(A), bench::pristine(Bm), Uplo::Lower, std::move(piv), std::move(ws),
                     [](Queue& qq, auto&&... xs) { (void)sytrs(qq, std::forward<decltype(xs)>(xs)...); });
     state.SetMetric("GFLOPS", double(batch) * 1e-9 * 2.0 * n * n * nrhs, minibench::Rate);
     state.SetMetric("Time (us) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_SYSV(minibench::State& state) {
     announce("sysv");
     const int n = int(state.range(0)), nrhs = int(state.range(1)), batch = int(state.range(2));
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    auto A = symmetric<T>(*q, n, batch);
-    auto Bm = Matrix<T>::Random(n, nrhs, false, batch, 777);
+    auto A = symmetric<Scalar>(*q, n, batch);
+    auto Bm = Matrix<Scalar>::Random(n, nrhs, false, batch, 777);
     UnifiedVector<int64_t> piv(size_t(n) * batch, 0);
-    UnifiedVector<std::byte> ws(std::max<size_t>(1, sysv_buffer_size<B, T>(*q, A.view(), Bm.view(), Uplo::Lower)));
+    UnifiedVector<std::byte> ws(std::max<size_t>(1, sysv_buffer_size<B, Scalar>(*q, A.view(), Bm.view(), Uplo::Lower)));
     state.SetKernel(q, bench::pristine(A), bench::pristine(Bm), Uplo::Lower, std::move(piv), std::move(ws),
                     [](Queue& qq, auto&&... xs) { (void)sysv(qq, std::forward<decltype(xs)>(xs)...); });
     state.SetMetric("GFLOPS", double(batch) * 1e-9 * (double(n) * n * n / 3.0 + 2.0 * n * n * nrhs), minibench::Rate);

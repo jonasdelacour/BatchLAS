@@ -30,12 +30,12 @@ namespace detail {
 
 /// F's leading dimension at order kb: whole 16-byte packs per line, plus one pack against bank
 /// conflicts; and the local elements of one block (F, then the transpose buffer of ld kb + 1).
-template <class T> constexpr int sygs2_ldf(int kb) {
-    const int v = sizeof(T) >= 16 ? 1 : static_cast<int>(16 / sizeof(T));
+template <class Scalar> constexpr int sygs2_ldf(int kb) {
+    const int v = sizeof(Scalar) >= 16 ? 1 : static_cast<int>(16 / sizeof(Scalar));
     return (kb + v - 1) / v * v + v;
 }
-template <class T> constexpr std::size_t sygs2_block_elems(int kb) {
-    return static_cast<std::size_t>(kb) * static_cast<std::size_t>(sygs2_ldf<T>(kb) + kb + 1);
+template <class Scalar> constexpr std::size_t sygs2_block_elems(int kb) {
+    return static_cast<std::size_t>(kb) * static_cast<std::size_t>(sygs2_ldf<Scalar>(kb) + kb + 1);
 }
 
 BATCHLAS_DEVICE_INLINE bool in_triangle(Uplo uplo, int i, int j) { return uplo == Uplo::Lower ? i >= j : i <= j; }
@@ -167,7 +167,7 @@ template <Itype IT, Uplo UL> struct sygst {
 // tier::Cta<N>, N <= 32 (the column of the block in one item's registers), then tier::Blocked<NB>
 // for any n; Blocked<16> is the fallback where Blocked<32>'s diagonal block does not fit (complex
 // double on 32 KB of local memory).
-template <Itype IT, Uplo UL, class T> struct tiers<routine::sygst<IT, UL>, T> {
+template <Itype IT, Uplo UL, class Scalar> struct tiers<routine::sygst<IT, UL>, Scalar> {
     using type = tier::list<tier::Cta<8>, tier::Cta<16>, tier::Cta<32>, tier::Blocked<32>, tier::Blocked<16>>;
 };
 
@@ -205,24 +205,24 @@ template <class D, int NB, Itype IT> constexpr SygstBlockedPlan<D> sygst_blocked
 
 // buffer_size(n): the local and global bytes of one matrix of order n (Cta: n <= N, global none;
 // Blocked: any n).
-template <Itype IT, Uplo UL, int N, class Alg, class T> struct tier_info<routine::sygst<IT, UL>, tier::Cta<N, Alg>, T> {
+template <Itype IT, Uplo UL, int N, class Alg, class Scalar> struct tier_info<routine::sygst<IT, UL>, tier::Cta<N, Alg>, Scalar> {
     static_assert(N >= 1 && N <= 32, "sygst: tier::Cta<N>, N <= 32");
     static constexpr int wg_size = (N + 31) / 32 * 32, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0 && n <= N; }
     static constexpr WorkspaceSize buffer_size(int n) {
-        return detail::sygst_cta_plan<std::remove_cv_t<T>>(n).plan.size();
+        return detail::sygst_cta_plan<std::remove_cv_t<Scalar>>(n).plan.size();
     }
 };
-template <Itype IT, Uplo UL, int NB, class Alg, class T> struct tier_info<routine::sygst<IT, UL>, tier::Blocked<NB, Alg>, T> {
+template <Itype IT, Uplo UL, int NB, class Alg, class Scalar> struct tier_info<routine::sygst<IT, UL>, tier::Blocked<NB, Alg>, Scalar> {
     static_assert(NB >= 1 && NB <= 32, "sygst: tier::Blocked<NB>, NB <= 32 (the ?sygs2 block)");
-    static constexpr int wg_size = detail::blocked_cfg_t<std::remove_cv_t<T>>::threads, sg_size = 32;
+    static constexpr int wg_size = detail::blocked_cfg_t<std::remove_cv_t<Scalar>>::threads, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int n) {
-        return detail::sygst_blocked_plan<std::remove_cv_t<T>, NB, IT>(n).size;
+        return detail::sygst_blocked_plan<std::remove_cv_t<Scalar>, NB, IT>(n).size;
     }
 };
 
@@ -246,7 +246,8 @@ BATCHLAS_DEVICE_INLINE void sygs2_one(const Ex& ex, int kb, bool lower, D* f, co
     else if (ex.sub().get_group_linear_id() == 0) run(SubGroup<Ex::sg_size>{ex.sub()});
 }
 
-template <class T> BATCHLAS_DEVICE_INLINE l3::Global<T> gsub(const l3::Global<T>& g, int r0, int c0, int m, int n) {
+template <class Scalar> BATCHLAS_DEVICE_INLINE l3::Global<Scalar> gsub(const l3::Global<Scalar>& g, int r0, int c0,
+                                                                       int m, int n) {
     return {g.p + r0 + c0 * g.ld, g.ld, m, n};
 }
 

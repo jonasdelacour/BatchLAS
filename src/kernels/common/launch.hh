@@ -23,8 +23,8 @@ struct Need {
 // size from the enumerated list (MAX_SUB_GROUP_SIZE reports entry [0], so it accepts a {64}-only
 // device and the launch aborts), and the launched work-group. An operand or the queue type throws
 // invalid_argument, a missing device feature unsupported; every message opens with `who`.
-template <typename T, MatrixFormat MF, typename... Ops>
-Device require_launchable(Queue& ctx, const char* who, const MatrixView<T, MF>& A, Need need, const Ops&... ops) {
+template <typename Scalar, MatrixFormat MF, typename... Ops>
+Device require_launchable(Queue& ctx, const char* who, const MatrixView<Scalar, MF>& A, Need need, const Ops&... ops) {
     const std::string w(who);
     if (need.square && A.rows() != A.cols()) throw batchlas::invalid_argument(w + ": A must be square");
     if (need.extents && (A.rows() < 1 || A.cols() < 1 || A.batch_size() < 1))

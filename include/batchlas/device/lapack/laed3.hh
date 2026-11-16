@@ -18,14 +18,14 @@ namespace detail {
 
 /// q(i) = (d(i) - origin) - tau, the root's denominators (at the origin pole exactly -tau; an
 /// exact zero is clamped to eps (|d(i)| + 1) to keep the Löwner reciprocal finite).
-template <class T, class Ex, class QCol, class DV>
-BATCHLAS_DEVICE_HELPER void denominators(const Ex& ex, const QCol& q, const DV& d_prob, T origin, T tau) {
+template <class Real, class Ex, class QCol, class DV>
+BATCHLAS_DEVICE_HELPER void denominators(const Ex& ex, const QCol& q, const DV& d_prob, Real origin, Real tau) {
     map(
         ex, q,
-        [=](T di) {
-            T denom = (di - origin) - tau;
-            if (denom == T(0)) {
-                denom = std::numeric_limits<T>::epsilon() * (sycl::fabs(di) + T(1));
+        [=](Real di) {
+            Real denom = (di - origin) - tau;
+            if (denom == Real(0)) {
+                denom = std::numeric_limits<Real>::epsilon() * (sycl::fabs(di) + Real(1));
             }
             return denom;
         },
@@ -37,7 +37,7 @@ BATCHLAS_DEVICE_HELPER void denominators(const Ex& ex, const QCol& q, const DV& 
 /// barrier. Iteration eid reads row eid of Q and writes only v(eid).
 // prod_scaled: the naive product leaves float range at n = 64.
 // evidence: docs/perf/stedc.md#stedc-partition-parallel-rescale-and-normalize
-template <class T, class Ex, class QBatch, class DV, class VView>
+template <class Real, class Ex, class QBatch, class DV, class VView>
 BATCHLAS_DEVICE_HELPER void rescale(bool do_rescale, const Ex& ex, std::int32_t first, std::int32_t stride, std::int32_t dd, QBatch& Q_bid,
                                  const DV& d_prob, const VView& v, std::int32_t bid) {
     if (!do_rescale) {
@@ -50,21 +50,21 @@ BATCHLAS_DEVICE_HELPER void rescale(bool do_rescale, const Ex& ex, std::int32_t 
     for (std::int32_t it = 0; it < iters; ++it) {
         const std::int32_t eid = first + it * stride;
         const bool active = (eid < dd);
-        const T Di = active ? d_prob(eid) : T(0);
+        const Real Di = active ? d_prob(eid) : Real(0);
         // |z_eid|^2 = prod_j Q(eid, j) / (D_eid - D_j), the j == eid factor Q(eid, eid) itself
         const auto prod = prod_scaled(ex, active ? dd : 0, [&](std::int32_t j) {
-            const T q_elem = Q_bid(eid, j);
-            T ratio;
+            const Real q_elem = Q_bid(eid, j);
+            Real ratio;
             if (j == eid) {
                 ratio = q_elem;
             } else {
-                const T denom = Di - d_prob(j);
+                const Real denom = Di - d_prob(j);
                 ratio = q_elem / denom;
             }
             return ratio;
         });
         if (active && ex.leader()) {
-            const T sgn = (v(eid, bid) >= T(0)) ? T(1) : T(-1);
+            const Real sgn = (v(eid, bid) >= Real(0)) ? Real(1) : Real(-1);
             v(eid, bid) = sgn * sqrt_scaled(prod);
         }
         if constexpr (detail::is_group_v<Ex>) sync<Scope::Group>(ex, Mem::Global);
@@ -73,7 +73,7 @@ BATCHLAS_DEVICE_HELPER void rescale(bool do_rescale, const Ex& ex, std::int32_t 
 
 /// Q(:, eig) = z ./ Q(:, eig), divided by its Blue 2-norm; `first`/`stride` as in rescale
 /// (column eig reads z and touches only Q(:, eig)).
-template <class T, class Ex, class QMat, class VView>
+template <class Real, class Ex, class QMat, class VView>
 BATCHLAS_DEVICE_HELPER void form_vectors(const Ex& ex, std::int32_t first, std::int32_t stride, std::int32_t dd, const QMat& Q, const VView& v,
                                    std::int32_t bid) {
     // Uniform trip count (see rescale): an inactive group runs every op on an empty column.
@@ -84,10 +84,10 @@ BATCHLAS_DEVICE_HELPER void form_vectors(const Ex& ex, std::int32_t first, std::
         const std::int32_t eig = first + it * stride;
         const bool active = (eig < dd);
         const auto q = Q.col(active ? eig : 0).head(active ? dd : 0);
-        map(ex, q, [](T zi, T den) { return zi / den; }, z, q);
+        map(ex, q, [](Real zi, Real den) { return zi / den; }, z, q);
         // No barrier: nrm2 walks q with map's owner stride (each item reads what it wrote).
-        const T nrm = nrm2<alg::Blue>(ex, q);
-        map(ex, q, [=](T qi) { return qi / nrm; }, q);
+        const Real nrm = nrm2<alg::Blue>(ex, q);
+        map(ex, q, [=](Real qi) { return qi / nrm; }, q);
         if constexpr (detail::is_group_v<Ex>) sync<Scope::Group>(ex, Mem::Global);
     }
 }
@@ -101,12 +101,12 @@ BATCHLAS_DEVICE_HELPER void form_vectors(const Ex& ex, std::int32_t first, std::
 /// Q(:, 0..dd) becomes the merged eigenvectors.
 /// d_prob, z_prob: the dd sorted poles and weights (any memory); abs_2rho = |2 rho|; Q_bid: Q
 /// by (i, j) for the rescale; v(i, bid) / v.batch_item(bid): the weights (written).
-template <class T, class WEx, class PEx, class DV, class QMat, class QBatch, class VView, class OnRoot>
+template <class Real, class WEx, class PEx, class DV, class QMat, class QBatch, class VView, class OnRoot>
 BATCHLAS_DEVICE_INLINE void laed3(const WEx& wex, const PEx& pex, std::int32_t first, std::int32_t stride, std::int32_t dd, const DV& d_prob,
-                               const DV& z_prob, T abs_2rho, std::int32_t max_iter, bool do_rescale, const QMat& Q, QBatch& Q_bid,
+                               const DV& z_prob, Real abs_2rho, std::int32_t max_iter, bool do_rescale, const QMat& Q, QBatch& Q_bid,
                                const VView& v, std::int32_t bid, const OnRoot& on_root) {
     for (std::int32_t root_ix = first; root_ix < dd; root_ix += stride) {
-        detail::SecularRoot<T> root;
+        detail::SecularRoot<Real> root;
         if (root_ix == dd - 1) {
             root = detail::solve_last(pex, d_prob, z_prob, dd, abs_2rho, max_iter);
         } else {
@@ -119,9 +119,9 @@ BATCHLAS_DEVICE_INLINE void laed3(const WEx& wex, const PEx& pex, std::int32_t f
     sync<Scope::Group>(wex, Mem::Global);
 
     // Rescale reads Q, writes v; form_vectors the reverse. On the group each step syncs itself.
-    detail::rescale<T>(do_rescale, pex, first, stride, dd, Q_bid, d_prob, v, bid);
+    detail::rescale<Real>(do_rescale, pex, first, stride, dd, Q_bid, d_prob, v, bid);
     if constexpr (!detail::is_group_v<PEx>) sync<Scope::Group>(wex, Mem::Global);
-    detail::form_vectors<T>(pex, first, stride, dd, Q, v, bid);
+    detail::form_vectors<Real>(pex, first, stride, dd, Q, v, bid);
 }
 
 }  // namespace batchlas::device

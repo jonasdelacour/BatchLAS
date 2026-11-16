@@ -398,22 +398,22 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
 // swallows errors that come from template substitution, so an ill-formed call
 // written with concrete types in a non-template context is a hard error and the
 // guard would fail to compile instead of passing.
-template <typename T>
-concept MatmulOptionsHasBeta = requires(linalg::MatmulOptions<T> o) { o.beta; };
+template <typename Scalar>
+concept MatmulOptionsHasBeta = requires(linalg::MatmulOptions<Scalar> o) { o.beta; };
 
-template <typename T>
-concept HasLinalgTranspose = requires(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
+template <typename Scalar>
+concept HasLinalgTranspose = requires(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A) {
     linalg::transpose(ctx, A);
 };
 
-template <typename T>
-concept HasLinalgCond = requires(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
+template <typename Scalar>
+concept HasLinalgCond = requires(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A) {
     linalg::cond(ctx, A);
 };
 
-template <typename T>
-concept MatmulTakesOptionList = requires(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
-    linalg::matmul(ctx, A, A, {.alpha = T(2)});
+template <typename Scalar>
+concept MatmulTakesOptionList = requires(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A) {
+    linalg::matmul(ctx, A, A, {.alpha = Scalar(2)});
 };
 
 // matmul allocates its result, so beta has no meaning: it used to be spellable
@@ -526,38 +526,38 @@ TEST(LinalgLayer, MismatchedShapesAreRejected) {
 
 namespace {
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
-template <typename T>
-using Real = typename base_type<T>::type;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+template <typename Scalar>
+using Real = typename base_type<Scalar>::type;
 
-template <typename T>
-inline constexpr bool kIsComplex = !std::is_same_v<T, Real<T>>;
+template <typename Scalar>
+inline constexpr bool kIsComplex = !std::is_same_v<Scalar, Real<Scalar>>;
 
-template <typename T>
-T scalar_of(double re, double im) {
-    if constexpr (kIsComplex<T>) {
-        return T(Real<T>(re), Real<T>(im));
+template <typename Scalar>
+Scalar scalar_of(double re, double im) {
+    if constexpr (kIsComplex<Scalar>) {
+        return Scalar(Real<Scalar>(re), Real<Scalar>(im));
     } else {
         (void)im;
-        return T(Real<T>(re));
+        return Scalar(Real<Scalar>(re));
     }
 }
 
-template <typename T>
-T& elem(const MV<T>& v, int i, int j, int b) {
+template <typename Scalar>
+Scalar& elem(const MV<Scalar>& v, int i, int j, int b) {
     return v.data_ptr()[static_cast<int64_t>(b) * v.stride() + static_cast<int64_t>(j) * v.ld() + i];
 }
 
 // In range and finite, so a kernel that reads padding or the unread triangle accepts it.
-template <typename T>
-const T kPoison = scalar_of<T>(777.0, -333.0);
+template <typename Scalar>
+const Scalar kPoison = scalar_of<Scalar>(777.0, -333.0);
 
 enum class Fill { general, hermitian, spd, pivoted };
 
-template <typename T>
-Matrix<T> make(Queue& q, int m, int n, int batch, Fill fill, unsigned seed) {
-    Matrix<T> A(m, n, batch);
+template <typename Scalar>
+Matrix<Scalar> make(Queue& q, int m, int n, int batch, Fill fill, unsigned seed) {
+    Matrix<Scalar> A(m, n, batch);
     switch (fill) {
         case Fill::general: (void)A.fill_random(q, false, seed); break;
         case Fill::hermitian: (void)A.fill_random(q, true, seed); break;
@@ -569,23 +569,23 @@ Matrix<T> make(Queue& q, int m, int n, int batch, Fill fill, unsigned seed) {
 }
 
 // A's values in storage with ld = rows + 3 and a padded batch stride, the padding poisoned.
-template <typename T>
-Matrix<T> padded(Queue& q, const MV<T>& A) {
+template <typename Scalar>
+Matrix<Scalar> padded(Queue& q, const MV<Scalar>& A) {
     const int ld = A.rows() + 3;
     const int stride = ld * A.cols() + 5;
     const int total = stride * A.batch_size();
-    Matrix<T> P(A.rows(), A.cols(), A.batch_size(), ld, stride);
-    (void)MV<T>(P.data_ptr(), total, 1, total, total, 1).fill(q, kPoison<T>);
-    (void)MV<T>::copy(q, P, A);
+    Matrix<Scalar> P(A.rows(), A.cols(), A.batch_size(), ld, stride);
+    (void)MV<Scalar>(P.data_ptr(), total, 1, total, total, 1).fill(q, kPoison<Scalar>);
+    (void)MV<Scalar>::copy(q, P, A);
     q.wait();
     return P;
 }
 
 // A with the triangle opposite `keep` replaced by poison: proves the wrapper reads only `keep`.
-template <typename T>
-Matrix<T> poison_other_triangle(Queue& q, const MV<T>& A, Uplo keep) {
-    Matrix<T> junk(A.rows(), A.cols(), A.batch_size());
-    (void)junk.fill(q, kPoison<T>);
+template <typename Scalar>
+Matrix<Scalar> poison_other_triangle(Queue& q, const MV<Scalar>& A, Uplo keep) {
+    Matrix<Scalar> junk(A.rows(), A.cols(), A.batch_size());
+    (void)junk.fill(q, kPoison<Scalar>);
     auto kept = keep == Uplo::Upper ? linalg::triu(q, A) : linalg::tril(q, A);
     auto other = keep == Uplo::Upper ? linalg::tril(q, junk, -1) : linalg::triu(q, junk, 1);
     auto P = linalg::add(q, kept, other);
@@ -700,24 +700,25 @@ namespace {
 // Diagonally dominant for every batch item, so LU is well-posed without pivot luck.
 // The imaginary part is off-diagonal and odd in (i - j), which is what makes
 // ConjTrans a different system from Trans.
-template <typename T>
-Matrix<T> solve_system(int n, int batch) {
-    Matrix<T> A(n, n, batch);
+template <typename Scalar>
+Matrix<Scalar> solve_system(int n, int batch) {
+    Matrix<Scalar> A(n, n, batch);
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i)
-                elem<T>(A, i, j, b) =
-                    i == j ? scalar_of<T>(double(n + b + 3), 0.0)
-                           : scalar_of<T>(1.0 / (1.0 + std::abs(i - j)), 0.25 * double(i - j) / double(n));
+                elem<Scalar>(A, i, j, b) =
+                    i == j ? scalar_of<Scalar>(double(n + b + 3), 0.0)
+                           : scalar_of<Scalar>(1.0 / (1.0 + std::abs(i - j)), 0.25 * double(i - j) / double(n));
     return A;
 }
 
-template <typename T>
-Matrix<T> solve_rhs(int n, int nrhs, int batch) {
-    Matrix<T> B(n, nrhs, batch);
+template <typename Scalar>
+Matrix<Scalar> solve_rhs(int n, int nrhs, int batch) {
+    Matrix<Scalar> B(n, nrhs, batch);
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < nrhs; ++j)
-            for (int i = 0; i < n; ++i) elem<T>(B, i, j, b) = scalar_of<T>(1.0 + i - 2.0 * j + b, 0.5 - 0.1 * j);
+            for (int i = 0; i < n; ++i) elem<Scalar>(B, i, j, b) = scalar_of<Scalar>(1.0 + i - 2.0 * j + b,
+                                                                                     0.5 - 0.1 * j);
     return B;
 }
 
@@ -930,11 +931,11 @@ TEST(LinalgLayer, EighSubsetRejectsExtremal) {
 // Inputs are padded views (ld = rows + 3, padded batch stride, poisoned padding), so a
 // wrapper that derives ld or stride instead of reading it fails.
 
-template <typename T>
+template <typename Scalar>
 class LinalgTyped : public ::testing::Test {
 protected:
     // Metal has no device fp64: the double cases run on the CPU device there instead.
-    Queue q = test_utils::kNativeGpuLacksFp64 && std::is_same_v<T, double> ? Queue(Device("cpu")) : Queue();
+    Queue q = test_utils::kNativeGpuLacksFp64 && std::is_same_v<Scalar, double> ? Queue(Device("cpu")) : Queue();
 };
 
 using LinalgTypes = ::testing::Types<float, double, std::complex<float>>;
@@ -1245,15 +1246,15 @@ void expect_composed_qr(Queue& q, int m, int n, int batch, unsigned seed, const 
 }
 
 // Two shapes and batch counts, then the first again, on one queue, then on a fresh queue.
-template <typename T>
+template <typename Scalar>
 void expect_repeated_qr(Queue& q, const std::string& where) {
     struct Shape { int m, n, batch; };
     const Shape seq[] = {{12, 8, 5}, {37, 21, 1030}, {12, 8, 5}, {16, 16, 3}};
     unsigned seed = 151;
     for (const auto& s : seq)
-        expect_composed_qr<T>(q, s.m, s.n, s.batch, seed++,
-                              where + " " + std::to_string(s.m) + "x" + std::to_string(s.n) + " batch " +
-                                  std::to_string(s.batch));
+        expect_composed_qr<Scalar>(q, s.m, s.n, s.batch, seed++,
+                                   where + " " + std::to_string(s.m) + "x" + std::to_string(s.n) + " batch " +
+                                       std::to_string(s.batch));
 }
 
 }  // namespace
@@ -1301,15 +1302,15 @@ void expect_wrapper_qr(Queue& q, int m, int n, int batch, unsigned seed, const s
     EXPECT_EQ(changed, 0) << what << ": A was modified";
 }
 
-template <typename T>
+template <typename Scalar>
 void expect_repeated_wrapper_qr(Queue& q, const std::string& where) {
     struct Shape { int m, n, batch; };
     const Shape seq[] = {{12, 8, 5}, {37, 21, 1030}, {12, 8, 5}, {16, 16, 3}};
     unsigned seed = 171;
     for (const auto& s : seq)
-        expect_wrapper_qr<T>(q, s.m, s.n, s.batch, seed++,
-                             where + " " + std::to_string(s.m) + "x" + std::to_string(s.n) + " batch " +
-                                 std::to_string(s.batch));
+        expect_wrapper_qr<Scalar>(q, s.m, s.n, s.batch, seed++,
+                                  where + " " + std::to_string(s.m) + "x" + std::to_string(s.n) + " batch " +
+                                      std::to_string(s.batch));
 }
 
 }  // namespace

@@ -25,7 +25,7 @@ inline void OrmqrCtaBenchSizes(Benchmark* b) {
 }
 
 // Batched ORMQR-CTA benchmark
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_ORMQR_CTA(minibench::State& state) {
 #if BATCHLAS_HAS_CUDA_BACKEND
     const int n = static_cast<int>(state.range(0));
@@ -42,17 +42,17 @@ void BM_ORMQR_CTA(minibench::State& state) {
 
     // Build reflectors via QR once (outside timed region) using the same backend.
     // This avoids an unconditional dependency on the NETLIB/CPU backend.
-    auto A = Matrix<T>::Random(n, n, /*hermitian=*/false, batch, /*seed=*/2025);
+    auto A = Matrix<Scalar>::Random(n, n, /*hermitian=*/false, batch, /*seed=*/2025);
     // NOTE: minibench executes the SetKernel callback after this function returns.
     // So we must capture *owning* storage (not just a VectorView) into the callback.
-    UnifiedVector<T> tau_storage(static_cast<size_t>(n) * static_cast<size_t>(batch));
+    UnifiedVector<Scalar> tau_storage(static_cast<size_t>(n) * static_cast<size_t>(batch));
     size_t geqrf_ws = geqrf_buffer_size(*q, A, tau_storage.to_span());
     UnifiedVector<std::byte> ws_geqrf(geqrf_ws);
 
     geqrf(*q, A, tau_storage.to_span(), ws_geqrf.to_span()).wait();
     q->wait();
 
-    auto C = Matrix<T>::Random(n, n, /*hermitian=*/false, batch, /*seed=*/1337);
+    auto C = Matrix<Scalar>::Random(n, n, /*hermitian=*/false, batch, /*seed=*/1337);
     UnifiedVector<std::byte> ws_dummy(1, std::byte{0});
 
     state.SetKernel(q,
@@ -77,9 +77,9 @@ void BM_ORMQR_CTA(minibench::State& state) {
                        auto n,
                        auto batch,
                        auto wg_mult) {
-                        VectorView<T> tau_view_local(tau_storage,
-                                                     static_cast<int>(n),
-                                                     static_cast<int>(batch));
+                        VectorView<Scalar> tau_view_local(tau_storage,
+                                                          static_cast<int>(n),
+                                                          static_cast<int>(batch));
                         (void)ormqx_cta(q,
                                     A,
                                     tau_view_local,

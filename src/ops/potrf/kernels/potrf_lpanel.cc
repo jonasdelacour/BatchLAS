@@ -29,7 +29,7 @@
 namespace batchlas {
 
 // Kernel name tag; outside the anonymous namespace so it names no internal-linkage entity.
-template <typename T, int NB, bool Masked>
+template <typename Scalar, int NB, bool Masked>
 class PotrfLpanelKernel;
 
 namespace ops::potrf {
@@ -38,19 +38,19 @@ namespace {
 
 // The panel width, and the length of the rp[]/rS[]/rA[] register arrays: 3 * NB scalars
 // per lane before addressing. evidence: docs/perf/potrf.md#lpanel-register-gate
-template <typename T>
+template <typename Scalar>
 struct PotrfLpanelConst { static constexpr int NB = 8; };
 
 // Which NB values this build actually instantiates. A hint the type cannot honour is an
 // ERROR rather than a silent downgrade: the NB A/B would otherwise measure NB = 8 twice.
-template <typename T>
+template <typename Scalar>
 constexpr bool potrf_lpanel_nb_is_built(int nb) {
-    return nb == PotrfLpanelConst<T>::NB || (std::is_same_v<T, float> && nb == 16);
+    return nb == PotrfLpanelConst<Scalar>::NB || (std::is_same_v<Scalar, float> && nb == 16);
 }
 
-template <typename T>
+template <typename Scalar>
 constexpr int potrf_lpanel_nb_for(int hint) {
-    return (hint == 0) ? PotrfLpanelConst<T>::NB : hint;
+    return (hint == 0) ? PotrfLpanelConst<Scalar>::NB : hint;
 }
 
 // Called by BOTH the capability query and the launcher, so the ceiling can_run() advertises
@@ -107,17 +107,17 @@ PotrfLpanelLaunch potrf_lpanel_launch_params(int n, int nb, int batch, std::size
 
 }  // namespace
 
-template <typename T>
+template <typename Scalar>
 int potrf_lpanel_max_n_for_slm(std::size_t slm_budget_bytes, int max_wg_size,
                                int min_blocks_per_sm, int nb_hint) {
-    const int nb = potrf_lpanel_nb_for<T>(nb_hint);
-    if (!potrf_lpanel_nb_is_built<T>(nb)) return 0;
+    const int nb = potrf_lpanel_nb_for<Scalar>(nb_hint);
+    if (!potrf_lpanel_nb_is_built<Scalar>(nb)) return 0;
 
     // Two independent caps, and the work-group one is NOT slack: the body requires L >= n.
     const int by_wg = (max_wg_size / 32) * 32;
     const int by_slm = resident::resident_max_n(
         [nb](int n) {
-            using DM = sycl_device::DevMap<T>;
+            using DM = sycl_device::DevMap<Scalar>;
             return resident::hole_padded(
                 potrf_lpanel_slm_per_matrix(n, nb, sizeof(typename DM::type)));
         },
@@ -125,19 +125,19 @@ int potrf_lpanel_max_n_for_slm(std::size_t slm_budget_bytes, int max_wg_size,
     return std::min(by_wg, by_slm);
 }
 
-template <typename T>
-std::size_t potrf_lpanel_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
+template <typename Scalar>
+std::size_t potrf_lpanel_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A) {
     const int batch = A.batch_size();
     return detail::info_scratch_bytes(ctx, batch);
 }
 
 // The launch geometry, for tests; see potrf_native.hh for the encoding.
-template <typename T>
+template <typename Scalar>
 unsigned potrf_lpanel_debug_launch(Queue& ctx, int n, int batch, int min_blocks_per_sm,
                                    int nb_hint) {
-    using DM = sycl_device::DevMap<T>;
-    const int nb = potrf_lpanel_nb_for<T>(nb_hint);
-    if (!potrf_lpanel_nb_is_built<T>(nb)) return 0u;
+    using DM = sycl_device::DevMap<Scalar>;
+    const int nb = potrf_lpanel_nb_for<Scalar>(nb_hint);
+    if (!potrf_lpanel_nb_is_built<Scalar>(nb)) return 0u;
 
     const auto dev = ctx.device();
     const std::size_t budget = resident::device_slm_budget(
@@ -156,17 +156,17 @@ namespace {
 // Masked: the batch mask folds into `live` (I2), a template so the unmasked instance is the kernel
 // as it was (the runtime fold cost 4.2% on complex<float> n = 48 at batch 32768). The body must
 // inline into each kernel: shared out of line by both, float NB = 16 ran 11% slower.
-template <typename T, int NB, bool Masked>
+template <typename Scalar, int NB, bool Masked>
 Event potrf_lpanel_launch(Queue& ctx,
-                          const MatrixView<T, MatrixFormat::Dense>& A,
+                          const MatrixView<Scalar, MatrixFormat::Dense>& A,
                           Span<int32_t> info,
                           const PotrfLpanelLaunch& p,
                           int n, int batch, const std::uint8_t* mask) {
     // std::complex is re-typed to the POD device scalar at the pointer boundary: its
     // Annex-G operator* costs an isnan branch and a __mulsc3 call in device code.
-    using DM = sycl_device::DevMap<T>;
+    using DM = sycl_device::DevMap<Scalar>;
     using D = typename DM::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     D* a_ptr = reinterpret_cast<D*>(A.data_ptr());
     const int ldg = A.ld();
@@ -198,7 +198,7 @@ Event potrf_lpanel_launch(Queue& ctx,
                            sizeof(sycl::vec<float, 4>)), h);
         sycl::local_accessor<int, 1> fail(sycl::range<1>(static_cast<std::size_t>(G)), h);
 
-        batchlas::impl::parallel_for<PotrfLpanelKernel<T, NB, Masked>>(h,
+        batchlas::impl::parallel_for<PotrfLpanelKernel<Scalar, NB, Masked>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) * wg_size),
                               sycl::range<1>(wg_size)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
@@ -238,15 +238,15 @@ Event potrf_lpanel_launch(Queue& ctx,
 
 }  // namespace
 
-template <typename T>
+template <typename Scalar>
 Event potrf_lpanel_dispatch(Queue& ctx,
-                            const MatrixView<T, MatrixFormat::Dense>& A,
+                            const MatrixView<Scalar, MatrixFormat::Dense>& A,
                             Uplo uplo,
                             Span<std::byte> workspace,
                             Span<int32_t> info_out,
                             int min_blocks_per_sm,
                             int nb_hint) {
-    using DM = sycl_device::DevMap<T>;
+    using DM = sycl_device::DevMap<Scalar>;
     constexpr std::size_t sz_d = sizeof(typename DM::type);
 
     const int n = static_cast<int>(A.rows());
@@ -264,8 +264,8 @@ Event potrf_lpanel_dispatch(Queue& ctx,
             "can_run in src/ops/potrf/potrf.cc");
     }
 
-    const int nb = potrf_lpanel_nb_for<T>(nb_hint);
-    if (!potrf_lpanel_nb_is_built<T>(nb)) {
+    const int nb = potrf_lpanel_nb_for<Scalar>(nb_hint);
+    if (!potrf_lpanel_nb_is_built<Scalar>(nb)) {
         throw batchlas::unsupported("potrf_lpanel: NB = " + std::to_string(nb) +
                                     " is not instantiated for this scalar type");
     }
@@ -282,23 +282,23 @@ Event potrf_lpanel_dispatch(Queue& ctx,
             " does not fit this device (needs " + std::to_string(p.slm_total) + " B of " +
             std::to_string(budget) + " B, and " + std::to_string(p.L) +
             " work-items); the ceiling for this type is " +
-            std::to_string(potrf_lpanel_max_n_for_slm<T>(device_budget, max_wg,
-                                                         min_blocks_per_sm, nb)));
+            std::to_string(potrf_lpanel_max_n_for_slm<Scalar>(device_budget, max_wg,
+                                                              min_blocks_per_sm, nb)));
     }
 
     BumpAllocator pool(workspace);
     Span<int32_t> info = detail::info_target(ctx, pool, info_out, static_cast<std::size_t>(batch));
 
     const std::uint8_t* const mask = detail::mask_ptr(detail::call_mask("potrf", A));
-    if constexpr (std::is_same_v<T, float>) {
+    if constexpr (std::is_same_v<Scalar, float>) {
         if (nb == 16) {
-            return mask ? potrf_lpanel_launch<T, 16, true>(ctx, A, info, p, n, batch, mask)
-                        : potrf_lpanel_launch<T, 16, false>(ctx, A, info, p, n, batch, nullptr);
+            return mask ? potrf_lpanel_launch<Scalar, 16, true>(ctx, A, info, p, n, batch, mask)
+                        : potrf_lpanel_launch<Scalar, 16, false>(ctx, A, info, p, n, batch, nullptr);
         }
     }
-    constexpr int kNb = PotrfLpanelConst<T>::NB;
-    return mask ? potrf_lpanel_launch<T, kNb, true>(ctx, A, info, p, n, batch, mask)
-                : potrf_lpanel_launch<T, kNb, false>(ctx, A, info, p, n, batch, nullptr);
+    constexpr int kNb = PotrfLpanelConst<Scalar>::NB;
+    return mask ? potrf_lpanel_launch<Scalar, kNb, true>(ctx, A, info, p, n, batch, mask)
+                : potrf_lpanel_launch<Scalar, kNb, false>(ctx, A, info, p, n, batch, nullptr);
 }
 
 // Per scalar type only, no Backend cross-product: the kernel has no Backend parameter.

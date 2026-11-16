@@ -223,9 +223,9 @@ Matrix<Real, MatrixFormat::Dense> tridiagonal_matrix(int n, Vector<Real>& d, Vec
     return T;
 }
 
-template <typename T, Backend B>
+template <typename Real, Backend B>
 struct SytrdCtaConfig {
-    using ScalarType = T;
+    using ScalarType = Real;
     static constexpr Backend BackendVal = B;
 };
 

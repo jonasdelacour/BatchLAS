@@ -12,28 +12,28 @@
 
 namespace batchlas::ops::syfn {
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
-template <typename T>
+template <typename Scalar>
 struct Core {
-    Span<T> y;           // n x m per item, ld n: the scaled columns
-    Span<float_t<T>> g;  // m per item: the column scales
+    Span<Scalar> y;           // n x m per item, ld n: the scaled columns
+    Span<float_t<Scalar>> g;  // m per item: the column scales
 };
 
 // Each launch skips item b where a non-null mask has mask[b] == 0.
 // info[b]: the out-of-domain count of W's item b, or n + syev_info[b] where that is nonzero.
-template <Backend B, typename T>
-void launch_info(Queue& q, const MV<T>& V, Span<float_t<T>> W, SyfnKind kind, Span<int32_t> info,
+template <Backend B, typename Scalar>
+void launch_info(Queue& q, const MV<Scalar>& V, Span<float_t<Scalar>> W, SyfnKind kind, Span<int32_t> info,
                  Span<int32_t> syev_info, const std::uint8_t* mask);
 
 // F := 0 (the m == 0 case).
-template <Backend B, typename T>
-Event launch_zero(Queue& q, const MV<T>& V, const MV<T>& F, const std::uint8_t* mask);
+template <Backend B, typename Scalar>
+Event launch_zero(Queue& q, const MV<Scalar>& V, const MV<Scalar>& F, const std::uint8_t* mask);
 
 // ws.g := the column scales, ws.y := V diag(ws.g).
-template <Backend B, typename T>
-void launch_scale(Queue& q, const MV<T>& V, Span<float_t<T>> W, SyfnFunction<float_t<T>> fn, const Core<T>& ws,
-                  const std::uint8_t* mask);
+template <Backend B, typename Scalar>
+void launch_scale(Queue& q, const MV<Scalar>& V, Span<float_t<Scalar>> W, SyfnFunction<float_t<Scalar>> fn,
+                  const Core<Scalar>& ws, const std::uint8_t* mask);
 
 }  // namespace batchlas::ops::syfn

@@ -21,15 +21,15 @@ namespace {
 
 namespace P = ops::potrf;
 
-template <typename T>
+template <typename Scalar>
 struct PotrfProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     int n, batch, ld;
     std::size_t stride;
     Uplo uplo;
-    UnifiedVector<T> A0, A;
-    UnifiedVector<T*> pA0, pA;
+    UnifiedVector<Scalar> A0, A;
+    UnifiedVector<Scalar*> pA0, pA;
     MV A0v, Av;
     UnifiedVector<std::int32_t> info;
 
@@ -41,7 +41,7 @@ struct PotrfProblem {
         (void)A0v.fill_random_spd(q, 12345);
         q.wait();
     }
-    std::size_t workspace() { return potrf_buffer_size<kBackend, T>(q, Av, uplo); }
+    std::size_t workspace() { return potrf_buffer_size<kBackend, Scalar>(q, Av, uplo); }
     void reset() {
         (void)MV::copy(q, Av, A0v);
         q.wait();
@@ -50,7 +50,7 @@ struct PotrfProblem {
         for (int b = 0; b < batch; ++b) info[std::size_t(b)] = 0;
     }
     void run(Span<std::byte> ws) {
-        (void)potrf<kBackend, T>(q, Av, uplo, ws, info.to_span());
+        (void)potrf<kBackend, Scalar>(q, Av, uplo, ws, info.to_span());
         q.wait();
     }
     std::pair<double, int> verify() {

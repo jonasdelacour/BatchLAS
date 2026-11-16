@@ -10,27 +10,27 @@
 #include <type_traits>
 #include <src/queue.hh>
 namespace batchlas {
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 struct CondSpectralKernel;
 
 // Sized and run through the same public syev, so the buffer and the call cannot disagree.
-template <Backend B, typename T>
-size_t cond_syev_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                             const Span<typename base_type<T>::type> eig) {
+template <Backend B, typename Scalar>
+size_t cond_syev_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                             const Span<typename base_type<Scalar>::type> eig) {
     // The public syev, so selection decides vendor vs native (a vendor-free build has no vendor).
-    return syev_buffer_size<B, T>(ctx, A, eig, JobType::NoEigenVectors, Uplo::Lower);
+    return syev_buffer_size<B, Scalar>(ctx, A, eig, JobType::NoEigenVectors, Uplo::Lower);
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event cond_spectral_impl(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A,
-                         const Span<T> conds,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         const Span<Scalar> conds,
                          const Span<std::byte> workspace) {
                     if (A.rows() != A.cols()) {
                         throw batchlas::invalid_argument("cond: Spectral norm requires square symmetric/Hermitian matrices");
                     }
 
-                    using Real = typename base_type<T>::type;
+                    using Real = typename base_type<Scalar>::type;
                     const int n = A.rows();
                     const int batch_size = A.batch_size();
 
@@ -38,17 +38,18 @@ Event cond_spectral_impl(Queue& ctx,
                     const std::uint8_t* mk = detail::mask_ptr(mask);
                     const bool masked = mk != nullptr;  // a captured null pointer can read as non-null on AdaptiveCpp Metal
                     auto pool = BumpAllocator(workspace);
-                    auto A_buf = pool.allocate<T>(ctx, A.data().size());
-                    auto A_ptrs = pool.allocate<T*>(ctx, A.batch_size());
-                    auto A_copy = MatrixView<T, MatrixFormat::Dense>(A_buf.data(),
-                                                                     A.rows(), A.cols(), A.ld(), A.stride(), A.batch_size(),
-                                                                     A_ptrs.data())
+                    auto A_buf = pool.allocate<Scalar>(ctx, A.data().size());
+                    auto A_ptrs = pool.allocate<Scalar*>(ctx, A.batch_size());
+                    auto A_copy = MatrixView<Scalar, MatrixFormat::Dense>(A_buf.data(),
+                                                                          A.rows(), A.cols(), A.ld(), A.stride(), A.batch_size(),
+                                                                          A_ptrs.data())
                                       .with_batch_mask(mask);
 
-                    Event copy_e = MatrixView<T, MatrixFormat::Dense>::copy(ctx, A_copy, A);
+                    Event copy_e = MatrixView<Scalar, MatrixFormat::Dense>::copy(ctx, A_copy, A);
                     ctx.enqueue(copy_e);
 
-                    if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) {
+                    if constexpr (std::is_same_v<Scalar, std::complex<float>> || std::is_same_v<Scalar,
+                                  std::complex<double>>) {
                         A_copy.hermitize(ctx, Uplo::Lower).wait();
                     } else {
                         A_copy.symmetrize(ctx, Uplo::Lower).wait();
@@ -57,11 +58,12 @@ Event cond_spectral_impl(Queue& ctx,
                     auto eig = pool.allocate<Real>(ctx, static_cast<size_t>(batch_size) * n);
                     auto eig_span = Span<Real>(eig.data(), eig.size());
 
-                    auto syev_ws = pool.allocate<std::byte>(ctx, cond_syev_buffer_size<B, T>(ctx, A_copy, eig_span));
-                    Event e = syev<B, T>(ctx, A_copy, eig_span, JobType::NoEigenVectors, Uplo::Lower, syev_ws);
+                    auto syev_ws = pool.allocate<std::byte>(ctx, cond_syev_buffer_size<B,
+                                                            Scalar>(ctx, A_copy, eig_span));
+                    Event e = syev<B, Scalar>(ctx, A_copy, eig_span, JobType::NoEigenVectors, Uplo::Lower, syev_ws);
                     ctx.enqueue(e);
 
-                    ctx->parallel_for<CondSpectralKernel<B, T>>(sycl::range<1>(static_cast<size_t>(batch_size)), [=](sycl::id<1> idx) {
+                    ctx->parallel_for<CondSpectralKernel<B, Scalar>>(sycl::range<1>(static_cast<size_t>(batch_size)), [=](sycl::id<1> idx) {
                         const size_t b = idx[0];
                         if (masked && !mk[b]) return;
                         const Real* ev = eig_span.data() + b * n;
@@ -73,17 +75,17 @@ Event cond_spectral_impl(Queue& ctx,
                             min_v = sycl::fmin(min_v, v);
                         }
                         const Real ratio = (min_v == Real(0)) ? std::numeric_limits<Real>::infinity() : (max_v / min_v);
-                        conds[b] = static_cast<T>(ratio);
+                        conds[b] = static_cast<Scalar>(ratio);
                     });
 
                     return ctx.get_event();
                 }
 
-template <Backend B, typename T>
+template <Backend B, typename Real>
 Event cond_impl(Queue& ctx,
-                const MatrixView<T, MatrixFormat::Dense>& A,
+                const MatrixView<Real, MatrixFormat::Dense>& A,
                 const NormType norm_type,
-                const Span<T> conds,
+                const Span<Real> conds,
                 const Span<std::byte> workspace) {
                     if (norm_type == NormType::Spectral) {
                         return cond_spectral_impl<B>(ctx, A, conds, workspace);
@@ -92,14 +94,14 @@ Event cond_impl(Queue& ctx,
                     const std::uint8_t* mk = detail::mask_ptr(mask);
                     const bool masked = mk != nullptr;  // a captured null pointer can read as non-null on AdaptiveCpp Metal
                     auto pool = BumpAllocator(workspace);
-                    auto Ainv = MatrixView<T, MatrixFormat::Dense>(pool.allocate<T>(ctx, A.data().size()).data(),
+                    auto Ainv = MatrixView<Real, MatrixFormat::Dense>(pool.allocate<Real>(ctx, A.data().size()).data(),
                                                                  A.rows(), A.cols(), A.ld(), A.stride(), A.batch_size(),
-                                                                 pool.allocate<T*>(ctx, A.batch_size()).data())
+                                                                 pool.allocate<Real*>(ctx, A.batch_size()).data())
                                     .with_batch_mask(mask);
 
                     auto inv_workspace = pool.allocate<std::byte>(ctx, inv_buffer_size<B>(ctx, A));
-                    auto A_norms = pool.allocate<T>(ctx, A.batch_size());
-                    auto A_inv_norms = pool.allocate<T>(ctx, A.batch_size());
+                    auto A_norms = pool.allocate<Real>(ctx, A.batch_size());
+                    auto A_inv_norms = pool.allocate<Real>(ctx, A.batch_size());
 
                     // (void) on an Event: deliberate. This Queue is in-order, so the next submission
                     // is already ordered after this one and the Event carries nothing the caller needs.
@@ -115,12 +117,12 @@ Event cond_impl(Queue& ctx,
                 }
 
 // Memory passed from outside
-template <Backend B, typename T, MatrixFormat MF>
-    requires RealScalar<T>
+template <Backend B, typename Real, MatrixFormat MF>
+    requires RealScalar<Real>
 Event cond(Queue& ctx,
-            const MatrixView<T, MF>& A,
+            const MatrixView<Real, MF>& A,
             const NormType norm_type,
-            const Span<T> conds,
+            const Span<Real> conds,
             const Span<std::byte> workspace) {
     (void)detail::call_mask("cond", A);
     return cond_impl<B>(ctx, A, norm_type, conds, workspace);
@@ -154,13 +156,13 @@ size_t cond_buffer_size(Queue& ctx,
 }
 
 // Convenience function which allocates and returns the results stored in an array.
-template <Backend B, typename T, MatrixFormat MF>
-    requires RealScalar<T>
-UnifiedVector<T> cond(Queue& ctx,
-                      const MatrixView<T, MF>& A,
-                      const NormType norm_type) {
+template <Backend B, typename Real, MatrixFormat MF>
+    requires RealScalar<Real>
+UnifiedVector<Real> cond(Queue& ctx,
+                         const MatrixView<Real, MF>& A,
+                         const NormType norm_type) {
     (void)detail::call_mask("cond", A);
-    UnifiedVector<T> conds(A.batch_size());
+    UnifiedVector<Real> conds(A.batch_size());
     auto workspace = ctx.workspace(cond_buffer_size<B>(ctx, A, norm_type));
     cond_impl<B>(ctx, A, norm_type, conds.to_span(), workspace.span()).wait();
     return conds;

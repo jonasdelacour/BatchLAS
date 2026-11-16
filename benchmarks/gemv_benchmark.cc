@@ -9,23 +9,23 @@ using namespace batchlas;
 namespace {
 
 // Single GEMV benchmark
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_GEMV(minibench::State& state) {
     const size_t m = state.range(0);
     const size_t n = state.range(1);
     const size_t batch = state.range(2);
 
-    auto A = Matrix<T>::Random(m, n, false, batch);
-    auto x = Vector<T>::random(n, batch);
-    auto y = Vector<T>::zeros(m, batch);
+    auto A = Matrix<Scalar>::Random(m, n, false, batch);
+    auto x = Vector<Scalar>::random(n, batch);
+    auto y = Vector<Scalar>::zeros(m, batch);
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     state.SetKernel(q,
                     std::move(A),
                     std::move(x),
                     std::move(y),
-                    T(1),
-                    T(0),
+                    Scalar(1),
+                    Scalar(0),
                     Transpose::NoTrans,
                     [](Queue& q, auto&&... xs) {
                         (void)gemv(q, std::forward<decltype(xs)>(xs)...);

@@ -95,8 +95,8 @@ struct ManagedInputs {
         return prepare(batchlas::VectorView<T>(v));
     }
 
-    template <typename T, batchlas::MatrixFormat F>
-    ManagedInputs& prepare(const batchlas::Matrix<T, F>& m) {
+    template <typename Scalar, batchlas::MatrixFormat F>
+    ManagedInputs& prepare(const batchlas::Matrix<Scalar, F>& m) {
         return prepare(m.view());
     }
 
@@ -111,8 +111,8 @@ struct ManagedInputs {
         return *this;
     }
 
-    template <typename T, batchlas::MatrixFormat F>
-    ManagedInputs& prepare(const batchlas::MatrixView<T, F>& m) {
+    template <typename Scalar, batchlas::MatrixFormat F>
+    ManagedInputs& prepare(const batchlas::MatrixView<Scalar, F>& m) {
         auto queue = q;
         prepare_once.emplace_back([queue, m]() mutable {
             (void)m.set_access_device(*queue);
@@ -146,19 +146,20 @@ struct ManagedInputs {
         return *this;
     }
 
-    template <typename T, batchlas::MatrixFormat F>
-    ManagedInputs& pristine(std::shared_ptr<batchlas::Matrix<T, F>> m) {
+    template <typename Scalar, batchlas::MatrixFormat F>
+    ManagedInputs& pristine(std::shared_ptr<batchlas::Matrix<Scalar, F>> m) {
 
     static_assert(F == batchlas::MatrixFormat::Dense,
               "ManagedInputs::pristine(Matrix) currently supports Dense only");
-    auto m0 = std::make_shared<batchlas::Matrix<T, F>>(m->rows(), m->cols(), m->batch_size(), m->ld(), m->stride());
+    auto m0 = std::make_shared<batchlas::Matrix<Scalar, F>>(m->rows(), m->cols(), m->batch_size(), m->ld(),
+                                                            m->stride());
     auto queue = q;
 
         init_once.emplace_back([queue, m, m0]() mutable {
-            batchlas::MatrixView<T, F>::copy(*queue, m0->view(), m->view()).wait();
+            batchlas::MatrixView<Scalar, F>::copy(*queue, m0->view(), m->view()).wait();
         });
         before_each.emplace_back([queue, m, m0]() mutable {
-            batchlas::MatrixView<T, F>::copy(*queue, m->view(), m0->view()).wait();
+            batchlas::MatrixView<Scalar, F>::copy(*queue, m->view(), m0->view()).wait();
 
         });
         prepare(*m);
@@ -284,13 +285,13 @@ inline decltype(auto) kernel_arg(const batchlas::Vector<T>& v) {
     return batchlas::VectorView<T>(v);
 }
 
-template <typename T, batchlas::MatrixFormat F>
-inline decltype(auto) kernel_arg(batchlas::Matrix<T, F>& m) {
+template <typename Scalar, batchlas::MatrixFormat F>
+inline decltype(auto) kernel_arg(batchlas::Matrix<Scalar, F>& m) {
     return m.view();
 }
 
-template <typename T, batchlas::MatrixFormat F>
-inline decltype(auto) kernel_arg(const batchlas::Matrix<T, F>& m) {
+template <typename Scalar, batchlas::MatrixFormat F>
+inline decltype(auto) kernel_arg(const batchlas::Matrix<Scalar, F>& m) {
     return m.view();
 }
 
@@ -314,8 +315,8 @@ inline decltype(auto) kernel_arg(batchlas::VectorView<T> v) {
     return v;
 }
 
-template <typename T, batchlas::MatrixFormat F>
-inline decltype(auto) kernel_arg(batchlas::MatrixView<T, F> m) {
+template <typename Scalar, batchlas::MatrixFormat F>
+inline decltype(auto) kernel_arg(batchlas::MatrixView<Scalar, F> m) {
     return m;
 }
 

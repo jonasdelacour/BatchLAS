@@ -31,23 +31,23 @@ namespace ops::getri {
 
 namespace {
 
-template <typename T> class GetriZeroKernel;
-template <typename T> class GetriPermKernel;
+template <typename Scalar> class GetriZeroKernel;
+template <typename Scalar> class GetriPermKernel;
 
 // C := 0 over the LOGICAL n x n x batch region only: C may be a view into a
 // larger buffer, so a stride*batch fill would corrupt padding or a neighbour.
-template <typename T>
-Event getri_zero_c_launch(Queue& ctx, T* c_ptr, int ldc, int stride_c,
+template <typename Scalar>
+Event getri_zero_c_launch(Queue& ctx, Scalar* c_ptr, int ldc, int stride_c,
                           int n, int batch, const std::uint8_t* mask) {
-    using DM = sycl_device::DevMap<T>;
+    using DM = sycl_device::DevMap<Scalar>;
     using D = typename DM::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     D* const cp = reinterpret_cast<D*>(c_ptr);
     const std::size_t elems = static_cast<std::size_t>(n) * static_cast<std::size_t>(n);
 
     ctx->submit([&](sycl::handler& h) {
-        batchlas::impl::parallel_for<GetriZeroKernel<T>>(h,
+        batchlas::impl::parallel_for<GetriZeroKernel<Scalar>>(h,
             sycl::range<2>(static_cast<std::size_t>(batch), elems),
             [=](sycl::item<2> it) {
                 const int b = static_cast<int>(it.get_id(0));
@@ -64,24 +64,24 @@ Event getri_zero_c_launch(Queue& ctx, T* c_ptr, int ldc, int stride_c,
 
 // C := F (the ones of the permutation matrix) and, if requested, info. One
 // work-group per matrix, because info is a min-reduction over the diagonal.
-template <typename T>
+template <typename Scalar>
 Event getri_perm_launch(Queue& ctx,
-                        const T* a_ptr, int lda, int stride_a,
-                        T* c_ptr, int ldc, int stride_c,
+                        const Scalar* a_ptr, int lda, int stride_a,
+                        Scalar* c_ptr, int ldc, int stride_c,
                         int n, int batch,
                         const int* piv, int piv_stride,
                         int32_t* info_ptr, bool want_info,
                         int wg, const std::uint8_t* mask) {
-    using DM = sycl_device::DevMap<T>;
+    using DM = sycl_device::DevMap<Scalar>;
     using D = typename DM::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     const D* const ap = reinterpret_cast<const D*>(a_ptr);
     D* const cp = reinterpret_cast<D*>(c_ptr);
 
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<int, 1> slot(sycl::range<1>(1), h);
-        batchlas::impl::parallel_for<GetriPermKernel<T>>(h,
+        batchlas::impl::parallel_for<GetriPermKernel<Scalar>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
@@ -120,19 +120,19 @@ Event getri_perm_launch(Queue& ctx,
 
 // No workspace. Called from a layout function under mempool's measuring(), so it
 // must not dereference A.data_ptr().
-template <typename T>
-std::size_t getri_blocked_buffer_size(Queue&, const MatrixView<T, MatrixFormat::Dense>&) {
+template <typename Scalar>
+std::size_t getri_blocked_buffer_size(Queue&, const MatrixView<Scalar, MatrixFormat::Dense>&) {
     return 0;
 }
 
-template <typename T>
+template <typename Scalar>
 Event getri_blocked_dispatch(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& A,
-                             const MatrixView<T, MatrixFormat::Dense>& C,
+                             const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                             const MatrixView<Scalar, MatrixFormat::Dense>& C,
                              Span<int64_t> pivots,
                              Span<std::byte> workspace,
                              Span<int32_t> info_out,
-                             GetriSolveTrsm<T> solve_trsm) {
+                             GetriSolveTrsm<Scalar> solve_trsm) {
     static_cast<void>(workspace);   // this arm needs none
 
     const int n = static_cast<int>(A.rows());
@@ -184,21 +184,21 @@ Event getri_blocked_dispatch(Queue& ctx,
 
     // Inactive items keep C and info untouched; the solves take the masked A and C.
     const std::uint8_t* const mask = batchlas::detail::mask_ptr(batchlas::detail::call_mask("getri_blocked", A, C));
-    (void)getri_zero_c_launch<T>(ctx, C.data_ptr(), C.ld(), C.stride(), n, batch, mask);
+    (void)getri_zero_c_launch<Scalar>(ctx, C.data_ptr(), C.ld(), C.stride(), n, batch, mask);
     // In-order queues give the ordering for free; an out-of-order one does not.
     if (!ctx.in_order()) ctx.wait();
 
-    (void)getri_perm_launch<T>(ctx, A.data_ptr(), A.ld(), A.stride(),
-                               C.data_ptr(), C.ld(), C.stride(),
-                               n, batch, piv_i32.data(), /*piv_stride=*/n,
-                               want_info ? info_out.data() : nullptr, want_info, wg, mask);
+    (void)getri_perm_launch<Scalar>(ctx, A.data_ptr(), A.ld(), A.stride(),
+                                    C.data_ptr(), C.ld(), C.stride(),
+                                    n, batch, piv_i32.data(), /*piv_stride=*/n,
+                                    want_info ? info_out.data() : nullptr, want_info, wg, mask);
     if (!ctx.in_order()) ctx.wait();
 
     // C := L^-1 C, then C := U^-1 C. alpha comes THIRD in the public trsm.
-    (void)solve_trsm(ctx, A, C, T(1), Side::Left, Uplo::Lower,
+    (void)solve_trsm(ctx, A, C, Scalar(1), Side::Left, Uplo::Lower,
                      Transpose::NoTrans, Diag::Unit);
     if (!ctx.in_order()) ctx.wait();
-    return solve_trsm(ctx, A, C, T(1), Side::Left, Uplo::Upper,
+    return solve_trsm(ctx, A, C, Scalar(1), Side::Left, Uplo::Upper,
                       Transpose::NoTrans, Diag::NonUnit);
 }
 

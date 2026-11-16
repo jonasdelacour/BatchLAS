@@ -32,7 +32,7 @@ template <OrthoAlgorithm A>
 inline constexpr bool is_chol_v = A == OrthoAlgorithm::Cholesky || A == OrthoAlgorithm::Chol2 || A == OrthoAlgorithm::ShiftChol3;
 template <OrthoAlgorithm A, class Tier> inline constexpr bool on_l3_v = is_chol_v<A> || tier::is_blocked_v<Tier>;
 
-template <Transpose TR, OrthoAlgorithm Algo, class Tier, class Cfg, class T> constexpr void check() {
+template <Transpose TR, OrthoAlgorithm Algo, class Tier, class Cfg, class Scalar> constexpr void check() {
     static_assert(TR == Transpose::NoTrans, "ortho: the rows arm (TR != NoTrans) is not a device op yet");
     static_assert(Algo == OrthoAlgorithm::CGS2 || is_chol_v<Algo>,
                   "ortho: CGS2, Cholesky, Chol2 and ShiftChol3 are the device algorithms (SVQB needs a device syev, "
@@ -42,7 +42,7 @@ template <Transpose TR, OrthoAlgorithm Algo, class Tier, class Cfg, class T> con
                   "ortho: the Cholesky algorithms take tier::Cta<N>; tier::Blocked waits for potrf tier::Blocked");
     if constexpr (on_l3_v<Algo, Tier>) {
         static_assert(l3::Config<Cfg>, "ortho: this tier runs on the in-group Level 3, Cfg is an l3::cfg preset");
-        if constexpr (l3::Config<Cfg>) static_assert(std::is_same_v<typename Cfg::value_type, T>, "ortho: Cfg::value_type is A's T");
+        if constexpr (l3::Config<Cfg>) static_assert(std::is_same_v<typename Cfg::value_type, Scalar>, "ortho: Cfg::value_type is A's T");
     } else {
         static_assert(std::is_void_v<Cfg>, "ortho: CGS2 tier::Cta takes no Cfg");
     }
@@ -50,24 +50,24 @@ template <Transpose TR, OrthoAlgorithm Algo, class Tier, class Cfg, class T> con
 
 // The one workspace plan (buffer_size and the carve). Local: the Level 3 stages, potrf's tile or
 // the Cta coefficients h (k); global: Blocked's H (k x NB, ld k) and h (NB), or the Gram k x k.
-template <class T> struct OrthoLayout {
-    WsSlot<T> smem, h, hb, gram;
+template <class Scalar> struct OrthoLayout {
+    WsSlot<Scalar> smem, h, hb, gram;
     WsSlot<std::byte> chol;
     WorkspaceSize size;
 };
-template <OrthoAlgorithm Algo, class Tier, class Cfg, class T> constexpr OrthoLayout<T> ortho_layout(int k) {
+template <OrthoAlgorithm Algo, class Tier, class Cfg, class Scalar> constexpr OrthoLayout<Scalar> ortho_layout(int k) {
     const std::size_t uk = static_cast<std::size_t>(k);
     ::batchlas::device::Plan p;
-    OrthoLayout<T> l{};
-    if constexpr (on_l3_v<Algo, Tier>) l.smem = p.take<T>(WsSpace::Local, static_cast<std::size_t>(l3::smem_elems<Cfg>()));
+    OrthoLayout<Scalar> l{};
+    if constexpr (on_l3_v<Algo, Tier>) l.smem = p.take<Scalar>(WsSpace::Local, static_cast<std::size_t>(l3::smem_elems<Cfg>()));
     if constexpr (is_chol_v<Algo>) {
-        l.chol = p.take<std::byte>(WsSpace::Local, buffer_size<routine::potrf<Uplo::Lower>, tier::Cta<Tier::n_max>, T>(k).local_bytes);
-        l.gram = p.take<T>(WsSpace::Global, uk * uk);
+        l.chol = p.take<std::byte>(WsSpace::Local, buffer_size<routine::potrf<Uplo::Lower>, tier::Cta<Tier::n_max>, Scalar>(k).local_bytes);
+        l.gram = p.take<Scalar>(WsSpace::Global, uk * uk);
     } else if constexpr (tier::is_cta_v<Tier>) {
-        l.h = p.take<T>(WsSpace::Local, uk);
+        l.h = p.take<Scalar>(WsSpace::Local, uk);
     } else {
-        l.hb = p.take<T>(WsSpace::Global, uk * static_cast<std::size_t>(Tier::nb));
-        l.h = p.take<T>(WsSpace::Global, static_cast<std::size_t>(Tier::nb));
+        l.hb = p.take<Scalar>(WsSpace::Global, uk * static_cast<std::size_t>(Tier::nb));
+        l.h = p.take<Scalar>(WsSpace::Global, static_cast<std::size_t>(Tier::nb));
     }
     l.size = p.size();
     return l;
@@ -103,8 +103,8 @@ template <class Ex, class MA, class H> BATCHLAS_DEVICE_INLINE void cgs2(const Ex
 // Block CGS2 (Barlow and Smoktunowicz): per NB-column block A_j, twice { H := Q^H A_j;
 // A_j -= Q H; cgs2(A_j) } with Q the columns left of the block; the first block runs cgs2 once.
 // The two projections are in-group gemms (H: c0 x nb at ld k); every step ends on a global barrier.
-template <int NB, class Cfg, class Ex, class MA, class T>
-BATCHLAS_DEVICE_INLINE void bcgs2(const Ex& ex, const MA& a, T* hb, T* h, const Workspace& sm) {
+template <int NB, class Cfg, class Ex, class MA, class Scalar>
+BATCHLAS_DEVICE_INLINE void bcgs2(const Ex& ex, const MA& a, Scalar* hb, Scalar* h, const Workspace& sm) {
     const int m = a.rows(), k = a.cols();
     const auto g = l3::global_of(a);
     for (int c0 = 0; c0 < k; c0 += NB) {
@@ -113,9 +113,9 @@ BATCHLAS_DEVICE_INLINE void bcgs2(const Ex& ex, const MA& a, T* hb, T* h, const 
         const int passes = c0 > 0 ? 2 : 1;
         for (int pass = 0; pass < passes; ++pass) {
             if (c0 > 0) {
-                const l3::Global<T> q{g.p, g.ld, m, c0};
-                const l3::Global<T> aj{g.p + static_cast<std::ptrdiff_t>(c0) * g.ld, g.ld, m, nb};
-                const l3::Global<T> hj{hb, k, c0, nb};
+                const l3::Global<Scalar> q{g.p, g.ld, m, c0};
+                const l3::Global<Scalar> aj{g.p + static_cast<std::ptrdiff_t>(c0) * g.ld, g.ld, m, nb};
+                const l3::Global<Scalar> hj{hb, k, c0, nb};
                 gemm<Transpose::ConjTrans, Transpose::NoTrans, Cfg>(ex, One{}, q, aj, Zero{}, hj, sm);
                 gemm<Transpose::NoTrans, Transpose::NoTrans, Cfg>(ex, NegOne{}, q, hj, One{}, aj, sm);
             }
@@ -126,17 +126,18 @@ BATCHLAS_DEVICE_INLINE void bcgs2(const Ex& ex, const MA& a, T* hb, T* h, const 
 
 // One CholeskyQR pass: G := A^H A (its lower triangle), for ShiftChol3's first pass G += s I with
 // the host's s, then G = L L^H and A := A L^-H. Returns potrf's info (k > 0: A not changed).
-template <int N, bool Shift, class Cfg, class Ex, class MA, class T>
-BATCHLAS_DEVICE_INLINE int cholqr_pass(const Ex& ex, const MA& a, T* gp, const Workspace& pws, const Workspace& sm) {
-    using R = real_t<T>;
+template <int N, bool Shift, class Cfg, class Ex, class MA, class Scalar>
+BATCHLAS_DEVICE_INLINE int cholqr_pass(const Ex& ex, const MA& a, Scalar* gp, const Workspace& pws,
+                                       const Workspace& sm) {
+    using R = real_t<Scalar>;
     const int m = a.rows(), k = a.cols();
     const auto gram = mat(gp, k, k, k);
     herk<Uplo::Lower, Transpose::ConjTrans, Cfg>(ex, One{}, a, Zero{}, gram, sm);
     if constexpr (Shift) {
         // trace(A^H A) = ||A||_F^2 bounds ||A||_2^2, so the shift scales with the Gram matrix.
-        const R fro2 = reduce(ex, k, [&](int i) { return Arith<T>::re(gram(i, i)); });
+        const R fro2 = reduce(ex, k, [&](int i) { return Arith<Scalar>::re(gram(i, i)); });
         const R shift = R(11) * (R(m * k) + R(k + 1) * R(k)) * lamch<'P', R>() * fro2;
-        for_each_owned(ex, k, [&](int i) { gram(i, i) = Arith<T>::add(gram(i, i), T(shift)); });
+        for_each_owned(ex, k, [&](int i) { gram(i, i) = Arith<Scalar>::add(gram(i, i), Scalar(shift)); });
         ex.barrier(Mem::Global);
     }
     const int info = potrf<Uplo::Lower, tier::Cta<N>>(ex, gram, pws);
@@ -165,26 +166,26 @@ template <class Cfg> constexpr int ortho_wg_size() {
 
 /// buffer_size(k): ONE matrix's local and global bytes for ortho() on k columns; the caller's
 /// global buffer holds batch times global_bytes.
-template <Transpose TR, class Cfg, OrthoAlgorithm Alg, int N, class A, class T>
-struct tier_info<routine::ortho<TR, Cfg, Alg>, tier::Cta<N, A>, T> {
+template <Transpose TR, class Cfg, OrthoAlgorithm Alg, int N, class A, class Scalar>
+struct tier_info<routine::ortho<TR, Cfg, Alg>, tier::Cta<N, A>, Scalar> {
     static constexpr int wg_size = detail::ortho_wg_size<Cfg>(), sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int k) { return k >= 0 && k <= N; }
     static constexpr WorkspaceSize buffer_size(int k) {
-        detail::check<TR, Alg, tier::Cta<N, A>, Cfg, T>();
-        return detail::ortho_layout<Alg, tier::Cta<N, A>, Cfg, T>(k).size;
+        detail::check<TR, Alg, tier::Cta<N, A>, Cfg, Scalar>();
+        return detail::ortho_layout<Alg, tier::Cta<N, A>, Cfg, Scalar>(k).size;
     }
 };
-template <Transpose TR, class Cfg, OrthoAlgorithm Alg, int NB, class A, class T>
-struct tier_info<routine::ortho<TR, Cfg, Alg>, tier::Blocked<NB, A>, T> {
+template <Transpose TR, class Cfg, OrthoAlgorithm Alg, int NB, class A, class Scalar>
+struct tier_info<routine::ortho<TR, Cfg, Alg>, tier::Blocked<NB, A>, Scalar> {
     static constexpr int wg_size = detail::ortho_wg_size<Cfg>(), sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int k) { return k >= 0; }
     static constexpr WorkspaceSize buffer_size(int k) {
-        detail::check<TR, Alg, tier::Blocked<NB, A>, Cfg, T>();
-        return detail::ortho_layout<Alg, tier::Blocked<NB, A>, Cfg, T>(k).size;
+        detail::check<TR, Alg, tier::Blocked<NB, A>, Cfg, Scalar>();
+        return detail::ortho_layout<Alg, tier::Blocked<NB, A>, Cfg, Scalar>(k).size;
     }
 };
 

@@ -135,7 +135,7 @@ void BM_GESVD_BATCHLAS_CTA(minibench::State& state) {
 
 // BatchLAS one-sided Jacobi (gesvdj_cta) -- same algorithm class as
 // gesvdjBatched, so this is the like-for-like row.
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_GESVD_BATCHLAS_JACOBI(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
@@ -144,10 +144,10 @@ void BM_GESVD_BATCHLAS_JACOBI(minibench::State& state) {
 
     auto q = std::make_shared<Queue>(Device("gpu"), B, true);
 
-    auto A = Matrix<T>::Random(n, n, /*hermitian=*/false, batch);
-    Matrix<T> U(n, n, batch);
-    Matrix<T> Vh(n, n, batch);
-    UnifiedVector<typename base_type<T>::type> s(n * batch);
+    auto A = Matrix<Scalar>::Random(n, n, /*hermitian=*/false, batch);
+    Matrix<Scalar> U(n, n, batch);
+    Matrix<Scalar> Vh(n, n, batch);
+    UnifiedVector<typename base_type<Scalar>::type> s(n * batch);
 
     state.SetKernel(q,
                     bench::pristine(A),
@@ -158,14 +158,14 @@ void BM_GESVD_BATCHLAS_JACOBI(minibench::State& state) {
                     jobvh,
                     [](Queue& q, auto&& A_, auto&& s_, auto&& U_, auto&& Vh_,
                        auto&& jobu_, auto&& jobvh_) {
-                        GesvdjParams<T> jp;
+                        GesvdjParams<Scalar> jp;
                         // Occupancy knob, exposed so it can be swept rather than
                         // assumed: more problems per work-group trades local
                         // memory for warps and the trade is not monotone.
                         if (const char* e = std::getenv("BATCHLAS_GESVDJ_WGMUL")) {
                             jp.cta_wg_size_multiplier = static_cast<size_t>(std::atoi(e));
                         }
-                        (void)gesvdj_cta<B, T>(q, A_, s_, U_, Vh_, jobu_, jobvh_, Span<std::byte>(), jp);
+                        (void)gesvdj_cta<B, Scalar>(q, A_, s_, U_, Vh_, jobu_, jobvh_, Span<std::byte>(), jp);
                     });
 
     state.SetMetric("Matrices/s", static_cast<double>(batch), minibench::Rate);

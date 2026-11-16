@@ -43,8 +43,8 @@ struct Spectrum {
 #define SYEVX_REQUIRE_LAPACKE() \
     do { if (!BATCHLAS_VERIFY_HAVE_LAPACKE) GTEST_SKIP() << "no host LAPACKE reference in this build"; } while (0)
 
-template <typename T>
-Spectrum lapacke_spectrum(const MatrixView<T, MatrixFormat::Dense>& A) {
+template <typename Scalar>
+Spectrum lapacke_spectrum(const MatrixView<Scalar, MatrixFormat::Dense>& A) {
     Spectrum s;
     s.w.resize(static_cast<size_t>(A.batch_size()));
     for (int b = 0; b < A.batch_size(); ++b) {
@@ -100,17 +100,17 @@ void expect_pairs(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const
     }
 }
 
-template <typename R>
-std::vector<double> closed_form(const std::vector<R>& lam, int first, int count, bool reverse = false) {
+template <typename Real>
+std::vector<double> closed_form(const std::vector<Real>& lam, int first, int count, bool reverse = false) {
     std::vector<double> out(lam.begin() + first, lam.begin() + first + count);
     if (reverse) std::reverse(out.begin(), out.end());
     return out;
 }
 
-template <typename R>
-double max_abs(const std::vector<R>& lam) {
+template <typename Real>
+double max_abs(const std::vector<Real>& lam) {
     double m = 0;
-    for (R l : lam) m = verify::nanmax(m, std::fabs(double(l)));
+    for (Real l : lam) m = verify::nanmax(m, std::fabs(double(l)));
     return m;
 }
 

@@ -44,7 +44,7 @@
 namespace batchlas {
 
 // At namespace scope: a kernel name must not name an internal-linkage entity.
-template <typename T, int N, int NR, int MinBlocks, bool Masked>
+template <typename Scalar, int N, int NR, int MinBlocks, bool Masked>
 class GesvTinyKernel;
 
 namespace ops::gesv {
@@ -62,9 +62,9 @@ static_assert(resident::sm89_fits(kWorstRegsPerThread, resident::kTinyWgSize),
 
 // cdouble stops at 16 for the same reason getrf_tiny does: 32 rows of a 16-byte scalar
 // is already 128 registers before the RHS. evidence: docs/perf/lu.md#d3-why-cdouble-stops-at-n16
-template <typename T>
+template <typename Scalar>
 constexpr int tiny_cap() {
-    return std::is_same_v<T, std::complex<double>> ? 16 : 32;
+    return std::is_same_v<Scalar, std::complex<double>> ? 16 : 32;
 }
 
 // The RHS ladder is {1, 2, 4}: nrhs 3 runs in NR = 4 with one zero column. Every RHS loop
@@ -298,21 +298,21 @@ BATCHLAS_UNROLL_FULL
 };
 
 // The local-memory row is for the 32-bit types at N >= 16, where it was measured.
-template <typename T, int N>
+template <typename Scalar, int N>
 constexpr bool gesv_tiny_slm() {
-    return (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>) && N >= 16;
+    return (std::is_same_v<Scalar, float> || std::is_same_v<Scalar, std::complex<float>>) && N >= 16;
 }
 
-template <typename T, int N, int NC, int NR, int MinBlocks, bool Masked>
+template <typename Scalar, int N, int NC, int NR, int MinBlocks, bool Masked>
 Event gesv_tiny_launch_b(Queue& ctx,
-                         T* a_ptr, int lda, int stride_a,
-                         T* b_ptr, int ldb, int stride_b,
+                         Scalar* a_ptr, int lda, int stride_a,
+                         Scalar* b_ptr, int ldb, int stride_b,
                          int n, int nrhs, int batch,
                          int* piv_ptr, int32_t* info_ptr, const std::uint8_t* mask) {
     // Re-typed HERE: std::complex's Annex-G operator* costs an isnan branch and a libcall.
-    using DM = sycl_device::DevMap<T>;
+    using DM = sycl_device::DevMap<Scalar>;
     using D = typename DM::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
     static_assert(tiny_native::tiny_n_is_legal(N), "the tiny ladder is {8, 16, 32}");
     static_assert(NR == 1 || NR == 2 || NR == kGesvTinyMaxRhs, "the RHS ladder is {1, 2, 4}");
     static_assert(NC <= N && NC % 2 == 0, "the column bucket is even and within the lanes");
@@ -321,7 +321,7 @@ Event gesv_tiny_launch_b(Queue& ctx,
         /*bytes_per_matrix=*/1u, N, /*wg_slm_budget_bytes=*/~std::size_t(0),
         resident::kTinyWgSize, resident::kTinyWgSize, /*max_pack=*/resident::kTinyWgSize / N);
     static_assert(kMpw * N == resident::kTinyWgSize, "the tiny launch must fill its work-group exactly");
-    constexpr bool kSlm = gesv_tiny_slm<T, N>();
+    constexpr bool kSlm = gesv_tiny_slm<Scalar, N>();
     using Body = GesvTinyBody<D, N, NC, NR, kMpw, MinBlocks, kSlm, Masked>;
 
     const int num_wg = (batch + kMpw - 1) / kMpw;
@@ -334,7 +334,7 @@ Event gesv_tiny_launch_b(Queue& ctx,
             static_cast<std::ptrdiff_t>(stride_a), static_cast<std::ptrdiff_t>(stride_b),
             piv_ptr, info_ptr, mask,
             sycl::local_accessor<typename Body::R4, 1>(sycl::range<1>(slm_elems), h)};
-        batchlas::impl::parallel_for<GesvTinyKernel<T, N, NC * 8 + NR, MinBlocks, Masked>>(h,
+        batchlas::impl::parallel_for<GesvTinyKernel<Scalar, N, NC * 8 + NR, MinBlocks, Masked>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) *
                                              static_cast<std::size_t>(resident::kTinyWgSize)),
                               sycl::range<1>(static_cast<std::size_t>(resident::kTinyWgSize))),
@@ -344,9 +344,9 @@ Event gesv_tiny_launch_b(Queue& ctx,
 }
 
 // The column bucket, coarser than getrf's: every NC here is paid three times (NR).
-template <typename T, int N>
+template <typename Scalar, int N>
 constexpr bool gesv_nc_legal(int nc) {
-    if constexpr (!gesv_tiny_slm<T, N>()) return nc == N;
+    if constexpr (!gesv_tiny_slm<Scalar, N>()) return nc == N;
     return N == 16 ? (nc == 12 || nc == 16) : (nc == 20 || nc == 24 || nc == 28 || nc == 32);
 }
 inline int gesv_nc_of(int n, int N) {
@@ -358,12 +358,12 @@ inline int gesv_nc_of(int n, int N) {
 // The launch bound per (type, N, NC, NR), each the argmin of a batch-32768 sweep over
 // {8, 12, 16}; float is flat within 2% except NR = 1 at NC >= 28.
 // evidence: docs/perf/lu.md#the-column-bucket
-template <typename T, int N, int NC, int NR>
+template <typename Scalar, int N, int NC, int NR>
 constexpr int gesv_tiny_min_blocks() {
-    if constexpr (std::is_same_v<T, float>) {
+    if constexpr (std::is_same_v<Scalar, float>) {
         if constexpr (N == 32) return (NR == 1 && NC >= 28) ? 12 : 16;
         return N == 16 ? 16 : 1;
-    } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+    } else if constexpr (std::is_same_v<Scalar, std::complex<float>>) {
         if constexpr (N == 16) return (NC == 16 && NR == 4) ? 12 : 16;
         if constexpr (N == 32) {
             if constexpr (NC == 20) return NR == 1 ? 16 : 12;
@@ -377,16 +377,16 @@ constexpr int gesv_tiny_min_blocks() {
     }
 }
 
-template <typename T, int N, int NC, int NR>
-Event gesv_tiny_launch_nc(Queue& ctx, T* a_ptr, int lda, int stride_a, T* b_ptr, int ldb,
+template <typename Scalar, int N, int NC, int NR>
+Event gesv_tiny_launch_nc(Queue& ctx, Scalar* a_ptr, int lda, int stride_a, Scalar* b_ptr, int ldb,
                           int stride_b, int n, int nrhs, int batch, int* piv_ptr,
                           int32_t* info_ptr, const std::uint8_t* mask) {
-    constexpr int kMinBlocks = gesv_tiny_min_blocks<T, N, NC, NR>();
+    constexpr int kMinBlocks = gesv_tiny_min_blocks<Scalar, N, NC, NR>();
     if (mask != nullptr)
-        return gesv_tiny_launch_b<T, N, NC, NR, kMinBlocks, true>(ctx, a_ptr, lda, stride_a, b_ptr, ldb, stride_b, n,
-                                                                  nrhs, batch, piv_ptr, info_ptr, mask);
-    return gesv_tiny_launch_b<T, N, NC, NR, kMinBlocks, false>(ctx, a_ptr, lda, stride_a, b_ptr, ldb, stride_b, n,
-                                                               nrhs, batch, piv_ptr, info_ptr, mask);
+        return gesv_tiny_launch_b<Scalar, N, NC, NR, kMinBlocks, true>(ctx, a_ptr, lda, stride_a, b_ptr, ldb, stride_b,
+                                                                       n, nrhs, batch, piv_ptr, info_ptr, mask);
+    return gesv_tiny_launch_b<Scalar, N, NC, NR, kMinBlocks, false>(ctx, a_ptr, lda, stride_a, b_ptr, ldb, stride_b, n,
+                                                                    nrhs, batch, piv_ptr, info_ptr, mask);
 }
 
 template <typename T, int N, int NR>
@@ -417,15 +417,15 @@ Event gesv_tiny_launch(Queue& ctx,
 
 }  // namespace
 
-template <typename T>
+template <typename Scalar>
 int gesv_tiny_max_n() {
-    return tiny_cap<T>();
+    return tiny_cap<Scalar>();
 }
 
-template <typename T>
+template <typename Scalar>
 std::size_t gesv_tiny_buffer_size(Queue& ctx,
-                                  const MatrixView<T, MatrixFormat::Dense>& A,
-                                  const MatrixView<T, MatrixFormat::Dense>& B) {
+                                  const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                  const MatrixView<Scalar, MatrixFormat::Dense>& B) {
     static_cast<void>(B);
     const int batch = static_cast<int>(A.batch_size());
     if (batch < 1) return 0;

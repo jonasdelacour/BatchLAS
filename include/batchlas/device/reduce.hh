@@ -24,9 +24,9 @@ struct NanPropagate {};
 }  // namespace alg
 
 // {index, value} of a maximum; index < 0 is "no candidate" (an item that owned nothing).
-template <class R> struct ArgMax {
+template <class Real> struct ArgMax {
     int index;
-    R value;
+    Real value;
 };
 
 namespace detail {
@@ -38,7 +38,7 @@ template <class Part, class R> BATCHLAS_DEVICE_INLINE R shfl_down_word(const Par
     else return shift_group_left(part, v, d);  // ADL
 }
 template <class T> inline constexpr bool is_argmax_v = false;
-template <class R> inline constexpr bool is_argmax_v<ArgMax<R>> = true;
+template <class Real> inline constexpr bool is_argmax_v<ArgMax<Real>> = true;
 }  // namespace detail
 
 // v of lane (lane ^ m). Complex values and ArgMax pairs move member by member (a shuffle is
@@ -178,28 +178,31 @@ template <class Tie> BATCHLAS_DEVICE_INLINE bool tie_prefers(const Tie& tie, int
 // A 32-bit key compares bitwise: a short-circuit `||` became a branch per butterfly step (getrf
 // tiny float: BRA 319 -> 383, +7%). A 64-bit key short-circuits: the equality compare runs on the
 // 1:64 FP64 pipe only after a tie (sytrf double, bitwise: 1.016-1.021x, short-circuit <= 1.007x).
-template <class R, class Tie> BATCHLAS_DEVICE_INLINE bool argmax_beats(R ov, int oi, R bv, int bi, const Tie& tie) {
-    if constexpr (sizeof(R) > 4) return ov > bv || (ov == bv && tie_prefers(tie, oi, bi));
+template <class Real, class Tie> BATCHLAS_DEVICE_INLINE bool argmax_beats(Real ov, int oi, Real bv, int bi,
+                                                                          const Tie& tie) {
+    if constexpr (sizeof(Real) > 4) return ov > bv || (ov == bv && tie_prefers(tie, oi, bi));
     else return (ov > bv) | ((ov == bv) & tie_prefers(tie, oi, bi));
 }
 // a := (ov, oi) when it beats a (members assigned one by one: AdaptiveCpp's Metal backend
 // miscompiles a select of the whole struct).
-template <class R, class Tie> BATCHLAS_DEVICE_INLINE void argmax_take(ArgMax<R>& a, R ov, int oi, const Tie& tie) {
+template <class Real, class Tie> BATCHLAS_DEVICE_INLINE void argmax_take(ArgMax<Real>& a, Real ov, int oi,
+                                                                         const Tie& tie) {
     if (argmax_beats(ov, oi, a.value, a.index, tie)) {
         a.value = ov;
         a.index = oi;
     }
 }
 }  // namespace detail
-template <class R, class Tie = alg::TieLowest>
-BATCHLAS_DEVICE_INLINE ArgMax<R> argmax_merge(const ArgMax<R>& a, const ArgMax<R>& b, const Tie& tie = {}) {
-    ArgMax<R> r = a;
+template <class Real, class Tie = alg::TieLowest>
+BATCHLAS_DEVICE_INLINE ArgMax<Real> argmax_merge(const ArgMax<Real>& a, const ArgMax<Real>& b, const Tie& tie = {}) {
+    ArgMax<Real> r = a;
     detail::argmax_take(r, b.value, b.index, tie);
     return r;
 }
 template <class Tie = alg::TieLowest> struct ArgMaxMerge {
     Tie tie{};
-    template <class R> BATCHLAS_DEVICE_INLINE ArgMax<R> operator()(const ArgMax<R>& a, const ArgMax<R>& b) const {
+    template <class Real> BATCHLAS_DEVICE_INLINE ArgMax<Real> operator()(const ArgMax<Real>& a,
+                                                                         const ArgMax<Real>& b) const {
         return argmax_merge(a, b, tie);
     }
 };
@@ -227,13 +230,13 @@ template <class VS, class IS, Mem F, bool St> inline constexpr bool is_argmax_sl
 // lanes/2 .. 1). At Group scope lane 0 of team t then writes slots[t], ONE barrier, and every
 // item scans the slots in team order from {none, seed}; with no slots (None) two group
 // collectives fold it (the key, then the index).
-template <class Ex, class R, class Tie, class S, class W = None>
-BATCHLAS_DEVICE_INLINE ArgMax<R> argmax_allreduce(const Ex& ex, ArgMax<R> a, const Tie& tie, S slots, int none, R seed, W lanes = {}) {
+template <class Ex, class Real, class Tie, class S, class W = None>
+BATCHLAS_DEVICE_INLINE ArgMax<Real> argmax_allreduce(const Ex& ex, ArgMax<Real> a, const Tie& tie, S slots, int none, Real seed, W lanes = {}) {
     if constexpr (requires { ex.part; }) {
         constexpr int P = Ex::team_size;
 #pragma unroll
         for (std::uint32_t mk = 1u; mk < static_cast<std::uint32_t>(P); mk <<= 1) {
-            const R ov = detail::xor_shuffle(ex.part, a.value, mk);
+            const Real ov = detail::xor_shuffle(ex.part, a.value, mk);
             const int oi = detail::xor_shuffle(ex.part, a.index, mk);
             detail::argmax_take(a, ov, oi, tie);
         }
@@ -246,7 +249,7 @@ BATCHLAS_DEVICE_INLINE ArgMax<R> argmax_allreduce(const Ex& ex, ArgMax<R> a, con
         if constexpr (std::is_same_v<W, None>) w = detail::team_size_of(ex);
         else w = lanes;
         for (std::uint32_t off = static_cast<std::uint32_t>(w) / 2u; off > 0u; off >>= 1) {
-            const R ov = detail::xor_shuffle(sg, a.value, off);
+            const Real ov = detail::xor_shuffle(sg, a.value, off);
             const int oi = detail::xor_shuffle(sg, a.index, off);
             detail::argmax_take(a, ov, oi, tie);
         }
@@ -261,17 +264,17 @@ BATCHLAS_DEVICE_INLINE ArgMax<R> argmax_allreduce(const Ex& ex, ArgMax<R> a, con
                 slots.i[static_cast<std::size_t>(ex.team())] = a.index;
             }
             ex.barrier(S::fence);
-            ArgMax<R> r{none, seed};
+            ArgMax<Real> r{none, seed};
             const int nt = detail::nteams_of(ex);
             for (int t = 0; t < nt; ++t) {  // the legacy statements: ptxas unrolls this scan by them
-                const R v = slots.v[static_cast<std::size_t>(t)];
+                const Real v = slots.v[static_cast<std::size_t>(t)];
                 const int ii = slots.i[static_cast<std::size_t>(t)];
                 detail::argmax_take(r, v, ii, tie);
             }
             if constexpr (S::standalone) ex.barrier(S::fence);
             return r;
         } else {
-            const R m = ex.group_reduce(a.value, sycl::maximum<R>());
+            const Real m = ex.group_reduce(a.value, sycl::maximum<Real>());
             bool low;
             if constexpr (std::is_same_v<Tie, alg::TieRt>) low = tie.low;
             else low = std::is_same_v<Tie, alg::TieLowest>;

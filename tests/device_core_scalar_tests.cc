@@ -22,7 +22,7 @@ using namespace device_core_test;
 
 namespace {
 
-template <class T> class DeviceCoreScalarTest : public DeviceCoreTest<T> {};
+template <class Scalar> class DeviceCoreScalarTest : public DeviceCoreTest<Scalar> {};
 TYPED_TEST_SUITE(DeviceCoreScalarTest, AllTypes);
 
 // ---- compile-time vocabulary ---------------------------------------------------------------

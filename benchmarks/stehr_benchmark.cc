@@ -9,7 +9,7 @@ using namespace batchlas;
 namespace {
 
 // Batched tridiagonal_solver benchmark (eigenvalues and eigenvectors)
-template <typename T, Backend B>
+template <typename Real, Backend B>
 void BM_STEHR(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
@@ -21,13 +21,13 @@ void BM_STEHR(minibench::State& state) {
 
     const double total_flops = (flops_eigvals + (jobz == JobType::EigenVectors ? flops_eigvects : 0)) * double(batch);
 
-    Vector<T> diags = Vector<T>::random(n, batch);
-    Vector<T> off_diags = Vector<T>::random(n, batch);
+    Vector<Real> diags = Vector<Real>::random(n, batch);
+    Vector<Real> off_diags = Vector<Real>::random(n, batch);
 
-    auto eigvals = Vector<T>::zeros(n, batch);
-    auto eigvects = Matrix<T>::Identity(n, batch);
+    auto eigvals = Vector<Real>::zeros(n, batch);
+    auto eigvects = Matrix<Real>::Identity(n, batch);
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    UnifiedVector<std::byte> ws(tridiagonal_solver_buffer_size<B, T>(*q, n, batch, jobz));
+    UnifiedVector<std::byte> ws(tridiagonal_solver_buffer_size<B, Real>(*q, n, batch, jobz));
 
     state.SetKernel(q,
                     bench::pristine(std::move(diags)),

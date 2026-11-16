@@ -34,18 +34,18 @@ namespace batchlas::ops::potri {
 
 namespace {
 
-template <typename T> class PotriCtaKernel;
+template <typename Scalar> class PotriCtaKernel;
 
 }  // namespace
 
-template <typename T>
-Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, CtaMode mode, int nb,
-                bool full, Span<int32_t> info, Stash<T> stash) {
-    using DM = sycl_device::DevMap<T>;
+template <typename Scalar>
+Event potri_cta(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, Uplo uplo, CtaMode mode, int nb,
+                bool full, Span<int32_t> info, Stash<Scalar> stash) {
+    using DM = sycl_device::DevMap<Scalar>;
     using D = typename DM::type;
     using R = typename DM::real;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
-    constexpr int TS = kCtaTs<T>;
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
+    constexpr int TS = kCtaTs<Scalar>;
     constexpr int NT = kCtaTiles;
     const int n = A.rows();
     const int batch = A.batch_size();
@@ -60,7 +60,7 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
     // Each item holds up to kCtaTiles tiles, so the smaller block still covers the ceiling.
     int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     try {
-        const int kmax = static_cast<int>(impl::kernel_max_wg_size<PotriCtaKernel<T>>(ctx->get_context(), ctx->get_device()));
+        const int kmax = static_cast<int>(impl::kernel_max_wg_size<PotriCtaKernel<Scalar>>(ctx->get_context(), ctx->get_device()));
         if (kmax >= 32) max_wg = std::min(max_wg, kmax / 32 * 32);
     } catch (const sycl::exception&) {
     }
@@ -68,7 +68,8 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
         throw batchlas::internal_error("potri_cta: order " + std::to_string(bn) + " needs " +
                                        std::to_string(cta_slm_bytes(bn, TS, sizeof(D), sizeof(R))) +
                                        " B of local memory and " + std::to_string(cta_tiles(bn, TS)) +
-                                       " tiles; the ceiling here is " + std::to_string(cta_max_n<T>(budget, max_wg)));
+                                       " tiles; the ceiling here is " + std::to_string(cta_max_n<Scalar>(budget,
+                                                                                                         max_wg)));
     const bool want_info = mode == CtaMode::Potri && !info.empty();
     if (want_info && info.size() < static_cast<std::size_t>(batch))
         throw batchlas::internal_error("potri_cta: info span shorter than the batch");
@@ -99,7 +100,7 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<D, 1> St(sycl::range<1>(tile), h);
         sycl::local_accessor<R, 1> rdt(sycl::range<1>(static_cast<std::size_t>(mp)), h);
-        batchlas::impl::parallel_for<PotriCtaKernel<T>>(h, sycl::nd_range<1>(groups * wg, wg), [=](sycl::nd_item<1> it) {
+        batchlas::impl::parallel_for<PotriCtaKernel<Scalar>>(h, sycl::nd_range<1>(groups * wg, wg), [=](sycl::nd_item<1> it) {
             using namespace sycl_device;
             const device::RtGroup<> ex(it);
             const device::Thread th{};

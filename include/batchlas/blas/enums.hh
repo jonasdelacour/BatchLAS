@@ -32,22 +32,22 @@ struct base_type {
 };
 
 /// @brief Specialisation that strips `std::complex`.
-template <typename T>
-struct base_type<std::complex<T>> {
-    using type = T;  ///< The component type `R` of `std::complex<R>`.
+template <typename Real>
+struct base_type<std::complex<Real>> {
+    using type = Real;  ///< The component type `R` of `std::complex<R>`.
 };
 
-/// @brief Shorthand for `base_type<T>::type`: the precision of `T` (tolerances, norms, eigenvalues).
-template <typename T>
-using float_t = typename base_type<T>::type;
+/// @brief Shorthand for `base_type<Scalar>::type`: the precision of `Scalar` (tolerances, norms, eigenvalues).
+template <typename Scalar>
+using float_t = typename base_type<Scalar>::type;
 
 /// @brief True for `std::complex<R>`, false otherwise.
 template <typename T>
 struct is_std_complex : std::false_type {};
 
 /// @brief Specialisation for `std::complex<R>`.
-template <typename T>
-struct is_std_complex<std::complex<T>> : std::true_type {};
+template <typename Real>
+struct is_std_complex<std::complex<Real>> : std::true_type {};
 
 /// @brief Value of is_std_complex<T>.
 template <typename T>

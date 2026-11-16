@@ -28,26 +28,26 @@
 
 namespace batchlas {
 namespace backend {
-    template <Backend B, typename T>
+    template <Backend B, typename Scalar>
     size_t ormqr_vendor_buffer_size(Queue& ctx,
-                                    const MatrixView<T, MatrixFormat::Dense>& A,
-                                    const MatrixView<T, MatrixFormat::Dense>& C,
+                                    const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                    const MatrixView<Scalar, MatrixFormat::Dense>& C,
                                     Side side,
                                     Transpose trans,
-                                    Span<T> tau);
+                                    Span<Scalar> tau);
 
-    template <Backend B, typename T>
+    template <Backend B, typename Scalar>
     size_t orgqr_vendor_buffer_size(Queue& ctx,
-                                    const MatrixView<T, MatrixFormat::Dense>& A,
-                                    Span<T> tau);
+                                    const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                    Span<Scalar> tau);
 
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 Event gemm_vendor_impl(Queue& ctx,
-                       const MatrixView<T, MatrixFormat::Dense>& A,
-                       const MatrixView<T, MatrixFormat::Dense>& B,
-                       const MatrixView<T, MatrixFormat::Dense>& C,
-                       T alpha,
-                       T beta,
+                       const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                       const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                       const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                       Scalar alpha,
+                       Scalar beta,
                        Transpose transA,
                        Transpose transB,
                        ComputePrecision precision) {
@@ -64,7 +64,7 @@ Event gemm_vendor_impl(Queue& ctx,
         alignas(16) auto alpha_h = alpha;  // cuBLASLt vector-loads it; closures are 8-aligned
         alignas(16) auto beta_h = beta;
         // Workaround: cdouble m or n == 1 through the Ex calls segfaults in cuBLASLt (known-defects #13).
-        if constexpr (std::is_same_v<T, std::complex<double>>) {
+        if constexpr (std::is_same_v<Scalar, std::complex<double>>) {
             if (m == 1 || n == 1) {
                 check_status(cublasZgemmStridedBatched(handle,
                     enum_convert<BackendLibrary::CUBLAS>(transA), enum_convert<BackendLibrary::CUBLAS>(transB),
@@ -82,60 +82,60 @@ Event gemm_vendor_impl(Queue& ctx,
                 enum_convert<BackendLibrary::CUBLAS>(transA), enum_convert<BackendLibrary::CUBLAS>(transB),
                 m, n, k,
                 &alpha_h,
-                A.data_ptr(), BackendScalar<T, BackendLibrary::CUBLAS>::type, A.ld(),
-                B.data_ptr(), BackendScalar<T, BackendLibrary::CUBLAS>::type, B.ld(),
+                A.data_ptr(), BackendScalar<Scalar, BackendLibrary::CUBLAS>::type, A.ld(),
+                B.data_ptr(), BackendScalar<Scalar, BackendLibrary::CUBLAS>::type, B.ld(),
                 &beta_h,
-                C.data_ptr(), BackendScalar<T, BackendLibrary::CUBLAS>::type, C.ld(),
-                enum_convert<BackendLibrary::CUBLAS, T>(precision),
+                C.data_ptr(), BackendScalar<Scalar, BackendLibrary::CUBLAS>::type, C.ld(),
+                enum_convert<BackendLibrary::CUBLAS, Scalar>(precision),
                 CUBLAS_GEMM_DFALT));
         } else {
             check_status(cublasGemmStridedBatchedEx(handle,
                 enum_convert<BackendLibrary::CUBLAS>(transA), enum_convert<BackendLibrary::CUBLAS>(transB),
                 m, n, k,
                 &alpha_h,
-                A.data_ptr(), BackendScalar<T, BackendLibrary::CUBLAS>::type, A.ld(), A.stride(),
-                B.data_ptr(), BackendScalar<T, BackendLibrary::CUBLAS>::type, B.ld(), B.stride(),
+                A.data_ptr(), BackendScalar<Scalar, BackendLibrary::CUBLAS>::type, A.ld(), A.stride(),
+                B.data_ptr(), BackendScalar<Scalar, BackendLibrary::CUBLAS>::type, B.ld(), B.stride(),
                 &beta_h,
-                C.data_ptr(), BackendScalar<T, BackendLibrary::CUBLAS>::type, C.ld(), C.stride(),
+                C.data_ptr(), BackendScalar<Scalar, BackendLibrary::CUBLAS>::type, C.ld(), C.stride(),
                 A.batch_size(),
-                enum_convert<BackendLibrary::CUBLAS, T>(precision),
+                enum_convert<BackendLibrary::CUBLAS, Scalar>(precision),
                 CUBLAS_GEMM_DFALT));
         }
     });
     return ctx.create_event_after_external_work();
 }
 
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 Event gemm_vendor(Queue& ctx,
-                  const MatrixView<T, MatrixFormat::Dense>& A,
-                  const MatrixView<T, MatrixFormat::Dense>& B,
-                  const MatrixView<T, MatrixFormat::Dense>& C,
-                  T alpha,
-                  T beta,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                  Scalar alpha,
+                  Scalar beta,
                   Transpose transA,
                   Transpose transB,
                   ComputePrecision precision) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::gemm, "gemm_vendor", Back, A, B, C);
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::gemm, "gemm_vendor", Back, A, B, C);
     // The library call only: which kernel runs is decided by the public gemm
     // (src/ops/gemm/gemm.cc), which reaches here through its `vendor` choice. A direct caller's
     // heterogeneous batch is walked member by member.
     if (gemm_has_heterogeneous_batch(A, B, C)) {
-        return detail::gemm_heterogeneous_loop<T>(ctx, A, B, C, beta, transA, transB,
+        return detail::gemm_heterogeneous_loop<Scalar>(ctx, A, B, C, beta, transA, transB,
             [&](const auto& A_i, const auto& B_i, const auto& C_i) {
-                return gemm_vendor_impl<Back, T>(ctx, A_i, B_i, C_i, alpha, beta, transA, transB, precision);
+                return gemm_vendor_impl<Back, Scalar>(ctx, A_i, B_i, C_i, alpha, beta, transA, transB, precision);
             });
     }
 
-    return gemm_vendor_impl<Back, T>(ctx, A, B, C, alpha, beta, transA, transB, precision);
+    return gemm_vendor_impl<Back, Scalar>(ctx, A, B, C, alpha, beta, transA, transB, precision);
 }
 
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 Event symm_vendor_impl(Queue& ctx,
-                       const MatrixView<T, MatrixFormat::Dense>& A,
-                       const MatrixView<T, MatrixFormat::Dense>& B,
-                       const MatrixView<T, MatrixFormat::Dense>& C,
-                       T alpha,
-                       T beta,
+                       const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                       const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                       const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                       Scalar alpha,
+                       Scalar beta,
                        Side side,
                        Uplo uplo) {
     static LinalgHandle<Back> handle;
@@ -148,10 +148,10 @@ Event symm_vendor_impl(Queue& ctx,
         handle.setStream(stream);
         alignas(16) auto alpha_h = alpha;  // cuBLASLt vector-loads it; closures are 8-aligned
         alignas(16) auto beta_h = beta;
-        auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
-                                 const MatrixView<T, MatrixFormat::Dense>& B_i,
-                                 const MatrixView<T, MatrixFormat::Dense>& C_i) {
-            call_backend<T, BackendLibrary::CUBLAS, Back>(cublasSsymm, cublasDsymm, cublasCsymm, cublasZsymm,
+        auto launch_single = [&](const MatrixView<Scalar, MatrixFormat::Dense>& A_i,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& B_i,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& C_i) {
+            call_backend<Scalar, BackendLibrary::CUBLAS, Back>(cublasSsymm, cublasDsymm, cublasCsymm, cublasZsymm,
                 handle, side, uplo, m, n, &alpha_h,
                 A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(), &beta_h,
                 C_i.data_ptr(), C_i.ld());
@@ -285,12 +285,12 @@ Event her2k_vendor(Queue& ctx,
     return ctx.create_event_after_external_work();
 }
 
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 Event syrk_vendor_impl(Queue& ctx,
-                       const MatrixView<T, MatrixFormat::Dense>& A,
-                       const MatrixView<T, MatrixFormat::Dense>& C,
-                       T alpha,
-                       T beta,
+                       const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                       const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                       Scalar alpha,
+                       Scalar beta,
                        Uplo uplo,
                        Transpose transA) {
     static LinalgHandle<Back> handle;
@@ -302,9 +302,9 @@ Event syrk_vendor_impl(Queue& ctx,
         handle.setStream(stream);
         alignas(16) auto alpha_h = alpha;  // cuBLASLt vector-loads it; closures are 8-aligned
         alignas(16) auto beta_h = beta;
-        auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
-                                 const MatrixView<T, MatrixFormat::Dense>& C_i) {
-            call_backend<T, BackendLibrary::CUBLAS, Back>(cublasSsyrk, cublasDsyrk, cublasCsyrk, cublasZsyrk,
+        auto launch_single = [&](const MatrixView<Scalar, MatrixFormat::Dense>& A_i,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& C_i) {
+            call_backend<Scalar, BackendLibrary::CUBLAS, Back>(cublasSsyrk, cublasDsyrk, cublasCsyrk, cublasZsyrk,
                 handle, uplo, transA, n, k, &alpha_h,
                 A_i.data_ptr(), A_i.ld(), &beta_h,
                 C_i.data_ptr(), C_i.ld());
@@ -330,13 +330,13 @@ Event syrk_vendor(Queue& ctx,
     return syrk_vendor_impl<Back, T>(ctx, A, C, alpha, beta, uplo, transA);
 }
 
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 Event syr2k_vendor_impl(Queue& ctx,
-                        const MatrixView<T, MatrixFormat::Dense>& A,
-                        const MatrixView<T, MatrixFormat::Dense>& B,
-                        const MatrixView<T, MatrixFormat::Dense>& C,
-                        T alpha,
-                        T beta,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                        Scalar alpha,
+                        Scalar beta,
                         Uplo uplo,
                         Transpose transA) {
     static LinalgHandle<Back> handle;
@@ -348,10 +348,10 @@ Event syr2k_vendor_impl(Queue& ctx,
         handle.setStream(stream);
         alignas(16) auto alpha_h = alpha;  // cuBLASLt vector-loads it; closures are 8-aligned
         alignas(16) auto beta_h = beta;
-        auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
-                                 const MatrixView<T, MatrixFormat::Dense>& B_i,
-                                 const MatrixView<T, MatrixFormat::Dense>& C_i) {
-            call_backend<T, BackendLibrary::CUBLAS, Back>(cublasSsyr2k, cublasDsyr2k, cublasCsyr2k, cublasZsyr2k,
+        auto launch_single = [&](const MatrixView<Scalar, MatrixFormat::Dense>& A_i,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& B_i,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& C_i) {
+            call_backend<Scalar, BackendLibrary::CUBLAS, Back>(cublasSsyr2k, cublasDsyr2k, cublasCsyr2k, cublasZsyr2k,
                 handle, uplo, transA, n, k, &alpha_h,
                 A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(), &beta_h,
                 C_i.data_ptr(), C_i.ld());
@@ -377,12 +377,12 @@ Event syr2k_vendor(Queue& ctx,
     return syr2k_vendor_impl<Back, T>(ctx, A, B, C, alpha, beta, uplo, transA);
 }
 
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 Event trmm_vendor_impl(Queue& ctx,
-                       const MatrixView<T, MatrixFormat::Dense>& A,
-                       const MatrixView<T, MatrixFormat::Dense>& B,
-                       const MatrixView<T, MatrixFormat::Dense>& C,
-                       T alpha,
+                       const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                       const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                       const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                       Scalar alpha,
                        Side side,
                        Uplo uplo,
                        Transpose transA,
@@ -397,10 +397,10 @@ Event trmm_vendor_impl(Queue& ctx,
     impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
         handle.setStream(stream);
         alignas(16) auto alpha_h = alpha;  // cuBLASLt vector-loads it; closures are 8-aligned
-        auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
-                                 const MatrixView<T, MatrixFormat::Dense>& B_i,
-                                 const MatrixView<T, MatrixFormat::Dense>& C_i) {
-            call_backend<T, BackendLibrary::CUBLAS, Back>(cublasStrmm, cublasDtrmm, cublasCtrmm, cublasZtrmm,
+        auto launch_single = [&](const MatrixView<Scalar, MatrixFormat::Dense>& A_i,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& B_i,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& C_i) {
+            call_backend<Scalar, BackendLibrary::CUBLAS, Back>(cublasStrmm, cublasDtrmm, cublasCtrmm, cublasZtrmm,
                 handle, side, uplo, transA, diag, m, n, &alpha_h,
                 A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(), C_i.data_ptr(), C_i.ld());
         };
@@ -411,29 +411,29 @@ Event trmm_vendor_impl(Queue& ctx,
     return ctx.create_event_after_external_work();
 }
 
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 Event trmm_vendor(Queue& ctx,
-                  const MatrixView<T, MatrixFormat::Dense>& A,
-                  const MatrixView<T, MatrixFormat::Dense>& B,
-                  const MatrixView<T, MatrixFormat::Dense>& C,
-                  T alpha,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                  Scalar alpha,
                   Side side,
                   Uplo uplo,
                   Transpose transA,
                   Diag diag) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::trmm, "trmm_vendor", Back, A, B, C);
-    return trmm_vendor_impl<Back, T>(ctx, A, B, C, alpha, side, uplo, transA, diag);
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::trmm, "trmm_vendor", Back, A, B, C);
+    return trmm_vendor_impl<Back, Scalar>(ctx, A, B, C, alpha, side, uplo, transA, diag);
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event gemv_vendor(Queue& ctx,
-    const MatrixView<T, MatrixFormat::Dense>& A,
-    const VectorView<T>& X,
-    const VectorView<T>& Y,
-    T alpha,
-    T beta,
+    const MatrixView<Scalar, MatrixFormat::Dense>& A,
+    const VectorView<Scalar>& X,
+    const VectorView<Scalar>& Y,
+    Scalar alpha,
+    Scalar beta,
     Transpose transA) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::gemv, "gemv_vendor", B, A, X, Y);
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::gemv, "gemv_vendor", B, A, X, Y);
     static LinalgHandle<B> handle;
     auto m = A.rows();
     auto n = A.cols();
@@ -443,26 +443,26 @@ Event gemv_vendor(Queue& ctx,
         alignas(16) auto alpha_h = alpha;  // cuBLASLt vector-loads it; closures are 8-aligned
         alignas(16) auto beta_h = beta;
         if (batch_size <= 1) {
-            call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgemv, cublasDgemv, cublasCgemv, cublasZgemv,
+            call_backend<Scalar, BackendLibrary::CUBLAS, B>(cublasSgemv, cublasDgemv, cublasCgemv, cublasZgemv,
                 handle, transA, m, n, &alpha_h, A.data_ptr(), A.ld(), X.data_ptr(), X.inc(), &beta_h, Y.data_ptr(), Y.inc());
         } else {
-            call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgemvStridedBatched, cublasDgemvStridedBatched, cublasCgemvStridedBatched, cublasZgemvStridedBatched,
+            call_backend<Scalar, BackendLibrary::CUBLAS, B>(cublasSgemvStridedBatched, cublasDgemvStridedBatched, cublasCgemvStridedBatched, cublasZgemvStridedBatched,
                 handle, transA, m, n, &alpha_h, A.data_ptr(), A.ld(), A.stride(), X.data_ptr(), X.inc(), X.stride(), &beta_h, Y.data_ptr(), Y.inc(), Y.stride(), batch_size);
         }
     });
     return ctx.create_event_after_external_work();
 }
 
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 Event trsm_vendor(Queue& ctx,
-               const MatrixView<T, MatrixFormat::Dense>& A,
-               const MatrixView<T, MatrixFormat::Dense>& B,
+               const MatrixView<Scalar, MatrixFormat::Dense>& A,
+               const MatrixView<Scalar, MatrixFormat::Dense>& B,
                Side side,
                Uplo uplo,
                Transpose transA,
                Diag diag,
-               T alpha) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::trsm, "trsm_vendor", Back, A, B);
+               Scalar alpha) {
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::trsm, "trsm_vendor", Back, A, B);
     static LinalgHandle<Back> handle;
     auto [kB, n] = get_effective_dims(B, Transpose::NoTrans);
     auto batch_size = A.batch_size();
@@ -473,13 +473,13 @@ Event trsm_vendor(Queue& ctx,
     const auto trans_cublas = enum_convert<BackendLibrary::CUBLAS>(transA);
     const auto diag_cublas = enum_convert<BackendLibrary::CUBLAS>(diag);
 
-    if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) {
+    if constexpr (std::is_same_v<Scalar, std::complex<float>> || std::is_same_v<Scalar, std::complex<double>>) {
         // Fallback: Implement TRSM directly for complex types.
         // cuBLAS TRSM has exhibited incorrect behavior (unchanged output / NaNs) with our
         // SYCL CUDA interop + USM complex buffers. This kernel is sequential per RHS/row,
         // but parallel across (batch, rhs) or (batch, row).
-        const T* A_ptr = A.data_ptr();
-        T* B_ptr = B.data_ptr();
+        const Scalar* A_ptr = A.data_ptr();
+        Scalar* B_ptr = B.data_ptr();
         const int m = B.rows();
         const int nrhs = B.cols();
         // 64-bit: b * strideA passes 2^31 at cfloat order 512, batch 8193 (an int wrapped).
@@ -494,15 +494,15 @@ Event trsm_vendor(Queue& ctx,
                               const std::int64_t b = static_cast<std::int64_t>(tid[0]);
                               const int p = static_cast<int>(tid[1]);
 
-                              const T* Ab = A_ptr + b * strideA;
-                              T* Bb = B_ptr + b * strideB;
+                              const Scalar* Ab = A_ptr + b * strideA;
+                              Scalar* Bb = B_ptr + b * strideB;
 
                               const bool do_conj = (transA == Transpose::ConjTrans);
                               const bool do_trans = (transA != Transpose::NoTrans);
                               const bool op_is_lower = (uplo == Uplo::Lower) ? !do_trans : do_trans;
                               const bool unit_diag = (diag == Diag::Unit);
 
-                              auto conj_if = [=](T v) {
+                              auto conj_if = [=](Scalar v) {
                                   if (!do_conj) return v;
                                   using std::conj;
                                   return conj(v);
@@ -522,11 +522,11 @@ Event trsm_vendor(Queue& ctx,
                                   if (op_is_lower) {
                                       // Forward substitution (i = 0..m-1)
                                       for (int i = 0; i < m; ++i) {
-                                          T sum = T(0);
+                                          Scalar sum = Scalar(0);
                                           for (int k = 0; k < i; ++k) {
                                               sum += opA(i, k) * Bb[j * ldb + k];
                                           }
-                                          T x = alpha * Bb[j * ldb + i] - sum;
+                                          Scalar x = alpha * Bb[j * ldb + i] - sum;
                                           if (!unit_diag) {
                                               x /= opA(i, i);
                                           }
@@ -535,11 +535,11 @@ Event trsm_vendor(Queue& ctx,
                                   } else {
                                       // Backward substitution (i = m-1..0)
                                       for (int i = m - 1; i >= 0; --i) {
-                                          T sum = T(0);
+                                          Scalar sum = Scalar(0);
                                           for (int k = i + 1; k < m; ++k) {
                                               sum += opA(i, k) * Bb[j * ldb + k];
                                           }
-                                          T x = alpha * Bb[j * ldb + i] - sum;
+                                          Scalar x = alpha * Bb[j * ldb + i] - sum;
                                           if (!unit_diag) {
                                               x /= opA(i, i);
                                           }
@@ -552,11 +552,11 @@ Event trsm_vendor(Queue& ctx,
                                   if (op_is_lower) {
                                       // Lower: solve backward in columns (j = nrhs-1..0)
                                       for (int j = nrhs - 1; j >= 0; --j) {
-                                          T sum = T(0);
+                                          Scalar sum = Scalar(0);
                                           for (int k = j + 1; k < nrhs; ++k) {
                                               sum += Bb[k * ldb + i] * opA(k, j);
                                           }
-                                          T x = alpha * Bb[j * ldb + i] - sum;
+                                          Scalar x = alpha * Bb[j * ldb + i] - sum;
                                           if (!unit_diag) {
                                               x /= opA(j, j);
                                           }
@@ -565,11 +565,11 @@ Event trsm_vendor(Queue& ctx,
                                   } else {
                                       // Upper: solve forward in columns (j = 0..nrhs-1)
                                       for (int j = 0; j < nrhs; ++j) {
-                                          T sum = T(0);
+                                          Scalar sum = Scalar(0);
                                           for (int k = 0; k < j; ++k) {
                                               sum += Bb[k * ldb + i] * opA(k, j);
                                           }
-                                          T x = alpha * Bb[j * ldb + i] - sum;
+                                          Scalar x = alpha * Bb[j * ldb + i] - sum;
                                           if (!unit_diag) {
                                               x /= opA(j, j);
                                           }
@@ -579,18 +579,18 @@ Event trsm_vendor(Queue& ctx,
                               }
                           });
     } else {
-        ::batchlas::detail::VendorPtrArrays<T, 2> arrays;
-        if (batch_size != 1) arrays = ::batchlas::detail::vendor_ptr_arrays<T>(ctx, A, B);
-        T** a_ptrs = arrays[0];
-        T** b_ptrs = arrays[1];
+        ::batchlas::detail::VendorPtrArrays<Scalar, 2> arrays;
+        if (batch_size != 1) arrays = ::batchlas::detail::vendor_ptr_arrays<Scalar>(ctx, A, B);
+        Scalar** a_ptrs = arrays[0];
+        Scalar** b_ptrs = arrays[1];
         impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
             handle.setStream(stream);
             alignas(16) auto alpha_h = alpha;  // cuBLASLt vector-loads it; closures are 8-aligned
             if (batch_size == 1) {
-                call_backend<T, BackendLibrary::CUBLAS, Back>(cublasStrsm, cublasDtrsm, cublasCtrsm, cublasZtrsm,
+                call_backend<Scalar, BackendLibrary::CUBLAS, Back>(cublasStrsm, cublasDtrsm, cublasCtrsm, cublasZtrsm,
                     handle, side, uplo, transA, diag, kB, n, &alpha_h, A.data_ptr(), A.ld(), B.data_ptr(), B.ld());
             } else {
-                call_backend<T, BackendLibrary::CUBLAS, Back>(cublasStrsmBatched, cublasDtrsmBatched, cublasCtrsmBatched, cublasZtrsmBatched,
+                call_backend<Scalar, BackendLibrary::CUBLAS, Back>(cublasStrsmBatched, cublasDtrsmBatched, cublasCtrsmBatched, cublasZtrsmBatched,
                     handle, side, uplo, transA, diag, kB, n, &alpha_h, a_ptrs, A.ld(), b_ptrs, B.ld(), batch_size);
             }
         });
@@ -598,12 +598,12 @@ Event trsm_vendor(Queue& ctx,
     return ctx.create_event_after_external_work();
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event geqrf_vendor(Queue& ctx,
-    const MatrixView<T, MatrixFormat::Dense>& A, // In place reflectors (Lower triangle of A)
-    Span<T> tau,
+    const MatrixView<Scalar, MatrixFormat::Dense>& A, // In place reflectors (Lower triangle of A)
+    Span<Scalar> tau,
     Span<std::byte> workspace) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::geqrf, "geqrf_vendor", B, A);
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::geqrf, "geqrf_vendor", B, A);
     static LinalgHandle<B> handle;
     auto m = A.rows();
     auto n = A.cols();
@@ -617,9 +617,9 @@ Event geqrf_vendor(Queue& ctx,
         try {
             size_t device_l_work = 0, host_l_work = 0;
             check_status(cusolverDnXgeqrf_bufferSize(handle, params, m, n,
-                BackendScalar<T, BackendLibrary::CUSOLVER>::type, A.data_ptr(), A.ld(),
-                BackendScalar<T, BackendLibrary::CUSOLVER>::type, tau.data(),
-                BackendScalar<T, BackendLibrary::CUSOLVER>::type, &device_l_work, &host_l_work));
+                BackendScalar<Scalar, BackendLibrary::CUSOLVER>::type, A.data_ptr(), A.ld(),
+                BackendScalar<Scalar, BackendLibrary::CUSOLVER>::type, tau.data(),
+                BackendScalar<Scalar, BackendLibrary::CUSOLVER>::type, &device_l_work, &host_l_work));
             auto device_work_space = pool.allocate<std::byte>(ctx, device_l_work);
             auto d_info = pool.allocate<int>(ctx, 1);
             // bufferOnHost is host memory, not a draw from the (device) workspace.
@@ -628,9 +628,9 @@ Event geqrf_vendor(Queue& ctx,
             impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
                 handle.setStream(stream);
                 check_status(cusolverDnXgeqrf(handle, params, m, n,
-                    BackendScalar<T, BackendLibrary::CUSOLVER>::type, A.data_ptr(), A.ld(),
-                    BackendScalar<T, BackendLibrary::CUSOLVER>::type, tau.data(),
-                    BackendScalar<T, BackendLibrary::CUSOLVER>::type, device_work_space.data(),
+                    BackendScalar<Scalar, BackendLibrary::CUSOLVER>::type, A.data_ptr(), A.ld(),
+                    BackendScalar<Scalar, BackendLibrary::CUSOLVER>::type, tau.data(),
+                    BackendScalar<Scalar, BackendLibrary::CUSOLVER>::type, device_work_space.data(),
                     device_l_work, host_ptr, host_l_work, d_info.data()));
             });
             if (host_l_work > 0) ctx.wait();  // host_work_space must outlive the call's stream work
@@ -641,20 +641,20 @@ Event geqrf_vendor(Queue& ctx,
         check_status(cusolverDnDestroyParams(params));
     } else {
         auto tau_data = tau.data();
-        auto tau_ptrs = pool.allocate<T*>(ctx, batch_size);
+        auto tau_ptrs = pool.allocate<Scalar*>(ctx, batch_size);
         ctx->parallel_for(sycl::range<1>(batch_size), [=](sycl::id<1> item) {
             size_t i = item.get(0);
             tau_ptrs[i] = tau_data + i * k;
         });
-        const auto arrays = ::batchlas::detail::vendor_ptr_arrays<T>(ctx, A);
-        T** a_ptrs = arrays[0];
+        const auto arrays = ::batchlas::detail::vendor_ptr_arrays<Scalar>(ctx, A);
+        Scalar** a_ptrs = arrays[0];
         if (!ctx.in_order()) ctx.wait();  // tau_ptrs' kernel is not ordered before the native call
         // cublas<t>geqrfBatched's info is a host int: a parameter-error code, set before return.
         int info_h = 0;
         int* info_p = &info_h;
         impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
             handle.setStream(stream);
-            call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgeqrfBatched, cublasDgeqrfBatched, cublasCgeqrfBatched, cublasZgeqrfBatched,
+            call_backend<Scalar, BackendLibrary::CUBLAS, B>(cublasSgeqrfBatched, cublasDgeqrfBatched, cublasCgeqrfBatched, cublasZgeqrfBatched,
                 handle, m, n, a_ptrs, A.ld(), tau_ptrs.data(), info_p, batch_size);
         });
         if (info_h != 0) {
@@ -665,10 +665,10 @@ Event geqrf_vendor(Queue& ctx,
     return ctx.create_event_after_external_work();
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t geqrf_vendor_buffer_size(Queue& ctx,
-    const MatrixView<T, MatrixFormat::Dense>& A,
-    Span<T> tau) {
+    const MatrixView<Scalar, MatrixFormat::Dense>& A,
+    Span<Scalar> tau) {
     static LinalgHandle<B> handle;
     handle.setStream(ctx);
     auto m = A.rows();
@@ -679,27 +679,27 @@ size_t geqrf_vendor_buffer_size(Queue& ctx,
         cusolverDnParams_t params;
         check_status(cusolverDnCreateParams(&params));
         const cusolverStatus_t st = cusolverDnXgeqrf_bufferSize(handle, params, m, n,
-            BackendScalar<T, BackendLibrary::CUSOLVER>::type, A.data_ptr(), A.ld(),
-            BackendScalar<T, BackendLibrary::CUSOLVER>::type, tau.data(),
-            BackendScalar<T, BackendLibrary::CUSOLVER>::type, &device_l_work, &host_l_work);
+            BackendScalar<Scalar, BackendLibrary::CUSOLVER>::type, A.data_ptr(), A.ld(),
+            BackendScalar<Scalar, BackendLibrary::CUSOLVER>::type, tau.data(),
+            BackendScalar<Scalar, BackendLibrary::CUSOLVER>::type, &device_l_work, &host_l_work);
         check_status(cusolverDnDestroyParams(params));
         check_status(st);
         // The run path's draws only: its host buffer and geqrfBatched's info live on the host.
         return BumpAllocator::allocation_size<std::byte>(ctx, device_l_work) + BumpAllocator::allocation_size<int>(ctx, 1);
     } else {
-        return BumpAllocator::allocation_size<T*>(ctx, batch_size);
+        return BumpAllocator::allocation_size<Scalar*>(ctx, batch_size);
     }
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event ormqr_vendor(Queue& ctx,
-            const MatrixView<T, MatrixFormat::Dense>& A,
-            const MatrixView<T, MatrixFormat::Dense>& C,
+            const MatrixView<Scalar, MatrixFormat::Dense>& A,
+            const MatrixView<Scalar, MatrixFormat::Dense>& C,
             Side side,
             Transpose trans,
-            Span<T> tau,
+            Span<Scalar> tau,
             Span<std::byte> workspace) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::ormqr, "ormqr_vendor", B, A, C);
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::ormqr, "ormqr_vendor", B, A, C);
     static LinalgHandle<B> handle;
     auto m = C.rows();
     auto n = C.cols();
@@ -709,7 +709,7 @@ Event ormqr_vendor(Queue& ctx,
     if (batch_size == 1) {
         handle.setStream(ctx);
         int lwork;
-        call_backend<T, BackendLibrary::CUSOLVER, B>(
+        call_backend<Scalar, BackendLibrary::CUSOLVER, B>(
             cusolverDnSormqr_bufferSize, cusolverDnDormqr_bufferSize,
             cusolverDnCunmqr_bufferSize, cusolverDnZunmqr_bufferSize,
             handle,
@@ -720,11 +720,11 @@ Event ormqr_vendor(Queue& ctx,
             tau.data(),
             C.data_ptr(), C.ld(),
             &lwork);
-        auto device_ws = pool.allocate<T>(ctx, lwork);
+        auto device_ws = pool.allocate<Scalar>(ctx, lwork);
         auto info = pool.allocate<int>(ctx, 1);
         impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
             handle.setStream(stream);
-            call_backend<T, BackendLibrary::CUSOLVER, B>(
+            call_backend<Scalar, BackendLibrary::CUSOLVER, B>(
                 cusolverDnSormqr, cusolverDnDormqr,
                 cusolverDnCunmqr, cusolverDnZunmqr,
                 handle,
@@ -746,13 +746,13 @@ Event ormqr_vendor(Queue& ctx,
     return ctx.create_event_after_external_work();
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t ormqr_vendor_buffer_size(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A,
-                         const MatrixView<T, MatrixFormat::Dense>& C,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& C,
                          Side side,
                          Transpose trans,
-                         Span<T> tau) {
+                         Span<Scalar> tau) {
     static LinalgHandle<B> handle;
     handle.setStream(ctx);
     auto m = C.rows();
@@ -761,7 +761,7 @@ size_t ormqr_vendor_buffer_size(Queue& ctx,
     auto batch_size = A.batch_size();
     if (batch_size == 1) {
         int lwork;
-        call_backend<T, BackendLibrary::CUSOLVER, B>(
+        call_backend<Scalar, BackendLibrary::CUSOLVER, B>(
             cusolverDnSormqr_bufferSize, cusolverDnDormqr_bufferSize,
             cusolverDnCunmqr_bufferSize, cusolverDnZunmqr_bufferSize,
             handle,
@@ -772,19 +772,19 @@ size_t ormqr_vendor_buffer_size(Queue& ctx,
             tau.data(),
             C.data_ptr(), C.ld(),
             &lwork);
-        return BumpAllocator::allocation_size<T>(ctx, lwork) + BumpAllocator::allocation_size<int>(ctx, 1); // +1 for info
+        return BumpAllocator::allocation_size<Scalar>(ctx, lwork) + BumpAllocator::allocation_size<int>(ctx, 1); // +1 for info
     }
 
     size_t single = BumpAllocator::allocation_size<std::byte>(ctx, ormqr_vendor_buffer_size<B>(ctx, A.batch_item(0), C.batch_item(0), side, trans, tau.subspan(0, k)));
     return single * batch_size;
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event orgqr_vendor(Queue& ctx,
-            const MatrixView<T, MatrixFormat::Dense>& A,
-            Span<T> tau,
+            const MatrixView<Scalar, MatrixFormat::Dense>& A,
+            Span<Scalar> tau,
             Span<std::byte> workspace) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::orgqr, "orgqr_vendor", B, A);
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::orgqr, "orgqr_vendor", B, A);
     static LinalgHandle<B> handle;
     auto m = A.rows();
     auto n = A.cols();
@@ -794,7 +794,7 @@ Event orgqr_vendor(Queue& ctx,
     if (batch_size == 1) {
         handle.setStream(ctx);
         int lwork;
-        call_backend<T, BackendLibrary::CUSOLVER, B>(
+        call_backend<Scalar, BackendLibrary::CUSOLVER, B>(
             cusolverDnSorgqr_bufferSize, cusolverDnDorgqr_bufferSize,
             cusolverDnCungqr_bufferSize, cusolverDnZungqr_bufferSize,
             handle,
@@ -802,11 +802,11 @@ Event orgqr_vendor(Queue& ctx,
             A.data_ptr(), A.ld(),
             tau.data(),
             &lwork);
-        auto device_ws = pool.allocate<T>(ctx, lwork);
+        auto device_ws = pool.allocate<Scalar>(ctx, lwork);
         auto info = pool.allocate<int>(ctx, 1);
         impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
             handle.setStream(stream);
-            call_backend<T, BackendLibrary::CUSOLVER, B>(
+            call_backend<Scalar, BackendLibrary::CUSOLVER, B>(
                 cusolverDnSorgqr, cusolverDnDorgqr,
                 cusolverDnCungqr, cusolverDnZungqr,
                 handle,
@@ -826,10 +826,10 @@ Event orgqr_vendor(Queue& ctx,
     return ctx.create_event_after_external_work();
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t orgqr_vendor_buffer_size(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A,
-                         Span<T> tau) {
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         Span<Scalar> tau) {
     static LinalgHandle<B> handle;
     handle.setStream(ctx);
     auto m = A.rows();
@@ -838,7 +838,7 @@ size_t orgqr_vendor_buffer_size(Queue& ctx,
     auto batch_size = A.batch_size();
     if (batch_size == 1) {
         int lwork;
-        call_backend<T, BackendLibrary::CUSOLVER, B>(
+        call_backend<Scalar, BackendLibrary::CUSOLVER, B>(
             cusolverDnSorgqr_bufferSize, cusolverDnDorgqr_bufferSize,
             cusolverDnCungqr_bufferSize, cusolverDnZungqr_bufferSize,
             handle,
@@ -846,21 +846,21 @@ size_t orgqr_vendor_buffer_size(Queue& ctx,
             A.data_ptr(), A.ld(),
             tau.data(),
             &lwork);
-        return BumpAllocator::allocation_size<T>(ctx, lwork) + BumpAllocator::allocation_size<int>(ctx, 1);
+        return BumpAllocator::allocation_size<Scalar>(ctx, lwork) + BumpAllocator::allocation_size<int>(ctx, 1);
     } else {
         size_t single = BumpAllocator::allocation_size<std::byte>(ctx, orgqr_vendor_buffer_size<B>(ctx, A.batch_item(0), tau.subspan(0, k)));
         return single * batch_size;
     }
 }
 
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 Event getrs_vendor(Queue& ctx,
-    const MatrixView<T, MatrixFormat::Dense>& A,
-    const MatrixView<T, MatrixFormat::Dense>& B,
+    const MatrixView<Scalar, MatrixFormat::Dense>& A,
+    const MatrixView<Scalar, MatrixFormat::Dense>& B,
     Transpose transA,
     Span<int64_t> pivots,
     Span<std::byte> workspace) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::getrs, "getrs_vendor", Back, A, B);
+        ::batchlas::detail::refuse_batch_mask<Scalar>(Op::getrs, "getrs_vendor", Back, A, B);
         static LinalgHandle<Back> handle;
         auto n = A.rows();
         auto nrhs = B.cols();
@@ -891,13 +891,13 @@ Event getrs_vendor(Queue& ctx,
         // the change this family has been bitten by before.
         (void)pool;
         auto reinterpreted_pivots = pivots.as_span<int>();
-        const auto arrays = ::batchlas::detail::vendor_ptr_arrays<T>(ctx, A, B);
-        T** a_ptrs = arrays[0];
-        T** b_ptrs = arrays[1];
+        const auto arrays = ::batchlas::detail::vendor_ptr_arrays<Scalar>(ctx, A, B);
+        Scalar** a_ptrs = arrays[0];
+        Scalar** b_ptrs = arrays[1];
         impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
             handle.setStream(stream);
             int info;
-            call_backend<T, BackendLibrary::CUBLAS, Back>(cublasSgetrsBatched, cublasDgetrsBatched, cublasCgetrsBatched, cublasZgetrsBatched,
+            call_backend<Scalar, BackendLibrary::CUBLAS, Back>(cublasSgetrsBatched, cublasDgetrsBatched, cublasCgetrsBatched, cublasZgetrsBatched,
                 handle, enum_convert<BackendLibrary::CUBLAS>(transA), n, nrhs,
                 a_ptrs, A.ld(), reinterpreted_pivots.data(),
                 b_ptrs, B.ld(), &info, batch_size);
@@ -905,21 +905,21 @@ Event getrs_vendor(Queue& ctx,
         return ctx.create_event_after_external_work();
     }
 
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 size_t getrs_vendor_buffer_size(Queue& ctx,
-    const MatrixView<T, MatrixFormat::Dense>& A,
-    const MatrixView<T, MatrixFormat::Dense>& B,
+    const MatrixView<Scalar, MatrixFormat::Dense>& A,
+    const MatrixView<Scalar, MatrixFormat::Dense>& B,
     Transpose transA) {
         return BumpAllocator::allocation_size<int>(ctx, A.batch_size() == 1 ? 1 : 0); // batched getrs just uses a single host integer.
     }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event getrf_vendor(Queue& ctx,
-    const MatrixView<T, MatrixFormat::Dense>& A,
+    const MatrixView<Scalar, MatrixFormat::Dense>& A,
     Span<int64_t> pivots,
     Span<std::byte> workspace,
     Span<int32_t> info_out) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::getrf, "getrf_vendor", B, A);
+        ::batchlas::detail::refuse_batch_mask<Scalar>(Op::getrf, "getrf_vendor", B, A);
         static LinalgHandle<B> handle;
         auto n = A.rows();
         auto batch_size = A.batch_size();
@@ -929,31 +929,31 @@ Event getrf_vendor(Queue& ctx,
         // It used to be pool scratch that nothing ever read.
         auto info = ::batchlas::detail::info_target(ctx, pool, info_out, static_cast<size_t>(batch_size));
         auto reinterpreted_pivots = pivots.as_span<int>();
-        const auto arrays = ::batchlas::detail::vendor_ptr_arrays<T>(ctx, A);
-        T** a_ptrs = arrays[0];
+        const auto arrays = ::batchlas::detail::vendor_ptr_arrays<Scalar>(ctx, A);
+        Scalar** a_ptrs = arrays[0];
         impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
             handle.setStream(stream);
-            call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgetrfBatched, cublasDgetrfBatched, cublasCgetrfBatched, cublasZgetrfBatched,
+            call_backend<Scalar, BackendLibrary::CUBLAS, B>(cublasSgetrfBatched, cublasDgetrfBatched, cublasCgetrfBatched, cublasZgetrfBatched,
                 handle, n,
                 a_ptrs, A.ld(), reinterpreted_pivots.data(), info.data(), batch_size);
         });
         return ctx.create_event_after_external_work();
     }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t getrf_vendor_buffer_size(Queue& ctx,
-    const MatrixView<T, MatrixFormat::Dense>& A) {
+    const MatrixView<Scalar, MatrixFormat::Dense>& A) {
         return BumpAllocator::allocation_size<int>(ctx, A.batch_size()); // batched getrf just uses a single host integer.
     }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event getri_vendor(Queue& ctx,
-    const MatrixView<T, MatrixFormat::Dense>& A,
-    const MatrixView<T, MatrixFormat::Dense>& C, // C is overwritten with inverse of A
+    const MatrixView<Scalar, MatrixFormat::Dense>& A,
+    const MatrixView<Scalar, MatrixFormat::Dense>& C, // C is overwritten with inverse of A
     Span<int64_t> pivots,
     Span<std::byte> workspace,
     Span<int32_t> info_out) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::getri, "getri_vendor", B, A, C);
+        ::batchlas::detail::refuse_batch_mask<Scalar>(Op::getri, "getri_vendor", B, A, C);
         if (A.data_ptr() == C.data_ptr()) {
             throw batchlas::invalid_argument("getri_vendor (CUBLAS): cublas<t>getriBatched is out of place; C aliases A");
         }
@@ -966,12 +966,12 @@ Event getri_vendor(Queue& ctx,
         // result was thrown away, leaving the caller a matrix of infinities.
         auto info_arr = ::batchlas::detail::info_target(ctx, pool, info_out, static_cast<size_t>(batch_size));
         auto reinterpreted_pivots = pivots.as_span<int>();
-        const auto arrays = ::batchlas::detail::vendor_ptr_arrays<T>(ctx, A, C);  // never inside run_native
-        T** a_ptrs = arrays[0];
-        T** c_ptrs = arrays[1];
+        const auto arrays = ::batchlas::detail::vendor_ptr_arrays<Scalar>(ctx, A, C);  // never inside run_native
+        Scalar** a_ptrs = arrays[0];
+        Scalar** c_ptrs = arrays[1];
         impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
             handle.setStream(stream);
-            call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgetriBatched, cublasDgetriBatched, cublasCgetriBatched, cublasZgetriBatched,
+            call_backend<Scalar, BackendLibrary::CUBLAS, B>(cublasSgetriBatched, cublasDgetriBatched, cublasCgetriBatched, cublasZgetriBatched,
                 handle, n,
                 a_ptrs, A.ld(), reinterpreted_pivots.data(),
                 c_ptrs, C.ld(), info_arr.data(), batch_size);
@@ -979,9 +979,9 @@ Event getri_vendor(Queue& ctx,
         return ctx.create_event_after_external_work();
     }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t getri_vendor_buffer_size(Queue& ctx,
-    const MatrixView<T, MatrixFormat::Dense>& A) {
+    const MatrixView<Scalar, MatrixFormat::Dense>& A) {
         static LinalgHandle<B> handle;
         handle.setStream(ctx);
         auto n = A.rows();

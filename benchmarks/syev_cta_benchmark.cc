@@ -42,7 +42,7 @@ inline Uplo parse_uplo(int v) {
 }
 
 // CTA SYEV-like benchmark (CUDA/ROCm/MKL GPU backends)
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_SYEV_CTA(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
@@ -54,10 +54,10 @@ void BM_SYEV_CTA(minibench::State& state) {
     const Uplo uplo = parse_uplo(uplo_i);
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    auto A = Matrix<T>::Random(n, n, /*hermitian=*/true, batch);
-    UnifiedVector<typename base_type<T>::type> W(n * batch);
+    auto A = Matrix<Scalar>::Random(n, n, /*hermitian=*/true, batch);
+    UnifiedVector<typename base_type<Scalar>::type> W(n * batch);
 
-    SteqrParams<T> params;
+    SteqrParams<Scalar> params;
     params.cta_wg_size_multiplier = wg_mult;
 
     const size_t ws_size = syev_cta_buffer_size(*q, A, jobz, params);
@@ -81,7 +81,7 @@ void BM_SYEV_CTA(minibench::State& state) {
 }
 
 // Reference benchmark using LAPACKE SYEV (NETLIB backend)
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_SYEV_NETLIB_REF(minibench::State& state) {
     static_assert(B == Backend::NETLIB, "BM_SYEV_NETLIB_REF is only intended for NETLIB backend.");
 
@@ -94,8 +94,8 @@ void BM_SYEV_NETLIB_REF(minibench::State& state) {
     const Uplo uplo = parse_uplo(uplo_i);
 
     auto q = std::make_shared<Queue>("cpu");
-    auto A = Matrix<T>::Random(n, n, /*hermitian=*/true, batch);
-    UnifiedVector<typename base_type<T>::type> W(n * batch);
+    auto A = Matrix<Scalar>::Random(n, n, /*hermitian=*/true, batch);
+    UnifiedVector<typename base_type<Scalar>::type> W(n * batch);
 
     const size_t ws_size = syev_buffer_size(*q, A, W.to_span(), jobz, uplo);
     UnifiedVector<std::byte> workspace(ws_size);

@@ -35,9 +35,9 @@
 
 using namespace batchlas;
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct SyevConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 
@@ -127,23 +127,23 @@ namespace {
 // and every other test in this suite reads it the same way.
 //
 // The view is taken BY VALUE, not by const reference: MatrixView::operator() has
-// a const overload returning `const T&`, so a const-reference parameter would
+// a const overload returning `const Scalar&`, so a const-reference parameter would
 // make every assignment below a compile error. A MatrixView is a non-owning
 // descriptor, so copying it costs nothing.
-template <typename T>
-void fill_mixed_convergence_matrices(MatrixView<T, MatrixFormat::Dense> A) {
+template <typename Scalar>
+void fill_mixed_convergence_matrices(MatrixView<Scalar, MatrixFormat::Dense> A) {
     const int n = A.rows();
     const int batch = A.batch_size();
     for (int b = 0; b < batch; ++b) {
         const bool easy = (b % 2) == 0;
         for (int j = 0; j < n; ++j) {
-            for (int i = 0; i < n; ++i) A(i, j, b) = T(0);
+            for (int i = 0; i < n; ++i) A(i, j, b) = Scalar(0);
         }
-        for (int i = 0; i < n; ++i) A(i, i, b) = easy ? T(i + 1) : T(1);
+        for (int i = 0; i < n; ++i) A(i, i, b) = easy ? Scalar(i + 1) : Scalar(1);
         if (!easy) {
             for (int i = 0; i + 1 < n; ++i) {
-                A(i + 1, i, b) = T(0.5);
-                A(i, i + 1, b) = T(0.5);
+                A(i + 1, i, b) = Scalar(0.5);
+                A(i, i + 1, b) = Scalar(0.5);
             }
         }
     }
@@ -324,15 +324,15 @@ double vendor_syev_lambda(int i, int n) {
     return (i % 2) ? -mag : mag;
 }
 
-// Item b is Q_b diag(lambda) Q_b^H with a random Householder Q_b (complex for complex T).
-template <typename T>
+// Item b is Q_b diag(lambda) Q_b^H with a random Householder Q_b (complex for complex Scalar).
+template <typename Scalar>
 std::vector<std::complex<double>> vendor_syev_item(int n, int b) {
     std::mt19937 gen(1234u + 7u * unsigned(b));
     std::uniform_real_distribution<double> dis(-1.0, 1.0);
     std::vector<std::complex<double>> u(n);
     double unorm2 = 0.0;
     for (auto& x : u) {
-        x = {dis(gen), is_std_complex_v<T> ? dis(gen) : 0.0};
+        x = {dis(gen), is_std_complex_v<Scalar> ? dis(gen) : 0.0};
         unorm2 += std::norm(x);
     }
     std::vector<std::complex<double>> Q(size_t(n) * n), A(size_t(n) * n);
@@ -349,10 +349,10 @@ std::vector<std::complex<double>> vendor_syev_item(int n, int b) {
     return A;
 }
 
-template <typename T>
-T vendor_syev_cast(std::complex<double> z) {
-    if constexpr (is_std_complex_v<T>) return T(z.real(), z.imag());
-    else return T(z.real());
+template <typename Scalar>
+Scalar vendor_syev_cast(std::complex<double> z) {
+    if constexpr (is_std_complex_v<Scalar>) return Scalar(z.real(), z.imag());
+    else return Scalar(z.real());
 }
 
 }  // namespace
@@ -437,12 +437,13 @@ constexpr ChunkRoute kChunkRoutes[] = {{"cta", 12}, {"blocked", 40}};
 double chunk_item_scale(int b) { return 1.0 + 0.125 * b; }
 
 // Writes item b of the chunk batch into buf (ld, stride) and into the natural-layout A0.
-template <typename T>
-void chunk_fill(UnifiedVector<T>& buf, Matrix<T, MatrixFormat::Dense>& A0, int n, int ld, int stride, int b, int src) {
-    const auto ref = vendor_syev_item<T>(n, src);
+template <typename Scalar>
+void chunk_fill(UnifiedVector<Scalar>& buf, Matrix<Scalar, MatrixFormat::Dense>& A0, int n, int ld, int stride, int b,
+                int src) {
+    const auto ref = vendor_syev_item<Scalar>(n, src);
     for (int j = 0; j < n; ++j)
         for (int i = 0; i < n; ++i) {
-            const T v = vendor_syev_cast<T>(ref[i + size_t(j) * n] * chunk_item_scale(src));
+            const Scalar v = vendor_syev_cast<Scalar>(ref[i + size_t(j) * n] * chunk_item_scale(src));
             buf[size_t(b) * stride + i + size_t(j) * ld] = v;
             A0.view()(i, j, b) = v;
         }
@@ -658,25 +659,25 @@ namespace {
 // A graded Hermitian batch from the library fill (lambda_i = 10^(-6 i / (n - 1)), a different Q per
 // item, seed 91 + n), generated once per (n, batch, ld, stride) and kept pristine: `image` in that
 // strided storage, zero padding included, and `full`, its dense copy. A fill at n >= 1024 costs 12-46 s.
-template <typename T>
+template <typename Scalar>
 class GradedFills {
 public:
     struct Entry {
         Entry(int n, int batch, int ld, int stride)
-            : n(n), batch(batch), ld(ld), stride(stride), image(size_t(stride) * batch, T(0)), full(n, n, batch) {}
+            : n(n), batch(batch), ld(ld), stride(stride), image(size_t(stride) * batch, Scalar(0)), full(n, n, batch) {}
         int n, batch, ld, stride;
-        UnifiedVector<T> image;
-        Matrix<T, MatrixFormat::Dense> full;
+        UnifiedVector<Scalar> image;
+        Matrix<Scalar, MatrixFormat::Dense> full;
     };
 
     const Entry& get(Queue& ctx, int n, int batch, int ld, int stride) {
         for (const auto& e : entries_)
             if (e->n == n && e->batch == batch && e->ld == ld && e->stride == stride) return *e;
         Entry& e = *entries_.emplace_back(std::make_unique<Entry>(n, batch, ld, stride));
-        UnifiedVector<T*> ptrs(batch, nullptr);
-        MatrixView<T, MatrixFormat::Dense> image(e.image.data(), n, n, ld, stride, batch, ptrs.data());
+        UnifiedVector<Scalar*> ptrs(batch, nullptr);
+        MatrixView<Scalar, MatrixFormat::Dense> image(e.image.data(), n, n, ld, stride, batch, ptrs.data());
         image.fill_graded_hermitian(ctx, 6.0, 91u + unsigned(n)).wait();
-        MatrixView<T, MatrixFormat::Dense>::copy(ctx, e.full, image).wait();
+        MatrixView<Scalar, MatrixFormat::Dense>::copy(ctx, e.full, image).wait();
         return e;
     }
 
@@ -684,22 +685,23 @@ private:
     std::vector<std::unique_ptr<Entry>> entries_;
 };
 
-template <typename T>
+template <typename Scalar>
 struct Poisoned {
-    const Matrix<T, MatrixFormat::Dense>& A0;
+    const Matrix<Scalar, MatrixFormat::Dense>& A0;
     std::vector<std::vector<double>> lambda;
 };
 
 // The cached graded batch device-copied into A (whose buffer is exactly stride * batch), then a large
 // finite poison (9e3 against ||A||_2 = 1) over the triangle `uplo` does not name, on the device.
-template <typename T>
-Poisoned<T> fill_poisoned(Queue& ctx, GradedFills<T>& fills, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
+template <typename Scalar>
+Poisoned<Scalar> fill_poisoned(Queue& ctx, GradedFills<Scalar>& fills, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                               Uplo uplo) {
     const int n = A.rows(), ld = A.ld(), stride = A.stride();
     const auto& e = fills.get(ctx, n, A.batch_size(), ld, stride);
-    const T poison = vendor_syev_cast<T>({-9.0e3, is_std_complex_v<T> ? 7.0e3 : 0.0});
+    const Scalar poison = vendor_syev_cast<Scalar>({-9.0e3, is_std_complex_v<Scalar> ? 7.0e3 : 0.0});
     const bool lower = uplo == Uplo::Lower;
-    T* const a = A.data_ptr();
-    ctx->memcpy(a, e.image.data(), e.image.size() * sizeof(T)).wait();
+    Scalar* const a = A.data_ptr();
+    ctx->memcpy(a, e.image.data(), e.image.size() * sizeof(Scalar)).wait();
     ctx->parallel_for(sycl::range<3>(size_t(e.batch), size_t(n), size_t(n)), [=](sycl::id<3> id) {
            const int b = int(id[0]), j = int(id[1]), i = int(id[2]);
            if (lower ? i < j : i > j) a[size_t(b) * stride + size_t(j) * ld + i] = poison;
@@ -856,8 +858,8 @@ TYPED_TEST(SyevTest, PinnedRouteIsBitwiseRepeatableAtSaturatingBatch) {
 
 namespace {
 
-template <typename T>
-constexpr bool kDoubleScalar = std::is_same_v<typename base_type<T>::type, double>;
+template <typename Scalar>
+constexpr bool kDoubleScalar = std::is_same_v<typename base_type<Scalar>::type, double>;
 
 // The choice the outermost syev select-trace line names, plus " (last resort)" when no row served it.
 template <typename F>
@@ -880,12 +882,13 @@ std::string syev_route_of(F&& run) {
     return "<no syev trace line>";
 }
 
-template <Backend B, typename T, typename Real = typename base_type<T>::type>
-std::string traced_syev(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, UnifiedVector<Real>& W, JobType jobz,
+template <Backend B, typename Scalar, typename Real = typename base_type<Scalar>::type>
+std::string traced_syev(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, UnifiedVector<Real>& W,
+                        JobType jobz,
                         Uplo uplo) {
     return syev_route_of([&] {
-        UnifiedVector<std::byte> ws(syev_buffer_size<B, T>(ctx, A, W.to_span(), jobz, uplo));
-        (void)syev<B, T>(ctx, A, W.to_span(), jobz, uplo, ws.to_span(), Span<int32_t>{});
+        UnifiedVector<std::byte> ws(syev_buffer_size<B, Scalar>(ctx, A, W.to_span(), jobz, uplo));
+        (void)syev<B, Scalar>(ctx, A, W.to_span(), jobz, uplo, ws.to_span(), Span<int32_t>{});
         ctx.wait();
     });
 }
@@ -941,12 +944,12 @@ std::vector<BandCase> band_grid(std::initializer_list<int> orders) {
 
 // Auto: vendor-free, a GPU row must name a runnable native family (never the last resort); with the
 // library the GPU row is served as transcribed and the CPU takes LAPACKE.
-template <Backend B, typename T>
-void expect_band_auto(Queue& ctx, GradedFills<T>& fills, const std::vector<BandCase>& cases) {
+template <Backend B, typename Scalar>
+void expect_band_auto(Queue& ctx, GradedFills<Scalar>& fills, const std::vector<BandCase>& cases) {
     constexpr bool kVendor = batchlas::select::solver_vendor_available<B>;
     for (const BandCase& c : cases) {
         const std::string where = band_where(c.n, c.uplo, c.jobz);
-        const std::string route = solve_graded_band<B, T>(ctx, fills, c.n, 2, c.uplo, c.jobz, where);
+        const std::string route = solve_graded_band<B, Scalar>(ctx, fills, c.n, 2, c.uplo, c.jobz, where);
         if (B == Backend::NETLIB) {
             EXPECT_EQ(route.rfind("vendor", 0), 0u) << where << ": " << route;
         } else {

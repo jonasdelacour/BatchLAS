@@ -13,16 +13,17 @@ namespace {
 static_assert(og::wide_configs.size() == 9 && og::reg_configs.size() == 13,
               "a new wide or reg row needs a shard in BATCHLAS_GEMM_SHARDS (src/ops/CMakeLists.txt)");
 
-template <typename T>
+template <typename Scalar>
 class GemmSplitKReduceKernel;
 
 // C = alpha (W[z s] + ... + W[z s + s - 1]) + beta C per item z, the slices summed in that fixed
 // order (deterministic, no atomics); beta = 0 never reads C. One work-item per element, m fastest.
 // An item the mask switches off is skipped here as in the slices, which left its partials unwritten.
-template <typename T>
-Event splitk_reduce(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& W, int splits,
-                    const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, const std::uint8_t* mask) {
-    using D = typename sycl_device::DevMap<T>::type;
+template <typename Scalar>
+Event splitk_reduce(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& W, int splits,
+                    const MatrixView<Scalar, MatrixFormat::Dense>& C, Scalar alpha, Scalar beta,
+                    const std::uint8_t* mask) {
+    using D = typename sycl_device::DevMap<Scalar>::type;
     constexpr int kWg = 256;
     // mn <= ldw n <= INT_MAX (can_run), but the padded range and the global id can pass it.
     const int m = C.rows(), mn = C.rows() * C.cols();
@@ -35,7 +36,7 @@ Event splitk_reduce(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& W, int
         D alpha_d, beta_d;
         std::memcpy(&alpha_d, &alpha, sizeof(D));
         std::memcpy(&beta_d, &beta, sizeof(D));
-        batchlas::impl::parallel_for<GemmSplitKReduceKernel<T>>(
+        batchlas::impl::parallel_for<GemmSplitKReduceKernel<Scalar>>(
             h, sycl::nd_range<2>(global, sycl::range<2>(1, kWg)), [=](sycl::nd_item<2> item) {
                 const size_t g = item.get_global_id(1);
                 const auto b = static_cast<std::ptrdiff_t>(item.get_group(0));
@@ -77,31 +78,37 @@ void refuse_over_budget(Queue& ctx, const char* who, std::int64_t bytes, int wg)
 
 }  // namespace
 
-template <typename T>
-Event gemm_direct(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
-                  const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Transpose transA, Transpose transB) {
-    return launch_direct<T>(ctx, A, B, C, alpha, beta, transA, transB);
+template <typename Scalar>
+Event gemm_direct(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, const MatrixView<Scalar,
+                  MatrixFormat::Dense>& B,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& C, Scalar alpha, Scalar beta, Transpose transA,
+                  Transpose transB) {
+    return launch_direct<Scalar>(ctx, A, B, C, alpha, beta, transA, transB);
 }
 
-template <typename T>
-Event gemm_tiled(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
-                 const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Transpose transA, Transpose transB) {
-    return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
+template <typename Scalar>
+Event gemm_tiled(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, const MatrixView<Scalar,
+                 MatrixFormat::Dense>& B,
+                 const MatrixView<Scalar, MatrixFormat::Dense>& C, Scalar alpha, Scalar beta, Transpose transA,
+                 Transpose transB) {
+    return launch_tiled<Scalar, 16>(ctx, A, B, C, alpha, beta, transA, transB);
 }
 
-template <typename T>
-Event gemm_small(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
-                 const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Transpose transA, Transpose transB) {
+template <typename Scalar>
+Event gemm_small(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, const MatrixView<Scalar,
+                 MatrixFormat::Dense>& B,
+                 const MatrixView<Scalar, MatrixFormat::Dense>& C, Scalar alpha, Scalar beta, Transpose transA,
+                 Transpose transB) {
     const auto [m, k] = get_effective_dims(A, transA);
     const auto [k_b, n] = get_effective_dims(B, transB);
     static_cast<void>(k_b);
-    if (std::max({m, n, k}) > ops::gemm::kSmallMaxDimFor<T>)
-        refuse("small serves max(m, n, k) <= " + std::to_string(ops::gemm::kSmallMaxDimFor<T>));
+    if (std::max({m, n, k}) > ops::gemm::kSmallMaxDimFor<Scalar>)
+        refuse("small serves max(m, n, k) <= " + std::to_string(ops::gemm::kSmallMaxDimFor<Scalar>));
     const bool nn = transA == Transpose::NoTrans && transB == Transpose::NoTrans;
     const int mx = static_cast<int>(std::max({m, n, k}));
-    refuse_over_budget(ctx, "small", og::small_slm_bytes<T>(nn, mx), og::small_wg<T>(nn, mx));
+    refuse_over_budget(ctx, "small", og::small_slm_bytes<Scalar>(nn, mx), og::small_wg<Scalar>(nn, mx));
     BATCHLAS_KERNEL_TRACE_SCOPE("gemm_sycl_small_batched");
-    return ops::gemm::small_batched<T>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k);
+    return ops::gemm::small_batched<Scalar>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k);
 }
 
 Event gemm_reg(Queue& ctx, int tm, int tn, int tk, int u, const MatrixView<float, MatrixFormat::Dense>& A,
@@ -130,17 +137,20 @@ Event gemm_reg(Queue& ctx, int tm, int tn, int tk, int u, const MatrixView<float
     return std::move(*out);
 }
 
-template <typename T>
-Event gemm_wide(Queue& ctx, int tm, int tn, int tk, const MatrixView<T, MatrixFormat::Dense>& A,
-                const MatrixView<T, MatrixFormat::Dense>& B, const MatrixView<T, MatrixFormat::Dense>& C, T alpha,
-                T beta, Transpose transA, Transpose transB) {
+template <typename Scalar>
+Event gemm_wide(Queue& ctx, int tm, int tn, int tk, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                const MatrixView<Scalar, MatrixFormat::Dense>& B, const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                Scalar alpha,
+                Scalar beta, Transpose transA, Transpose transB) {
     std::optional<Event> out;
     static_for<static_cast<int>(og::wide_configs.size())>([&](auto I) {
         constexpr og::WideCfg c = og::wide_configs[I];
         if (out || c.m != tm || c.n != tn || c.k != tk) return;
-        refuse_over_budget(ctx, "wide", og::wide_slm_bytes<T>(c), c.threads());
-        gemm_wide_row<T, decltype(I)::value, false, 0>(out, ctx, A, B, C, alpha, beta, transA, transB, WideSplit{});
-        gemm_wide_row<T, decltype(I)::value, false, 1>(out, ctx, A, B, C, alpha, beta, transA, transB, WideSplit{});
+        refuse_over_budget(ctx, "wide", og::wide_slm_bytes<Scalar>(c), c.threads());
+        gemm_wide_row<Scalar, decltype(I)::value, false, 0>(out, ctx, A, B, C, alpha, beta, transA, transB,
+                                                            WideSplit{});
+        gemm_wide_row<Scalar, decltype(I)::value, false, 1>(out, ctx, A, B, C, alpha, beta, transA, transB,
+                                                            WideSplit{});
     });
     if (!out)
         refuse("wide:m=" + std::to_string(tm) + ":n=" + std::to_string(tn) + ":k=" + std::to_string(tk) +
@@ -148,10 +158,11 @@ Event gemm_wide(Queue& ctx, int tm, int tn, int tk, const MatrixView<T, MatrixFo
     return std::move(*out);
 }
 
-template <typename T>
-Event gemm_splitk(Queue& ctx, int tm, int tn, int tk, int splits, const MatrixView<T, MatrixFormat::Dense>& A,
-                  const MatrixView<T, MatrixFormat::Dense>& B, const MatrixView<T, MatrixFormat::Dense>& C, T alpha,
-                  T beta, Transpose transA, Transpose transB) {
+template <typename Scalar>
+Event gemm_splitk(Queue& ctx, int tm, int tn, int tk, int splits, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& B, const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                  Scalar alpha,
+                  Scalar beta, Transpose transA, Transpose transB) {
     const std::string spelling = "splitk:m=" + std::to_string(tm) + ":n=" + std::to_string(tn) + ":k=" +
                                  std::to_string(tk) + ":s=" + std::to_string(splits);
     if (std::find(og::kSplitKSlices.begin(), og::kSplitKSlices.end(), splits) == og::kSplitKSlices.end())
@@ -164,32 +175,32 @@ Event gemm_splitk(Queue& ctx, int tm, int tn, int tk, int splits, const MatrixVi
     const int batch = A.batch_size();
     if (std::int64_t(batch) * splits > INT_MAX) refuse(spelling + ": batch * s passes the int group id");
     const auto budget = batchlas::select::describe(ctx.device(), ctx.backend(), false).scratch_budget;
-    if (batch > 0 && og::splitk_item_bytes<T>(m, n, splits) > budget / batch)
+    if (batch > 0 && og::splitk_item_bytes<Scalar>(m, n, splits) > budget / batch)
         refuse(spelling + ": the partials pass the scratch budget of " + std::to_string(budget) + " B");
     const int kc = ((k + splits - 1) / splits + tk - 1) / tk * tk;
     const std::size_t elems = static_cast<std::size_t>(ldw * n) * static_cast<std::size_t>(splits) * batch;
     auto sizer = BumpAllocator::measuring();
-    sizer.allocate<T>(ctx, elems);
+    sizer.allocate<Scalar>(ctx, elems);
     auto lease = ctx.workspace(sizer.required_bytes());
     BumpAllocator pool(lease.span());
-    const auto partials = pool.allocate<T>(ctx, elems);
-    const MatrixView<T, MatrixFormat::Dense> W(partials.data(), m, n, int(ldw), int(ldw * n), batch * splits);
+    const auto partials = pool.allocate<Scalar>(ctx, elems);
+    const MatrixView<Scalar, MatrixFormat::Dense> W(partials.data(), m, n, int(ldw), int(ldw * n), batch * splits);
     const std::uint8_t* mask = item_mask(A, B, C);
     std::optional<Event> out;
     static_for<static_cast<int>(og::wide_configs.size())>([&](auto I) {
         constexpr og::WideCfg c = og::wide_configs[I];
         if (out || !og::splitk_host(c) || c.m != tm || c.n != tn || c.k != tk) return;
-        refuse_over_budget(ctx, "splitk", og::wide_slm_bytes<T>(c), c.threads());
-        gemm_wide_row<T, decltype(I)::value, true, 0>(out, ctx, A, B, W, T(1), T(0), transA, transB,
-                                                      WideSplit{splits, kc, mask});
-        gemm_wide_row<T, decltype(I)::value, true, 1>(out, ctx, A, B, W, T(1), T(0), transA, transB,
-                                                      WideSplit{splits, kc, mask});
+        refuse_over_budget(ctx, "splitk", og::wide_slm_bytes<Scalar>(c), c.threads());
+        gemm_wide_row<Scalar, decltype(I)::value, true, 0>(out, ctx, A, B, W, Scalar(1), Scalar(0), transA, transB,
+                                                           WideSplit{splits, kc, mask});
+        gemm_wide_row<Scalar, decltype(I)::value, true, 1>(out, ctx, A, B, W, Scalar(1), Scalar(0), transA, transB,
+                                                           WideSplit{splits, kc, mask});
     });
     if (!out) refuse(spelling + " has no instantiation for this transpose form");
     // An out-of-order queue would let the reduction overtake the slices.
     if (!ctx.in_order()) out->wait();
     BATCHLAS_KERNEL_TRACE_SCOPE("gemm_splitk_reduce");
-    return splitk_reduce<T>(ctx, W, splits, C, alpha, beta, mask);
+    return splitk_reduce<Scalar>(ctx, W, splits, C, alpha, beta, mask);
 }
 
 #define GEMM_LAUNCHERS(T)                                                                                       \

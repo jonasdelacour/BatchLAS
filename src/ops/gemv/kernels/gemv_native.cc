@@ -45,10 +45,10 @@ namespace {
 // beta's flag sat in a register across the dot loop (GemvDirectTKernel<double>: REG
 // 36 -> 40 in the sm_89 SASS gate); a top-level bool is an entry-block predicate.
 // `beta_zero` is what keeps y unread when beta == 0; y may be uninitialised.
-template <typename T>
+template <typename Scalar>
 struct GemvOperands {
-    using D = typename DevMap<T>::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    using D = typename DevMap<Scalar>::type;
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     const D* a;
     const D* x;
@@ -58,8 +58,8 @@ struct GemvOperands {
     int m, n;
     D alpha, beta;
 
-    GemvOperands(const MatrixView<T, MatrixFormat::Dense>& A, const VectorView<T>& X,
-                 const VectorView<T>& Y, T alpha_, T beta_)
+    GemvOperands(const MatrixView<Scalar, MatrixFormat::Dense>& A, const VectorView<Scalar>& X,
+                 const VectorView<Scalar>& Y, Scalar alpha_, Scalar beta_)
         : a(reinterpret_cast<const D*>(A.data_ptr())),
           x(reinterpret_cast<const D*>(X.data_ptr())),
           y(reinterpret_cast<D*>(Y.data_ptr())),
@@ -77,11 +77,11 @@ struct GemvOperands {
     auto yvec(int64_t b, int len) const { return device::vec_wide(y + b * stride_y, len, yinc); }
 };
 
-template <typename T> class GemvDirectNKernel;
-template <typename T> class GemvDirectTKernel;
-template <typename T> class GemvCtaTKernel;
-template <typename T, int W> class GemvSegNKernel;
-template <typename T, int W> class GemvSegTKernel;
+template <typename Scalar> class GemvDirectNKernel;
+template <typename Scalar> class GemvDirectTKernel;
+template <typename Scalar> class GemvCtaTKernel;
+template <typename Scalar, int W> class GemvSegNKernel;
+template <typename Scalar, int W> class GemvSegTKernel;
 
 // Body 4's segment width: the largest power of two W with W * out_len <= 32, so
 // one sub-group covers a whole output vector; W == 1 gates body 4 off. W must
@@ -100,7 +100,7 @@ inline constexpr int kGemvSegTransMaxW = 8;
 // GATE 1 -- the admitted band per type, ON red_len() and NEVER out_len(): under
 // Trans red_len() == A.rows(), and a predicate on the other extent inverts it.
 // evidence: docs/perf/gemv.md#the-sub-route-gates
-template <typename T> inline constexpr int kGemvSegTransMaxRedLen = 0;
+template <typename Scalar> inline constexpr int kGemvSegTransMaxRedLen = 0;
 template <> inline constexpr int kGemvSegTransMaxRedLen<float> = 32;
 template <> inline constexpr int kGemvSegTransMaxRedLen<std::complex<float>> = 16;
 template <> inline constexpr int kGemvSegTransMaxRedLen<double> = 48;
@@ -108,7 +108,7 @@ template <> inline constexpr int kGemvSegTransMaxRedLen<std::complex<double>> = 
 
 // GATE 2 -- which W: 8 at the short end of the admitted band, 4 at the long end.
 // evidence: docs/perf/gemv.md#the-body-5-gates
-template <typename T> inline constexpr int kGemvSegTransW8MaxRedLen = 0;
+template <typename Scalar> inline constexpr int kGemvSegTransW8MaxRedLen = 0;
 template <> inline constexpr int kGemvSegTransW8MaxRedLen<float> = 24;
 template <> inline constexpr int kGemvSegTransW8MaxRedLen<std::complex<float>> = 16;
 template <> inline constexpr int kGemvSegTransW8MaxRedLen<double> = 32;
@@ -137,15 +137,15 @@ inline SegTMode gemv_segt_mode() {
     return SegTMode::kAuto;
 }
 
-template <typename T>
+template <typename Scalar>
 inline constexpr bool kGemvSegTransEmit =
-    std::is_same_v<T, float> || std::is_same_v<T, double> ||
-    std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>;
+    std::is_same_v<Scalar, float> || std::is_same_v<Scalar, double> ||
+    std::is_same_v<Scalar, std::complex<float>> || std::is_same_v<Scalar, std::complex<double>>;
 
 // The width decision in ONE place: 1 means body 3, W >= 2 means body 5 at that W.
-template <typename T>
+template <typename Scalar>
 inline int gemv_seg_trans_width(SegTMode mode, int red_len, int64_t items, int cu) {
-    if constexpr (!kGemvSegTransEmit<T>) {
+    if constexpr (!kGemvSegTransEmit<Scalar>) {
         static_cast<void>(mode);
         static_cast<void>(red_len);
         static_cast<void>(items);
@@ -160,12 +160,12 @@ inline int gemv_seg_trans_width(SegTMode mode, int red_len, int64_t items, int c
             case SegTMode::kForce8: return 8;
             case SegTMode::kAuto:   break;
         }
-        static_assert(kGemvSegTransW8MaxRedLen<T> <= kGemvSegTransMaxRedLen<T>,
+        static_assert(kGemvSegTransW8MaxRedLen<Scalar> <= kGemvSegTransMaxRedLen<Scalar>,
                       "the W = 8 band must lie inside the admitted band");
         static_assert(kGemvSegTransMaxW >= 8, "the W table selects 8 and 4");
         if (red_len <= 0) return 1;
-        if (red_len > kGemvSegTransMaxRedLen<T>) return 1;
-        const int w = (red_len <= kGemvSegTransW8MaxRedLen<T>) ? 8 : 4;
+        if (red_len > kGemvSegTransMaxRedLen<Scalar>) return 1;
+        const int w = (red_len <= kGemvSegTransW8MaxRedLen<Scalar>) ? 8 : 4;
         if (items < gemv_seg_trans_min_items(cu, w)) return 1;
         return w;
     }
@@ -173,22 +173,22 @@ inline int gemv_seg_trans_width(SegTMode mode, int red_len, int64_t items, int c
 
 // Reference ?GEMV semantics: y is left COMPLETELY UNTOUCHED -- in particular NOT
 // scaled by beta when the reduction length is 0.
-template <typename T>
-inline bool gemv_quick_return(int m, int n, T alpha, T beta) {
-    return m == 0 || n == 0 || (alpha == T(0) && beta == T(1));
+template <typename Scalar>
+inline bool gemv_quick_return(int m, int n, Scalar alpha, Scalar beta) {
+    return m == 0 || n == 0 || (alpha == Scalar(0) && beta == Scalar(1));
 }
 
 // BODY 1 -- `direct`, transA == NoTrans, one work-item per output row:
 //   y_i = alpha * sum_j A[i + j*ld] * x[j*xinc] + beta * y[i*yinc]
 // Coalesced ONLY FOR out_len >= 32, since out_len*batch is the only parallel
 // extent; body 4 covers shorter outputs where a 32-lane sub-group exists.
-template <typename T>
+template <typename Scalar>
 Event gemv_direct_notrans(Queue& ctx,
-                          const MatrixView<T, MatrixFormat::Dense>& A,
-                          const VectorView<T>& X,
-                          const VectorView<T>& Y,
-                          T alpha, T beta, const std::uint8_t* mask) {
-    using D = typename DevMap<T>::type;
+                          const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                          const VectorView<Scalar>& X,
+                          const VectorView<Scalar>& Y,
+                          Scalar alpha, Scalar beta, const std::uint8_t* mask) {
+    using D = typename DevMap<Scalar>::type;
 
     const int m = A.rows();
     const int batch = A.batch_size();
@@ -202,11 +202,11 @@ Event gemv_direct_notrans(Queue& ctx,
     const int64_t groups = (items + wg - 1) / wg;
 
     ctx->submit([&](sycl::handler& h) {
-        const GemvOperands<T> op(A, X, Y, alpha, beta);
-        const bool alpha_zero = (alpha == T(0)), beta_zero = (beta == T(0));
+        const GemvOperands<Scalar> op(A, X, Y, alpha, beta);
+        const bool alpha_zero = (alpha == Scalar(0)), beta_zero = (beta == Scalar(0));
         const int64_t total = items;
 
-        batchlas::impl::parallel_for<GemvDirectNKernel<T>>(h,
+        batchlas::impl::parallel_for<GemvDirectNKernel<Scalar>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(groups) * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
@@ -235,13 +235,13 @@ Event gemv_direct_notrans(Queue& ctx,
 // lanes l and l+m fold at stride m. THE FOLD IS CLOSED -- lane i draws only from
 // lanes i + m*t, t < W, all below m*W <= 32 -- so lanes at or above m*W may shift
 // past lane 31 harmlessly; `jsub < W` is a work saving, not a correctness gate.
-template <typename T, int W>
+template <typename Scalar, int W>
 Event gemv_seg_notrans(Queue& ctx,
-                       const MatrixView<T, MatrixFormat::Dense>& A,
-                       const VectorView<T>& X,
-                       const VectorView<T>& Y,
-                       T alpha, T beta, const std::uint8_t* mask) {
-    using D = typename DevMap<T>::type;
+                       const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                       const VectorView<Scalar>& X,
+                       const VectorView<Scalar>& Y,
+                       Scalar alpha, Scalar beta, const std::uint8_t* mask) {
+    using D = typename DevMap<Scalar>::type;
 
     constexpr int kSg = 32;
 
@@ -255,12 +255,12 @@ Event gemv_seg_notrans(Queue& ctx,
     const int64_t groups = (static_cast<int64_t>(batch) + sgs_per_wg - 1) / sgs_per_wg;
 
     ctx->submit([&](sycl::handler& h) {
-        const GemvOperands<T> op(A, X, Y, alpha, beta);
-        const bool alpha_zero = (alpha == T(0)), beta_zero = (beta == T(0));
+        const GemvOperands<Scalar> op(A, X, Y, alpha, beta);
+        const bool alpha_zero = (alpha == Scalar(0)), beta_zero = (beta == Scalar(0));
         const int64_t nbatch = batch;
         const int sgs = sgs_per_wg;
 
-        batchlas::impl::parallel_for<GemvSegNKernel<T, W>>(h,
+        batchlas::impl::parallel_for<GemvSegNKernel<Scalar, W>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(groups) * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(kSg) {
@@ -296,13 +296,13 @@ Event gemv_seg_notrans(Queue& ctx,
 // BODY 2 -- `direct`, transA != NoTrans.  THE PORTABLE ARM.
 //   y_j = alpha * sum_i conj?(A[i + j*ld]) * x[i*xinc] + beta * y[j*yinc]
 // Lanes read `ld` apart and are not coalesced; body 3 is the GPU shape.
-template <typename T>
+template <typename Scalar>
 Event gemv_direct_trans(Queue& ctx,
-                        const MatrixView<T, MatrixFormat::Dense>& A,
-                        const VectorView<T>& X,
-                        const VectorView<T>& Y,
-                        T alpha, T beta, bool conjugate, const std::uint8_t* mask) {
-    using D = typename DevMap<T>::type;
+                        const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                        const VectorView<Scalar>& X,
+                        const VectorView<Scalar>& Y,
+                        Scalar alpha, Scalar beta, bool conjugate, const std::uint8_t* mask) {
+    using D = typename DevMap<Scalar>::type;
 
     const int n = A.cols();
     const int batch = A.batch_size();
@@ -316,12 +316,12 @@ Event gemv_direct_trans(Queue& ctx,
     const int64_t groups = (items + wg - 1) / wg;
 
     ctx->submit([&](sycl::handler& h) {
-        const GemvOperands<T> op(A, X, Y, alpha, beta);
-        const bool alpha_zero = (alpha == T(0)), beta_zero = (beta == T(0));
+        const GemvOperands<Scalar> op(A, X, Y, alpha, beta);
+        const bool alpha_zero = (alpha == Scalar(0)), beta_zero = (beta == Scalar(0));
         const bool conj = conjugate;
         const int64_t total = items;
 
-        batchlas::impl::parallel_for<GemvDirectTKernel<T>>(h,
+        batchlas::impl::parallel_for<GemvDirectTKernel<Scalar>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(groups) * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
@@ -349,13 +349,13 @@ Event gemv_direct_trans(Queue& ctx,
 // size of 32. One 32-lane sub-group per output element, folded through
 // device::shift_reduce, lane 0 alone writes y. THE EARLY EXIT IS SUB-GROUP UNIFORM,
 // and has to be: a shuffle reached by only some lanes of a sub-group is UB.
-template <typename T>
+template <typename Scalar>
 Event gemv_cta_trans(Queue& ctx,
-                     const MatrixView<T, MatrixFormat::Dense>& A,
-                     const VectorView<T>& X,
-                     const VectorView<T>& Y,
-                     T alpha, T beta, bool conjugate, const std::uint8_t* mask) {
-    using D = typename DevMap<T>::type;
+                     const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                     const VectorView<Scalar>& X,
+                     const VectorView<Scalar>& Y,
+                     Scalar alpha, Scalar beta, bool conjugate, const std::uint8_t* mask) {
+    using D = typename DevMap<Scalar>::type;
 
     constexpr int kSg = 32;
 
@@ -374,13 +374,13 @@ Event gemv_cta_trans(Queue& ctx,
     const int64_t groups = (items + sgs_per_wg - 1) / sgs_per_wg;
 
     ctx->submit([&](sycl::handler& h) {
-        const GemvOperands<T> op(A, X, Y, alpha, beta);
-        const bool alpha_zero = (alpha == T(0)), beta_zero = (beta == T(0));
+        const GemvOperands<Scalar> op(A, X, Y, alpha, beta);
+        const bool alpha_zero = (alpha == Scalar(0)), beta_zero = (beta == Scalar(0));
         const bool conj = conjugate;
         const int64_t total = items;
         const int sgs = sgs_per_wg;
 
-        batchlas::impl::parallel_for<GemvCtaTKernel<T>>(h,
+        batchlas::impl::parallel_for<GemvCtaTKernel<Scalar>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(groups) * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(kSg) {
@@ -423,13 +423,13 @@ Event gemv_cta_trans(Queue& ctx,
 // covers W outputs, so a tail sub-group is partially in range -- it is MASKED by
 // `active` and sg_out is CLAMPED before any pointer arithmetic. The fold is
 // closed at stride 1 (32 % L == 0), so an inactive lane group folds a zero acc.
-template <typename T, int W>
+template <typename Scalar, int W>
 Event gemv_seg_trans(Queue& ctx,
-                     const MatrixView<T, MatrixFormat::Dense>& A,
-                     const VectorView<T>& X,
-                     const VectorView<T>& Y,
-                     T alpha, T beta, bool conjugate, const std::uint8_t* mask) {
-    using D = typename DevMap<T>::type;
+                     const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                     const VectorView<Scalar>& X,
+                     const VectorView<Scalar>& Y,
+                     Scalar alpha, Scalar beta, bool conjugate, const std::uint8_t* mask) {
+    using D = typename DevMap<Scalar>::type;
     static_assert(W >= 2 && W <= 32 && (W & (W - 1)) == 0, "W must be a power of two in [2, 32]");
 
     constexpr int kSg = 32;
@@ -451,13 +451,13 @@ Event gemv_seg_trans(Queue& ctx,
     const int64_t groups = (sub_groups + sgs_per_wg - 1) / sgs_per_wg;
 
     ctx->submit([&](sycl::handler& h) {
-        const GemvOperands<T> op(A, X, Y, alpha, beta);
-        const bool alpha_zero = (alpha == T(0)), beta_zero = (beta == T(0));
+        const GemvOperands<Scalar> op(A, X, Y, alpha, beta);
+        const bool alpha_zero = (alpha == Scalar(0)), beta_zero = (beta == Scalar(0));
         const bool conj = conjugate;
         const int64_t total = items;
         const int sgs = sgs_per_wg;
 
-        batchlas::impl::parallel_for<GemvSegTKernel<T, W>>(h,
+        batchlas::impl::parallel_for<GemvSegTKernel<Scalar, W>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(groups) * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(kSg) {
@@ -506,27 +506,27 @@ Event gemv_seg_trans(Queue& ctx,
 // TEST-ONLY. Which CTA kernel a (queue, red_len) resolves to: 1 = body 3, W >= 2
 // = body 5 at that W. `cta` names two kernels, so the trace or coverage spelling
 // column cannot tell them apart and a break against body 5 can look green.
-template <typename T>
+template <typename Scalar>
 int gemv_seg_trans_width_debug(Queue& ctx, int red_len, int64_t out_len_times_batch) {
-    if constexpr (!kGemvSegTransEmit<T>) {
+    if constexpr (!kGemvSegTransEmit<Scalar>) {
         static_cast<void>(ctx);
         static_cast<void>(red_len);
         static_cast<void>(out_len_times_batch);
         return 1;
     } else {
         if (!ctx.device().supports_sub_group_size(32)) return 1;
-        return gemv_seg_trans_width<T>(
+        return gemv_seg_trans_width<Scalar>(
             gemv_segt_mode(), red_len, out_len_times_batch,
             static_cast<int>(ctx.device().get_property(DeviceProperty::MAX_COMPUTE_UNITS)));
     }
 }
 
-template <typename T>
+template <typename Scalar>
 Event gemv_native_direct(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A,
-                         const VectorView<T>& X,
-                         const VectorView<T>& Y,
-                         T alpha, T beta, Transpose transA) {
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         const VectorView<Scalar>& X,
+                         const VectorView<Scalar>& Y,
+                         Scalar alpha, Scalar beta, Transpose transA) {
     if (gemv_quick_return(A.rows(), A.cols(), alpha, beta)) return ctx.get_event();
     const std::uint8_t* const mask = batchlas::detail::mask_ptr(batchlas::detail::call_mask("gemv", A, X, Y));
 
@@ -536,25 +536,25 @@ Event gemv_native_direct(Queue& ctx,
         const int w = gemv_seg_width(A.rows());
         if (w >= 2 && ctx.device().supports_sub_group_size(32)) {
             switch (w) {
-                case 32: return gemv_seg_notrans<T, 32>(ctx, A, X, Y, alpha, beta, mask);
-                case 16: return gemv_seg_notrans<T, 16>(ctx, A, X, Y, alpha, beta, mask);
-                case 8:  return gemv_seg_notrans<T, 8>(ctx, A, X, Y, alpha, beta, mask);
-                case 4:  return gemv_seg_notrans<T, 4>(ctx, A, X, Y, alpha, beta, mask);
-                default: return gemv_seg_notrans<T, 2>(ctx, A, X, Y, alpha, beta, mask);
+                case 32: return gemv_seg_notrans<Scalar, 32>(ctx, A, X, Y, alpha, beta, mask);
+                case 16: return gemv_seg_notrans<Scalar, 16>(ctx, A, X, Y, alpha, beta, mask);
+                case 8:  return gemv_seg_notrans<Scalar, 8>(ctx, A, X, Y, alpha, beta, mask);
+                case 4:  return gemv_seg_notrans<Scalar, 4>(ctx, A, X, Y, alpha, beta, mask);
+                default: return gemv_seg_notrans<Scalar, 2>(ctx, A, X, Y, alpha, beta, mask);
             }
         }
-        return gemv_direct_notrans<T>(ctx, A, X, Y, alpha, beta, mask);
+        return gemv_direct_notrans<Scalar>(ctx, A, X, Y, alpha, beta, mask);
     }
-    return gemv_direct_trans<T>(ctx, A, X, Y, alpha, beta,
-                                transA == Transpose::ConjTrans, mask);
+    return gemv_direct_trans<Scalar>(ctx, A, X, Y, alpha, beta,
+                                     transA == Transpose::ConjTrans, mask);
 }
 
-template <typename T>
+template <typename Scalar>
 Event gemv_native_cta(Queue& ctx,
-                      const MatrixView<T, MatrixFormat::Dense>& A,
-                      const VectorView<T>& X,
-                      const VectorView<T>& Y,
-                      T alpha, T beta, Transpose transA) {
+                      const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                      const VectorView<Scalar>& X,
+                      const VectorView<Scalar>& Y,
+                      Scalar alpha, Scalar beta, Transpose transA) {
     if (transA == Transpose::NoTrans) {
         throw batchlas::unsupported(
             "BatchLAS: gemv_native_cta called with transA = NoTrans. The CTA body "
@@ -567,25 +567,25 @@ Event gemv_native_cta(Queue& ctx,
 
     // BODY 5 vs BODY 3 is a device-and-shape choice, not a family: a `cta` pin does
     // not identify which kernel ran (gemv_seg_trans_width_debug does).
-    if constexpr (kGemvSegTransEmit<T>) {
-        const int w = gemv_seg_trans_width<T>(
+    if constexpr (kGemvSegTransEmit<Scalar>) {
+        const int w = gemv_seg_trans_width<Scalar>(
             gemv_segt_mode(), A.rows(),
             static_cast<int64_t>(A.cols()) * A.batch_size(),
             static_cast<int>(ctx.device().get_property(DeviceProperty::MAX_COMPUTE_UNITS)));
         if (w >= 2 && ctx.device().supports_sub_group_size(32)) {
             switch (w) {
-                case 8: return gemv_seg_trans<T, 8>(ctx, A, X, Y, alpha, beta,
-                                                    transA == Transpose::ConjTrans, mask);
-                case 4: return gemv_seg_trans<T, 4>(ctx, A, X, Y, alpha, beta,
-                                                    transA == Transpose::ConjTrans, mask);
-                default: return gemv_seg_trans<T, 2>(ctx, A, X, Y, alpha, beta,
-                                                     transA == Transpose::ConjTrans, mask);
+                case 8: return gemv_seg_trans<Scalar, 8>(ctx, A, X, Y, alpha, beta,
+                                                         transA == Transpose::ConjTrans, mask);
+                case 4: return gemv_seg_trans<Scalar, 4>(ctx, A, X, Y, alpha, beta,
+                                                         transA == Transpose::ConjTrans, mask);
+                default: return gemv_seg_trans<Scalar, 2>(ctx, A, X, Y, alpha, beta,
+                                                          transA == Transpose::ConjTrans, mask);
             }
         }
     }
 
-    return gemv_cta_trans<T>(ctx, A, X, Y, alpha, beta,
-                             transA == Transpose::ConjTrans, mask);
+    return gemv_cta_trans<Scalar>(ctx, A, X, Y, alpha, beta,
+                                  transA == Transpose::ConjTrans, mask);
 }
 
 #define BATCHLAS_GEMV_NATIVE_INSTANTIATE(fp)                                   \

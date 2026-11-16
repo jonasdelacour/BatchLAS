@@ -130,12 +130,12 @@ using Reduce = ReduceN<1>;
 }  // namespace reduce_op
 
 // A scalar with a host-decided zero flag: an epilogue never reads y when beta's flag is set.
-template <class T> struct MaybeZero {
-    T v;
+template <class Scalar> struct MaybeZero {
+    Scalar v;
     bool zero;
 };
-template <class T> MaybeZero(T, bool) -> MaybeZero<T>;
-template <class T> inline constexpr bool is_scalar_tag_v<MaybeZero<T>> = true;
+template <class Scalar> MaybeZero(Scalar, bool) -> MaybeZero<Scalar>;
+template <class Scalar> inline constexpr bool is_scalar_tag_v<MaybeZero<Scalar>> = true;
 
 // The absent operand / callback: an op compiles the step out (if constexpr (is_none_v<X>)).
 struct None {};
@@ -159,10 +159,10 @@ template <int N> inline constexpr int static_extent_v<Ext<N>> = N;
 // NaN-losing max / min (sycl::fmax / fmin: a NaN operand yields the other), as reduction ops.
 namespace reduce_op {
 struct FMax {
-    template <class R> BATCHLAS_DEVICE_INLINE R operator()(R a, R b) const { return sycl::fmax(a, b); }
+    template <class Real> BATCHLAS_DEVICE_INLINE Real operator()(Real a, Real b) const { return sycl::fmax(a, b); }
 };
 struct FMin {
-    template <class R> BATCHLAS_DEVICE_INLINE R operator()(R a, R b) const { return sycl::fmin(a, b); }
+    template <class Real> BATCHLAS_DEVICE_INLINE Real operator()(Real a, Real b) const { return sycl::fmin(a, b); }
 };
 }  // namespace reduce_op
 

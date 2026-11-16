@@ -37,20 +37,20 @@ using namespace batchlas;
 
 namespace {
 
-template <typename U>
-inline U conj_if(const U& x) {
-    if constexpr (std::is_same_v<U, std::complex<float>> ||
-                  std::is_same_v<U, std::complex<double>>) {
+template <typename Scalar>
+inline Scalar conj_if(const Scalar& x) {
+    if constexpr (std::is_same_v<Scalar, std::complex<float>> ||
+                  std::is_same_v<Scalar, std::complex<double>>) {
         return std::conj(x);
     } else {
         return x;
     }
 }
 
-template <typename T>
-inline typename base_type<T>::type abs_of(const T& x) {
-    if constexpr (std::is_same_v<T, std::complex<float>> ||
-                  std::is_same_v<T, std::complex<double>>) {
+template <typename Scalar>
+inline typename base_type<Scalar>::type abs_of(const Scalar& x) {
+    if constexpr (std::is_same_v<Scalar, std::complex<float>> ||
+                  std::is_same_v<Scalar, std::complex<double>>) {
         return std::abs(x);
     } else {
         return std::abs(x);
@@ -58,22 +58,22 @@ inline typename base_type<T>::type abs_of(const T& x) {
 }
 
 // Dense Hermitian band matrix, row-major n x n on the host.
-template <typename T>
-std::vector<T> make_banded_hermitian(int n, int kd, unsigned seed) {
-    using Real = typename base_type<T>::type;
+template <typename Scalar>
+std::vector<Scalar> make_banded_hermitian(int n, int kd, unsigned seed) {
+    using Real = typename base_type<Scalar>::type;
     std::mt19937 gen(seed);
     std::uniform_real_distribution<double> dist(-1.0, 1.0);
-    std::vector<T> A(static_cast<size_t>(n) * n, T(0));
+    std::vector<Scalar> A(static_cast<size_t>(n) * n, Scalar(0));
     for (int j = 0; j < n; ++j) {
         for (int i = j; i < n && i <= j + kd; ++i) {
-            T v;
-            if constexpr (std::is_same_v<T, std::complex<float>> ||
-                          std::is_same_v<T, std::complex<double>>) {
+            Scalar v;
+            if constexpr (std::is_same_v<Scalar, std::complex<float>> ||
+                          std::is_same_v<Scalar, std::complex<double>>) {
                 const auto re = static_cast<Real>(dist(gen)), im = static_cast<Real>(dist(gen));
-                v = T(re, im);
-                if (i == j) v = T(v.real(), Real(0));
+                v = Scalar(re, im);
+                if (i == j) v = Scalar(v.real(), Real(0));
             } else {
-                v = static_cast<T>(dist(gen));
+                v = static_cast<Scalar>(dist(gen));
             }
             A[static_cast<size_t>(i) * n + j] = v;
             A[static_cast<size_t>(j) * n + i] = conj_if(v);
@@ -82,9 +82,9 @@ std::vector<T> make_banded_hermitian(int n, int kd, unsigned seed) {
     return A;
 }
 
-template <typename T, Backend Back>
+template <typename Scalar, Backend Back>
 struct Sb2stHhConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = Back;
 };
 

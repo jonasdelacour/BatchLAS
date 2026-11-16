@@ -42,8 +42,8 @@ using namespace batchlas;
 
 namespace {
 
-template <class T> using real_of = typename device::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
+template <class Scalar> using real_of = typename device::Arith<Scalar>::real_t;
+template <class Scalar> constexpr bool is_cplx = device::Arith<Scalar>::is_complex;
 
 constexpr int kBatch = 1024;
 constexpr int kPeriod = 3;
@@ -55,12 +55,12 @@ std::uint64_t mix(std::uint64_t x) {
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
     return x ^ (x >> 31);
 }
-template <class R> R uval(std::uint64_t i) { return static_cast<R>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
-template <class T> T val(std::uint64_t i) {
-    if constexpr (is_cplx<T>) return T(uval<real_of<T>>(2 * i), uval<real_of<T>>(2 * i + 1));
-    else return uval<T>(i);
+template <class Real> Real uval(std::uint64_t i) { return static_cast<Real>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
+template <class Scalar> Scalar val(std::uint64_t i) {
+    if constexpr (is_cplx<Scalar>) return Scalar(uval<real_of<Scalar>>(2 * i), uval<real_of<Scalar>>(2 * i + 1));
+    else return uval<Scalar>(i);
 }
-template <class T> T poison() { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }
+template <class Scalar> Scalar poison() { return Scalar(std::numeric_limits<real_of<Scalar>>::quiet_NaN()); }
 
 template <class V> int bitdiff(const std::vector<V>& a, const std::vector<V>& b) {
     int d = 0;
@@ -83,19 +83,19 @@ template <class V> int poison_lost(const std::vector<V>& got, std::size_t from) 
 
 // kBatch lower bands (ld x n, rows kd + 1 .. ld - 1 poisoned, entries past the matrix 0), item b a
 // copy of representative b % kPeriod; representative 1 is graded (D A D, D = diag(2^(-8 k / n))).
-template <class T> std::vector<T> make_band(int n, int kd, int ld, std::uint64_t seed) {
-    using R = real_of<T>;
+template <class Scalar> std::vector<Scalar> make_band(int n, int kd, int ld, std::uint64_t seed) {
+    using R = real_of<Scalar>;
     const std::size_t per = std::size_t(ld) * n;
-    std::vector<T> h(per * kBatch);
+    std::vector<Scalar> h(per * kBatch);
     for (int r = 0; r < kPeriod; ++r) {
-        T* a = h.data() + std::size_t(r) * per;
+        Scalar* a = h.data() + std::size_t(r) * per;
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < ld; ++i) {
-                T& x = a[i + std::size_t(j) * ld];
-                if (i > kd) x = poison<T>();
-                else if (j + i >= n) x = T(0);
+                Scalar& x = a[i + std::size_t(j) * ld];
+                if (i > kd) x = poison<Scalar>();
+                else if (j + i >= n) x = Scalar(0);
                 else {
-                    x = val<T>(seed + std::uint64_t(r) * 1000003u + std::uint64_t(j) * ld + i);
+                    x = val<Scalar>(seed + std::uint64_t(r) * 1000003u + std::uint64_t(j) * ld + i);
                     if (r == 1) x = x * R(std::exp2(-8.0 * (j + i) / n) * std::exp2(-8.0 * j / n));
                 }
             }
@@ -104,9 +104,9 @@ template <class T> std::vector<T> make_band(int n, int kd, int ld, std::uint64_t
     return h;
 }
 
-template <class T> struct Out {
-    std::vector<real_of<T>> d, e;
-    std::vector<T> tau, ab;
+template <class Scalar> struct Out {
+    std::vector<real_of<Scalar>> d, e;
+    std::vector<Scalar> tau, ab;
     std::vector<int> info;
 };
 
@@ -130,20 +130,21 @@ struct Dev {
     std::vector<void*> ptrs;
 };
 
-template <class T, int P, class Tier> class UserSb2stKernel;
+template <class Scalar, int P, class Tier> class UserSb2stKernel;
 struct alignas(16) Chunk16 {
     unsigned char b[16];
 };
 
 // The user's kernel: work-groups of 32, 32 / P matrices each, each partition its own local slice.
-template <class T, int P, class Tier> Out<T> run_device(Dev& dev, const std::vector<T>& band, int n, int kd, int ld) {
-    using R = real_of<T>;
+template <class Scalar, int P, class Tier> Out<Scalar> run_device(Dev& dev, const std::vector<Scalar>& band, int n,
+                                                                  int kd, int ld) {
+    using R = real_of<Scalar>;
     const int nm1 = std::max(0, n - 1);
-    const device::WorkspaceSize sz = device::buffer_size<device::routine::sb2st<Uplo::Lower, 32>, Tier, T>(n, kd);
-    T* ab = dev.up(band);
+    const device::WorkspaceSize sz = device::buffer_size<device::routine::sb2st<Uplo::Lower, 32>, Tier, Scalar>(n, kd);
+    Scalar* ab = dev.up(band);
     R* d = dev.up(std::vector<R>(std::size_t(kBatch) * n + kTail, poison<R>()));
     R* e = dev.up(std::vector<R>(std::size_t(kBatch) * nm1 + kTail, poison<R>()));
-    T* tau = dev.up(std::vector<T>(std::size_t(kBatch) * nm1 + kTail, poison<T>()));
+    Scalar* tau = dev.up(std::vector<Scalar>(std::size_t(kBatch) * nm1 + kTail, poison<Scalar>()));
     int* info = dev.up(std::vector<int>(kBatch, 12345));
     std::byte* gws = dev.up(std::vector<std::byte>(sz.global_bytes * kBatch));
     constexpr int WG = 32, per_wg = WG / P;
@@ -151,7 +152,7 @@ template <class T, int P, class Tier> Out<T> run_device(Dev& dev, const std::vec
     const std::size_t l16 = std::max<std::size_t>((lbytes * per_wg + 15) / 16, 1);
     dev.q().submit([&](sycl::handler& h) {
            sycl::local_accessor<Chunk16, 1> slm(sycl::range<1>(l16), h);
-           h.parallel_for<UserSb2stKernel<T, P, Tier>>(
+           h.parallel_for<UserSb2stKernel<Scalar, P, Tier>>(
                sycl::nd_range<1>(std::size_t(kBatch / per_wg) * WG, WG), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                    const auto sg = it.get_sub_group();
                    const device::SgpPartition<P> pex{sg};
@@ -175,24 +176,24 @@ template <class T, int P, class Tier> Out<T> run_device(Dev& dev, const std::vec
 }
 
 // The host route on a device copy of the same band (its input is not overwritten).
-template <class T> Out<T> run_host(Dev& dev, const std::vector<T>& band, int n, int kd, int ld) {
-    using R = real_of<T>;
+template <class Scalar> Out<Scalar> run_host(Dev& dev, const std::vector<Scalar>& band, int n, int kd, int ld) {
+    using R = real_of<Scalar>;
     const int nm1 = std::max(0, n - 1);
-    T* ab = dev.up(band);
+    Scalar* ab = dev.up(band);
     R* d = dev.up(std::vector<R>(std::size_t(kBatch) * n + kTail, poison<R>()));
     R* e = dev.up(std::vector<R>(std::size_t(kBatch) * nm1 + kTail, poison<R>()));
-    T* tau = dev.up(std::vector<T>(std::size_t(kBatch) * nm1 + kTail, poison<T>()));
-    const MatrixView<T, MatrixFormat::Dense> abv(ab, kd + 1, n, ld, ld * n, kBatch);
+    Scalar* tau = dev.up(std::vector<Scalar>(std::size_t(kBatch) * nm1 + kTail, poison<Scalar>()));
+    const MatrixView<Scalar, MatrixFormat::Dense> abv(ab, kd + 1, n, ld, ld * n, kBatch);
     const VectorView<R> dvw(d, n, kBatch, 1, n);
     const VectorView<R> evw(e, nm1, kBatch, 1, nm1);
-    const VectorView<T> tvw(tau, nm1, kBatch, 1, nm1);
+    const VectorView<Scalar> tvw(tau, nm1, kBatch, 1, nm1);
     UnifiedVector<std::byte> ws(sytrd_sb2st_buffer_size(dev.ctx, abv, dvw, evw, tvw, Uplo::Lower, kd, 16));
     sytrd_sb2st(dev.ctx, abv, dvw, evw, tvw, Uplo::Lower, kd, ws.to_span(), 16).wait();
     return {dev.down(d, std::size_t(kBatch) * n + kTail), dev.down(e, std::size_t(kBatch) * nm1 + kTail),
             dev.down(tau, std::size_t(kBatch) * nm1 + kTail), {}, std::vector<int>(kBatch, 0)};
 }
 
-template <class T> class DeviceApiSb2stTest : public ::testing::Test {
+template <class Scalar> class DeviceApiSb2stTest : public ::testing::Test {
 public:
     bool fits(std::size_t local_bytes_per_wg) {
         return local_bytes_per_wg <= dev.q().get_device().template get_info<sycl::info::device::local_mem_size>();
@@ -202,7 +203,7 @@ public:
 protected:
     void SetUp() override {
         if (!dev.ctx.device().supports_sub_group_size(32)) GTEST_SKIP() << "sb2st's partition chase runs at sub-group size 32";
-        if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
+        if (test_utils::lacks_fp64<Scalar>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
 };
 
@@ -211,15 +212,15 @@ TYPED_TEST_SUITE(DeviceApiSb2stTest, Types);
 
 // Device op (one tier) vs the pinned host route, bit for bit, plus the band's poisoned pad rows and
 // the outputs' poisoned tails.
-template <class T, int P, class Tier, class Fx> void expect_bit_identical(Fx& fx, int n, int kd, const Out<T>& host, const std::vector<T>& band) {
+template <class Scalar, int P, class Tier, class Fx> void expect_bit_identical(Fx& fx, int n, int kd, const Out<Scalar>& host, const std::vector<Scalar>& band) {
     const int ld = kd + 4, nm1 = std::max(0, n - 1);
     if constexpr (device::tier::is_cta_v<Tier>) {
-        if (!fx.fits(device::buffer_size<device::routine::sb2st<Uplo::Lower, 32>, Tier, T>(n, kd).local_bytes * (32 / P))) {
+        if (!fx.fits(device::buffer_size<device::routine::sb2st<Uplo::Lower, 32>, Tier, Scalar>(n, kd).local_bytes * (32 / P))) {
             std::printf("[   NOTE   ] Cta tier at n=%d kd=%d does not fit this device's local memory; not run\n", n, kd);
             return;
         }
     }
-    const Out<T> got = run_device<T, P, Tier>(fx.dev, band, n, kd, ld);
+    const Out<Scalar> got = run_device<Scalar, P, Tier>(fx.dev, band, n, kd, ld);
     EXPECT_EQ(std::count(got.info.begin(), got.info.end(), 0), kBatch);
     EXPECT_EQ(bitdiff(got.d, host.d), 0) << "d";
     EXPECT_EQ(bitdiff(got.e, host.e), 0) << "e";
@@ -234,7 +235,7 @@ template <class T, int P, class Tier, class Fx> void expect_bit_identical(Fx& fx
         for (int j = 0; j < n; ++j)
             for (int i = kd + 1; i < ld; ++i) {
                 const std::size_t k = std::size_t(b) * ld * n + std::size_t(j) * ld + i;
-                pads += std::memcmp(&got.ab[k], &band[k], sizeof(T)) != 0;
+                pads += std::memcmp(&got.ab[k], &band[k], sizeof(Scalar)) != 0;
             }
     EXPECT_EQ(pads, 0) << "pad rows of the band";
 }
@@ -329,10 +330,10 @@ static_assert(device::buffer_size<device::routine::sb2st<Uplo::Lower, 32>, devic
 static_assert(std::is_same_v<device::resolve_tier_t<Lower8, float, device::tier::upto<4096>>, device::tier::Cta<4096>>);
 static_assert(std::is_same_v<device::resolve_tier_t<Lower8, float, device::tier::upto<4097>>, device::tier::Blocked<32>>);
 
-template <class T> std::string pick(const device::DeviceLimits& lim, int n) {
+template <class Scalar> std::string pick(const device::DeviceLimits& lim, int n) {
     std::string got = "none";
     try {
-        device::with_tier<Lower8, T>(lim, n, [&]<class Tier>(Tier) { got = device::tier::is_cta_v<Tier> ? "cta" : "blocked"; });
+        device::with_tier<Lower8, Scalar>(lim, n, [&]<class Tier>(Tier) { got = device::tier::is_cta_v<Tier> ? "cta" : "blocked"; });
     } catch (const batchlas::invalid_argument& e) {
         got = std::string("throw:") + e.what();
     }

@@ -35,7 +35,7 @@ inline void SyevBlockedBenchSizesNetlib(Benchmark* b) {
 }
 
 // Blocked SYEV-like benchmark (sytrd_blocked + stedc + ormqr_blocked).
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_SYEV_BLOCKED(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
@@ -45,8 +45,8 @@ void BM_SYEV_BLOCKED(minibench::State& state) {
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
-    auto A = Matrix<T>::Random(n, n, /*hermitian=*/true, batch);
-    UnifiedVector<typename base_type<T>::type> W(n * batch);
+    auto A = Matrix<Scalar>::Random(n, n, /*hermitian=*/true, batch);
+    UnifiedVector<typename base_type<Scalar>::type> W(n * batch);
 
     const size_t ws_size = syev_blocked_buffer_size(*q,
                                                          A,

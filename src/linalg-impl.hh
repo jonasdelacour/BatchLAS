@@ -46,7 +46,7 @@
 #endif
 
 namespace batchlas{
-template <typename T, BackendLibrary B>
+template <typename Scalar, BackendLibrary B>
 struct BackendScalar;
 
 template <Backend B>
@@ -293,11 +293,11 @@ constexpr auto enum_convert(Transpose trans) {
     }
 }
 
-template <BackendLibrary B, typename T>
+template <BackendLibrary B, typename Scalar>
 constexpr auto enum_convert(ComputePrecision precision) {
 #if BATCHLAS_HAS_CUBLAS
     if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSOLVER || B == BackendLibrary::CUSPARSE) {
-        using BaseType = typename base_type<T>::type;
+        using BaseType = typename base_type<Scalar>::type;
 
         // Handle default precision first
         if (precision == ComputePrecision::Default) {
@@ -329,13 +329,13 @@ constexpr auto enum_convert(ComputePrecision precision) {
 #if BATCHLAS_HAS_ROCM_BACKEND
     if constexpr (B == BackendLibrary::ROCBLAS || B == BackendLibrary::ROCSOLVER || B == BackendLibrary::ROCSPARSE) {
         (void)precision;
-        if constexpr (std::is_same_v<T, float>) {
+        if constexpr (std::is_same_v<Scalar, float>) {
             return rocblas_datatype_f32_r;
-        } else if constexpr (std::is_same_v<T, double>) {
+        } else if constexpr (std::is_same_v<Scalar, double>) {
             return rocblas_datatype_f64_r;
-        } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+        } else if constexpr (std::is_same_v<Scalar, std::complex<float>>) {
             return rocblas_datatype_f32_c;
-        } else if constexpr (std::is_same_v<T, std::complex<double>>) {
+        } else if constexpr (std::is_same_v<Scalar, std::complex<double>>) {
             return rocblas_datatype_f64_c;
         }
     } else
@@ -345,39 +345,39 @@ constexpr auto enum_convert(ComputePrecision precision) {
     }
 }
 
-template <BackendLibrary B, typename T>
-constexpr auto ptr_convert(T** ptr) {
+template <BackendLibrary B, typename Scalar>
+constexpr auto ptr_convert(Scalar** ptr) {
 #if BATCHLAS_HAS_CUDA_BACKEND
     if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSPARSE || B == BackendLibrary::CUSOLVER) {
-        if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+        if constexpr (std::is_same_v<Scalar, float> || std::is_same_v<Scalar, double>) {
             return ptr; // No conversion needed
-        } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+        } else if constexpr (std::is_same_v<Scalar, std::complex<float>>) {
             return reinterpret_cast<cuComplex**>(ptr);
-        } else if constexpr (std::is_same_v<T, std::complex<double>>) {
+        } else if constexpr (std::is_same_v<Scalar, std::complex<double>>) {
             return reinterpret_cast<cuDoubleComplex**>(ptr);
         }
     } else
 #endif
 #if BATCHLAS_HAS_ROCM_BACKEND
     if constexpr (B == BackendLibrary::ROCBLAS || B == BackendLibrary::ROCSOLVER || B == BackendLibrary::ROCSPARSE) {
-        if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+        if constexpr (std::is_same_v<Scalar, float> || std::is_same_v<Scalar, double>) {
             return ptr;
-        } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+        } else if constexpr (std::is_same_v<Scalar, std::complex<float>>) {
             return reinterpret_cast<rocblas_float_complex**>(ptr);
-        } else if constexpr (std::is_same_v<T, std::complex<double>>) {
+        } else if constexpr (std::is_same_v<Scalar, std::complex<double>>) {
             return reinterpret_cast<rocblas_double_complex**>(ptr);
         }
     } else
 #endif
 #if BATCHLAS_HAS_CBLAS
     if constexpr (B == BackendLibrary::CBLAS) {
-        if constexpr (std::is_same_v<T, float>) {
+        if constexpr (std::is_same_v<Scalar, float>) {
             return reinterpret_cast<float**>(ptr);
-        } else if constexpr (std::is_same_v<T, double>) {
+        } else if constexpr (std::is_same_v<Scalar, double>) {
             return reinterpret_cast<double**>(ptr);
-        } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+        } else if constexpr (std::is_same_v<Scalar, std::complex<float>>) {
             return reinterpret_cast<void**>(ptr);
-        } else if constexpr (std::is_same_v<T, std::complex<double>>) {
+        } else if constexpr (std::is_same_v<Scalar, std::complex<double>>) {
             return reinterpret_cast<void**>(ptr);
         }
     } else
@@ -387,53 +387,53 @@ constexpr auto ptr_convert(T** ptr) {
     }
 }
 
-template <BackendLibrary B, typename T>
-constexpr auto ptr_convert(T* ptr) {
-    static_assert(std::is_floating_point<T>::value || std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>, "Type must be floating point or complex");
+template <BackendLibrary B, typename Scalar>
+constexpr auto ptr_convert(Scalar* ptr) {
+    static_assert(std::is_floating_point<Scalar>::value || std::is_same_v<Scalar, std::complex<float>> || std::is_same_v<Scalar, std::complex<double>>, "Type must be floating point or complex");
 #if BATCHLAS_HAS_CUDA_BACKEND
     if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSPARSE || B == BackendLibrary::CUSOLVER) {
-        if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+        if constexpr (std::is_same_v<Scalar, float> || std::is_same_v<Scalar, double>) {
             return ptr; // No conversion needed
-        } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+        } else if constexpr (std::is_same_v<Scalar, std::complex<float>>) {
             return reinterpret_cast<cuComplex*>(ptr);
-        } else if constexpr (std::is_same_v<T, std::complex<double>>) {
+        } else if constexpr (std::is_same_v<Scalar, std::complex<double>>) {
             return reinterpret_cast<cuDoubleComplex*>(ptr);
         }
     } else
 #endif
 #if BATCHLAS_HAS_ROCM_BACKEND
     if constexpr (B == BackendLibrary::ROCBLAS || B == BackendLibrary::ROCSOLVER || B == BackendLibrary::ROCSPARSE) {
-        if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+        if constexpr (std::is_same_v<Scalar, float> || std::is_same_v<Scalar, double>) {
             return ptr;
-        } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+        } else if constexpr (std::is_same_v<Scalar, std::complex<float>>) {
             return reinterpret_cast<rocblas_float_complex*>(ptr);
-        } else if constexpr (std::is_same_v<T, std::complex<double>>) {
+        } else if constexpr (std::is_same_v<Scalar, std::complex<double>>) {
             return reinterpret_cast<rocblas_double_complex*>(ptr);
         }
     } else
 #endif
 #if BATCHLAS_HAS_HOST_BACKEND
     if constexpr (B == BackendLibrary::CBLAS) {
-        if constexpr (std::is_same_v<T, float>) {
+        if constexpr (std::is_same_v<Scalar, float>) {
             return reinterpret_cast<float*>(ptr);
-        } else if constexpr (std::is_same_v<T, double>) {
+        } else if constexpr (std::is_same_v<Scalar, double>) {
             return reinterpret_cast<double*>(ptr);
-        } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+        } else if constexpr (std::is_same_v<Scalar, std::complex<float>>) {
             return reinterpret_cast<void*>(ptr);
-        } else if constexpr (std::is_same_v<T, std::complex<double>>) {
+        } else if constexpr (std::is_same_v<Scalar, std::complex<double>>) {
             return reinterpret_cast<void*>(ptr);
         }
     } else
 #endif
 #if BATCHLAS_HAS_LAPACKE
     if constexpr (B == BackendLibrary::LAPACKE) {
-        if constexpr (std::is_same_v<T, float>) {
+        if constexpr (std::is_same_v<Scalar, float>) {
             return reinterpret_cast<float*>(ptr);
-        } else if constexpr (std::is_same_v<T, double>) {
+        } else if constexpr (std::is_same_v<Scalar, double>) {
             return reinterpret_cast<double*>(ptr);
-        } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+        } else if constexpr (std::is_same_v<Scalar, std::complex<float>>) {
             return reinterpret_cast<lapack_complex_float*>(ptr);
-        } else if constexpr (std::is_same_v<T, std::complex<double>>) {
+        } else if constexpr (std::is_same_v<Scalar, std::complex<double>>) {
             return reinterpret_cast<lapack_complex_double*>(ptr);
         }
     } else
@@ -444,27 +444,27 @@ constexpr auto ptr_convert(T* ptr) {
 }
 
 // Const pointer version
-template <BackendLibrary B, typename T>
-constexpr auto ptr_convert(const T* ptr) {
-    static_assert(std::is_floating_point<T>::value || std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>, "Type must be floating point or complex");
+template <BackendLibrary B, typename Scalar>
+constexpr auto ptr_convert(const Scalar* ptr) {
+    static_assert(std::is_floating_point<Scalar>::value || std::is_same_v<Scalar, std::complex<float>> || std::is_same_v<Scalar, std::complex<double>>, "Type must be floating point or complex");
 #if BATCHLAS_HAS_CUDA_BACKEND
     if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSPARSE || B == BackendLibrary::CUSOLVER) {
-        if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+        if constexpr (std::is_same_v<Scalar, float> || std::is_same_v<Scalar, double>) {
             return ptr; // No conversion needed
-        } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+        } else if constexpr (std::is_same_v<Scalar, std::complex<float>>) {
             return reinterpret_cast<const cuComplex*>(ptr);
-        } else if constexpr (std::is_same_v<T, std::complex<double>>) {
+        } else if constexpr (std::is_same_v<Scalar, std::complex<double>>) {
             return reinterpret_cast<const cuDoubleComplex*>(ptr);
         }
     } else
 #endif
 #if BATCHLAS_HAS_ROCM_BACKEND
     if constexpr (B == BackendLibrary::ROCBLAS || B == BackendLibrary::ROCSOLVER || B == BackendLibrary::ROCSPARSE) {
-        if constexpr (std::is_same_v<T, float> || std::is_same_v<T, double>) {
+        if constexpr (std::is_same_v<Scalar, float> || std::is_same_v<Scalar, double>) {
             return ptr;
-        } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+        } else if constexpr (std::is_same_v<Scalar, std::complex<float>>) {
             return reinterpret_cast<const rocblas_float_complex*>(ptr);
-        } else if constexpr (std::is_same_v<T, std::complex<double>>) {
+        } else if constexpr (std::is_same_v<Scalar, std::complex<double>>) {
             return reinterpret_cast<const rocblas_double_complex*>(ptr);
         }
     } else
@@ -474,9 +474,9 @@ constexpr auto ptr_convert(const T* ptr) {
     }
 }
 
-template <BackendLibrary B, typename T>
-constexpr auto float_convert(const T& val) {
-    using BareT = std::remove_const_t<T>;
+template <BackendLibrary B, typename Scalar>
+constexpr auto float_convert(const Scalar& val) {
+    using BareT = std::remove_const_t<Scalar>;
     static_assert(is_complex_or_floating_point<BareT>::value, "Type must be floating point or complex");
     if constexpr (B == BackendLibrary::CBLAS) {
         if constexpr (std::is_same_v<BareT, float>) {
@@ -493,15 +493,15 @@ constexpr auto float_convert(const T& val) {
     }
 }
 
-template <typename T>
-constexpr auto base_float_ptr_convert(T* ptr) {
-    if constexpr (std::is_same_v<T, float>) {
+template <typename Scalar>
+constexpr auto base_float_ptr_convert(Scalar* ptr) {
+    if constexpr (std::is_same_v<Scalar, float>) {
         return reinterpret_cast<float*>(ptr);
-    } else if constexpr (std::is_same_v<T, double>) {
+    } else if constexpr (std::is_same_v<Scalar, double>) {
         return reinterpret_cast<double*>(ptr);
-    } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+    } else if constexpr (std::is_same_v<Scalar, std::complex<float>>) {
         return reinterpret_cast<float*>(ptr);
-    } else if constexpr (std::is_same_v<T, std::complex<double>>) {
+    } else if constexpr (std::is_same_v<Scalar, std::complex<double>>) {
         return reinterpret_cast<double*>(ptr);
     }
 }
@@ -598,44 +598,44 @@ inline auto check_status(rocsparse_status status) {
 #endif
 
 #if BATCHLAS_HAS_CUDA_BACKEND
-template <typename T, BackendLibrary BL, Backend B, typename Fun1, typename Fun2, typename Fun3, typename Fun4, typename... Args>
+template <typename Scalar, BackendLibrary BL, Backend B, typename Fun1, typename Fun2, typename Fun3, typename Fun4, typename... Args>
 auto call_backend(const Fun1& fun1, const Fun2& fun2, const Fun3& fun3, const Fun4& fun4, const LinalgHandle<B>& handle, Args&&... args) {
-    if constexpr (std::is_same_v<T, float>) {
+    if constexpr (std::is_same_v<Scalar, float>) {
         return check_status(std::apply(fun1, std::tuple_cat(std::forward_as_tuple(handle), backend_convert<BL>(std::forward<Args>(args)...))));
-    } else if constexpr (std::is_same_v<T, double>) {
+    } else if constexpr (std::is_same_v<Scalar, double>) {
         return check_status(std::apply(fun2, std::tuple_cat(std::forward_as_tuple(handle), backend_convert<BL>(std::forward<Args>(args)...))));
-    } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+    } else if constexpr (std::is_same_v<Scalar, std::complex<float>>) {
         return check_status(std::apply(fun3, std::tuple_cat(std::forward_as_tuple(handle), backend_convert<BL>(std::forward<Args>(args)...))));
-    } else if constexpr (std::is_same_v<T, std::complex<double>>) {
+    } else if constexpr (std::is_same_v<Scalar, std::complex<double>>) {
         return check_status(std::apply(fun4, std::tuple_cat(std::forward_as_tuple(handle), backend_convert<BL>(std::forward<Args>(args)...))));
     }
 }
 #endif
 
 #if BATCHLAS_HAS_ROCM_BACKEND
-template <typename T, BackendLibrary BL, Backend B, typename Fun1, typename Fun2, typename Fun3, typename Fun4, typename... Args>
+template <typename Scalar, BackendLibrary BL, Backend B, typename Fun1, typename Fun2, typename Fun3, typename Fun4, typename... Args>
 auto call_backend(const Fun1& fun1, const Fun2& fun2, const Fun3& fun3, const Fun4& fun4, const LinalgHandle<B>& handle, Args&&... args) {
-    if constexpr (std::is_same_v<T, float>) {
+    if constexpr (std::is_same_v<Scalar, float>) {
         return check_status(std::apply(fun1, std::tuple_cat(std::forward_as_tuple(handle), backend_convert<BL>(std::forward<Args>(args)...))));
-    } else if constexpr (std::is_same_v<T, double>) {
+    } else if constexpr (std::is_same_v<Scalar, double>) {
         return check_status(std::apply(fun2, std::tuple_cat(std::forward_as_tuple(handle), backend_convert<BL>(std::forward<Args>(args)...))));
-    } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+    } else if constexpr (std::is_same_v<Scalar, std::complex<float>>) {
         return check_status(std::apply(fun3, std::tuple_cat(std::forward_as_tuple(handle), backend_convert<BL>(std::forward<Args>(args)...))));
-    } else if constexpr (std::is_same_v<T, std::complex<double>>) {
+    } else if constexpr (std::is_same_v<Scalar, std::complex<double>>) {
         return check_status(std::apply(fun4, std::tuple_cat(std::forward_as_tuple(handle), backend_convert<BL>(std::forward<Args>(args)...))));
     }
 }
 #endif
 
-template <typename T, BackendLibrary BL, typename Fun1, typename Fun2, typename Fun3, typename Fun4, typename... Args>
+template <typename Scalar, BackendLibrary BL, typename Fun1, typename Fun2, typename Fun3, typename Fun4, typename... Args>
 void call_backend_nh(const Fun1& fun1, const Fun2& fun2, const Fun3& fun3, const Fun4& fun4, Args&&... args) {
-    if constexpr (std::is_same_v<T, float>) {
+    if constexpr (std::is_same_v<Scalar, float>) {
         std::apply(fun1, backend_convert<BL>(std::forward<Args>(args)...));
-    } else if constexpr (std::is_same_v<T, double>) {
+    } else if constexpr (std::is_same_v<Scalar, double>) {
         std::apply(fun2, backend_convert<BL>(std::forward<Args>(args)...));
-    } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+    } else if constexpr (std::is_same_v<Scalar, std::complex<float>>) {
         std::apply(fun3, backend_convert<BL>(std::forward<Args>(args)...));
-    } else if constexpr (std::is_same_v<T, std::complex<double>>) {
+    } else if constexpr (std::is_same_v<Scalar, std::complex<double>>) {
         std::apply(fun4, backend_convert<BL>(std::forward<Args>(args)...));
     }
 }
@@ -643,13 +643,13 @@ void call_backend_nh(const Fun1& fun1, const Fun2& fun2, const Fun3& fun3, const
 // Same dispatch, returning the routine's result (LAPACKE's info). A sibling, not a change to
 // call_backend_nh, whose void CBLAS users would break an `auto` return.
 // evidence: docs/design/runtime-internals.md#runtime-internals-the-per-item-info-span-contract
-template <typename T, BackendLibrary BL, typename Fun1, typename Fun2, typename Fun3, typename Fun4, typename... Args>
+template <typename Scalar, BackendLibrary BL, typename Fun1, typename Fun2, typename Fun3, typename Fun4, typename... Args>
 auto call_backend_nh_r(const Fun1& fun1, const Fun2& fun2, const Fun3& fun3, const Fun4& fun4, Args&&... args) {
-    if constexpr (std::is_same_v<T, float>) {
+    if constexpr (std::is_same_v<Scalar, float>) {
         return std::apply(fun1, backend_convert<BL>(std::forward<Args>(args)...));
-    } else if constexpr (std::is_same_v<T, double>) {
+    } else if constexpr (std::is_same_v<Scalar, double>) {
         return std::apply(fun2, backend_convert<BL>(std::forward<Args>(args)...));
-    } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+    } else if constexpr (std::is_same_v<Scalar, std::complex<float>>) {
         return std::apply(fun3, backend_convert<BL>(std::forward<Args>(args)...));
     } else {
         return std::apply(fun4, backend_convert<BL>(std::forward<Args>(args)...));

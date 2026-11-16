@@ -42,11 +42,11 @@ inline int32_t choose_two_stage_kd_for_job(int32_t n, JobType jobz) {
     return choose_two_stage_kd(n);
 }
 
-template <typename T>
+template <typename Scalar>
 inline void build_phase_from_kd1_band(Queue& ctx,
-                                       const MatrixView<T, MatrixFormat::Dense>& ab_kd1,
-                                       const VectorView<T>& phase) {
-    using Real = typename base_type<T>::type;
+                                       const MatrixView<Scalar, MatrixFormat::Dense>& ab_kd1,
+                                       const VectorView<Scalar>& phase) {
+    using Real = typename base_type<Scalar>::type;
     const int32_t n = static_cast<int32_t>(ab_kd1.cols());
     const int32_t batch = static_cast<int32_t>(ab_kd1.batch_size());
     if (n <= 0) return;
@@ -57,11 +57,11 @@ inline void build_phase_from_kd1_band(Queue& ctx,
         batchlas::impl::parallel_for(cgh, sycl::range<1>(static_cast<std::size_t>(batch)), [=](sycl::id<1> tid) {
             const int32_t b = static_cast<int32_t>(tid[0]);
             if (!AB.active(b)) return;  // I3: the band's batch mask
-            P(0, b) = T(1);
+            P(0, b) = Scalar(1);
             for (int32_t i = 0; i < n - 1; ++i) {
-                const T t = AB(1, i, b);
+                const Scalar t = AB(1, i, b);
                 Real a = Real(0);
-                if constexpr (is_std_complex_v<T>) {
+                if constexpr (is_std_complex_v<Scalar>) {
                     a = sycl::hypot(static_cast<Real>(t.real()), static_cast<Real>(t.imag()));
                 } else {
                     a = sycl::fabs(t);
@@ -69,7 +69,7 @@ inline void build_phase_from_kd1_band(Queue& ctx,
                 if (a == Real(0)) {
                     P(i + 1, b) = P(i, b);
                 } else {
-                    P(i + 1, b) = P(i, b) * (t / T(a));
+                    P(i + 1, b) = P(i, b) * (t / Scalar(a));
                 }
             }
         });
@@ -78,10 +78,10 @@ inline void build_phase_from_kd1_band(Queue& ctx,
 
 // Scales row i of z by phase(i). z need not be square: the subset path applies
 // this to an n x k block, so the column count must come from cols(), not rows().
-template <typename T>
+template <typename Scalar>
 inline void apply_phase_rows(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& z,
-                             const VectorView<T>& phase) {
+                             const MatrixView<Scalar, MatrixFormat::Dense>& z,
+                             const VectorView<Scalar>& phase) {
     const int32_t n = static_cast<int32_t>(z.rows());
     const int32_t m = static_cast<int32_t>(z.cols());
     const int32_t batch = static_cast<int32_t>(z.batch_size());
@@ -102,14 +102,14 @@ inline void apply_phase_rows(Queue& ctx,
     });
 }
 
-// Applies the per-row phase to a real eigenvector block, writing T: complex T lifts the
-// real column to (x, 0) before scaling; for real T the phase is a sign.
-template <typename T>
+// Applies the per-row phase to a real eigenvector block, writing Scalar: complex Scalar lifts the
+// real column to (x, 0) before scaling; for real Scalar the phase is a sign.
+template <typename Scalar>
 inline void lift_eigvecs_with_phase(Queue& ctx,
-                                    const MatrixView<typename base_type<T>::type, MatrixFormat::Dense>& z_real,
-                                    const VectorView<T>& phase,
-                                    const MatrixView<T, MatrixFormat::Dense>& z_out) {
-    using Real = typename base_type<T>::type;
+                                    const MatrixView<typename base_type<Scalar>::type, MatrixFormat::Dense>& z_real,
+                                    const VectorView<Scalar>& phase,
+                                    const MatrixView<Scalar, MatrixFormat::Dense>& z_out) {
+    using Real = typename base_type<Scalar>::type;
     const int32_t n = static_cast<int32_t>(z_real.rows());
     const int32_t batch = static_cast<int32_t>(z_real.batch_size());
     const int64_t total = static_cast<int64_t>(batch) * static_cast<int64_t>(n) * static_cast<int64_t>(n);
@@ -123,8 +123,8 @@ inline void lift_eigvecs_with_phase(Queue& ctx,
             const int64_t rem = idx - static_cast<int64_t>(b) * n * n;
             const int32_t row = static_cast<int32_t>(rem % n);
             const int32_t col = static_cast<int32_t>(rem / n);
-            if constexpr (is_std_complex_v<T>) {
-                Zo(row, col, b) = P(row, b) * T(Zr(row, col, b), Real(0));
+            if constexpr (is_std_complex_v<Scalar>) {
+                Zo(row, col, b) = P(row, b) * Scalar(Zr(row, col, b), Real(0));
             } else {
                 Zo(row, col, b) = P(row, b) * Zr(row, col, b);
             }

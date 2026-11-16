@@ -69,12 +69,12 @@ namespace routine {}  // routine tags: device::routine::<op><modes...>, declared
 // template is incomplete: naming a tier a routine does not have is a compile error.
 template <class Routine, class Tier, class T> struct tier_info;
 
-// tiers<Routine, T>::type = tier::list<...>: the routine's tiers for T, smallest first.
-template <class Routine, class T> struct tiers;
-template <class Routine, class T> using tiers_t = typename tiers<Routine, T>::type;
+// tiers<Routine, Scalar>::type = tier::list<...>: the routine's tiers for Scalar, smallest first.
+template <class Routine, class Scalar> struct tiers;
+template <class Routine, class Scalar> using tiers_t = typename tiers<Routine, Scalar>::type;
 
-template <class Routine, class Tier, class T>
-concept HasTier = requires { tier_info<Routine, Tier, T>::wg_size; };
+template <class Routine, class Tier, class Scalar>
+concept HasTier = requires { tier_info<Routine, Tier, Scalar>::wg_size; };
 
 namespace detail {
 template <class Tier> constexpr bool bound_admits(int n) { return Tier::n_max < 0 || n <= Tier::n_max; }
@@ -151,10 +151,10 @@ struct DeviceLimits {
 };
 
 namespace detail {
-template <class Routine, class Tier, class T> bool tier_fits(const DeviceLimits& lim, int n) {
-    using I = tier_info<Routine, Tier, T>;
+template <class Routine, class Tier, class Scalar> bool tier_fits(const DeviceLimits& lim, int n) {
+    using I = tier_info<Routine, Tier, Scalar>;
     if (!bound_admits<Tier>(n) || !I::admits(n)) return false;
-    if (std::is_same_v<typename Arith<T>::real_t, double> && !lim.fp64) return false;
+    if (std::is_same_v<typename Arith<Scalar>::real_t, double> && !lim.fp64) return false;
     if (static_cast<std::size_t>(I::wg_size) > lim.max_work_group_size) return false;
     bool sg_ok = false;
     for (std::size_t s : lim.sub_group_sizes) sg_ok = sg_ok || s == static_cast<std::size_t>(I::sg_size);
@@ -162,9 +162,9 @@ template <class Routine, class Tier, class T> bool tier_fits(const DeviceLimits&
     // A launch holds per_group matrices' local slices (launch.hh's local_workspace).
     return I::buffer_size(n).local_bytes * static_cast<std::size_t>(I::per_group) <= lim.local_mem_for(I::wg_size);
 }
-template <class Routine, class T, class F, class... Tiers> bool visit_first(const DeviceLimits& lim, int n, F& f, tier::list<Tiers...>) {
+template <class Routine, class Scalar, class F, class... Tiers> bool visit_first(const DeviceLimits& lim, int n, F& f, tier::list<Tiers...>) {
     bool done = false;
-    ((!done && tier_fits<Routine, Tiers, T>(lim, n) ? (f(Tiers{}), done = true) : false), ...);
+    ((!done && tier_fits<Routine, Tiers, Scalar>(lim, n) ? (f(Tiers{}), done = true) : false), ...);
     return done;
 }
 }  // namespace detail
@@ -172,17 +172,17 @@ template <class Routine, class T, class F, class... Tiers> bool visit_first(cons
 // Host side: call f(Tier{}) for the first tier of List (default: the routine's list) that admits
 // n, fits the device's local memory (per_group slices, less the per-item launch scratch) and
 // work-group size, runs at a sub-group size the device
-// has, and (for a double T) a device with fp64. Each listed tier is a separate instantiation of
+// has, and (for a double Scalar) a device with fp64. Each listed tier is a separate instantiation of
 // whatever kernel f launches; exactly one runs. Throws batchlas::invalid_argument("<name>: no
 // device tier admits n=<n>") when none does.
-template <class Routine, class T, class List = tiers_t<Routine, T>, class F>
+template <class Routine, class Scalar, class List = tiers_t<Routine, Scalar>, class F>
 void with_tier(const DeviceLimits& lim, int n, F&& f, const char* name = Routine::name) {
-    if (!detail::visit_first<Routine, T>(lim, n, f, List{}))
+    if (!detail::visit_first<Routine, Scalar>(lim, n, f, List{}))
         throw batchlas::invalid_argument(std::string(name) + ": no device tier admits n=" + std::to_string(n));
 }
-template <class Routine, class T, class List = tiers_t<Routine, T>, class F>
+template <class Routine, class Scalar, class List = tiers_t<Routine, Scalar>, class F>
 void with_tier(const sycl::device& d, int n, F&& f, const char* name = Routine::name) {
-    with_tier<Routine, T, List>(DeviceLimits::of(d), n, std::forward<F>(f), name);
+    with_tier<Routine, Scalar, List>(DeviceLimits::of(d), n, std::forward<F>(f), name);
 }
 
 }  // namespace batchlas::device

@@ -18,20 +18,21 @@ namespace batchlas::device {
 
 namespace detail {
 // The L3 configuration of a QR tier::Blocked<NB, Alg>: Alg itself when it is an l3::cfg preset,
-// else RegTiled<T, 32, 32, 8, 2, 2> (256 items, the in-group L3 tests' tile).
-template <class Alg, class T> struct larfb_cfg_of {
-    using type = l3::cfg::RegTiled<T, 32, 32, 8, 2, 2>;
+// else RegTiled<Scalar, 32, 32, 8, 2, 2> (256 items, the in-group L3 tests' tile).
+template <class Alg, class Scalar> struct larfb_cfg_of {
+    using type = l3::cfg::RegTiled<Scalar, 32, 32, 8, 2, 2>;
 };
-template <l3::Config Alg, class T> struct larfb_cfg_of<Alg, T> {
-    static_assert(std::is_same_v<typename Alg::value_type, T>, "larfb: the tier's l3 Cfg is for another scalar type");
+template <l3::Config Alg, class Scalar> struct larfb_cfg_of<Alg, Scalar> {
+    static_assert(std::is_same_v<typename Alg::value_type, Scalar>,
+                  "larfb: the tier's l3 Cfg is for another scalar type");
     using type = Alg;
 };
 }  // namespace detail
 
-template <class Alg, class T> using larfb_cfg_t = typename detail::larfb_cfg_of<Alg, T>::type;
+template <class Alg, class Scalar> using larfb_cfg_t = typename detail::larfb_cfg_of<Alg, Scalar>::type;
 
 /// The QR family's default WY block width, the host blocked routes' (16 for double, else 32).
-template <class T> constexpr int larfb_default_nb() { return std::is_same_v<T, double> ? 16 : 32; }
+template <class Scalar> constexpr int larfb_default_nb() { return std::is_same_v<Scalar, double> ? 16 : 32; }
 
 /// Elements of larfb's global work for C (m x n) and k reflectors: W1 and W2, k x n (Left) or
 /// m x k (Right).
@@ -90,9 +91,9 @@ BATCHLAS_DEVICE_INLINE void larfb(const Ex& ex, const MV& v, const MT& t, const 
 /// tau(i0 :)) (tbuf, ld ldt >= ib), then larfb<SD, TR> on c (a.m - i0 rows for Left, columns
 /// for Right), with larfb's ws. a's diagonal and upper triangle are not read. Collective; c
 /// visible on return.
-template <Side SD, Transpose TR, class Cfg, class Ex, class T>
-BATCHLAS_DEVICE_INLINE void larfb_from_panel(const Ex& ex, const l3::Global<T>& a, int i0, int ib, const T* tau, const l3::Global<T>& c,
-                                          T* vbuf, T* tbuf, int ldt, const Workspace& ws) {
+template <Side SD, Transpose TR, class Cfg, class Ex, class Scalar>
+BATCHLAS_DEVICE_INLINE void larfb_from_panel(const Ex& ex, const l3::Global<Scalar>& a, int i0, int ib, const Scalar* tau, const l3::Global<Scalar>& c,
+                                          Scalar* vbuf, Scalar* tbuf, int ldt, const Workspace& ws) {
     const int mv = a.m - i0;
     const auto panel = mat(a.p + i0 + static_cast<std::ptrdiff_t>(i0) * a.ld, mv, ib, a.ld);
     const auto v = mat(vbuf, mv, ib, mv);
@@ -101,7 +102,8 @@ BATCHLAS_DEVICE_INLINE void larfb_from_panel(const Ex& ex, const l3::Global<T>& 
     ex.barrier(Mem::Global);  // V complete before larft's gemv reads its columns
     larft(ex, v, vec(tau + i0, ib), mat(tbuf, ib, ib, ldt));
     ex.barrier(Mem::Global);  // T complete before the trmm stages it
-    larfb<SD, TR, Direct::Forward, Cfg>(ex, l3::Global<T>{vbuf, mv, mv, ib}, l3::Global<T>{tbuf, ldt, ib, ib}, c, ws);
+    larfb<SD, TR, Direct::Forward, Cfg>(ex, l3::Global<Scalar>{vbuf, mv, mv, ib}, l3::Global<Scalar>{tbuf, ldt, ib, ib},
+                                        c, ws);
 }
 
 }  // namespace batchlas::device

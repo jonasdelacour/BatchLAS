@@ -50,41 +50,42 @@ using namespace batchlas;
 
 namespace {
 
-template <typename T>
-using RealOf = typename batchlas::base_type<T>::type;
+template <typename Scalar>
+using RealOf = typename batchlas::base_type<Scalar>::type;
 
 template <typename T> inline T scale(T v, double f) { return T(v * static_cast<RealOf<T>>(f)); }
-template <typename R> inline std::complex<R> scale(std::complex<R> v, double f) {
-    return std::complex<R>(v.real() * static_cast<R>(f), v.imag() * static_cast<R>(f));
+template <typename Real> inline std::complex<Real> scale(std::complex<Real> v, double f) {
+    return std::complex<Real>(v.real() * static_cast<Real>(f), v.imag() * static_cast<Real>(f));
 }
 
 using verify::Check;
 using verify::nanmax;
-template <typename T>
-using MVof = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MVof = MatrixView<Scalar, MatrixFormat::Dense>;
 
 // The fixtures hold raw pointers at padded ld and odd strides; these hand one item to the library.
 template <typename T>
 VectorView<int32_t> pivots_of(const int* ipiv, int count) {
     return VectorView<int32_t>(const_cast<int32_t*>(reinterpret_cast<const int32_t*>(ipiv)), count, 1);
 }
-template <typename T>
-double factor_residual(Queue& ctx, const T* A0, const T* F, const int* ipiv, int m, int n, int ld) {
-    return MVof<T>::getrf_residual(ctx, MVof<T>(const_cast<T*>(A0), m, n, ld), MVof<T>(const_cast<T*>(F), m, n, ld), pivots_of<T>(ipiv, std::min(m, n)));
+template <typename Scalar>
+double factor_residual(Queue& ctx, const Scalar* A0, const Scalar* F, const int* ipiv, int m, int n, int ld) {
+    return MVof<Scalar>::getrf_residual(ctx, MVof<Scalar>(const_cast<Scalar*>(A0), m, n, ld), MVof<Scalar>(const_cast<Scalar*>(F), m, n, ld), pivots_of<Scalar>(ipiv, std::min(m, n)));
 }
-template <typename T>
-double solve_residual(Queue& ctx, const T* A0, const T* X, const T* B0, int n, int nrhs, int lda, int ldb, Transpose op) {
-    return MVof<T>::solve_residual(ctx, MVof<T>(const_cast<T*>(A0), n, n, lda), op, MVof<T>(const_cast<T*>(X), n, nrhs, ldb), MVof<T>(const_cast<T*>(B0), n, nrhs, ldb));
+template <typename Scalar>
+double solve_residual(Queue& ctx, const Scalar* A0, const Scalar* X, const Scalar* B0, int n, int nrhs, int lda, int ldb, Transpose op) {
+    return MVof<Scalar>::solve_residual(ctx, MVof<Scalar>(const_cast<Scalar*>(A0), n, n, lda), op, MVof<Scalar>(const_cast<Scalar*>(X), n, nrhs, ldb), MVof<Scalar>(const_cast<Scalar*>(B0), n, nrhs, ldb));
 }
-template <typename T>
-double inverse_residual(Queue& ctx, const T* A0, const T* C, int n, int lda, int ldc) {
-    return MVof<T>::solve_residual(ctx, MVof<T>(const_cast<T*>(A0), n, n, lda), MVof<T>(const_cast<T*>(C), n, n, ldc), MVof<T>(nullptr, 0, 0, 1));
+template <typename Scalar>
+double inverse_residual(Queue& ctx, const Scalar* A0, const Scalar* C, int n, int lda, int ldc) {
+    return MVof<Scalar>::solve_residual(ctx, MVof<Scalar>(const_cast<Scalar*>(A0), n, n, lda), MVof<Scalar>(const_cast<Scalar*>(C), n, n, ldc), MVof<Scalar>(nullptr, 0, 0, 1));
 }
-template <typename T>
-double lu_solve_residual(Queue& ctx, const T* F, const int* ipiv, const T* X, const T* B0, int n, int nrhs, int ldf,
+template <typename Scalar>
+double lu_solve_residual(Queue& ctx, const Scalar* F, const int* ipiv, const Scalar* X, const Scalar* B0, int n,
+                         int nrhs, int ldf,
                          int ldb, Transpose op) {
-    return MVof<T>::lu_solve_residual(ctx, MVof<T>(const_cast<T*>(F), n, n, ldf), pivots_of<T>(ipiv, n), op, MVof<T>(const_cast<T*>(X), n, nrhs, ldb),
-                                      MVof<T>(const_cast<T*>(B0), n, nrhs, ldb));
+    return MVof<Scalar>::lu_solve_residual(ctx, MVof<Scalar>(const_cast<Scalar*>(F), n, n, ldf), pivots_of<Scalar>(ipiv, n), op, MVof<Scalar>(const_cast<Scalar*>(X), n, nrhs, ldb),
+                                           MVof<Scalar>(const_cast<Scalar*>(B0), n, nrhs, ldb));
 }
 
 bool verbose() {
@@ -92,9 +93,9 @@ bool verbose() {
     return v;
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct LuConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 
@@ -102,12 +103,12 @@ struct LuConfig {
 // with the pad POISONED, so a launcher that lets MatrixView default the stride to
 // ld*cols is falsifiable by default. The pointer array is not optional either:
 // every vendor batched call dereferences data_ptrs_ and throws when it is empty.
-template <typename T>
+template <typename Scalar>
 struct Lu {
     int n = 0, batch = 0, ld = 0, stride = 0;
-    UnifiedVector<T> buf;        // working copy, overwritten by getrf
-    std::vector<T> a0;           // the pristine input, same ld/stride
-    UnifiedVector<T*> ptrs;
+    UnifiedVector<Scalar> buf;        // working copy, overwritten by getrf
+    std::vector<Scalar> a0;           // the pristine input, same ld/stride
+    UnifiedVector<Scalar*> ptrs;
     UnifiedVector<int64_t> piv;  // the PUBLIC int64 span; CUDA/ROCm pack int32 into it
     UnifiedVector<int32_t> info;
     // The interchange list this matrix MUST produce, when it is known exactly
@@ -115,31 +116,31 @@ struct Lu {
     std::vector<int> expect_piv;
 };
 
-template <typename T>
-void poison(Lu<T>& p) {
+template <typename Scalar>
+void poison(Lu<Scalar>& p) {
     std::copy(p.a0.begin(), p.a0.end(), p.buf.begin());
     std::fill(p.piv.begin(), p.piv.end(), int64_t(0x0BADBEEF0BADBEEFLL));
     std::fill(p.info.begin(), p.info.end(), int32_t(-12345));
 }
 
-template <typename T>
-void alloc(Lu<T>& p, int n, int batch, int ld_pad, int stride_pad) {
+template <typename Scalar>
+void alloc(Lu<Scalar>& p, int n, int batch, int ld_pad, int stride_pad) {
     p.n = n; p.batch = batch;
     p.ld = n + ld_pad;
     p.stride = p.ld * n + stride_pad;
-    p.buf = UnifiedVector<T>(static_cast<size_t>(p.stride) * batch, MVof<T>::make(-9.75e3, 4.5e3));
-    p.ptrs = UnifiedVector<T*>(static_cast<size_t>(batch), nullptr);
+    p.buf = UnifiedVector<Scalar>(static_cast<size_t>(p.stride) * batch, MVof<Scalar>::make(-9.75e3, 4.5e3));
+    p.ptrs = UnifiedVector<Scalar*>(static_cast<size_t>(batch), nullptr);
     p.piv = UnifiedVector<int64_t>(static_cast<size_t>(n) * batch, int64_t(0));
     p.info = UnifiedVector<int32_t>(static_cast<size_t>(batch), int32_t(0));
 }
 
 // A RANDOM matrix: the pivot sequence is data-dependent, so only the residual and
 // pivot-ratio oracles apply.
-template <typename T>
-Lu<T> make_random(int n, int batch, unsigned seed, int ld_pad = 5, int stride_pad = 11) {
-    Lu<T> p;
+template <typename Scalar>
+Lu<Scalar> make_random(int n, int batch, unsigned seed, int ld_pad = 5, int stride_pad = 11) {
+    Lu<Scalar> p;
     alloc(p, n, batch, ld_pad, stride_pad);
-    const auto R = Matrix<T>::Random(n, n, false, batch, seed);
+    const auto R = Matrix<Scalar>::Random(n, n, false, batch, seed);
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i)
@@ -154,12 +155,12 @@ Lu<T> make_random(int n, int batch, unsigned seed, int ld_pad = 5, int stride_pa
 // dominance survives elimination, so the winner at step k is known exactly and the
 // expected interchange list is pure integer bookkeeping. cond(A) is O(1), which is
 // why every getrs and getri residual runs on it too.
-template <typename T>
-Lu<T> make_dominant_permuted(int n, int batch, unsigned seed,
-                             int ld_pad = 5, int stride_pad = 11) {
-    Lu<T> p;
+template <typename Scalar>
+Lu<Scalar> make_dominant_permuted(int n, int batch, unsigned seed,
+                                  int ld_pad = 5, int stride_pad = 11) {
+    Lu<Scalar> p;
     alloc(p, n, batch, ld_pad, stride_pad);
-    const auto R = Matrix<T>::Random(n, n, false, batch, seed);
+    const auto R = Matrix<Scalar>::Random(n, n, false, batch, seed);
 
     // sigma: B's row r ends up at position sigma[r]. A CYCLIC SHIFT and not a
     // reversal: a reversal is its own inverse, so every test of a permutation
@@ -171,9 +172,9 @@ Lu<T> make_dominant_permuted(int n, int batch, unsigned seed,
         for (int r = 0; r < n; ++r) {
             const int dst = sigma[r];
             for (int j = 0; j < n; ++j) {
-                T v = R(r, j, b);
-                const double re = std::real(MVof<T>::up(v));
-                if (j == r) v = MVof<T>::make(4.0 * double(n) * (re >= 0 ? 1.0 : -1.0) + re, 0.0);
+                Scalar v = R(r, j, b);
+                const double re = std::real(MVof<Scalar>::up(v));
+                if (j == r) v = MVof<Scalar>::make(4.0 * double(n) * (re >= 0 ? 1.0 : -1.0) + re, 0.0);
                 p.buf[size_t(b) * p.stride + size_t(j) * p.ld + dst] = v;
             }
         }
@@ -195,31 +196,31 @@ Lu<T> make_dominant_permuted(int n, int batch, unsigned seed,
     return p;
 }
 
-template <typename T>
-MatrixView<T, MatrixFormat::Dense> view_of(Lu<T>& p) {
-    return MatrixView<T, MatrixFormat::Dense>(p.buf.data(), p.n, p.n, p.ld, p.stride, p.batch,
-                                              p.ptrs.data());
+template <typename Scalar>
+MatrixView<Scalar, MatrixFormat::Dense> view_of(Lu<Scalar>& p) {
+    return MatrixView<Scalar, MatrixFormat::Dense>(p.buf.data(), p.n, p.n, p.ld, p.stride, p.batch,
+                                                   p.ptrs.data());
 }
 
 // A right-hand-side / output block, same padding and poison discipline.
-template <typename T>
+template <typename Scalar>
 struct Rhs {
     int n = 0, nrhs = 0, batch = 0, ld = 0, stride = 0;
-    UnifiedVector<T> buf;
-    std::vector<T> b0;
-    UnifiedVector<T*> ptrs;
+    UnifiedVector<Scalar> buf;
+    std::vector<Scalar> b0;
+    UnifiedVector<Scalar*> ptrs;
 };
 
-template <typename T>
-Rhs<T> make_rhs(int n, int nrhs, int batch, unsigned seed,
-                int ld_pad = 3, int stride_pad = 7) {
-    Rhs<T> r;
+template <typename Scalar>
+Rhs<Scalar> make_rhs(int n, int nrhs, int batch, unsigned seed,
+                     int ld_pad = 3, int stride_pad = 7) {
+    Rhs<Scalar> r;
     r.n = n; r.nrhs = nrhs; r.batch = batch;
     r.ld = n + ld_pad;
     r.stride = r.ld * nrhs + stride_pad;
-    r.buf = UnifiedVector<T>(size_t(r.stride) * batch, MVof<T>::make(-9.75e3, 4.5e3));
-    r.ptrs = UnifiedVector<T*>(size_t(batch), nullptr);
-    const auto R = Matrix<T>::Random(n, nrhs, false, batch, seed);
+    r.buf = UnifiedVector<Scalar>(size_t(r.stride) * batch, MVof<Scalar>::make(-9.75e3, 4.5e3));
+    r.ptrs = UnifiedVector<Scalar*>(size_t(batch), nullptr);
+    const auto R = Matrix<Scalar>::Random(n, nrhs, false, batch, seed);
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < nrhs; ++j)
             for (int i = 0; i < n; ++i)
@@ -228,19 +229,19 @@ Rhs<T> make_rhs(int n, int nrhs, int batch, unsigned seed,
     return r;
 }
 
-template <typename T>
-void reset_rhs(Rhs<T>& r) { std::copy(r.b0.begin(), r.b0.end(), r.buf.begin()); }
+template <typename Scalar>
+void reset_rhs(Rhs<Scalar>& r) { std::copy(r.b0.begin(), r.b0.end(), r.buf.begin()); }
 
-template <typename T>
-MatrixView<T, MatrixFormat::Dense> view_of(Rhs<T>& r) {
-    return MatrixView<T, MatrixFormat::Dense>(r.buf.data(), r.n, r.nrhs, r.ld, r.stride, r.batch,
-                                              r.ptrs.data());
+template <typename Scalar>
+MatrixView<Scalar, MatrixFormat::Dense> view_of(Rhs<Scalar>& r) {
+    return MatrixView<Scalar, MatrixFormat::Dense>(r.buf.data(), r.n, r.nrhs, r.ld, r.stride, r.batch,
+                                                   r.ptrs.data());
 }
 
 // The PACKED int32 view of the public int64 pivot span, for ONE batch item. This
 // spelling -- not a widening read -- IS the pivot contract on CUDA and ROCm.
-template <typename T>
-const int* piv_item(const Lu<T>& p, int b) {
+template <typename Scalar>
+const int* piv_item(const Lu<Scalar>& p, int b) {
     return reinterpret_cast<const int*>(p.piv.data()) + size_t(b) * p.n;
 }
 
@@ -435,8 +436,8 @@ inline bool interchange_is_involution(const std::vector<int>& ipiv) {
 // Anti-vacuity for the pivot oracle: the construction must actually MOVE rows.
 // On a plain diagonally dominant matrix partial pivoting picks the diagonal at
 // every step and every pivot assertion in this file would be vacuous.
-template <typename T>
-int non_diagonal_pivots(const Lu<T>& p, int b) {
+template <typename Scalar>
+int non_diagonal_pivots(const Lu<Scalar>& p, int b) {
     const int* ip = piv_item(p, b);
     int c = 0;
     for (int k = 0; k < p.n; ++k) if (ip[k] != k + 1) ++c;
@@ -497,17 +498,17 @@ inline int fused_order_for_raw_bytes(std::size_t want, int nrhs, std::size_t sz)
 // orders of 334-1428, where a ||PA - LU|| oracle is O(n^3), and this makes an exact
 // O(n^2) residual available instead. The pivot list is a genuine INTERCHANGE LIST
 // -- ipiv[k] in [k+1, n], 1-BASED, PACKED int32 into the public int64 span.
-template <typename T>
-Lu<T> make_fabricated_factor(int n, int batch, unsigned seed,
-                             int ld_pad = 5, int stride_pad = 11) {
-    Lu<T> p;
+template <typename Scalar>
+Lu<Scalar> make_fabricated_factor(int n, int batch, unsigned seed,
+                                  int ld_pad = 5, int stride_pad = 11) {
+    Lu<Scalar> p;
     alloc(p, n, batch, ld_pad, stride_pad);
-    const auto R = Matrix<T>::Random(n, n + 1, false, batch, seed);   // column n: the pivot offsets
+    const auto R = Matrix<Scalar>::Random(n, n + 1, false, batch, seed);   // column n: the pivot offsets
     for (int b = 0; b < batch; ++b) {
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i) {
-                T v;
-                if (i == j)      v = MVof<T>::make(4.0 * double(n), 0.0);
+                Scalar v;
+                if (i == j)      v = MVof<Scalar>::make(4.0 * double(n), 0.0);
                 else if (i < j)  v = R(i, j, b);                 // U
                 else             v = scale(R(i, j, b), 0.25);    // L
                 p.buf[size_t(b) * p.stride + size_t(j) * p.ld + i] = v;
@@ -515,7 +516,7 @@ Lu<T> make_fabricated_factor(int n, int batch, unsigned seed,
         int* ip = reinterpret_cast<int*>(p.piv.data()) + size_t(b) * n;
         for (int k = 0; k < n; ++k) {
             const int span = n - k;
-            const int off = int(std::fabs(std::real(MVof<T>::up(R(k, n, b)))) * double(span)) % span;
+            const int off = int(std::fabs(std::real(MVof<Scalar>::up(R(k, n, b)))) * double(span)) % span;
             ip[k] = k + off + 1;                       // 1-BASED, in [k+1, n]
         }
         if (b == 0) p.expect_piv.assign(ip, ip + n);
@@ -543,15 +544,15 @@ void check_rhs_pad_intact(const Rhs<T>& r, const char* what) {
 
 // Every batch item, and the LAST one especially: item 0 sits at offset 0, so a
 // wrong batch stride cannot move it.
-template <typename T>
-void check_items_differ(const Rhs<T>& r, const char* what) {
+template <typename Scalar>
+void check_items_differ(const Rhs<Scalar>& r, const char* what) {
     if (r.batch < 2) return;
     bool differ = false;
-    const T* x0 = r.buf.data();
-    const T* xl = r.buf.data() + size_t(r.batch - 1) * r.stride;
+    const Scalar* x0 = r.buf.data();
+    const Scalar* xl = r.buf.data() + size_t(r.batch - 1) * r.stride;
     for (int c = 0; c < r.nrhs && !differ; ++c)
         for (int i = 0; i < r.n && !differ; ++i)
-            if (std::abs(MVof<T>::up(x0[size_t(c) * r.ld + i]) - MVof<T>::up(xl[size_t(c) * r.ld + i])) > 0.0)
+            if (std::abs(MVof<Scalar>::up(x0[size_t(c) * r.ld + i]) - MVof<Scalar>::up(xl[size_t(c) * r.ld + i])) > 0.0)
                 differ = true;
     EXPECT_TRUE(differ) << what << ": the first and last batch items' solutions are identical, "
                            "so this shape cannot see a batch-stride defect";
@@ -1078,31 +1079,31 @@ namespace {
 
 // An m x ncols PANEL: ld padded, stride NOT ld*ncols, both regions poisoned, so a
 // launcher that defaults either extent is falsifiable by construction.
-template <typename T>
+template <typename Scalar>
 struct Panel {
     int m = 0, ncols = 0, batch = 0, ld = 0, stride = 0, piv_stride = 0, piv_base = 0;
-    UnifiedVector<T> buf;
-    std::vector<T> a0;
+    UnifiedVector<Scalar> buf;
+    std::vector<Scalar> a0;
     UnifiedVector<int> piv;
     UnifiedVector<int32_t> info;
 
     const int* piv_of(int b) const {
         return piv.data() + size_t(b) * piv_stride + piv_base;
     }
-    T* fac_of(int b) { return buf.data() + size_t(b) * stride; }
-    const T* src_of(int b) const { return a0.data() + size_t(b) * stride; }
+    Scalar* fac_of(int b) { return buf.data() + size_t(b) * stride; }
+    const Scalar* src_of(int b) const { return a0.data() + size_t(b) * stride; }
 };
 
-template <typename T>
-Panel<T> make_panel(int m, int ncols, int batch, unsigned seed, int piv_base = 0) {
-    Panel<T> p;
+template <typename Scalar>
+Panel<Scalar> make_panel(int m, int ncols, int batch, unsigned seed, int piv_base = 0) {
+    Panel<Scalar> p;
     p.m = m; p.ncols = ncols; p.batch = batch;
     p.ld = m + 3;
     p.stride = p.ld * ncols + 7;
     p.piv_base = piv_base;
     p.piv_stride = piv_base + ncols + 4;
-    p.buf = UnifiedVector<T>(size_t(p.stride) * batch, MVof<T>::make(-9.75e3, 4.5e3));
-    const auto R = Matrix<T>::Random(m, ncols, false, batch, seed);
+    p.buf = UnifiedVector<Scalar>(size_t(p.stride) * batch, MVof<Scalar>::make(-9.75e3, 4.5e3));
+    const auto R = Matrix<Scalar>::Random(m, ncols, false, batch, seed);
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < ncols; ++j)
             for (int i = 0; i < m; ++i)
@@ -1113,8 +1114,8 @@ Panel<T> make_panel(int m, int ncols, int batch, unsigned seed, int piv_base = 0
     return p;
 }
 
-template <typename T>
-void repanel(Panel<T>& p) {
+template <typename Scalar>
+void repanel(Panel<Scalar>& p) {
     std::copy(p.a0.begin(), p.a0.end(), p.buf.begin());
     std::fill(p.piv.begin(), p.piv.end(), -12345);
     std::fill(p.info.begin(), p.info.end(), int32_t(0));
@@ -3010,8 +3011,8 @@ namespace {
 // Is `idx` inside SOME batch item's logical n x n window? Everything else is the
 // ld pad, the stride pad, or the gap past the last item -- memory the kernel must
 // neither read nor write.
-template <typename T>
-bool tiny_in_window(const Lu<T>& p, size_t idx) {
+template <typename Scalar>
+bool tiny_in_window(const Lu<Scalar>& p, size_t idx) {
     const size_t b = idx / size_t(p.stride);
     if (b >= size_t(p.batch)) return false;
     const size_t off = idx - b * size_t(p.stride);
@@ -3037,23 +3038,23 @@ void expect_pad_untouched(const Lu<T>& p, const char* what) {
 // residual and no pivot-growth bound can see: both candidates are equally good
 // pivots, so only the INDEX distinguishes LAPACK's answer from the other one.
 // Row 0 and row 2 of column 0 carry equal cabs1 and different values.
-template <typename T>
-void tiny_tie_pair(T& a, T& b) {
-    if constexpr (std::is_same_v<RealOf<T>, T>) {
-        a = MVof<T>::make(3.0, 0.0);
-        b = MVof<T>::make(-3.0, 0.0);      // cabs1 3 == 3
+template <typename Scalar>
+void tiny_tie_pair(Scalar& a, Scalar& b) {
+    if constexpr (std::is_same_v<RealOf<Scalar>, Scalar>) {
+        a = MVof<Scalar>::make(3.0, 0.0);
+        b = MVof<Scalar>::make(-3.0, 0.0);      // cabs1 3 == 3
     } else {
-        a = MVof<T>::make(3.0, 1.0);
-        b = MVof<T>::make(1.0, -3.0);      // cabs1 4 == 4
+        a = MVof<Scalar>::make(3.0, 1.0);
+        b = MVof<Scalar>::make(1.0, -3.0);      // cabs1 4 == 4
     }
 }
 
-template <typename T>
-Lu<T> make_cabs1_tie_in_column0(int n, int batch, unsigned seed) {
-    Lu<T> p;
+template <typename Scalar>
+Lu<Scalar> make_cabs1_tie_in_column0(int n, int batch, unsigned seed) {
+    Lu<Scalar> p;
     alloc(p, n, batch, 5, 11);
-    const auto R = Matrix<T>::Random(n, n, false, batch, seed);
-    T tie_a, tie_b;
+    const auto R = Matrix<Scalar>::Random(n, n, false, batch, seed);
+    Scalar tie_a, tie_b;
     tiny_tie_pair(tie_a, tie_b);
     for (int b = 0; b < batch; ++b) {
         for (int j = 0; j < n; ++j)
@@ -3064,7 +3065,7 @@ Lu<T> make_cabs1_tie_in_column0(int n, int batch, unsigned seed) {
         // is not forced by magnitude and the factor stays well conditioned.
         for (int j = 1; j < n; ++j)
             p.buf[size_t(b) * p.stride + size_t(j) * p.ld + j] =
-                MVof<T>::make(4.0 * double(n) * (1.0 + 0.01 * double(b)), 0.0);
+                MVof<Scalar>::make(4.0 * double(n) * (1.0 + 0.01 * double(b)), 0.0);
         p.buf[size_t(b) * p.stride + 0] = tie_a;                 // row 0
         p.buf[size_t(b) * p.stride + 2] = tie_b;                 // row 2
     }
@@ -3083,19 +3084,19 @@ Lu<T> make_cabs1_tie_in_column0(int n, int batch, unsigned seed) {
 // evidence: docs/perf/lu.md#the-pivot-margin-gate-on-elementwise-comparisons
 inline constexpr double kTinyAmbiguous = 0.99;
 
-template <typename T>
-void host_getf2_with_margins(int n, std::vector<T>& a, std::vector<int>& piv,
+template <typename Scalar>
+void host_getf2_with_margins(int n, std::vector<Scalar>& a, std::vector<int>& piv,
                              std::vector<double>& margin) {
-    using P = decltype(MVof<T>::up(T{}));
+    using P = decltype(MVof<Scalar>::up(Scalar{}));
     piv.assign(size_t(n), 0);
     margin.assign(size_t(n), 0.0);
     std::vector<P> A(size_t(n) * size_t(n));
-    for (size_t i = 0; i < A.size(); ++i) A[i] = MVof<T>::up(a[i]);
+    for (size_t i = 0; i < A.size(); ++i) A[i] = MVof<Scalar>::up(a[i]);
     for (int k = 0; k < n; ++k) {
         double best = -1.0, second = -1.0;
         int win = k;
         for (int i = k; i < n; ++i) {
-            const double m = MVof<T>::cabs1(A[size_t(k) * size_t(n) + size_t(i)]);
+            const double m = MVof<Scalar>::cabs1(A[size_t(k) * size_t(n) + size_t(i)]);
             // STRICTLY greater, so an exact tie keeps the LOWEST row -- I?AMAX's order
             // and the tier's. A `>=` here would silently make the oracle disagree with
             // LAPACK on exactly the case TinyBreaksAnExactCabs1Tie guards.
@@ -3109,7 +3110,7 @@ void host_getf2_with_margins(int n, std::vector<T>& a, std::vector<int>& piv,
                 std::swap(A[size_t(c) * size_t(n) + size_t(k)],
                           A[size_t(c) * size_t(n) + size_t(win)]);
         const P p = A[size_t(k) * size_t(n) + size_t(k)];
-        if (MVof<T>::cabs1(p) == 0.0) continue;                 // MAGMA update = 0: carry on
+        if (MVof<Scalar>::cabs1(p) == 0.0) continue;                 // MAGMA update = 0: carry on
         for (int i = k + 1; i < n; ++i) A[size_t(k) * size_t(n) + size_t(i)] /= p;
         for (int c = k + 1; c < n; ++c) {
             const P u = A[size_t(c) * size_t(n) + size_t(k)];
@@ -3123,10 +3124,10 @@ void host_getf2_with_margins(int n, std::vector<T>& a, std::vector<int>& piv,
 // ||P A - L U||_F / ||A||_F for a CONTIGUOUS n x n host factor and its interchange
 // list. Used to decide whether the host LAPACKE on THIS machine may be trusted as an
 // oracle for a given cell -- see the note in TinyPivotsMatchLapackeOnUnstructuredData.
-template <typename T>
-double host_factor_residual(Queue& ctx, int n, const std::vector<T>& a0, const std::vector<T>& f,
+template <typename Scalar>
+double host_factor_residual(Queue& ctx, int n, const std::vector<Scalar>& a0, const std::vector<Scalar>& f,
                             const std::int32_t* ip) {
-    return factor_residual<T>(ctx, a0.data(), f.data(), ip, n, n, n);
+    return factor_residual<Scalar>(ctx, a0.data(), f.data(), ip, n, n, n);
 }
 
 }  // namespace

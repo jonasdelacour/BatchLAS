@@ -48,16 +48,16 @@ namespace {
 namespace gq = batchlas::ops::geqrf;
 using C = gq::GeqrfChoice;
 using Pin = select::ScopedPin<C>;
-template <typename T>
-using MVof = MatrixView<T, MatrixFormat::Dense>;
-template <typename T>
-using RealOf = typename batchlas::base_type<T>::type;
-template <typename T>
-constexpr bool kCx = test_utils::is_complex<T>::value;
+template <typename Scalar>
+using MVof = MatrixView<Scalar, MatrixFormat::Dense>;
+template <typename Scalar>
+using RealOf = typename batchlas::base_type<Scalar>::type;
+template <typename Scalar>
+constexpr bool kCx = test_utils::is_complex<Scalar>::value;
 
-template <typename T>
-bool same_bits(T a, T b) {
-    return std::memcmp(&a, &b, sizeof(T)) == 0;
+template <typename Scalar>
+bool same_bits(Scalar a, Scalar b) {
+    return std::memcmp(&a, &b, sizeof(Scalar)) == 0;
 }
 
 struct Spec {
@@ -68,28 +68,28 @@ struct Spec {
 
 // A at a padded ld and a stride that is not ld * n, inside a buffer of large finite poison: a
 // kernel that reads the pad gets a wrong answer, one that writes it is caught bit for bit.
-template <typename T>
+template <typename Scalar>
 struct Qr {
     Spec s;
     int ld = 0, stride = 0;
-    UnifiedVector<T> mem, tau;
-    std::vector<T> mem0;
-    UnifiedVector<T*> ptrs;  // the vendor geqrf is a pointer-array API
+    UnifiedVector<Scalar> mem, tau;
+    std::vector<Scalar> mem0;
+    UnifiedVector<Scalar*> ptrs;  // the vendor geqrf is a pointer-array API
 
-    MVof<T> A() { return {mem.data(), s.m, s.n, ld, stride, s.batch, ptrs.data()}; }
+    MVof<Scalar> A() { return {mem.data(), s.m, s.n, ld, stride, s.batch, ptrs.data()}; }
     std::size_t at(int it, int i, int j) const { return std::size_t(it) * stride + std::size_t(j) * ld + i; }
     int k() const { return std::min(s.m, s.n); }
 };
 
-template <typename T>
-Qr<T> make_qr(const Spec& s) {
-    Qr<T> p;
+template <typename Scalar>
+Qr<Scalar> make_qr(const Spec& s) {
+    Qr<Scalar> p;
     p.s = s;
     p.ld = s.m + 3;
     p.stride = p.ld * s.n + 7;
-    p.mem = UnifiedVector<T>(std::size_t(p.stride) * s.batch + 5, MVof<T>::make(-9.75e3, 4.5e3));
-    p.tau = UnifiedVector<T>(std::size_t(std::max(1, p.k())) * s.batch, MVof<T>::make(-12345.0, -12345.0));
-    p.ptrs = UnifiedVector<T*>(s.batch, nullptr);
+    p.mem = UnifiedVector<Scalar>(std::size_t(p.stride) * s.batch + 5, MVof<Scalar>::make(-9.75e3, 4.5e3));
+    p.tau = UnifiedVector<Scalar>(std::size_t(std::max(1, p.k())) * s.batch, MVof<Scalar>::make(-12345.0, -12345.0));
+    p.ptrs = UnifiedVector<Scalar*>(s.batch, nullptr);
     std::mt19937 gen(s.seed);
     std::uniform_real_distribution<double> u(-1.0, 1.0);
     const int reps = s.period > 0 ? std::min(s.period, s.batch) : s.batch;
@@ -98,7 +98,7 @@ Qr<T> make_qr(const Spec& s) {
             for (int i = 0; i < s.m; ++i)
                 if (it < reps) {
                     const auto re = u(gen), im = u(gen);
-                    p.mem[p.at(it, i, j)] = MVof<T>::make(re, im);
+                    p.mem[p.at(it, i, j)] = MVof<Scalar>::make(re, im);
                 } else {
                     p.mem[p.at(it, i, j)] = p.mem[p.at(it % reps, i, j)];
                 }
@@ -184,9 +184,9 @@ struct TableGuard {
     ~TableGuard() { select::testing::use_embedded_tables(); }
 };
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;
@@ -820,7 +820,7 @@ TEST(GeqrfTranscribedTable, RowsHoldTheTranscribedPreference) {
 
 // can_run's device clauses on a synthetic select::Device, host-only: every GPU here has
 // sub-group size 32 and SLM for a CTA element, so the queue-driven tests cannot break them.
-template <typename T>
+template <typename Scalar>
 class GeqrfCanRunDevice : public ::testing::Test {};
 using ScalarTypes = ::testing::Types<float, double, std::complex<float>, std::complex<double>>;
 TYPED_TEST_SUITE(GeqrfCanRunDevice, ScalarTypes);

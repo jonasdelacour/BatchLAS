@@ -18,20 +18,20 @@
 namespace batchlas {
 
 namespace {
-template <Backend B, typename T> class UploMirrorUpperToLowerKernel;
+template <Backend B, typename Scalar> class UploMirrorUpperToLowerKernel;
 }  // namespace
 
-template <Backend B, typename T>
-Event mirror_upper_to_lower(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& a) {
+template <Backend B, typename Scalar>
+Event mirror_upper_to_lower(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& a) {
     const int n = static_cast<int>(a.rows());
     const int batch = static_cast<int>(a.batch_size());
     const int ld = static_cast<int>(a.ld());
     const int64_t stride = a.stride();
-    T* ptr = a.data().data();
+    Scalar* ptr = a.data().data();
     const std::uint8_t* mask = detail::mask_ptr(detail::call_mask("mirror_upper_to_lower", a));
 
     ctx->submit([&](sycl::handler& h) {
-        batchlas::impl::parallel_for<UploMirrorUpperToLowerKernel<B, T>>(h,
+        batchlas::impl::parallel_for<UploMirrorUpperToLowerKernel<B, Scalar>>(h,
             sycl::range<3>(static_cast<size_t>(batch),
                            static_cast<size_t>(n),
                            static_cast<size_t>(n)),

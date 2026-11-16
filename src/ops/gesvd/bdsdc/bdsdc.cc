@@ -28,74 +28,74 @@ namespace batchlas {
 
 namespace {
 
-template <Backend B, typename T> class BdsdcBuildGk;
-template <Backend B, typename T> class BdsdcValuesOnly;
-template <Backend B, typename T> class BdsdcExtract;
-template <Backend B, typename T> class BdsdcRepair;
+template <Backend B, typename Real> class BdsdcBuildGk;
+template <Backend B, typename Real> class BdsdcValuesOnly;
+template <Backend B, typename Real> class BdsdcExtract;
+template <Backend B, typename Real> class BdsdcRepair;
 
 // stedc wants a non-negative off-diagonal. A tridiagonal with signed
 // off-diagonals is similar to the |.| one through S = diag(s), s_0 = 1,
 // s_{i+1} = s_i * sign(f_i), and that sign vector is folded into the extraction
 // so it costs no extra pass over the eigenvector matrix.
-template <typename T>
-StedcParams<T> bdsdc_stedc_params() {
-    StedcParams<T> params{};
+template <typename Real>
+StedcParams<Real> bdsdc_stedc_params() {
+    StedcParams<Real> params{};
     params.leaf_steqr_params.sort = true;
     params.leaf_steqr_params.sort_order = SortOrder::Ascending;
     params.leaf_steqr_params.back_transform = false;
     return params;
 }
 
-template <typename T>
+template <typename Real>
 struct BdsdcWorkspace {
-    VectorView<T> gk_d;      // 2n zero diagonal
-    VectorView<T> gk_e;      // 2n-1 interleaved off-diagonal, made non-negative
-    VectorView<T> gk_sign;   // 2n row signs undoing that normalisation
-    VectorView<T> lambda;    // 2n eigenvalues, ascending
-    MatrixView<T, MatrixFormat::Dense> Z;  // 2n x 2n eigenvectors
+    VectorView<Real> gk_d;      // 2n zero diagonal
+    VectorView<Real> gk_e;      // 2n-1 interleaved off-diagonal, made non-negative
+    VectorView<Real> gk_sign;   // 2n row signs undoing that normalisation
+    VectorView<Real> lambda;    // 2n eigenvalues, ascending
+    MatrixView<Real, MatrixFormat::Dense> Z;  // 2n x 2n eigenvectors
     Span<std::byte> stedc_ws;
 };
 
-template <Backend B, typename T>
-BdsdcWorkspace<T> bdsdc_layout(Queue& ctx,
-                               BumpAllocator& pool,
-                               int32_t n,
-                               int32_t batch,
-                               bool want_vectors) {
+template <Backend B, typename Real>
+BdsdcWorkspace<Real> bdsdc_layout(Queue& ctx,
+                                  BumpAllocator& pool,
+                                  int32_t n,
+                                  int32_t batch,
+                                  bool want_vectors) {
     const int32_t N = 2 * n;
     const size_t nb = static_cast<size_t>(batch);
 
-    BdsdcWorkspace<T> ws{};
-    auto d_span = pool.allocate<T>(ctx, static_cast<size_t>(N) * nb);
-    auto e_span = pool.allocate<T>(ctx, static_cast<size_t>(N) * nb);
-    auto s_span = pool.allocate<T>(ctx, static_cast<size_t>(N) * nb);
-    auto l_span = pool.allocate<T>(ctx, static_cast<size_t>(N) * nb);
+    BdsdcWorkspace<Real> ws{};
+    auto d_span = pool.allocate<Real>(ctx, static_cast<size_t>(N) * nb);
+    auto e_span = pool.allocate<Real>(ctx, static_cast<size_t>(N) * nb);
+    auto s_span = pool.allocate<Real>(ctx, static_cast<size_t>(N) * nb);
+    auto l_span = pool.allocate<Real>(ctx, static_cast<size_t>(N) * nb);
 
-    ws.gk_d = VectorView<T>(d_span, N, batch, 1, N);
-    ws.gk_e = VectorView<T>(e_span, N - 1, batch, 1, N);
-    ws.gk_sign = VectorView<T>(s_span, N, batch, 1, N);
-    ws.lambda = VectorView<T>(l_span, N, batch, 1, N);
+    ws.gk_d = VectorView<Real>(d_span, N, batch, 1, N);
+    ws.gk_e = VectorView<Real>(e_span, N - 1, batch, 1, N);
+    ws.gk_sign = VectorView<Real>(s_span, N, batch, 1, N);
+    ws.lambda = VectorView<Real>(l_span, N, batch, 1, N);
 
     // Z is allocated even when only values are wanted: stedc unconditionally clears
     // the eigenvector view it is handed, so a null view would fault.
     static_cast<void>(want_vectors);
-    auto z_span = pool.allocate<T>(ctx, static_cast<size_t>(N) * static_cast<size_t>(N) * nb);
-    ws.Z = MatrixView<T, MatrixFormat::Dense>(z_span.data(), N, N, N,
-                                              static_cast<int64_t>(N) * static_cast<int64_t>(N), batch);
+    auto z_span = pool.allocate<Real>(ctx, static_cast<size_t>(N) * static_cast<size_t>(N) * nb);
+    ws.Z = MatrixView<Real, MatrixFormat::Dense>(z_span.data(), N, N, N,
+                                                 static_cast<int64_t>(N) * static_cast<int64_t>(N), batch);
 
     ws.stedc_ws = pool.allocate<std::byte>(
-        ctx, stedc_buffer_size<B, T>(ctx, static_cast<size_t>(N), nb, JobType::EigenVectors,
-                                        bdsdc_stedc_params<T>()));
+        ctx, stedc_buffer_size<B, Real>(ctx, static_cast<size_t>(N), nb, JobType::EigenVectors,
+                                        bdsdc_stedc_params<Real>()));
     return ws;
 }
 
 // Build the interleaved Golub-Kahan tridiagonal, with the off-diagonal made
 // non-negative and the compensating row signs recorded.
-template <Backend B, typename T>
+template <Backend B, typename Real>
 void bdsdc_build_gk(Queue& ctx,
-                    const VectorView<T>& d,
-                    const VectorView<T>& e,
-                    const BdsdcWorkspace<T>& ws,
+                    const VectorView<Real>& d,
+                    const VectorView<Real>& e,
+                    const BdsdcWorkspace<Real>& ws,
                     int32_t n,
                     int32_t batch,
                     const std::uint8_t* mask) {
@@ -107,7 +107,7 @@ void bdsdc_build_gk(Queue& ctx,
         auto GS = ws.gk_sign;
         const int32_t nn = n;
         const int32_t N = 2 * n;
-        batchlas::impl::parallel_for<BdsdcBuildGk<B, T>>(h,
+        batchlas::impl::parallel_for<BdsdcBuildGk<B, Real>>(h,
             sycl::range<1>(static_cast<size_t>(batch)), [mask, N, GD, nn, GE, D, E, GS](sycl::id<1> tid) {
             const int32_t b = static_cast<int32_t>(tid[0]);
             if (mask != nullptr && mask[b] == 0) return;  // I3
@@ -117,40 +117,40 @@ void bdsdc_build_gk(Queue& ctx,
     });
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Real>
 void bdsdc_extract_values(Queue& ctx,
-                          const BdsdcWorkspace<T>& ws,
-                          Span<T> sigma,
+                          const BdsdcWorkspace<Real>& ws,
+                          Span<Real> sigma,
                           int32_t n,
                           int32_t batch,
                           bool sort_desc,
                           const std::uint8_t* mask) {
     ctx->submit([&](sycl::handler& h) {
         auto L = ws.lambda;
-        T* out = sigma.data();
+        Real* out = sigma.data();
         const int32_t nn = n;
         const bool desc = sort_desc;
-        batchlas::impl::parallel_for<BdsdcValuesOnly<B, T>>(h,
+        batchlas::impl::parallel_for<BdsdcValuesOnly<B, Real>>(h,
             sycl::range<1>(static_cast<size_t>(n) * static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
             const int32_t lin = static_cast<int32_t>(tid[0]);
             const int32_t b = lin / nn;
             const int32_t i = lin - b * nn;
             if (mask != nullptr && mask[b] == 0) return;  // I3
             const int32_t src = desc ? (2 * nn - 1 - i) : (nn + i);
-            const T lam = L(src, b);
-            out[static_cast<size_t>(b) * static_cast<size_t>(nn) + i] = sycl::fmax(lam, T(0));
+            const Real lam = L(src, b);
+            out[static_cast<size_t>(b) * static_cast<size_t>(nn) + i] = sycl::fmax(lam, Real(0));
         });
     });
 }
 
 // One work-group per (batch item, output column): split the eigenvector into its
 // even rows (-> v) and odd rows (-> u) and normalise each half.
-template <Backend B, typename T>
+template <Backend B, typename Real>
 void bdsdc_extract_vectors(Queue& ctx,
-                           const BdsdcWorkspace<T>& ws,
-                           Span<T> sigma,
-                           const MatrixView<T, MatrixFormat::Dense>& u,
-                           const MatrixView<T, MatrixFormat::Dense>& vh,
+                           const BdsdcWorkspace<Real>& ws,
+                           Span<Real> sigma,
+                           const MatrixView<Real, MatrixFormat::Dense>& u,
+                           const MatrixView<Real, MatrixFormat::Dense>& vh,
                            int32_t n,
                            int32_t batch,
                            bool want_u,
@@ -158,8 +158,8 @@ void bdsdc_extract_vectors(Queue& ctx,
                            bool sort_desc,
                            const std::uint8_t* mask) {
     constexpr int32_t kGroup = 64;
-    auto& u_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(u);
-    auto& vh_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(vh);
+    auto& u_mut = const_cast<MatrixView<Real, MatrixFormat::Dense>&>(u);
+    auto& vh_mut = const_cast<MatrixView<Real, MatrixFormat::Dense>&>(vh);
 
     ctx->submit([&](sycl::handler& h) {
         auto L = ws.lambda;
@@ -167,13 +167,13 @@ void bdsdc_extract_vectors(Queue& ctx,
         auto Zk = ws.Z.kernel_view();
         auto U = u_mut.kernel_view();
         auto Vh = vh_mut.kernel_view();
-        T* sig = sigma.data();
+        Real* sig = sigma.data();
         const int32_t nn = n;
         const bool desc = sort_desc;
         const bool wu = want_u;
         const bool wv = want_vh;
 
-        batchlas::impl::parallel_for<BdsdcExtract<B, T>>(h,
+        batchlas::impl::parallel_for<BdsdcExtract<B, Real>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * static_cast<size_t>(n) * kGroup),
                               sycl::range<1>(kGroup)),
             [=](sycl::nd_item<1> it) {
@@ -196,29 +196,29 @@ void bdsdc_extract_vectors(Queue& ctx,
 // healthy). Axes are ranked in one pass: residual of e_c against orthonormal Q
 // is 1 - sum_t Q(c,t)^2. Full-rank input reads sigma and exits.
 // evidence: docs/perf/gesvd.md#gesvd-bdsdc-null-space-repair-criteria-that-failed
-template <Backend B, typename T>
+template <Backend B, typename Real>
 void bdsdc_repair_degenerate(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& u,
-                             const MatrixView<T, MatrixFormat::Dense>& vh,
-                             Span<T> sigma,
+                             const MatrixView<Real, MatrixFormat::Dense>& u,
+                             const MatrixView<Real, MatrixFormat::Dense>& vh,
+                             Span<Real> sigma,
                              int32_t n,
                              int32_t batch,
                              bool want_u,
                              bool want_vh,
                              const std::uint8_t* mask) {
     constexpr int32_t kGroup = 64;
-    auto& u_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(u);
-    auto& vh_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(vh);
+    auto& u_mut = const_cast<MatrixView<Real, MatrixFormat::Dense>&>(u);
+    auto& vh_mut = const_cast<MatrixView<Real, MatrixFormat::Dense>&>(vh);
 
     ctx->submit([&](sycl::handler& h) {
         auto U = u_mut.kernel_view();
         auto Vh = vh_mut.kernel_view();
-        const T* sig = sigma.data();
+        const Real* sig = sigma.data();
         const int32_t nn = n;
         const bool wu = want_u;
         const bool wv = want_vh;
 
-        batchlas::impl::parallel_for<BdsdcRepair<B, T>>(h,
+        batchlas::impl::parallel_for<BdsdcRepair<B, Real>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * kGroup),
                               sycl::range<1>(kGroup)),
             [=](sycl::nd_item<1> it) {
@@ -232,19 +232,19 @@ void bdsdc_repair_degenerate(Queue& ctx,
 
 }  // namespace
 
-template <Backend B, typename T>
+template <Backend B, typename Real>
 Event bdsdc(Queue& ctx,
-            const VectorView<T>& d,
-            const VectorView<T>& e,
-            Span<T> singular_values_out,
+            const VectorView<Real>& d,
+            const VectorView<Real>& e,
+            Span<Real> singular_values_out,
             const Span<std::byte>& ws,
-            const MatrixView<T, MatrixFormat::Dense>& u,
-            const MatrixView<T, MatrixFormat::Dense>& vh,
+            const MatrixView<Real, MatrixFormat::Dense>& u,
+            const MatrixView<Real, MatrixFormat::Dense>& vh,
             bool sort_desc,
             Span<int32_t> info) {
     const auto mask_span = ::batchlas::detail::call_mask("bdsdc", d, e, u, vh);
     const std::uint8_t* const mask = ::batchlas::detail::mask_ptr(mask_span);
-    if constexpr (detail::is_complex<T>::value) {
+    if constexpr (detail::is_complex<Real>::value) {
         throw batchlas::unsupported("bdsdc: complex types are not implemented");
     } else {
         const int32_t n = static_cast<int32_t>(d.size());
@@ -265,14 +265,14 @@ Event bdsdc(Queue& ctx,
 
         Span<std::byte> ws_mut(const_cast<std::byte*>(ws.data()), ws.size());
         BumpAllocator pool(ws_mut);
-        auto layout = bdsdc_layout<B, T>(ctx, pool, n, batch, want_vectors);
+        auto layout = bdsdc_layout<B, Real>(ctx, pool, n, batch, want_vectors);
         // Rebuilt from raw pointers: stedc gets the call's mask on every view it is handed.
         layout.gk_d = layout.gk_d.with_batch_mask(mask_span);
         layout.gk_e = layout.gk_e.with_batch_mask(mask_span);
         layout.lambda = layout.lambda.with_batch_mask(mask_span);
         layout.Z = layout.Z.with_batch_mask(mask_span);
 
-        bdsdc_build_gk<B, T>(ctx, d, e, layout, n, batch, mask);
+        bdsdc_build_gk<B, Real>(ctx, d, e, layout, n, batch, mask);
 
         // (void) on an Event: deliberate. This Queue is in-order, so the next submission
         // is already ordered after this one and the Event carries nothing the caller needs.
@@ -280,48 +280,48 @@ Event bdsdc(Queue& ctx,
         // passes are direct, so stedc is the only thing here that can fail to
         // converge. Its batch axis is the caller's (the tridiagonal is 2n long,
         // not the batch), so `info` forwards unchanged and stedc does the clear.
-        (void)stedc<B, T>(ctx,
+        (void)stedc<B, Real>(ctx,
                     layout.gk_d,
                     layout.gk_e,
                     layout.lambda,
                     layout.stedc_ws,
                     JobType::EigenVectors,
-                    bdsdc_stedc_params<T>(),
+                    bdsdc_stedc_params<Real>(),
                     layout.Z,
                     info);
 
         if (!want_vectors) {
-            bdsdc_extract_values<B, T>(ctx, layout, singular_values_out, n, batch, sort_desc, mask);
+            bdsdc_extract_values<B, Real>(ctx, layout, singular_values_out, n, batch, sort_desc, mask);
             return ctx.get_event();
         }
 
-        bdsdc_extract_vectors<B, T>(ctx, layout, singular_values_out, u, vh,
-                                    n, batch, want_u, want_vh, sort_desc, mask);
-        bdsdc_repair_degenerate<B, T>(ctx, u, vh, singular_values_out, n, batch, want_u, want_vh, mask);
+        bdsdc_extract_vectors<B, Real>(ctx, layout, singular_values_out, u, vh,
+                                       n, batch, want_u, want_vh, sort_desc, mask);
+        bdsdc_repair_degenerate<B, Real>(ctx, u, vh, singular_values_out, n, batch, want_u, want_vh, mask);
         return ctx.get_event();
     }
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Real>
 Event bdsdc(Queue& ctx,
-            const VectorView<T>& d,
-            const VectorView<T>& e,
-            Span<T> singular_values_out,
+            const VectorView<Real>& d,
+            const VectorView<Real>& e,
+            Span<Real> singular_values_out,
             const Span<std::byte>& ws,
             bool sort_desc,
             Span<int32_t> info) {
-    return bdsdc<B, T>(ctx, d, e, singular_values_out, ws,
-                       MatrixView<T, MatrixFormat::Dense>(nullptr, 0, 0, 1, 1, d.batch_size()),
-                       MatrixView<T, MatrixFormat::Dense>(nullptr, 0, 0, 1, 1, d.batch_size()),
-                       sort_desc,
-                       info);
+    return bdsdc<B, Real>(ctx, d, e, singular_values_out, ws,
+                          MatrixView<Real, MatrixFormat::Dense>(nullptr, 0, 0, 1, 1, d.batch_size()),
+                          MatrixView<Real, MatrixFormat::Dense>(nullptr, 0, 0, 1, 1, d.batch_size()),
+                          sort_desc,
+                          info);
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Real>
 size_t bdsdc_buffer_size(Queue& ctx,
-                         const VectorView<T>& d,
-                         const VectorView<T>& e,
-                         Span<T> singular_values_out,
+                         const VectorView<Real>& d,
+                         const VectorView<Real>& e,
+                         Span<Real> singular_values_out,
                          bool want_vectors) {
     static_cast<void>(e);
     static_cast<void>(singular_values_out);
@@ -329,7 +329,7 @@ size_t bdsdc_buffer_size(Queue& ctx,
     const int32_t batch = static_cast<int32_t>(d.batch_size());
     if (n <= 0) return 0;
     return workspace_bytes([&](BumpAllocator& pool) {
-        auto layout = bdsdc_layout<B, T>(ctx, pool, n, batch, want_vectors);
+        auto layout = bdsdc_layout<B, Real>(ctx, pool, n, batch, want_vectors);
         static_cast<void>(layout);
         return 0;
     });

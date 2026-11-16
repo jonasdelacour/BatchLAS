@@ -36,7 +36,7 @@
 namespace batchlas {
 
 // At namespace scope: a kernel name must not name an internal-linkage entity.
-template <typename T, int N, int NC, int NR, int MinBlocks, bool Masked>
+template <typename Scalar, int N, int NC, int NR, int MinBlocks, bool Masked>
 class PosvTinyKernel;
 
 namespace ops::posv {
@@ -55,9 +55,9 @@ static_assert(resident::sm89_fits(kWorstRegsPerThread, resident::kTinyWgSize),
 
 // The same flat compile-time ceiling potrf_tiny carries, for the same reason: the tier
 // allocates no local memory, so no budget walk applies to it.
-template <typename T>
+template <typename Scalar>
 constexpr int tiny_cap() {
-    return std::is_same_v<T, std::complex<double>> ? 16 : 32;
+    return std::is_same_v<Scalar, std::complex<double>> ? 16 : 32;
 }
 
 // The RHS ladder is {1, 2, 4}; every RHS loop stops at nrhs, see gesv_tiny.cc.
@@ -75,9 +75,9 @@ constexpr int tiny_rhs_bucket(int nrhs) {
 // evidence: docs/perf/potrf.md#the-posv-local-memory-transpose
 // Masked: the batch mask folds into `live`, a template so the unmasked instance is the kernel as
 // it was (the runtime fold cost 4.3% on complex<float> n = 16, nrhs = 4 at batch 32768).
-template <typename T, int N, int NC, int NR, int Mpw, int MinBlocks, bool Slm, bool Masked>
+template <typename Scalar, int N, int NC, int NR, int Mpw, int MinBlocks, bool Slm, bool Masked>
 struct PosvTinyBody {
-    using DM = sycl_device::DevMap<T>;
+    using DM = sycl_device::DevMap<Scalar>;
     using D = typename DM::type;
     using R = typename DM::real;
     static constexpr bool real_diag = DM::is_complex;
@@ -272,20 +272,20 @@ BATCHLAS_UNROLL_FULL
 };
 
 // The local-memory reads are for the 32-bit types at N >= 16, where they were measured.
-template <typename T, int N>
+template <typename Scalar, int N>
 constexpr bool posv_tiny_slm() {
-    return (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>) && N >= 16;
+    return (std::is_same_v<Scalar, float> || std::is_same_v<Scalar, std::complex<float>>) && N >= 16;
 }
 
-template <typename T, int N, int NC, int NR, int MinBlocks, bool Masked>
+template <typename Scalar, int N, int NC, int NR, int MinBlocks, bool Masked>
 Event posv_tiny_launch_b(Queue& ctx,
-                         T* a_ptr, int lda, int stride_a,
-                         T* b_ptr, int ldb, int stride_b,
+                         Scalar* a_ptr, int lda, int stride_a,
+                         Scalar* b_ptr, int ldb, int stride_b,
                          bool upper, int n, int nrhs, int batch, int32_t* info_ptr,
                          const std::uint8_t* mask) {
-    using DM = sycl_device::DevMap<T>;
+    using DM = sycl_device::DevMap<Scalar>;
     using D = typename DM::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
     static_assert(tiny_native::tiny_n_is_legal(N), "the tiny ladder is {8, 16, 32}");
     static_assert(NR == 1 || NR == 2 || NR == kPosvTinyMaxRhs, "the RHS ladder is {1, 2, 4}");
     static_assert(NC <= N && NC % 2 == 0, "the column bucket is even and within the lanes");
@@ -294,8 +294,8 @@ Event posv_tiny_launch_b(Queue& ctx,
         /*bytes_per_matrix=*/1u, N, /*wg_slm_budget_bytes=*/~std::size_t(0),
         resident::kTinyWgSize, resident::kTinyWgSize, /*max_pack=*/resident::kTinyWgSize / N);
     static_assert(kMpw * N == resident::kTinyWgSize, "the tiny launch must fill its work-group exactly");
-    constexpr bool kSlm = posv_tiny_slm<T, N>();
-    using Body = PosvTinyBody<T, N, NC, NR, kMpw, MinBlocks, kSlm, Masked>;
+    constexpr bool kSlm = posv_tiny_slm<Scalar, N>();
+    using Body = PosvTinyBody<Scalar, N, NC, NR, kMpw, MinBlocks, kSlm, Masked>;
 
     const int num_wg = (batch + kMpw - 1) / kMpw;
     const std::size_t slm_elems = kSlm ? std::size_t(4 * kMpw * Body::kNV) : 1;
@@ -306,7 +306,7 @@ Event posv_tiny_launch_b(Queue& ctx,
             static_cast<std::ptrdiff_t>(ldb), static_cast<std::ptrdiff_t>(stride_b),
             upper, n, nrhs, batch, info_ptr, mask,
             sycl::local_accessor<typename Body::R4, 1>(sycl::range<1>(slm_elems), h)};
-        batchlas::impl::parallel_for<PosvTinyKernel<T, N, NC, NR, MinBlocks, Masked>>(h,
+        batchlas::impl::parallel_for<PosvTinyKernel<Scalar, N, NC, NR, MinBlocks, Masked>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) *
                                              static_cast<std::size_t>(resident::kTinyWgSize)),
                               sycl::range<1>(static_cast<std::size_t>(resident::kTinyWgSize))),
@@ -316,9 +316,9 @@ Event posv_tiny_launch_b(Queue& ctx,
 }
 
 // The column bucket: {12, 16} under N = 16 and {20, 24, 28, 32} under N = 32.
-template <typename T, int N>
+template <typename Scalar, int N>
 constexpr bool posv_nc_legal(int nc) {
-    if constexpr (!posv_tiny_slm<T, N>()) return nc == N;
+    if constexpr (!posv_tiny_slm<Scalar, N>()) return nc == N;
     return N == 16 ? (nc == 12 || nc == 16) : (nc == 20 || nc == 24 || nc == 28 || nc == 32);
 }
 inline int posv_nc_of(int n, int N) {
@@ -330,12 +330,12 @@ inline int posv_nc_of(int n, int N) {
 // The launch bound per (type, N, NC, NR), each the argmin of a batch-32768 sweep over
 // {8, 12, 16}; float is flat within 2% and takes 16 throughout. N = 8 keeps the earlier
 // table. evidence: docs/perf/potrf.md#the-posv-local-memory-transpose
-template <typename T, int N, int NC, int NR>
+template <typename Scalar, int N, int NC, int NR>
 constexpr int posv_tiny_min_blocks() {
-    if constexpr (std::is_same_v<T, float>) {
+    if constexpr (std::is_same_v<Scalar, float>) {
         if constexpr (N == 8) return NR == 1 ? 1 : 16;
         return 16;
-    } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+    } else if constexpr (std::is_same_v<Scalar, std::complex<float>>) {
         if constexpr (N == 8) return NR == 1 ? 16 : 1;
         if constexpr (N == 16) return (NR == 4 || (NR == 2 && NC == 16)) ? 12 : 16;
         if constexpr (NC >= 28 || (NC == 24 && NR == 4)) return 8;
@@ -345,11 +345,11 @@ constexpr int posv_tiny_min_blocks() {
     }
 }
 
-template <typename T, int N, int NC, int NR, bool Masked>
-Event posv_tiny_launch_nc(Queue& ctx, T* a_ptr, int lda, int stride_a, T* b_ptr, int ldb,
+template <typename Scalar, int N, int NC, int NR, bool Masked>
+Event posv_tiny_launch_nc(Queue& ctx, Scalar* a_ptr, int lda, int stride_a, Scalar* b_ptr, int ldb,
                           int stride_b, bool upper, int n, int nrhs, int batch,
                           int32_t* info_ptr, const std::uint8_t* mask) {
-    return posv_tiny_launch_b<T, N, NC, NR, posv_tiny_min_blocks<T, N, NC, NR>(), Masked>(
+    return posv_tiny_launch_b<Scalar, N, NC, NR, posv_tiny_min_blocks<Scalar, N, NC, NR>(), Masked>(
         ctx, a_ptr, lda, stride_a, b_ptr, ldb, stride_b, upper, n, nrhs, batch, info_ptr, mask);
 }
 
@@ -381,15 +381,15 @@ Event posv_tiny_launch(Queue& ctx,
 
 }  // namespace
 
-template <typename T>
+template <typename Scalar>
 int posv_tiny_max_n() {
-    return tiny_cap<T>();
+    return tiny_cap<Scalar>();
 }
 
-template <typename T>
+template <typename Scalar>
 std::size_t posv_tiny_buffer_size(Queue& ctx,
-                                  const MatrixView<T, MatrixFormat::Dense>& A,
-                                  const MatrixView<T, MatrixFormat::Dense>& B) {
+                                  const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                  const MatrixView<Scalar, MatrixFormat::Dense>& B) {
     static_cast<void>(B);
     const int batch = static_cast<int>(A.batch_size());
     if (batch < 1) return 0;

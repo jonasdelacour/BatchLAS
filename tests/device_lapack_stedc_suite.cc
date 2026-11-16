@@ -50,14 +50,14 @@ std::uint64_t mix(std::uint64_t x) {
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
     return x ^ (x >> 31);
 }
-template <class R> R uval(std::uint64_t i) { return static_cast<R>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
+template <class Real> Real uval(std::uint64_t i) { return static_cast<Real>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
 template <class T> bool same_bits(const T& a, const T& b) { return std::memcmp(&a, &b, sizeof(T)) == 0; }
 
 // |got - ref| / scale, the blas relative error that EXPECT_VERIFY bounds.
-template <class T> double rel(T got, long double ref, long double scale) {
+template <class Real> double rel(Real got, long double ref, long double scale) {
     const long double d = std::fabs(static_cast<long double>(got) - ref);
     if (std::isnan(d)) return std::numeric_limits<double>::infinity();
-    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<T>::min()));
+    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<Real>::min()));
 }
 
 struct Dev {
@@ -152,11 +152,11 @@ std::string skip_reason(Dev& dev) {
     return {};
 }
 
-template <class T> class DeviceLapackStedcTest : public ::testing::Test {
+template <class Real> class DeviceLapackStedcTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (const auto why = skip_reason(dev); !why.empty()) GTEST_SKIP() << why;
-        if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
+        if (test_utils::lacks_fp64<Real>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
 };

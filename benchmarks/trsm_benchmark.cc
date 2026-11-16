@@ -12,21 +12,21 @@ using namespace batchlas;
 
 namespace {
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_TRSM(minibench::State& state) {
     // Args (n, nrhs, batch): A is n x n, B is n x nrhs. SquareBatchSizes emits nrhs = n.
     const size_t n = state.range(0);
     const size_t nrhs = state.range(1);
     const size_t batch = state.range(2);
 
-    auto A = Matrix<T>::Triangular(n, Uplo::Lower, T(1), T(0.5), batch);
-    auto Bm = Matrix<T>::Random(n, nrhs, false, batch);
+    auto A = Matrix<Scalar>::Triangular(n, Uplo::Lower, Scalar(1), Scalar(0.5), batch);
+    auto Bm = Matrix<Scalar>::Random(n, nrhs, false, batch);
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     state.SetKernel(q,
                     std::move(A),
                     bench::pristine(Bm),
-                    T(1),
+                    Scalar(1),
                     Side::Left,
                     Uplo::Lower,
                     Transpose::NoTrans,
@@ -118,7 +118,7 @@ void trsm_announce_route_env() {
 }
 
 // The two ortho cells, as one body. SD picks which extent of B carries q.
-template <typename T, Backend B, Side SD>
+template <typename Scalar, Backend B, Side SD>
 void BM_TRSM_OrthoBody(minibench::State& state) {
     trsm_announce_route_env();
 
@@ -129,18 +129,18 @@ void BM_TRSM_OrthoBody(minibench::State& state) {
     // ConjTrans for complex, Trans for real -- what ortho.cc issues; the resolver keys
     // on the enum, so the two spellings are not interchangeable here.
     constexpr Transpose kTrans =
-        batchlas::is_std_complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
+        batchlas::is_std_complex_v<Scalar> ? Transpose::ConjTrans : Transpose::Trans;
     constexpr Transpose trans = (SD == Side::Right) ? kTrans : Transpose::NoTrans;
 
-    auto A = Matrix<T>::Triangular(n, Uplo::Lower, T(1), T(0.5), batch);
-    auto Bm = (SD == Side::Right) ? Matrix<T>::Random(q, n, false, batch)
-                                  : Matrix<T>::Random(n, q, false, batch);
+    auto A = Matrix<Scalar>::Triangular(n, Uplo::Lower, Scalar(1), Scalar(0.5), batch);
+    auto Bm = (SD == Side::Right) ? Matrix<Scalar>::Random(q, n, false, batch)
+                                  : Matrix<Scalar>::Random(n, q, false, batch);
 
     auto qh = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     state.SetKernel(qh,
                     std::move(A),
                     bench::pristine(Bm),
-                    T(1),
+                    Scalar(1),
                     SD,
                     Uplo::Lower,
                     trans,
@@ -156,16 +156,16 @@ void BM_TRSM_OrthoBody(minibench::State& state) {
     state.SetMetric("Time (us) / matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
 }
 
-template <typename T, Backend B>
-void BM_TRSM_OrthoRight(minibench::State& s) { BM_TRSM_OrthoBody<T, B, Side::Right>(s); }
-template <typename T, Backend B>
-void BM_TRSM_OrthoLeft(minibench::State& s)  { BM_TRSM_OrthoBody<T, B, Side::Left>(s); }
+template <typename Scalar, Backend B>
+void BM_TRSM_OrthoRight(minibench::State& s) { BM_TRSM_OrthoBody<Scalar, B, Side::Right>(s); }
+template <typename Scalar, Backend B>
+void BM_TRSM_OrthoLeft(minibench::State& s)  { BM_TRSM_OrthoBody<Scalar, B, Side::Left>(s); }
 // NOT named *OrthoRightStarved: --name matches by SUBSTRING, so that spelling would
 // fold these profile-only rows into every ranking run.
-template <typename T, Backend B>
-void BM_TRSM_StarvedRight(minibench::State& s) { BM_TRSM_OrthoBody<T, B, Side::Right>(s); }
-template <typename T, Backend B>
-void BM_TRSM_StarvedLeft(minibench::State& s)  { BM_TRSM_OrthoBody<T, B, Side::Left>(s); }
+template <typename Scalar, Backend B>
+void BM_TRSM_StarvedRight(minibench::State& s) { BM_TRSM_OrthoBody<Scalar, B, Side::Right>(s); }
+template <typename Scalar, Backend B>
+void BM_TRSM_StarvedLeft(minibench::State& s)  { BM_TRSM_OrthoBody<Scalar, B, Side::Left>(s); }
 
 }  // namespace
 

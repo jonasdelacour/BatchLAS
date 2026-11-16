@@ -26,14 +26,14 @@ namespace {
 
 namespace S = ops::sytrs;
 
-template <typename T>
+template <typename Scalar>
 struct SytrsProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     int n, nrhs, batch, ld;
     std::size_t sa, sb;
-    UnifiedVector<T> A0, A, B0, X;
-    UnifiedVector<T*> pA0, pA, pB0, pX;
+    UnifiedVector<Scalar> A0, A, B0, X;
+    UnifiedVector<Scalar*> pA0, pA, pB0, pX;
     MV A0v, Av, B0v, Xv;
     UnifiedVector<std::int64_t> piv;
 
@@ -48,21 +48,21 @@ struct SytrsProblem {
         (void)A0v.symmetrize(q, Uplo::Lower);
         (void)B0v.fill_random(q, false, 777);
         (void)MV::copy(q, Av, A0v);
-        UnifiedVector<std::byte> fws(std::max<std::size_t>(1, sytrf_buffer_size<kBackend, T>(q, Av, Uplo::Lower)));
+        UnifiedVector<std::byte> fws(std::max<std::size_t>(1, sytrf_buffer_size<kBackend, Scalar>(q, Av, Uplo::Lower)));
         UnifiedVector<std::int32_t> info(std::size_t(batch_), 0);
-        (void)sytrf<kBackend, T>(q, Av, Uplo::Lower, piv.to_span(), fws.to_span(), info.to_span());
+        (void)sytrf<kBackend, Scalar>(q, Av, Uplo::Lower, piv.to_span(), fws.to_span(), info.to_span());
         q.wait();
         for (int b = 0; b < batch; ++b)
             if (info[std::size_t(b)] != 0) throw batchlas::convergence_error("sytrs input: sytrf reported a singular item");
     }
-    std::size_t workspace() { return sytrs_buffer_size<kBackend, T>(q, Av, Xv, Uplo::Lower); }
+    std::size_t workspace() { return sytrs_buffer_size<kBackend, Scalar>(q, Av, Xv, Uplo::Lower); }
     void reset() {  // the solve overwrites B with X; the factor and the pivots are read only
         (void)MV::copy(q, Xv, B0v);
         q.wait();
     }
     void clear_info() {}
     void run(Span<std::byte> ws) {
-        (void)sytrs<kBackend, T>(q, Av, Xv, Uplo::Lower, piv.to_span(), ws);
+        (void)sytrs<kBackend, Scalar>(q, Av, Xv, Uplo::Lower, piv.to_span(), ws);
         q.wait();
     }
     std::pair<double, int> verify() { return {MV::solve_residual(q, A0v, Xv, B0v), 0}; }

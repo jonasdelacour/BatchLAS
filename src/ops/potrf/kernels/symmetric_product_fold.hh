@@ -20,11 +20,11 @@
 namespace batchlas {
 namespace detail {
 
-template <typename T>
+template <typename Scalar>
 Event fold_symmetric_product_into_triangle(Queue& ctx,
-                                           const MatrixView<T, MatrixFormat::Dense>& C,
-                                           const MatrixView<T, MatrixFormat::Dense>& product,
-                                           T beta,
+                                           const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                                           const MatrixView<Scalar, MatrixFormat::Dense>& product,
+                                           Scalar beta,
                                            Uplo uplo) {
     const size_t n = static_cast<size_t>(C.rows());
     const size_t batch_size = static_cast<size_t>(C.batch_size());
@@ -33,14 +33,14 @@ Event fold_symmetric_product_into_triangle(Queue& ctx,
         return ctx.get_event();
     }
 
-    T* c_ptr = C.data_ptr();
-    const T* p_ptr = product.data_ptr();
+    Scalar* c_ptr = C.data_ptr();
+    const Scalar* p_ptr = product.data_ptr();
     const size_t c_ld = static_cast<size_t>(C.ld());
     const size_t c_stride = static_cast<size_t>(C.stride());
     const size_t p_ld = static_cast<size_t>(product.ld());
     const size_t p_stride = static_cast<size_t>(product.stride());
     const bool upper = uplo == Uplo::Upper;
-    const bool ignore_c = beta == T(0);
+    const bool ignore_c = beta == Scalar(0);
     const std::uint8_t* const mask = C.batch_mask().empty() ? nullptr : C.batch_mask().data();
 
     auto [global_size, local_size] = compute_nd_range_sizes(
@@ -63,8 +63,8 @@ Event fold_symmetric_product_into_triangle(Queue& ctx,
         const size_t p_idx = b * p_stride + j * p_ld + i;
         // P + beta C: real, the one fma `p + beta * c` contracted to; complex, arith::Fma's
         // explicit chain instead of the Annex-G multiply (an algo change, under tolerance).
-        T v = p_ptr[p_idx];
-        if (!ignore_c) device::arith_t<device::arith::Fma, T>::mac(v, beta, c_ptr[c_idx]);
+        Scalar v = p_ptr[p_idx];
+        if (!ignore_c) device::arith_t<device::arith::Fma, Scalar>::mac(v, beta, c_ptr[c_idx]);
         c_ptr[c_idx] = v;
     });
 

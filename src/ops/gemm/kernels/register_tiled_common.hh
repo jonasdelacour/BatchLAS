@@ -25,7 +25,7 @@ using batchlas::device::static_for;  // core.hh; the wide kernels' halves and th
 using batchlas::device::l3::supports_aligned_packet_loads;
 using batchlas::device::l3::supports_packet_v;
 
-template <typename T,
+template <typename Scalar,
           int TileM,
           int TileN,
           int TileK,
@@ -40,7 +40,7 @@ template <typename T,
           Transpose OpB>
 class GemmRegisterTiledKernel;
 
-template <typename T>
+template <typename Scalar>
 inline int register_ceil_div(int value, int divisor) {
     return (value + divisor - 1) / divisor;
 }
@@ -61,16 +61,16 @@ struct RegisterTilePolicy : device::l3::RegGeom<TileM_, TileN_, TileK_, ThreadTi
     static constexpr int VecB = VecB_;
 };
 
-template <typename T>
-inline bool is_contiguous_dense_matrix(const MatrixView<T, MatrixFormat::Dense>& M) {
+template <typename Scalar>
+inline bool is_contiguous_dense_matrix(const MatrixView<Scalar, MatrixFormat::Dense>& M) {
     return M.ld() == M.rows() && M.stride() == M.ld() * M.cols();
 }
 
-template <typename T, int TileM, int TileN, int TileK, int VecA, int VecB>
-inline bool can_use_aligned_nn_fast_path(const MatrixView<T, MatrixFormat::Dense>& A,
-                                         const MatrixView<T, MatrixFormat::Dense>& B,
-                                         const MatrixView<T, MatrixFormat::Dense>& C) {
-    if constexpr (!supports_packet_v<T, VecA> || !supports_packet_v<T, VecB>) {
+template <typename Scalar, int TileM, int TileN, int TileK, int VecA, int VecB>
+inline bool can_use_aligned_nn_fast_path(const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                         const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                                         const MatrixView<Scalar, MatrixFormat::Dense>& C) {
+    if constexpr (!supports_packet_v<Scalar, VecA> || !supports_packet_v<Scalar, VecB>) {
         static_cast<void>(A);
         static_cast<void>(B);
         static_cast<void>(C);
@@ -82,12 +82,12 @@ inline bool can_use_aligned_nn_fast_path(const MatrixView<T, MatrixFormat::Dense
             is_contiguous_dense_matrix(A) &&
             is_contiguous_dense_matrix(B) &&
             is_contiguous_dense_matrix(C) &&
-            supports_aligned_packet_loads<T, VecA>(A.data_ptr(), A.ld(), A.stride()) &&
-            supports_aligned_packet_loads<T, VecB>(B.data_ptr(), B.ld(), B.stride());
+            supports_aligned_packet_loads<Scalar, VecA>(A.data_ptr(), A.ld(), A.stride()) &&
+            supports_aligned_packet_loads<Scalar, VecB>(B.data_ptr(), B.ld(), B.stride());
     }
 }
 
-template <typename T,
+template <typename Scalar,
           int TileM,
           int TileN,
           int TileK,
@@ -101,11 +101,11 @@ template <typename T,
           Transpose OpA = Transpose::NoTrans,
           Transpose OpB = Transpose::NoTrans>
 Event launch_register_tiled(Queue& ctx,
-                            const MatrixView<T, MatrixFormat::Dense>& A,
-                            const MatrixView<T, MatrixFormat::Dense>& B,
-                            const MatrixView<T, MatrixFormat::Dense>& C,
-                            T alpha,
-                            T beta,
+                            const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                            const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                            const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                            Scalar alpha,
+                            Scalar beta,
                             const char* kernel_trace_name) {
     using Policy = RegisterTilePolicy<TileM, TileN, TileK, ThreadTileRows, ThreadTileCols, VecA, VecB, UnrollK, Stages>;
 
@@ -127,23 +127,23 @@ Event launch_register_tiled(Queue& ctx,
     const auto [m, k] = get_effective_dims(A, OpA);
     const auto [_, n] = get_effective_dims(B, OpB);
     static_cast<void>(_);
-    const bool use_packet_a = AlignedFastPath ? true : supports_aligned_packet_loads<T, VecA>(A.data_ptr(), A.ld(), A.stride());
-    const bool use_packet_b = AlignedFastPath ? true : supports_aligned_packet_loads<T, VecB>(B.data_ptr(), B.ld(), B.stride());
+    const bool use_packet_a = AlignedFastPath ? true : supports_aligned_packet_loads<Scalar, VecA>(A.data_ptr(), A.ld(), A.stride());
+    const bool use_packet_b = AlignedFastPath ? true : supports_aligned_packet_loads<Scalar, VecB>(B.data_ptr(), B.ld(), B.stride());
 
     const sycl::range<3> local(1, Policy::LocalRows, Policy::LocalCols);
-    const int group_rows = AlignedFastPath ? (m / TileM) : register_ceil_div<T>(m, TileM);
-    const int group_cols = AlignedFastPath ? (n / TileN) : register_ceil_div<T>(n, TileN);
+    const int group_rows = AlignedFastPath ? (m / TileM) : register_ceil_div<Scalar>(m, TileM);
+    const int group_cols = AlignedFastPath ? (n / TileN) : register_ceil_div<Scalar>(n, TileN);
     const sycl::range<3> global(static_cast<size_t>(A.batch_size()),
                                 static_cast<size_t>(group_rows * Policy::LocalRows),
                                 static_cast<size_t>(group_cols * Policy::LocalCols));
 
     ctx->submit([&](sycl::handler& h) {
-        sycl::local_accessor<T, 1> tile_a(sycl::range<1>(Policy::Stages * Policy::StageASize), h);
-        sycl::local_accessor<T, 1> tile_b(sycl::range<1>(Policy::Stages * Policy::StageBSize), h);
+        sycl::local_accessor<Scalar, 1> tile_a(sycl::range<1>(Policy::Stages * Policy::StageASize), h);
+        sycl::local_accessor<Scalar, 1> tile_b(sycl::range<1>(Policy::Stages * Policy::StageBSize), h);
 
-        const T* a_ptr = A.data_ptr();
-        const T* b_ptr = B.data_ptr();
-        T* c_ptr = C.data_ptr();
+        const Scalar* a_ptr = A.data_ptr();
+        const Scalar* b_ptr = B.data_ptr();
+        Scalar* c_ptr = C.data_ptr();
         const int lda = A.ld();
         const int ldb = B.ld();
         const int ldc = C.ld();
@@ -156,7 +156,7 @@ Event launch_register_tiled(Queue& ctx,
         const bool packet_b = use_packet_b;
 
         batchlas::impl::parallel_for<
-            GemmRegisterTiledKernel<T, TileM, TileN, TileK, ThreadTileRows, ThreadTileCols, VecA, VecB, UnrollK, Stages, AlignedFastPath, OpA, OpB>>(h,
+            GemmRegisterTiledKernel<Scalar, TileM, TileN, TileK, ThreadTileRows, ThreadTileCols, VecA, VecB, UnrollK, Stages, AlignedFastPath, OpA, OpB>>(h,
             sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
                 const int bid = static_cast<int>(item.get_group(0));
                 const int local_row = static_cast<int>(item.get_local_id(1));
@@ -168,14 +168,14 @@ Event launch_register_tiled(Queue& ctx,
                 const int linear_tid = local_row * Policy::LocalCols + local_col;
 
                 // Rebased per item in 64 bits (bid * stride passes 2^31); offsets within an item stay int.
-                const T* const a_item = a_ptr + static_cast<std::ptrdiff_t>(bid) * stride_a;
-                const T* const b_item = b_ptr + static_cast<std::ptrdiff_t>(bid) * stride_b;
-                T* const c_item = c_ptr + static_cast<std::ptrdiff_t>(bid) * stride_c;
+                const Scalar* const a_item = a_ptr + static_cast<std::ptrdiff_t>(bid) * stride_a;
+                const Scalar* const b_item = b_ptr + static_cast<std::ptrdiff_t>(bid) * stride_b;
+                Scalar* const c_item = c_ptr + static_cast<std::ptrdiff_t>(bid) * stride_c;
                 const int group_row = static_cast<int>(item.get_group(1));
                 const int group_col = static_cast<int>(item.get_group(2));
                 const device::Grid2D<> ex{item};
-                device::Tile<T, ThreadTileRows, ThreadTileCols> accum;
-                device::fill(accum, T(0));
+                device::Tile<Scalar, ThreadTileRows, ThreadTileCols> accum;
+                device::fill(accum, Scalar(0));
 
                 // accum += A(:, t) B(t, :) over every slab's k steps (all TileK when aligned). The
                 // stage callback writes op(A) (m x k; slot (r, c) at c * TileAStride + r) and op(B)
@@ -189,12 +189,12 @@ Event launch_register_tiled(Queue& ctx,
                     [&](int kk0, auto& dst_a, auto& dst_b) BATCHLAS_DEVICE_BODY {
                         const int m0 = group_row * TileM, n0 = group_col * TileN;
                         if constexpr (AlignedFastPath && OpA == Transpose::NoTrans && OpB == Transpose::NoTrans
-                                      && supports_packet_v<T, VecA> && supports_packet_v<T, VecB>) {
+                                      && supports_packet_v<Scalar, VecA> && supports_packet_v<Scalar, VecB>) {
                             device::l3::stage_block_packet_aligned<TileM, TileK, VecA, Thr>(linear_tid, a_item, lda, m0, kk0, dst_a);
                             device::l3::stage_block_packet_aligned<TileK, TileN, VecB, Thr>(linear_tid, b_item, ldb, kk0, n0, dst_b);
                             return;
                         }
-                        if constexpr (supports_packet_v<T, VecA> || supports_packet_v<T, VecB>) {
+                        if constexpr (supports_packet_v<Scalar, VecA> || supports_packet_v<Scalar, VecB>) {
                             if (packet_a) device::l3::stage_block_packet<OpA, TileM, TileK, VecA, Thr>(linear_tid, a_item, lda, m0, kk0, m, k, dst_a);
                             else device::l3::stage_block<OpA, TileM, TileK, Thr>(linear_tid, a_item, lda, m0, kk0, m, k, dst_a);
                             if (packet_b) device::l3::stage_block_packet<OpB, TileK, TileN, VecB, Thr>(linear_tid, b_item, ldb, kk0, n0, k, n, dst_b);

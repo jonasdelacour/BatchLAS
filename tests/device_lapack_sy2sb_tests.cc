@@ -50,28 +50,29 @@ using Blk64 = batchlas::device::tier::Blocked<64>;
 static_assert(batchlas::device::tier_info<batchlas::device::routine::sy2sb<Uplo::Lower, 32>, Blk32, float>::wg_size == kWG);
 static_assert(batchlas::device::tier_info<batchlas::device::routine::sy2sb<Uplo::Lower, 32>, Blk64, std::complex<double>>::wg_size == kWG);
 
-template <class T> T nan_of() { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }
-template <class T> double re_of(T v) {
-    if constexpr (is_cplx<T>) return double(v.real());
+template <class Scalar> Scalar nan_of() { return Scalar(std::numeric_limits<real_of<Scalar>>::quiet_NaN()); }
+template <class Scalar> double re_of(Scalar v) {
+    if constexpr (is_cplx<Scalar>) return double(v.real());
     else return double(v);
 }
 
 // items Hermitian n x n matrices, item b a copy of representative b % kPeriod (representative 1
 // graded: D A D, D = diag(2^(-8 k / n))); A, AB and tau with non-natural ld and batch strides, all
 // pads, the strict upper triangle, AB and tau NaN.
-template <class T> struct Problem {
+template <class Scalar> struct Problem {
     int n, kd, items, lda, ldab, ntau;
     std::size_t sa, sab, stau;
-    std::vector<T> a, ab, tau;
+    std::vector<Scalar> a, ab, tau;
     Problem(int n_, int kd_, int items_, std::uint64_t seed)
         : n(n_), kd(kd_), items(items_), lda(n_ + 3), ldab(kd_ + 4), ntau(std::max(0, n_ - kd_)), sa(std::size_t(n_ + 3) * n_ + 5),
-          sab(std::size_t(kd_ + 4) * n_ + 3), stau(std::size_t(std::max(0, n_ - kd_)) + 2), a(sa * items_, nan_of<T>()),
-          ab(sab * items_, nan_of<T>()), tau(stau * items_, nan_of<T>()) {
+          sab(std::size_t(kd_ + 4) * n_ + 3), stau(std::size_t(std::max(0, n_ - kd_)) + 2), a(sa * items_,
+                                                                                              nan_of<Scalar>()),
+          ab(sab * items_, nan_of<Scalar>()), tau(stau * items_, nan_of<Scalar>()) {
         for (int r = 0; r < kPeriod; ++r)
             for (int j = 0; j < n; ++j)
                 for (int i = j; i < n; ++i) {
-                    T x = val<T>(seed * 1000003u + std::uint64_t(r) * 7919u + std::uint64_t(j) * n + i);
-                    if (r == 1) x = x * real_of<T>(std::exp2(-8.0 * (i + j) / n));
+                    Scalar x = val<Scalar>(seed * 1000003u + std::uint64_t(r) * 7919u + std::uint64_t(j) * n + i);
+                    if (r == 1) x = x * real_of<Scalar>(std::exp2(-8.0 * (i + j) / n));
                     a[std::size_t(r) * sa + i + std::size_t(j) * lda] = x;
                 }
         for (int b = kPeriod; b < items; ++b) std::copy_n(a.data() + std::size_t(b % kPeriod) * sa, sa, a.data() + std::size_t(b) * sa);
@@ -84,13 +85,13 @@ template <class T> struct Problem {
             fros[r] = std::max(std::sqrt(double(s)), 1e-30);
         }
     }
-    T at(int b, int i, int j) const { return a[std::size_t(b) * sa + i + std::size_t(j) * lda]; }
+    Scalar at(int b, int i, int j) const { return a[std::size_t(b) * sa + i + std::size_t(j) * lda]; }
     double fro(int b) const { return fros[b % kPeriod]; }
     double fros[kPeriod] = {};
 };
 
-template <class T> struct Out {
-    std::vector<T> a, ab, tau;
+template <class Scalar> struct Out {
+    std::vector<Scalar> a, ab, tau;
     std::vector<int> info;
 };
 
@@ -99,16 +100,16 @@ struct Args {
     int kd = -1000, ab_rows = -1, tau_len = -1, a_cols = -1;
 };
 
-template <class T, class Tier> Out<T> run_device(Dev& dev, const Problem<T>& p, Args g = {}) {
+template <class Scalar, class Tier> Out<Scalar> run_device(Dev& dev, const Problem<Scalar>& p, Args g = {}) {
     const int n = p.n, lda = p.lda, ldab = p.ldab;
     const int kd = g.kd == -1000 ? p.kd : g.kd;
     const int ab_rows = g.ab_rows < 0 ? p.kd + 1 : g.ab_rows, tau_len = g.tau_len < 0 ? p.ntau : g.tau_len;
     const int a_cols = g.a_cols < 0 ? n : g.a_cols;
     const std::size_t sa = p.sa, sab = p.sab, stau = p.stau;
-    const batchlas::device::WorkspaceSize sz = batchlas::device::buffer_size<batchlas::device::routine::sy2sb<Uplo::Lower, 32>, Tier, T>(n, std::max(kd, 0));
-    T* a = dev.up(p.a);
-    T* ab = dev.up(p.ab);
-    T* tau = dev.up(p.tau);
+    const batchlas::device::WorkspaceSize sz = batchlas::device::buffer_size<batchlas::device::routine::sy2sb<Uplo::Lower, 32>, Tier, Scalar>(n, std::max(kd, 0));
+    Scalar* a = dev.up(p.a);
+    Scalar* ab = dev.up(p.ab);
+    Scalar* tau = dev.up(p.tau);
     int* info = dev.up(std::vector<int>(p.items, 12345));
     std::byte* gws = dev.up(std::vector<std::byte>(std::max<std::size_t>(sz.global_bytes * p.items, 1), std::byte{0xff}));
     dev.template run<kWG>(p.items, sz.local_bytes, [=](sycl::nd_item<1> it, unsigned char* lm) {
@@ -126,13 +127,13 @@ template <class T, class Tier> Out<T> run_device(Dev& dev, const Problem<T>& p, 
     return {dev.down(a, p.a.size()), dev.down(ab, p.ab.size()), dev.down(tau, p.tau.size()), dev.down(info, std::size_t(p.items))};
 }
 
-template <class T> Out<T> run_host(Dev& dev, const Problem<T>& p) {
-    T* a = dev.up(p.a);
-    T* ab = dev.up(p.ab);
-    T* tau = dev.up(p.tau);
-    const MatrixView<T, MatrixFormat::Dense> av(a, p.n, p.n, p.lda, int(p.sa), p.items);
-    const MatrixView<T, MatrixFormat::Dense> abv(ab, p.kd + 1, p.n, p.ldab, int(p.sab), p.items);
-    const VectorView<T> tv(tau, p.ntau, p.items, 1, int(p.stau));
+template <class Scalar> Out<Scalar> run_host(Dev& dev, const Problem<Scalar>& p) {
+    Scalar* a = dev.up(p.a);
+    Scalar* ab = dev.up(p.ab);
+    Scalar* tau = dev.up(p.tau);
+    const MatrixView<Scalar, MatrixFormat::Dense> av(a, p.n, p.n, p.lda, int(p.sa), p.items);
+    const MatrixView<Scalar, MatrixFormat::Dense> abv(ab, p.kd + 1, p.n, p.ldab, int(p.sab), p.items);
+    const VectorView<Scalar> tv(tau, p.ntau, p.items, 1, int(p.stau));
     UnifiedVector<std::byte> ws(sytrd_sy2sb_buffer_size(*dev.ctx, av, abv, tv, Uplo::Lower, p.kd));
     sytrd_sy2sb(*dev.ctx, av, abv, tv, Uplo::Lower, p.kd, ws.to_span()).wait();
     return {dev.down(a, p.a.size()), dev.down(ab, p.ab.size()), dev.down(tau, p.tau.size()), std::vector<int>(p.items, 0)};
@@ -140,18 +141,18 @@ template <class T> Out<T> run_host(Dev& dev, const Problem<T>& p) {
 
 // Element e of item b's slice is inside the written region: A's lower triangle, AB's kd + 1
 // rows, tau's ntau entries.
-template <class T> bool in_a(const Problem<T>& p, std::size_t e) {
+template <class Scalar> bool in_a(const Problem<Scalar>& p, std::size_t e) {
     const std::size_t r = e % p.sa;
     return r < std::size_t(p.lda) * p.n && int(r % p.lda) < p.n && int(r % p.lda) >= int(r / p.lda);
 }
-template <class T> bool in_ab(const Problem<T>& p, std::size_t e) {
+template <class Scalar> bool in_ab(const Problem<Scalar>& p, std::size_t e) {
     const std::size_t r = e % p.sab;
     return r < std::size_t(p.ldab) * p.n && int(r % p.ldab) <= p.kd;
 }
-template <class T> bool in_tau(const Problem<T>& p, std::size_t e) { return int(e % p.stau) < p.ntau; }
+template <class Scalar> bool in_tau(const Problem<Scalar>& p, std::size_t e) { return int(e % p.stau) < p.ntau; }
 
 // Outside the written regions the output equals the input bit for bit.
-template <class T, class In> int untouched_lost(const Problem<T>& p, const std::vector<T>& before, const std::vector<T>& after, In inside) {
+template <class Scalar, class In> int untouched_lost(const Problem<Scalar>& p, const std::vector<Scalar>& before, const std::vector<Scalar>& after, In inside) {
     int bad = 0;
     for (std::size_t e = 0; e < after.size(); ++e) bad += !inside(p, e) && !same_bits(before[e], after[e]);
     return bad;
@@ -164,13 +165,13 @@ template <class T> int vs_rep(const std::vector<T>& got, std::size_t stride, int
 }
 // Diagonal elements of A and AB (row 0). A Hermitian diagonal is real: its imaginary part is not
 // part of the matrix (her2k writes 0, the host's gemm-pair fallback leaves rounding there).
-template <class T> bool a_diag(const Problem<T>& p, std::size_t e) { return (e % p.sa) % (p.lda + 1) == 0; }
-template <class T> bool ab_diag(const Problem<T>& p, std::size_t e) { return (e % p.sab) % p.ldab == 0; }
-template <class T> bool no_diag(const Problem<T>&, std::size_t) { return false; }
+template <class Scalar> bool a_diag(const Problem<Scalar>& p, std::size_t e) { return (e % p.sa) % (p.lda + 1) == 0; }
+template <class Scalar> bool ab_diag(const Problem<Scalar>& p, std::size_t e) { return (e % p.sab) % p.ldab == 0; }
+template <class Scalar> bool no_diag(const Problem<Scalar>&, std::size_t) { return false; }
 
 // The worst |got - ref| / scale over the written region; scale = ||A||_F (floored at floor) or 1.
-template <class T, class In, class Dg>
-double worst(const Problem<T>& p, const std::vector<T>& got, const std::vector<T>& ref, std::size_t stride, In inside, Dg diag, double floor) {
+template <class Scalar, class In, class Dg>
+double worst(const Problem<Scalar>& p, const std::vector<Scalar>& got, const std::vector<Scalar>& ref, std::size_t stride, In inside, Dg diag, double floor) {
     double w = 0;
     for (std::size_t e = 0; e < got.size(); ++e) {
         if (!inside(p, e)) continue;
@@ -211,7 +212,7 @@ template <class T, class Tier> void expect_parity(Dev& dev, const Problem<T>& p)
     EXPECT_EQ(vs_rep(got.a, p.sa, p.items) + vs_rep(got.ab, p.sab, p.items) + vs_rep(got.tau, p.stau, p.items), 0);
 }
 
-template <class T> class DeviceApiSy2sbTest : public DeviceCoreTest<T> {};
+template <class Scalar> class DeviceApiSy2sbTest : public DeviceCoreTest<Scalar> {};
 
 // The host references sytrd_sy2sb / sytrd_sb2st are GPU routes (their own suites skip on a CPU
 // device; there sy2sb's workspace sizing and sb2st's sub-group kernel are missing).
@@ -262,8 +263,8 @@ TYPED_TEST(DeviceApiSy2sbTest, BadArgumentsReturnMinusIAndWriteNothing) {
 
 // ---- sy2sb + sb2st in one user kernel ------------------------------------------------------
 
-template <class R> struct Tri {
-    std::vector<R> d, e;
+template <class Real> struct Tri {
+    std::vector<Real> d, e;
     std::vector<int> info;
 };
 
@@ -302,32 +303,32 @@ std::vector<long double> sturm_eigs(const std::vector<long double>& d, const std
 // sycl-kernel-reduce-cross-barrier-values pass on the complex<double> chase of this kernel, with
 // or without the sy2sb before it: SPIR images compile it out and the case skips on their devices.
 #if defined(__SYCL_DEVICE_ONLY__) && (defined(__SPIR__) || defined(__SPIRV__))
-template <class T> constexpr bool kChaseCompiled = !std::is_same_v<T, std::complex<double>>;
+template <class Scalar> constexpr bool kChaseCompiled = !std::is_same_v<Scalar, std::complex<double>>;
 #else
-template <class T> constexpr bool kChaseCompiled = true;
+template <class Scalar> constexpr bool kChaseCompiled = true;
 #endif
-template <class T> bool chase_on_spir_device(Dev& dev) {
+template <class Scalar> bool chase_on_spir_device(Dev& dev) {
 #if BATCHLAS_SYCL_IMPL_ACPP  // no SPIR AOT image (and no such backend enumerators)
     (void)dev;
     return false;
 #else
     const sycl::backend be = dev.q().get_device().get_backend();
-    return std::is_same_v<T, std::complex<double>> && (be == sycl::backend::opencl || be == sycl::backend::ext_oneapi_level_zero);
+    return std::is_same_v<Scalar, std::complex<double>> && (be == sycl::backend::opencl || be == sycl::backend::ext_oneapi_level_zero);
 #endif
 }
 
-template <class T, class Tier> Tri<real_of<T>> run_fused(Dev& dev, const Problem<T>& p) {
-    using R = real_of<T>;
+template <class Scalar, class Tier> Tri<real_of<Scalar>> run_fused(Dev& dev, const Problem<Scalar>& p) {
+    using R = real_of<Scalar>;
     const int n = p.n, kd = p.kd, lda = p.lda, ldab = p.ldab, ntau = p.ntau, nm1 = std::max(0, n - 1);
     const std::size_t sa = p.sa, sab = p.sab, stau = p.stau;
-    const batchlas::device::WorkspaceSize s1 = batchlas::device::buffer_size<batchlas::device::routine::sy2sb<Uplo::Lower, 32>, Tier, T>(n, kd);
-    const batchlas::device::WorkspaceSize s2 = batchlas::device::buffer_size<batchlas::device::routine::sb2st<Uplo::Lower, 32>, Blk32, T>(n, kd);
-    T* a = dev.up(p.a);
-    T* ab = dev.up(p.ab);
-    T* tau = dev.up(p.tau);
+    const batchlas::device::WorkspaceSize s1 = batchlas::device::buffer_size<batchlas::device::routine::sy2sb<Uplo::Lower, 32>, Tier, Scalar>(n, kd);
+    const batchlas::device::WorkspaceSize s2 = batchlas::device::buffer_size<batchlas::device::routine::sb2st<Uplo::Lower, 32>, Blk32, Scalar>(n, kd);
+    Scalar* a = dev.up(p.a);
+    Scalar* ab = dev.up(p.ab);
+    Scalar* tau = dev.up(p.tau);
     R* d = dev.alloc<R>(std::size_t(p.items) * n, nan_of<R>());
     R* e = dev.alloc<R>(std::size_t(p.items) * nm1 + 1, nan_of<R>());
-    T* tau2 = dev.alloc<T>(std::size_t(p.items) * nm1 + 1, nan_of<T>());
+    Scalar* tau2 = dev.alloc<Scalar>(std::size_t(p.items) * nm1 + 1, nan_of<Scalar>());
     int* info = dev.up(std::vector<int>(p.items, 12345));
     std::byte* g1 = dev.up(std::vector<std::byte>(std::max<std::size_t>(s1.global_bytes * p.items, 1), std::byte{0xff}));
     std::byte* g2 = dev.up(std::vector<std::byte>(std::max<std::size_t>(s2.global_bytes * p.items, 1), std::byte{0xff}));
@@ -340,7 +341,7 @@ template <class T, class Tier> Tri<real_of<T>> run_fused(Dev& dev, const Problem
         int r = batchlas::device::sy2sb<Uplo::Lower, Tier>(ex, batchlas::device::mat(a + sa * b, n, n, lda), AB, batchlas::device::vec(tau + stau * b, ntau), kd,
                                              batchlas::device::Workspace{local, batchlas::device::global_slice(g1, s1, b)});
         (void)d, (void)e, (void)tau2, (void)g2, (void)s2;  // the same captures in every image
-        if constexpr (kChaseCompiled<T>) {
+        if constexpr (kChaseCompiled<Scalar>) {
             if (ex.team() == 0) {  // one sub-group chases the band the work-group just produced
                 const batchlas::device::SgpPartition<32> pex{it.get_sub_group()};
                 r |= batchlas::device::sb2st<Uplo::Lower, Blk32>(pex, AB, batchlas::device::vec(d + std::ptrdiff_t(b) * n, n), batchlas::device::vec(e + std::ptrdiff_t(b) * nm1, nm1),
@@ -354,23 +355,23 @@ template <class T, class Tier> Tri<real_of<T>> run_fused(Dev& dev, const Problem
     return {dev.down(d, std::size_t(p.items) * n), dev.down(e, std::size_t(p.items) * nm1), dev.down(info, std::size_t(p.items))};
 }
 
-template <class T> Tri<real_of<T>> run_host_two_stage(Dev& dev, const Problem<T>& p) {
-    using R = real_of<T>;
+template <class Scalar> Tri<real_of<Scalar>> run_host_two_stage(Dev& dev, const Problem<Scalar>& p) {
+    using R = real_of<Scalar>;
     const int n = p.n, nm1 = std::max(0, n - 1);
-    T* a = dev.up(p.a);
-    T* ab = dev.up(p.ab);
-    T* tau = dev.up(p.tau);
+    Scalar* a = dev.up(p.a);
+    Scalar* ab = dev.up(p.ab);
+    Scalar* tau = dev.up(p.tau);
     R* d = dev.alloc<R>(std::size_t(p.items) * n, nan_of<R>());
     R* e = dev.alloc<R>(std::size_t(p.items) * nm1 + 1, nan_of<R>());
-    T* tau2 = dev.alloc<T>(std::size_t(p.items) * nm1 + 1, nan_of<T>());
-    const MatrixView<T, MatrixFormat::Dense> av(a, n, n, p.lda, int(p.sa), p.items);
-    const MatrixView<T, MatrixFormat::Dense> abv(ab, p.kd + 1, n, p.ldab, int(p.sab), p.items);
-    const VectorView<T> tv(tau, p.ntau, p.items, 1, int(p.stau));
+    Scalar* tau2 = dev.alloc<Scalar>(std::size_t(p.items) * nm1 + 1, nan_of<Scalar>());
+    const MatrixView<Scalar, MatrixFormat::Dense> av(a, n, n, p.lda, int(p.sa), p.items);
+    const MatrixView<Scalar, MatrixFormat::Dense> abv(ab, p.kd + 1, n, p.ldab, int(p.sab), p.items);
+    const VectorView<Scalar> tv(tau, p.ntau, p.items, 1, int(p.stau));
     UnifiedVector<std::byte> ws1(sytrd_sy2sb_buffer_size(*dev.ctx, av, abv, tv, Uplo::Lower, p.kd));
     sytrd_sy2sb(*dev.ctx, av, abv, tv, Uplo::Lower, p.kd, ws1.to_span()).wait();
     const VectorView<R> dvw(d, n, p.items, 1, n);
     const VectorView<R> evw(e, nm1, p.items, 1, nm1);
-    const VectorView<T> t2(tau2, nm1, p.items, 1, nm1);
+    const VectorView<Scalar> t2(tau2, nm1, p.items, 1, nm1);
     UnifiedVector<std::byte> ws2(sytrd_sb2st_buffer_size(*dev.ctx, abv, dvw, evw, t2, Uplo::Lower, p.kd, 16));
     sytrd_sb2st(*dev.ctx, abv, dvw, evw, t2, Uplo::Lower, p.kd, ws2.to_span(), 16).wait();
     return {dev.down(d, std::size_t(p.items) * n), dev.down(e, std::size_t(p.items) * nm1), std::vector<int>(p.items, 0)};
@@ -419,10 +420,10 @@ static_assert(kLay.m2.offset + 5 * 5 * sizeof(std::complex<double>) <= kLay.size
 static_assert(batchlas::device::buffer_size<batchlas::device::routine::sy2sb<Uplo::Lower, 32>, Blk32, float>(8, 8) == batchlas::device::WorkspaceSize{});
 static_assert(batchlas::device::buffer_size<batchlas::device::routine::sy2sb<Uplo::Lower, 32>, Blk32, float>(9, 0) == batchlas::device::WorkspaceSize{});
 
-template <class T> std::string pick(const batchlas::device::DeviceLimits& lim, int n) {
+template <class Scalar> std::string pick(const batchlas::device::DeviceLimits& lim, int n) {
     std::string got = "none";
     try {
-        batchlas::device::with_tier<Lower16, T>(lim, n, [&]<class Tier>(Tier) { got = "blocked" + std::to_string(Tier::nb); });
+        batchlas::device::with_tier<Lower16, Scalar>(lim, n, [&]<class Tier>(Tier) { got = "blocked" + std::to_string(Tier::nb); });
     } catch (const batchlas::invalid_argument& e) {
         got = std::string("throw:") + e.what();
     }

@@ -34,7 +34,7 @@ namespace {
 // Per-TU tag: this cluster's own instantiation of the shared LASWP kernel.
 struct GetrsLaswpTag {};
 
-template <typename T> class GetrsPermGatherKernel;
+template <typename Scalar> class GetrsPermGatherKernel;
 
 // Collapsed permutation: apply the transposition list once to an identity index
 // array, after which dst[i] = src[idxs[i]] is coalesced on both sides. It stages
@@ -44,33 +44,33 @@ template <typename T> class GetrsPermGatherKernel;
 
 constexpr std::size_t kGetrsPermTileCap = 24576;
 
-template <typename T>
+template <typename Scalar>
 bool getrs_perm_gather_fits(int n, std::size_t slm_budget) {
     if (n <= 0) return false;
     const std::size_t int_bytes = 2u * static_cast<std::size_t>(n) * sizeof(int);
     if (slm_budget <= int_bytes) return false;
     const std::size_t col_bytes =
-        static_cast<std::size_t>(n | 1) * sizeof(typename sycl_device::DevMap<T>::type);
+        static_cast<std::size_t>(n | 1) * sizeof(typename sycl_device::DevMap<Scalar>::type);
     return (slm_budget - int_bytes) >= col_bytes;
 }
 
-template <typename T>
+template <typename Scalar>
 bool getrs_perm_gather_launch(Queue& ctx,
-                              T* base, int ld, int stride, int nrhs, int batch,
+                              Scalar* base, int ld, int stride, int nrhs, int batch,
                               const int* piv, int piv_stride, int n,
                               bool forward,
                               std::size_t slm_budget, int max_wg, const std::uint8_t* mask) {
     if (nrhs <= 0 || batch <= 0 || n <= 0) return true;
 
-    using DM = sycl_device::DevMap<T>;
+    using DM = sycl_device::DevMap<Scalar>;
     using D = typename DM::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     // ODD ldt: the permuted read is random in the row index, so an even ldt
     // would put a whole column in one bank.
     const int ldt = n | 1;
     const std::size_t int_bytes = 2u * static_cast<std::size_t>(n) * sizeof(int);
-    if (!getrs_perm_gather_fits<T>(n, slm_budget)) return false;
+    if (!getrs_perm_gather_fits<Scalar>(n, slm_budget)) return false;
 
     const std::size_t col_bytes = static_cast<std::size_t>(ldt) * sizeof(D);
     std::size_t data_budget = slm_budget - int_bytes;
@@ -100,7 +100,7 @@ bool getrs_perm_gather_launch(Queue& ctx,
             sycl::range<1>(2u * static_cast<std::size_t>(n)), h);
         sycl::local_accessor<D, 1> tile(sycl::range<1>(tile_elems), h);
 
-        batchlas::impl::parallel_for<GetrsPermGatherKernel<T>>(h,
+        batchlas::impl::parallel_for<GetrsPermGatherKernel<Scalar>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
@@ -177,22 +177,22 @@ bool getrs_perm_use_gather(PermSpelling sp, int nrhs) {
 
 // Which spelling this call resolves, through the SAME functions the driver uses.
 // Tests only: on capacity the gather silently falls back to the walk. 1 = gather.
-template <typename T>
+template <typename Scalar>
 int getrs_perm_spelling_debug(Queue& ctx, int n, int nrhs) {
     if (!getrs_perm_use_gather(perm_spelling(), nrhs)) return 0;
     const auto dev = ctx.device();
     if (dev.type != DeviceType::GPU) return 0;
     const std::size_t lm = dev.get_property(DeviceProperty::LOCAL_MEM_SIZE);
     const std::size_t budget = (lm > 4096) ? (lm - 4096) : 0;
-    return getrs_perm_gather_fits<T>(n, budget) ? 1 : 0;
+    return getrs_perm_gather_fits<Scalar>(n, budget) ? 1 : 0;
 }
 
 // Workspace: ZERO in every mode -- the interchange is in place and the routed
 // trsm takes none. It dereferences nothing: A and B arrive null when measuring.
-template <typename T>
+template <typename Scalar>
 std::size_t getrs_blocked_buffer_size(Queue&,
-                                      const MatrixView<T, MatrixFormat::Dense>&,
-                                      const MatrixView<T, MatrixFormat::Dense>&,
+                                      const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                      const MatrixView<Scalar, MatrixFormat::Dense>&,
                                       Transpose) {
     return 0;
 }
@@ -201,14 +201,14 @@ std::size_t getrs_blocked_buffer_size(Queue&,
 // permutes B, then solves L (unit lower) and U. Trans/ConjTrans solve U then L
 // and apply the SAME list REVERSED to the output; either half wrong is a
 // silently wrong Trans answer that no NoTrans test can see.
-template <typename T>
+template <typename Scalar>
 Event getrs_blocked_dispatch(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& A,
-                             const MatrixView<T, MatrixFormat::Dense>& B,
+                             const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                             const MatrixView<Scalar, MatrixFormat::Dense>& B,
                              Transpose transA,
                              Span<int64_t> pivots,
                              Span<std::byte> workspace,
-                             GetrsSolveTrsm<T> solve_trsm) {
+                             GetrsSolveTrsm<Scalar> solve_trsm) {
     static_cast<void>(workspace);   // this arm needs none
 
     const int n = static_cast<int>(A.rows());
@@ -251,14 +251,14 @@ Event getrs_blocked_dispatch(Queue& ctx,
 
     auto apply_perm = [&](bool forward) -> Event {
         if (want_gather &&
-            getrs_perm_gather_launch<T>(ctx, B.data_ptr(), B.ld(), B.stride(), nrhs,
-                                        batch, piv_i32.data(), /*piv_stride=*/n, n,
-                                        forward, slm_budget, max_wg, mask)) {
+            getrs_perm_gather_launch<Scalar>(ctx, B.data_ptr(), B.ld(), B.stride(), nrhs,
+                                             batch, piv_i32.data(), /*piv_stride=*/n, n,
+                                             forward, slm_budget, max_wg, mask)) {
             return ctx.get_event();
         }
         // FALLBACK, not a throw: the gather refuses when a column of B plus the
         // two int arrays will not fit local memory; the walk is identical.
-        return lu_native::lu_laswp_launch<GetrsLaswpTag, T>(
+        return lu_native::lu_laswp_launch<GetrsLaswpTag, Scalar>(
             ctx, B.data_ptr(), B.ld(), B.stride(), nrhs, batch,
             piv_i32.data(), /*piv_stride=*/n, /*k0=*/0, /*k1=*/n, forward, mask);
     };
@@ -268,16 +268,16 @@ Event getrs_blocked_dispatch(Queue& ctx,
         // An out-of-order queue does not give this ordering for free.
         if (!ctx.in_order()) ctx.wait();
 
-        (void)solve_trsm(ctx, A, B, T(1), Side::Left, Uplo::Lower,
+        (void)solve_trsm(ctx, A, B, Scalar(1), Side::Left, Uplo::Lower,
                          Transpose::NoTrans, Diag::Unit);
         if (!ctx.in_order()) ctx.wait();
-        return solve_trsm(ctx, A, B, T(1), Side::Left, Uplo::Upper,
+        return solve_trsm(ctx, A, B, Scalar(1), Side::Left, Uplo::Upper,
                           Transpose::NoTrans, Diag::NonUnit);
     }
 
-    (void)solve_trsm(ctx, A, B, T(1), Side::Left, Uplo::Upper, transA, Diag::NonUnit);
+    (void)solve_trsm(ctx, A, B, Scalar(1), Side::Left, Uplo::Upper, transA, Diag::NonUnit);
     if (!ctx.in_order()) ctx.wait();
-    (void)solve_trsm(ctx, A, B, T(1), Side::Left, Uplo::Lower, transA, Diag::Unit);
+    (void)solve_trsm(ctx, A, B, Scalar(1), Side::Left, Uplo::Lower, transA, Diag::Unit);
     if (!ctx.in_order()) ctx.wait();
 
     return apply_perm(/*forward=*/false);

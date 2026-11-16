@@ -30,7 +30,7 @@ inline void SyevJacobiCtaBenchSizes(Benchmark* b) {
     }
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_SYEV_JACOBI_CTA(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
@@ -38,10 +38,10 @@ void BM_SYEV_JACOBI_CTA(minibench::State& state) {
     const size_t wg_mult = state.range(3) > 0 ? state.range(3) : 1;
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    auto A = Matrix<T>::Random(n, n, /*hermitian=*/true, batch);
-    UnifiedVector<typename base_type<T>::type> W(n * batch);
+    auto A = Matrix<Scalar>::Random(n, n, /*hermitian=*/true, batch);
+    UnifiedVector<typename base_type<Scalar>::type> W(n * batch);
 
-    JacobiParams<T> params;
+    JacobiParams<Scalar> params;
     params.cta_wg_size_multiplier = wg_mult;
 
     UnifiedVector<std::byte> workspace(0);
@@ -63,7 +63,7 @@ void BM_SYEV_JACOBI_CTA(minibench::State& state) {
 }
 
 // Same grid, tridiagonalization-based path, for a direct comparison.
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_SYEV_CTA_TRIDIAG_REF(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
@@ -71,10 +71,10 @@ void BM_SYEV_CTA_TRIDIAG_REF(minibench::State& state) {
     const size_t wg_mult = state.range(3) > 0 ? state.range(3) : 1;
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    auto A = Matrix<T>::Random(n, n, /*hermitian=*/true, batch);
-    UnifiedVector<typename base_type<T>::type> W(n * batch);
+    auto A = Matrix<Scalar>::Random(n, n, /*hermitian=*/true, batch);
+    UnifiedVector<typename base_type<Scalar>::type> W(n * batch);
 
-    SteqrParams<T> params;
+    SteqrParams<Scalar> params;
     params.cta_wg_size_multiplier = wg_mult;
 
     const size_t ws_size = syev_cta_buffer_size(*q, A, jobz, params);

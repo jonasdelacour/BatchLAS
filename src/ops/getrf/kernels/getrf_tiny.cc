@@ -37,7 +37,7 @@ namespace batchlas {
 namespace ops::getrf {
 
 // At TU namespace scope: a kernel name must not name an internal-linkage entity.
-template <typename T, int N, int NC, int MinBlocks> class GetrfTinyKernel;
+template <typename Scalar, int N, int NC, int MinBlocks> class GetrfTinyKernel;
 
 namespace {
 
@@ -62,9 +62,9 @@ constexpr int tiny_bucket(int n) {
 }
 
 // evidence: docs/perf/lu.md#d3-why-cdouble-stops-at-n16
-template <typename T>
+template <typename Scalar>
 constexpr int tiny_cap() {
-    return std::is_same_v<T, std::complex<double>> ? 16 : 32;
+    return std::is_same_v<Scalar, std::complex<double>> ? 16 : 32;
 }
 
 // The launcher's addressing of the public Reg body (lapack/getrf.hh detail::getrf_reg_run, whose
@@ -196,18 +196,18 @@ struct GetrfTinyBody {
 
 // The local-memory broadcast is for the 32-bit types, where it was measured; fp64 runs at
 // 1/64 rate on this part and keeps the shuffles.
-template <typename T>
+template <typename Scalar>
 constexpr bool getrf_tiny_slm() {
-    return std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
+    return std::is_same_v<Scalar, float> || std::is_same_v<Scalar, std::complex<float>>;
 }
 
-template <typename T, int N, int NC, int MinBlocks>
-Event getrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int batch,
+template <typename Scalar, int N, int NC, int MinBlocks>
+Event getrf_tiny_launch(Queue& ctx, Scalar* a_ptr, int ld, int stride, int n, int batch,
                         int* piv_ptr, int32_t* info_ptr, const std::uint8_t* mask) {
     // Re-typed HERE: std::complex's Annex-G operator* costs an isnan branch and a libcall.
-    using DM = sycl_device::DevMap<T>;
+    using DM = sycl_device::DevMap<Scalar>;
     using D = typename DM::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
     static_assert(N == 4 || N == 8 || N == 16 || N == 32, "the tiny ladder is {4, 8, 16, 32}");
     static_assert(NC <= N && NC % 2 == 0, "the column bucket is even and within the lanes");
 
@@ -216,7 +216,7 @@ Event getrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
         /*bytes_per_matrix=*/1u, N, /*wg_slm_budget_bytes=*/~std::size_t(0),
         resident::kTinyWgSize, resident::kTinyWgSize, /*max_pack=*/resident::kTinyWgSize / N);
     static_assert(kMpw * N == resident::kTinyWgSize, "the tiny launch must fill its work-group exactly");
-    constexpr bool kSlm = getrf_tiny_slm<T>() && N >= 16;
+    constexpr bool kSlm = getrf_tiny_slm<Scalar>() && N >= 16;
     using Body = GetrfTinyBody<D, N, NC, kMpw, MinBlocks, kSlm>;
     const int num_wg = (batch + kMpw - 1) / kMpw;
     const std::size_t slm_elems = kSlm ? std::size_t(2 * kMpw * Body::kNCV) : 1;
@@ -225,7 +225,7 @@ Event getrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
         const Body body{reinterpret_cast<D*>(a_ptr), n, batch, static_cast<std::ptrdiff_t>(ld),
                         static_cast<std::ptrdiff_t>(stride), piv_ptr, info_ptr, mask,
                         sycl::local_accessor<typename Body::R4, 1>(sycl::range<1>(slm_elems), h)};
-        batchlas::impl::parallel_for<GetrfTinyKernel<T, N, NC, MinBlocks>>(h,
+        batchlas::impl::parallel_for<GetrfTinyKernel<Scalar, N, NC, MinBlocks>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) *
                                              static_cast<std::size_t>(resident::kTinyWgSize)),
                               sycl::range<1>(static_cast<std::size_t>(resident::kTinyWgSize))),
@@ -237,14 +237,14 @@ Event getrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
 // The launch bound per (type, column bucket), each the argmin of a batch-32768 sweep over
 // {8, 12, 16, 20} (N = 32) or {1, 8, 12, 16} (N = 16); fp64 unmeasured, no cap.
 // evidence: docs/perf/lu.md#the-column-bucket
-template <typename T, int N, int NC>
+template <typename Scalar, int N, int NC>
 constexpr int getrf_tiny_min_blocks() {
-    if constexpr (std::is_same_v<T, float>) {
+    if constexpr (std::is_same_v<Scalar, float>) {
         if constexpr (N == 32) {
             return (NC == 18 || NC == 22 || NC == 24) ? 20 : NC == 26 ? 12 : 16;
         }
         return N == 16 ? 16 : 1;
-    } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+    } else if constexpr (std::is_same_v<Scalar, std::complex<float>>) {
         if constexpr (N == 32) {
             return (NC == 22 || NC == 24) ? 16 : NC >= 30 ? 8 : 12;
         }
@@ -254,10 +254,10 @@ constexpr int getrf_tiny_min_blocks() {
     }
 }
 
-template <typename T, int N, int NC>
-Event getrf_tiny_launch_nc(Queue& ctx, T* a_ptr, int ld, int stride, int n, int batch,
+template <typename Scalar, int N, int NC>
+Event getrf_tiny_launch_nc(Queue& ctx, Scalar* a_ptr, int ld, int stride, int n, int batch,
                            int* piv_ptr, int32_t* info_ptr, const std::uint8_t* mask) {
-    return getrf_tiny_launch<T, N, NC, getrf_tiny_min_blocks<T, N, NC>()>(
+    return getrf_tiny_launch<Scalar, N, NC, getrf_tiny_min_blocks<Scalar, N, NC>()>(
         ctx, a_ptr, ld, stride, n, batch, piv_ptr, info_ptr, mask);
 }
 
@@ -291,13 +291,13 @@ Event getrf_tiny_launch_mb(Queue& ctx, T* a_ptr, int ld, int stride, int n, int 
 }  // namespace
 
 // The ONE place the ceiling is spelled: a fork lets can_run promise what the launcher refuses.
-template <typename T>
+template <typename Scalar>
 int getrf_tiny_max_n() {
-    return tiny_cap<T>();
+    return tiny_cap<Scalar>();
 }
 
-template <typename T>
-std::size_t getrf_tiny_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
+template <typename Scalar>
+std::size_t getrf_tiny_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A) {
     const int batch = static_cast<int>(A.batch_size());
     if (batch < 1) return 0;
     return detail::info_scratch_bytes(ctx, batch);
@@ -305,9 +305,9 @@ std::size_t getrf_tiny_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat:
 
 // Every can_run gate is re-applied here: the driver is also reached directly
 // (tests), and can_run must equal it exactly (R3).
-template <typename T>
+template <typename Scalar>
 Event getrf_tiny_dispatch(Queue& ctx,
-                          const MatrixView<T, MatrixFormat::Dense>& A,
+                          const MatrixView<Scalar, MatrixFormat::Dense>& A,
                           Span<int64_t> pivots,
                           Span<std::byte> workspace,
                           Span<int32_t> info_out) {
@@ -322,11 +322,11 @@ Event getrf_tiny_dispatch(Queue& ctx,
     }
 
     const int bucket = tiny_bucket(n);
-    if (bucket < 1 || bucket > tiny_cap<T>()) {
+    if (bucket < 1 || bucket > tiny_cap<Scalar>()) {
         throw batchlas::unsupported(
             "getrf_tiny: order " + std::to_string(n) +
             " is above this type's register-resident ceiling of " +
-            std::to_string(tiny_cap<T>()));
+            std::to_string(tiny_cap<Scalar>()));
     }
 
     BumpAllocator pool(workspace);
@@ -339,17 +339,17 @@ Event getrf_tiny_dispatch(Queue& ctx,
 
     switch (bucket) {
         case 4:
-            return getrf_tiny_launch_mb<T, 4>(ctx, A.data_ptr(), A.ld(), A.stride(), n, batch,
+            return getrf_tiny_launch_mb<Scalar, 4>(ctx, A.data_ptr(), A.ld(), A.stride(), n, batch,
                                            piv_i32.data(), info.data(), mask);
         case 8:
-            return getrf_tiny_launch_mb<T, 8>(ctx, A.data_ptr(), A.ld(), A.stride(), n, batch,
+            return getrf_tiny_launch_mb<Scalar, 8>(ctx, A.data_ptr(), A.ld(), A.stride(), n, batch,
                                            piv_i32.data(), info.data(), mask);
         case 16:
-            return getrf_tiny_launch_mb<T, 16>(ctx, A.data_ptr(), A.ld(), A.stride(), n, batch,
+            return getrf_tiny_launch_mb<Scalar, 16>(ctx, A.data_ptr(), A.ld(), A.stride(), n, batch,
                                             piv_i32.data(), info.data(), mask);
         case 32:
-            if constexpr (tiny_cap<T>() >= 32) {
-                return getrf_tiny_launch_mb<T, 32>(ctx, A.data_ptr(), A.ld(), A.stride(), n,
+            if constexpr (tiny_cap<Scalar>() >= 32) {
+                return getrf_tiny_launch_mb<Scalar, 32>(ctx, A.data_ptr(), A.ld(), A.stride(), n,
                                                 batch, piv_i32.data(), info.data(), mask);
             }
             break;
@@ -359,7 +359,7 @@ Event getrf_tiny_dispatch(Queue& ctx,
     // Unreachable: thrown rather than falling through to a leading-submatrix factorisation.
     throw batchlas::unsupported(
         "getrf_tiny: no instantiation for order " + std::to_string(n) +
-        " (ceiling " + std::to_string(tiny_cap<T>()) + ")");
+        " (ceiling " + std::to_string(tiny_cap<Scalar>()) + ")");
 }
 
 // Per scalar type only; the switch above pulls the <T, N> cross-product in implicitly.

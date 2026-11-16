@@ -11,10 +11,10 @@
 
 namespace batchlas::ops::symm {
 
-template <typename T, bool Herm>
-BATCHLAS_INTERNAL_API Event symm_mirror(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A,
-                                        const MatrixView<T, MatrixFormat::Dense>& B,
-                                        const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Side side,
-                                        Uplo uplo, int chunk);
+template <typename Scalar, bool Herm>
+BATCHLAS_INTERNAL_API Event symm_mirror(Queue& q, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                        const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                                        const MatrixView<Scalar, MatrixFormat::Dense>& C, Scalar alpha, Scalar beta,
+                                        Side side, Uplo uplo, int chunk);
 
 }  // namespace batchlas::ops::symm

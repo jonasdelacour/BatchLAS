@@ -29,15 +29,15 @@ namespace ops::gemm {
 
 using select::overloaded;
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
 struct Dims {
     std::int64_t m, n, k;
 };
 
-template <typename T>
-Dims dims_of(const MV<T>& A, const MV<T>& B, Transpose ta, Transpose tb) {
+template <typename Scalar>
+Dims dims_of(const MV<Scalar>& A, const MV<Scalar>& B, Transpose ta, Transpose tb) {
     const auto [m, k] = get_effective_dims(A, ta);
     const auto [kb, n] = get_effective_dims(B, tb);
     static_cast<void>(kb);
@@ -45,8 +45,8 @@ Dims dims_of(const MV<T>& A, const MV<T>& B, Transpose ta, Transpose tb) {
 }
 
 // One launch covers the batch with one (m, n, k, ld, stride), so the three views must agree.
-template <typename T>
-void validate(const MV<T>& A, const MV<T>& B, const MV<T>& C, Transpose ta, Transpose tb) {
+template <typename Scalar>
+void validate(const MV<Scalar>& A, const MV<Scalar>& B, const MV<Scalar>& C, Transpose ta, Transpose tb) {
     const auto [m, k] = get_effective_dims(A, ta);
     const auto [kb, n] = get_effective_dims(B, tb);
     if (A.batch_size() != B.batch_size() || A.batch_size() != C.batch_size() || k != kb || C.rows() != m ||
@@ -54,32 +54,32 @@ void validate(const MV<T>& A, const MV<T>& B, const MV<T>& C, Transpose ta, Tran
         throw batchlas::invalid_argument("gemm: incompatible matrix dimensions");
 }
 
-template <typename T>
-bool contiguous16(const MV<T>& M) {
+template <typename Scalar>
+bool contiguous16(const MV<Scalar>& M) {
     const bool aligned = reinterpret_cast<std::uintptr_t>(M.data_ptr()) % 16 == 0;
     return aligned && M.ld() == M.rows() && (M.batch_size() == 1 || M.stride() == M.ld() * M.cols());
 }
 
 // C folds to T for a real scalar (conj is the identity): one row serves both.
-template <typename T>
+template <typename Scalar>
 std::string_view trans_word(Transpose t) {
     if (t == Transpose::NoTrans) return "N";
-    return (!is_complex_v<T> || t == Transpose::Trans) ? "T" : "C";
+    return (!is_complex_v<Scalar> || t == Transpose::Trans) ? "T" : "C";
 }
 
-template <typename T>
-select::Key key_of(const MV<T>& A, const MV<T>& B, const MV<T>& C, Transpose ta, Transpose tb) {
-    const Dims d = dims_of<T>(A, B, ta, tb);
-    const bool packed = contiguous16<T>(A) && contiguous16<T>(B) && contiguous16<T>(C);
-    return {{"ta", trans_word<T>(ta)}, {"tb", trans_word<T>(tb)}, {"layout", packed ? "packed" : "strided"},
+template <typename Scalar>
+select::Key key_of(const MV<Scalar>& A, const MV<Scalar>& B, const MV<Scalar>& C, Transpose ta, Transpose tb) {
+    const Dims d = dims_of<Scalar>(A, B, ta, tb);
+    const bool packed = contiguous16<Scalar>(A) && contiguous16<Scalar>(B) && contiguous16<Scalar>(C);
+    return {{"ta", trans_word<Scalar>(ta)}, {"tb", trans_word<Scalar>(tb)}, {"layout", packed ? "packed" : "strided"},
             {"m", d.m}, {"n", d.n}, {"k", d.k}, {"batch", A.batch_size()}};
 }
 
 // Does a wide config instantiate this form? A real Trans is served by a ConjTrans instantiation.
-template <typename T>
+template <typename Scalar>
 bool wide_form(const WideCfg& c, Transpose ta, Transpose tb) {
     auto op = [](Transpose t) { return t == Transpose::NoTrans ? 0 : t == Transpose::Trans ? 1 : 2; };
-    return wide_serves<T>(c, op(ta), op(tb));
+    return wide_serves<Scalar>(c, op(ta), op(tb));
 }
 
 inline bool reg_form(const RegCfg& c, Transpose ta, Transpose tb) {
@@ -88,15 +88,15 @@ inline bool reg_form(const RegCfg& c, Transpose ta, Transpose tb) {
 }
 
 // Whether the native kernels answer `precision` (contract: ComputePrecision in enums.hh). They
-// compute in T throughout, so Default and the precision equal to T's own (F32 for float and
+// compute in Scalar throughout, so Default and the precision equal to Scalar's own (F32 for float and
 // complex<float>, F64 for double and complex<double>) are exact. F16, BF16 and TF32 on a
-// single-precision T only PERMIT a less accurate product, which full precision satisfies; while a
+// single-precision Scalar only PERMIT a less accurate product, which full precision satisfies; while a
 // vendor library exists it is the one that honours the hint (tensor cores), so the natives answer
 // it only when there is none. Any other pair (F64 on float, F32 on double, ...) is an error on
 // every path, as cuBLAS's enum_convert already makes it.
-template <typename T>
+template <typename Scalar>
 bool native_serves_precision(ComputePrecision p, bool has_vendor) {
-    constexpr bool single = std::is_same_v<typename base_type<T>::type, float>;
+    constexpr bool single = std::is_same_v<typename base_type<Scalar>::type, float>;
     switch (p) {
         case ComputePrecision::Default: return true;
         case ComputePrecision::F32: return single;
@@ -115,14 +115,15 @@ inline bool natives_run_on(const select::Device& d) { return d.is_gpu || !d.has_
 // Correctness only (R3): false means the launcher would throw or answer wrongly. Every register
 // and wide tile hard-wires its transpose form, so a form it does not instantiate is refused
 // here (a silent wrong answer otherwise). evidence: docs/perf/gemm.md#choices-flat-selection-p34
-template <typename T>
-bool can_run(const GemmChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& B, const MV<T>& C,
+template <typename Scalar>
+bool can_run(const GemmChoice& c, const select::Device& d, const MV<Scalar>& A, const MV<Scalar>& B,
+             const MV<Scalar>& C,
              Transpose ta, Transpose tb, ComputePrecision precision) {
     // Every native family honours a batch mask; the vendor's strided call cannot skip an item.
     const bool masked = batchlas::detail::any_batch_mask(A, B, C);
-    const Dims s = dims_of<T>(A, B, ta, tb);
+    const Dims s = dims_of<Scalar>(A, B, ta, tb);
     const bool device = natives_run_on(d);
-    const bool native = device && native_serves_precision<T>(precision, d.has_vendor) && s.m > 0 && s.n > 0 && s.k > 0 &&
+    const bool native = device && native_serves_precision<Scalar>(precision, d.has_vendor) && s.m > 0 && s.n > 0 && s.k > 0 &&
                         A.batch_size() >= 1 && !A.is_heterogeneous() && !B.is_heterogeneous() &&
                         !C.is_heterogeneous();
     // The 3-D launches put the batch in grid z (65535 on CUDA); launch() chunks a larger batch.
@@ -132,10 +133,10 @@ bool can_run(const GemmChoice& c, const select::Device& d, const MV<T>& A, const
         [&](Tiled) { return grid && d.max_wg >= kTiledWg; },
         [&](Small) {
             const bool nn = ta == Transpose::NoTrans && tb == Transpose::NoTrans;
-            return native && small_fits<T>(d, nn, std::max({s.m, s.n, s.k}));
+            return native && small_fits<Scalar>(d, nn, std::max({s.m, s.n, s.k}));
         },
         [&](const Reg& r) {
-            if constexpr (!std::is_same_v<T, float>) return false;
+            if constexpr (!std::is_same_v<Scalar, float>) return false;
             const auto* cfg = std::find_if(reg_configs.begin(), reg_configs.end(), [&](const RegCfg& g) {
                 return g.m == r.m && g.n == r.n && g.k == r.k && g.u == r.u;
             });
@@ -145,8 +146,8 @@ bool can_run(const GemmChoice& c, const select::Device& d, const MV<T>& A, const
         [&](const Wide& w) {
             const auto* cfg = std::find_if(wide_configs.begin(), wide_configs.end(),
                                            [&](const WideCfg& g) { return g.m == w.m && g.n == w.n && g.k == w.k; });
-            return grid && cfg != wide_configs.end() && wide_form<T>(*cfg, ta, tb) && d.max_wg >= cfg->threads() &&
-                   d.slm_budget_for(cfg->threads()) >= wide_slm_bytes<T>(*cfg);
+            return grid && cfg != wide_configs.end() && wide_form<Scalar>(*cfg, ta, tb) && d.max_wg >= cfg->threads() &&
+                   d.slm_budget_for(cfg->threads()) >= wide_slm_bytes<Scalar>(*cfg);
         },
         [&](const SplitK& sk) {
             // The slices put batch * s in grid z (an int group id); one item's partials are int-indexed;
@@ -156,10 +157,10 @@ bool can_run(const GemmChoice& c, const select::Device& d, const MV<T>& A, const
             const bool slices = std::find(kSplitKSlices.begin(), kSplitKSlices.end(), sk.s) != kSplitKSlices.end();
             const std::int64_t batch = A.batch_size();
             return grid && slices && sk.s <= d.max_groups_yz &&
-                   cfg != wide_configs.end() && splitk_host(*cfg) && wide_form<T>(*cfg, ta, tb) &&
-                   d.max_wg >= cfg->threads() && d.slm_budget_for(cfg->threads()) >= wide_slm_bytes<T>(*cfg) &&
+                   cfg != wide_configs.end() && splitk_host(*cfg) && wide_form<Scalar>(*cfg, ta, tb) &&
+                   d.max_wg >= cfg->threads() && d.slm_budget_for(cfg->threads()) >= wide_slm_bytes<Scalar>(*cfg) &&
                    splitk_ld(s.m) * s.n <= std::numeric_limits<int>::max() &&
-                   splitk_item_bytes<T>(s.m, s.n, sk.s) <= d.scratch_budget / batch;
+                   splitk_item_bytes<Scalar>(s.m, s.n, sk.s) <= d.scratch_budget / batch;
         },
         [&](Vendor) { return d.has_vendor && !masked; },
     }, c);
@@ -169,14 +170,15 @@ bool can_run(const GemmChoice& c, const select::Device& d, const MV<T>& A, const
 // batch in grid z serves any batch. The chunks are disjoint in C and the views are the strided
 // ones the kernels read (data_ptr, ld, stride), so each chunk is an independent call; batch_range
 // hands each chunk its slice of the batch mask.
-template <typename T, typename Fn>
-Event for_batch_chunks(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, std::int64_t chunk, Fn&& fn) {
+template <typename Scalar, typename Fn>
+Event for_batch_chunks(Queue& q, const MV<Scalar>& A, const MV<Scalar>& Bm, const MV<Scalar>& C, std::int64_t chunk,
+                       Fn&& fn) {
     const std::int64_t batch = A.batch_size();
     if (batch <= chunk) return fn(A, Bm, C);
     Event last;
     for (std::int64_t off = 0; off < batch; off += chunk) {
         const int n = static_cast<int>(std::min(chunk, batch - off));
-        auto sub = [&](const MV<T>& M) { return M.batch_range(static_cast<int>(off), n); };
+        auto sub = [&](const MV<Scalar>& M) { return M.batch_range(static_cast<int>(off), n); };
         last = fn(sub(A), sub(Bm), sub(C));
     }
     // The chunk Events are not chained: an out-of-order Queue is drained so `last` covers them all.
@@ -184,45 +186,50 @@ Event for_batch_chunks(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C
     return last;
 }
 
-template <Backend B, typename T>
-Event launch(Queue& q, const GemmChoice& c, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta,
+template <Backend B, typename Scalar>
+Event launch(Queue& q, const GemmChoice& c, const MV<Scalar>& A, const MV<Scalar>& Bm, const MV<Scalar>& C,
+             Scalar alpha, Scalar beta,
              Transpose ta, Transpose tb, ComputePrecision precision) {
     const std::int64_t grid = select::device_of<B>(q).max_groups_yz;
     return std::visit(overloaded{
         [&](Direct) {
-            return for_batch_chunks<T>(q, A, Bm, C, grid, [&](const MV<T>& a, const MV<T>& b, const MV<T>& cc) {
-                return ops::gemm::gemm_direct<T>(q, a, b, cc, alpha, beta, ta, tb);
+            return for_batch_chunks<Scalar>(q, A, Bm, C, grid,
+                                            [&](const MV<Scalar>& a, const MV<Scalar>& b, const MV<Scalar>& cc) {
+                return ops::gemm::gemm_direct<Scalar>(q, a, b, cc, alpha, beta, ta, tb);
             });
         },
         [&](Tiled) {
-            return for_batch_chunks<T>(q, A, Bm, C, grid, [&](const MV<T>& a, const MV<T>& b, const MV<T>& cc) {
-                return ops::gemm::gemm_tiled<T>(q, a, b, cc, alpha, beta, ta, tb);
+            return for_batch_chunks<Scalar>(q, A, Bm, C, grid,
+                                            [&](const MV<Scalar>& a, const MV<Scalar>& b, const MV<Scalar>& cc) {
+                return ops::gemm::gemm_tiled<Scalar>(q, a, b, cc, alpha, beta, ta, tb);
             });
         },
-        [&](Small) { return ops::gemm::gemm_small<T>(q, A, Bm, C, alpha, beta, ta, tb); },
+        [&](Small) { return ops::gemm::gemm_small<Scalar>(q, A, Bm, C, alpha, beta, ta, tb); },
         [&](const Reg& r) -> Event {
-            if constexpr (std::is_same_v<T, float>)
-                return for_batch_chunks<T>(q, A, Bm, C, grid, [&](const MV<T>& a, const MV<T>& b, const MV<T>& cc) {
+            if constexpr (std::is_same_v<Scalar, float>)
+                return for_batch_chunks<Scalar>(q, A, Bm, C, grid,
+                                                [&](const MV<Scalar>& a, const MV<Scalar>& b, const MV<Scalar>& cc) {
                     return ops::gemm::gemm_reg(q, r.m, r.n, r.k, r.u, a, b, cc, alpha, beta, ta, tb);
                 });
             else throw batchlas::unsupported("gemm: reg is float only");
         },
         [&](const Wide& w) {
-            return for_batch_chunks<T>(q, A, Bm, C, grid, [&](const MV<T>& a, const MV<T>& b, const MV<T>& cc) {
-                return ops::gemm::gemm_wide<T>(q, w.m, w.n, w.k, a, b, cc, alpha, beta, ta, tb);
+            return for_batch_chunks<Scalar>(q, A, Bm, C, grid,
+                                            [&](const MV<Scalar>& a, const MV<Scalar>& b, const MV<Scalar>& cc) {
+                return ops::gemm::gemm_wide<Scalar>(q, w.m, w.n, w.k, a, b, cc, alpha, beta, ta, tb);
             });
         },
         [&](const SplitK& sk) {
             // batch * s groups in grid z: the chunk is what keeps that product under the cap.
-            return for_batch_chunks<T>(q, A, Bm, C, std::max<std::int64_t>(1, grid / sk.s),
-                                       [&](const MV<T>& a, const MV<T>& b, const MV<T>& cc) {
-                return ops::gemm::gemm_splitk<T>(q, sk.m, sk.n, sk.k, sk.s, a, b, cc, alpha, beta, ta, tb);
-            });
+            return for_batch_chunks<Scalar>(q, A, Bm, C, std::max<std::int64_t>(1, grid / sk.s),
+                                            [&](const MV<Scalar>& a, const MV<Scalar>& b, const MV<Scalar>& cc) {
+                     return ops::gemm::gemm_splitk<Scalar>(q, sk.m, sk.n, sk.k, sk.s, a, b, cc, alpha, beta, ta, tb);
+                 });
         },
         [&](Vendor) -> Event {
             if constexpr (select::has_library<B>(spec.vendor))
-                return backend::gemm_vendor<B, T>(q, A, Bm, C, alpha, beta, ta, tb, precision);
-            else select::no_vendor<B, T>(spec);
+                return backend::gemm_vendor<B, Scalar>(q, A, Bm, C, alpha, beta, ta, tb, precision);
+            else select::no_vendor<B, Scalar>(spec);
         },
     }, c);
 }
@@ -230,47 +237,49 @@ Event launch(Queue& q, const GemmChoice& c, const MV<T>& A, const MV<T>& Bm, con
 }  // namespace ops::gemm
 
 // gemm takes no caller workspace (no gemm_buffer_size): splitk leases its partials from the Queue.
-template <Backend Back, typename T>
-Event gemm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
-           const MatrixView<T, MatrixFormat::Dense>& C_, T alpha, T beta, Transpose transA, Transpose transB,
+template <Backend Back, typename Scalar>
+Event gemm(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, const MatrixView<Scalar,
+           MatrixFormat::Dense>& B,
+           const MatrixView<Scalar, MatrixFormat::Dense>& C_, Scalar alpha, Scalar beta, Transpose transA,
+           Transpose transB,
            ComputePrecision precision) {
     // C carries the call's mask whichever operand brought it: the k = 0 writes below and in the
     // heterogeneous loop are C's own (fill_zeros, scale and batch_item honour it).
     const auto mask = batchlas::detail::call_mask("gemm", A, B, C_);
     const bool adopt = !mask.empty() && mask.size() == static_cast<std::size_t>(C_.batch_size());  // else validate throws
-    const MatrixView<T, MatrixFormat::Dense> C = adopt ? C_.with_batch_mask(mask) : C_;
+    const MatrixView<Scalar, MatrixFormat::Dense> C = adopt ? C_.with_batch_mask(mask) : C_;
     // Where no native family runs, refuse before the heterogeneous loop writes a k = 0 item.
     if (!mask.empty() && !ops::gemm::natives_run_on(select::device_of<Back>(ctx, ops::gemm::spec.vendor)))
-        batchlas::detail::refuse_batch_mask<T>(Op::gemm, "gemm", Back, A, B, C);
+        batchlas::detail::refuse_batch_mask<Scalar>(Op::gemm, "gemm", Back, A, B, C);
     if (A.is_heterogeneous() || B.is_heterogeneous() || C.is_heterogeneous()) {
         // Items are homogeneous by construction, so the recursion is one level deep; each batch-1
         // child carries its item's mask byte and skips on the device.
-        return backend::detail::gemm_heterogeneous_loop<T>(
+        return backend::detail::gemm_heterogeneous_loop<Scalar>(
             ctx, A, B, C, beta, transA, transB,
-            [&](const MatrixView<T, MatrixFormat::Dense>& a, const MatrixView<T, MatrixFormat::Dense>& b,
-                const MatrixView<T, MatrixFormat::Dense>& c) {
-                return gemm<Back, T>(ctx, a, b, c, alpha, beta, transA, transB, precision);
+            [&](const MatrixView<Scalar, MatrixFormat::Dense>& a, const MatrixView<Scalar, MatrixFormat::Dense>& b,
+                const MatrixView<Scalar, MatrixFormat::Dense>& c) {
+                return gemm<Back, Scalar>(ctx, a, b, c, alpha, beta, transA, transB, precision);
             });
     }
-    ops::gemm::validate<T>(A, B, C, transA, transB);
+    ops::gemm::validate<Scalar>(A, B, C, transA, transB);
     // An empty batch launches nothing under any pin.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
-    const auto d = ops::gemm::dims_of<T>(A, B, transA, transB);
+    const auto d = ops::gemm::dims_of<Scalar>(A, B, transA, transB);
     // No family takes a zero extent (vendor-free there was no route): an empty C is a no-op and
     // k = 0 is C := beta C, written as zeros at beta 0 so a NaN in C does not survive.
-    if (d.m == 0 || d.n == 0 || (d.k == 0 && beta == T(1))) return ctx.create_event_after_external_work();
-    if (d.k == 0) return beta == T(0) ? C.fill_zeros(ctx) : scale(ctx, beta, C);
+    if (d.m == 0 || d.n == 0 || (d.k == 0 && beta == Scalar(1))) return ctx.create_event_after_external_work();
+    if (d.k == 0) return beta == Scalar(0) ? C.fill_zeros(ctx) : scale(ctx, beta, C);
     const coverage::Shape shape{.m = d.m, .n = d.n, .k = d.k, .batch = A.batch_size(), .transA = transA,
                                 .transB = transB};
-    const select::Key key = ops::gemm::key_of<T>(A, B, C, transA, transB);
-    return select::run<Back, T>(
-        ops::gemm::spec, ctx, key, ops::gemm::candidates<T>(),
+    const select::Key key = ops::gemm::key_of<Scalar>(A, B, C, transA, transB);
+    return select::run<Back, Scalar>(
+        ops::gemm::spec, ctx, key, ops::gemm::candidates<Scalar>(),
         [&](const auto& c, const auto& dev) {
-            return ops::gemm::can_run<T>(c, dev, A, B, C, transA, transB, precision);
+            return ops::gemm::can_run<Scalar>(c, dev, A, B, C, transA, transB, precision);
         },
         shape, key,
         [&](const auto& c) {
-            return ops::gemm::launch<Back, T>(ctx, c, A, B, C, alpha, beta, transA, transB, precision);
+            return ops::gemm::launch<Back, Scalar>(ctx, c, A, B, C, alpha, beta, transA, transB, precision);
         });
 }
 

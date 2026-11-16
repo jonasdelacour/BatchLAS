@@ -60,21 +60,21 @@ constexpr bool trsm_stage_left() {
     return sizeof(D) <= 8 && !sycl_device::dev_is_complex_v<D>;
 }
 
-template <typename T, int N, Side SideV>
+template <typename Scalar, int N, Side SideV>
 class TrsmCtaKernel;
 
 }  // namespace
 
-template <typename T, int N, Side SideV>
+template <typename Scalar, int N, Side SideV>
 Event trsm_native_v1(Queue& ctx,
-                     const MatrixView<T, MatrixFormat::Dense>& A,
-                     const MatrixView<T, MatrixFormat::Dense>& B,
-                     T alpha,
+                     const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                     const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                     Scalar alpha,
                      Uplo uplo,
                      Transpose transA,
                      Diag diag) {
-    using D = typename sycl_device::DevMap<T>::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    using D = typename sycl_device::DevMap<Scalar>::type;
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     const Canonical can = canonicalise(SideV, uplo, transA, diag);
 
@@ -133,7 +133,7 @@ Event trsm_native_v1(Queue& ctx,
         D alpha_d;
         __builtin_memcpy(&alpha_d, &alpha, sizeof(D));
 
-        batchlas::impl::parallel_for<TrsmCtaKernel<T, N, SideV>>(h,
+        batchlas::impl::parallel_for<TrsmCtaKernel<Scalar, N, SideV>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(bs) * groups * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
@@ -219,16 +219,16 @@ BATCHLAS_UNROLL_FULL
     return ctx.get_event();
 }
 
-template <typename T, Side SideV>
+template <typename Scalar, Side SideV>
 Event trsm_native_v1_buckets(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& A,
-                             const MatrixView<T, MatrixFormat::Dense>& B,
-                             T alpha, Uplo uplo, Transpose transA, Diag diag) {
-    using D_ = typename sycl_device::DevMap<T>::type;
+                             const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                             const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                             Scalar alpha, Uplo uplo, Transpose transA, Diag diag) {
+    using D_ = typename sycl_device::DevMap<Scalar>::type;
     switch (smallest_bucket_ge(static_cast<int>(A.rows()))) {
-        case 8:  return trsm_native_v1<T, 8, SideV>(ctx, A, B, alpha, uplo, transA, diag);
-        case 16: return trsm_native_v1<T, 16, SideV>(ctx, A, B, alpha, uplo, transA, diag);
-        case 32: return trsm_native_v1<T, 32, SideV>(ctx, A, B, alpha, uplo, transA, diag);
+        case 8:  return trsm_native_v1<Scalar, 8, SideV>(ctx, A, B, alpha, uplo, transA, diag);
+        case 16: return trsm_native_v1<Scalar, 16, SideV>(ctx, A, B, alpha, uplo, transA, diag);
+        case 32: return trsm_native_v1<Scalar, 32, SideV>(ctx, A, B, alpha, uplo, transA, diag);
         default: break;
     }
     {
@@ -266,23 +266,23 @@ inline int trsm_outer_block(int cta_nb, Side side) {
     return rounded >= cta_nb ? rounded : cta_nb;
 }
 
-template <typename T>
+template <typename Scalar>
 Event trsm_native_blocked(Queue& ctx,
-                          const MatrixView<T, MatrixFormat::Dense>& A,
-                          const MatrixView<T, MatrixFormat::Dense>& B,
-                          T alpha,
+                          const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                          const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                          Scalar alpha,
                           Side side,
                           Uplo uplo,
                           Transpose transA,
                           Diag diag,
-                          TrsmTrailingGemm<T> trailing_gemm) {
+                          TrsmTrailingGemm<Scalar> trailing_gemm) {
     if (!trailing_gemm) {
         throw batchlas::invalid_argument("trsm_native_blocked: trailing_gemm is required (pass the public gemm)");
     }
     const Canonical can = canonicalise(side, uplo, transA, diag);
     const int n = static_cast<int>(A.rows());
     const int q = static_cast<int>(side == Side::Left ? B.cols() : B.rows());
-    const int nb = trsm_cta_max_n<T>();          // the CTA capacity: the INNER block
+    const int nb = trsm_cta_max_n<Scalar>();          // the CTA capacity: the INNER block
     const int outer_nb = trsm_outer_block(nb, side);  // the trailing-update block
 
     const int lda = A.ld(), ldb = B.ld();
@@ -291,9 +291,9 @@ Event trsm_native_blocked(Queue& ctx,
 
     // Every block re-attaches the call's batch mask, which the raw-pointer view drops.
     const auto mask = batchlas::detail::call_mask("trsm", A, B);
-    auto sub = [&mask](const MatrixView<T, MatrixFormat::Dense>& V,
+    auto sub = [&mask](const MatrixView<Scalar, MatrixFormat::Dense>& V,
                        int r0, int nr, int c0, int nc, int ld, int stride, int batch) {
-        return MatrixView<T, MatrixFormat::Dense>(
+        return MatrixView<Scalar, MatrixFormat::Dense>(
             V.data_ptr() + static_cast<std::ptrdiff_t>(c0) * ld + r0,
             nr, nc, ld, stride, batch).with_batch_mask(mask);
     };
@@ -302,7 +302,7 @@ Event trsm_native_blocked(Queue& ctx,
     // [n-b, n-a) when not. Both levels go through this, sharing one convention.
     auto stored_off = [&](int a, int b) { return can.fwd ? a : (n - b); };
 
-    auto apply_update = [&](int t_lo, int t_hi, int p_lo, int p_hi, T beta) {
+    auto apply_update = [&](int t_lo, int t_hi, int p_lo, int p_hi, Scalar beta) {
         const int m = t_hi - t_lo;
         const int k = p_hi - p_lo;
         const int r0 = stored_off(t_lo, t_hi);
@@ -323,20 +323,20 @@ Event trsm_native_blocked(Queue& ctx,
 
         if (side == Side::Left) {
             // C(m x q) := -op(Aoff)(m x k) * X(k x q) + beta*C
-            (void)trailing_gemm(ctx, Aoff, X, C, T(-1), beta,
+            (void)trailing_gemm(ctx, Aoff, X, C, Scalar(-1), beta,
                           transA, Transpose::NoTrans,
                           ComputePrecision::Default);
         } else {
             // C(q x m) := -X(q x k) * op(Aoff)(k x m) + beta*C. X GOES IN THE A
             // POSITION: with the A block first, C would have at most nb rows
             // against the required q.
-            (void)trailing_gemm(ctx, X, Aoff, C, T(-1), beta,
+            (void)trailing_gemm(ctx, X, Aoff, C, Scalar(-1), beta,
                           Transpose::NoTrans, transA,
                           ComputePrecision::Default);
         }
     };
 
-    auto solve_diag = [&](int lo, int hi, T alpha_eff) {
+    auto solve_diag = [&](int lo, int hi, Scalar alpha_eff) {
         const int m = hi - lo;
         const int r0 = stored_off(lo, hi);
         const auto Adiag = sub(A, r0, m, r0, m, lda, sa, bs);
@@ -344,7 +344,7 @@ Event trsm_native_blocked(Queue& ctx,
                                                : sub(B, 0, q, r0, m, ldb, sb, bs);
         // (void) on an Event: deliberate. This Queue is in-order, so the next submission
         // is already ordered after this one and the Event carries nothing the caller needs.
-        (void)trsm_native_v1_dispatch<T>(ctx, Adiag, Bblk, alpha_eff, side, uplo, transA, diag);
+        (void)trsm_native_v1_dispatch<Scalar>(ctx, Adiag, Bblk, alpha_eff, side, uplo, transA, diag);
     };
 
     // TWO LEVELS: the outer applies the whole solved prefix to a panel in one fat
@@ -358,9 +358,9 @@ Event trsm_native_blocked(Queue& ctx,
             const int hi = std::min(HI, lo + nb);
             const bool first_touch_is_here = (LO == 0);
             if (lo > LO) {
-                apply_update(lo, hi, LO, lo, first_touch_is_here ? alpha : T(1));
+                apply_update(lo, hi, LO, lo, first_touch_is_here ? alpha : Scalar(1));
             }
-            const T alpha_eff = (LO == 0 && lo == 0) ? alpha : T(1);
+            const Scalar alpha_eff = (LO == 0 && lo == 0) ? alpha : Scalar(1);
             solve_diag(lo, hi, alpha_eff);
 
             // Block i+1's GEMM reads what block i's solve just wrote; an
@@ -372,18 +372,18 @@ Event trsm_native_blocked(Queue& ctx,
     return ctx.get_event();
 }
 
-template <typename T>
+template <typename Scalar>
 Event trsm_native_v1_dispatch(Queue& ctx,
-                              const MatrixView<T, MatrixFormat::Dense>& A,
-                              const MatrixView<T, MatrixFormat::Dense>& B,
-                              T alpha,
+                              const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                              const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                              Scalar alpha,
                               Side side,
                               Uplo uplo,
                               Transpose transA,
                               Diag diag) {
     return (side == Side::Left)
-               ? trsm_native_v1_buckets<T, Side::Left>(ctx, A, B, alpha, uplo, transA, diag)
-               : trsm_native_v1_buckets<T, Side::Right>(ctx, A, B, alpha, uplo, transA, diag);
+               ? trsm_native_v1_buckets<Scalar, Side::Left>(ctx, A, B, alpha, uplo, transA, diag)
+               : trsm_native_v1_buckets<Scalar, Side::Right>(ctx, A, B, alpha, uplo, transA, diag);
 }
 
 template Event trsm_native_v1_dispatch<float>(

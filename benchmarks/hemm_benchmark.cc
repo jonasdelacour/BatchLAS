@@ -13,22 +13,22 @@ namespace {
 // route this same binary takes with BATCHLAS_EXPAND_MAX_BYTES=0, so running it
 // twice measures both implementations without a second benchmark, and
 // gemm_benchmark at the same complex type and shape gives the equal-work floor.
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_HEMM(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(3);
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    auto A = Matrix<T>::Random(n, n, true, batch);
-    auto Bm = Matrix<T>::Random(n, n, false, batch);
-    auto C = Matrix<T>::Random(n, n, false, batch);
+    auto A = Matrix<Scalar>::Random(n, n, true, batch);
+    auto Bm = Matrix<Scalar>::Random(n, n, false, batch);
+    auto C = Matrix<Scalar>::Random(n, n, false, batch);
 
     state.SetKernel(q,
                     std::move(A),
                     std::move(Bm),
                     bench::pristine(C),
-                    T(1),
-                    T(1),
+                    Scalar(1),
+                    Scalar(1),
                     Side::Left,
                     Uplo::Lower,
                     [](Queue& q, auto&&... xs) {

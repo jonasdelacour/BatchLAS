@@ -49,17 +49,17 @@ SvdVectors job_of(const std::string& vec) {
     return vec == "none" ? SvdVectors::None : vec == "thin" ? SvdVectors::Thin : SvdVectors::All;
 }
 
-template <typename T>
+template <typename Scalar>
 struct GesvdProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
-    using R = typename base_type<T>::type;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+    using R = typename base_type<Scalar>::type;
     Queue& q;
     std::optional<Uplo> herm;
     SvdVectors job;
     int m, n, k, batch, ld, urows, ucols, vrows, vcols, ldu, ldv;
     std::size_t sa, su, sv;
-    UnifiedVector<T> A0, A, U, Vh;
-    UnifiedVector<T*> pA0, pA, pU, pVh;
+    UnifiedVector<Scalar> A0, A, U, Vh;
+    UnifiedVector<Scalar*> pA0, pA, pU, pVh;
     MV A0v, Av, Uv, Vhv;
     UnifiedVector<R> s;
     UnifiedVector<std::int32_t> info;
@@ -91,8 +91,8 @@ struct GesvdProblem {
         if (job == SvdVectors::None && m != n && select::detail::pin_text("gesvd", &src) == std::optional<std::string>("vendor"))
             throw batchlas::invalid_argument("gesvd vendor: values-only non-square faults (known defect 15)");
         try {
-            return herm ? gesvd_buffer_size<kBackend, T>(q, Av, s.to_span(), Uv, Vhv, job, job, *herm)
-                        : gesvd_buffer_size<kBackend, T>(q, Av, s.to_span(), Uv, Vhv, job, job);
+            return herm ? gesvd_buffer_size<kBackend, Scalar>(q, Av, s.to_span(), Uv, Vhv, job, job, *herm)
+                        : gesvd_buffer_size<kBackend, Scalar>(q, Av, s.to_span(), Uv, Vhv, job, job);
         } catch (const batchlas::unsupported& e) {
             throw batchlas::invalid_argument(e.what());
         }
@@ -110,9 +110,9 @@ struct GesvdProblem {
     }
     void run(Span<std::byte> ws) {
         if (herm)
-            (void)gesvd<kBackend, T>(q, Av, s.to_span(), Uv, Vhv, job, job, *herm, ws, info.to_span());
+            (void)gesvd<kBackend, Scalar>(q, Av, s.to_span(), Uv, Vhv, job, job, *herm, ws, info.to_span());
         else
-            (void)gesvd<kBackend, T>(q, Av, s.to_span(), Uv, Vhv, job, job, ws, info.to_span());
+            (void)gesvd<kBackend, Scalar>(q, Av, s.to_span(), Uv, Vhv, job, job, ws, info.to_span());
         q.wait();
     }
     std::pair<double, int> verify() {
@@ -130,17 +130,18 @@ struct GesvdProblem {
         double scale = 0;
         for (int b : items) scale = std::max(scale, ref[std::size_t(b)].empty() ? 0.0 : ref[std::size_t(b)][0]);
         const VectorView<R> sval(s.data(), k, batch);
-        double worst = MV::values_error(sval, ref, scale) / verify::bound<T>(verify::Check::values, k);
+        double worst = MV::values_error(sval, ref, scale) / verify::bound<Scalar>(verify::Check::values, k);
         if (job == SvdVectors::None) return {worst, bad};
-        const double rec = MV::svd_residual(q, A0v, Uv, sval, Vhv) / verify::bound<T>(verify::Check::factorization, std::max(m, n));
-        const double ou = MV::orthogonality(q, Uv) / verify::bound<T>(verify::Check::orthogonality_rotations, ucols);
-        auto vh = Vhv.template astype<T>(items);
-        Matrix<T, MatrixFormat::Dense> vhh(vcols, vrows, int(items.size()));
-        auto eye = Matrix<T, MatrixFormat::Dense>::Identity(vrows, int(items.size()));
+        const double rec = MV::svd_residual(q, A0v, Uv, sval, Vhv) / verify::bound<Scalar>(verify::Check::factorization, std::max(m, n));
+        const double ou = MV::orthogonality(q, Uv) / verify::bound<Scalar>(verify::Check::orthogonality_rotations,
+                                                                           ucols);
+        auto vh = Vhv.template astype<Scalar>(items);
+        Matrix<Scalar, MatrixFormat::Dense> vhh(vcols, vrows, int(items.size()));
+        auto eye = Matrix<Scalar, MatrixFormat::Dense>::Identity(vrows, int(items.size()));
         (void)MV::product(q, vh, Transpose::ConjTrans, eye, Transpose::NoTrans, vhh);
         q.wait();
         const double ov = MV::orthogonality(q, vhh, vhh.all_items()) /
-                          verify::bound<T>(verify::Check::orthogonality_rotations, vrows);
+                          verify::bound<Scalar>(verify::Check::orthogonality_rotations, vrows);
         worst = verify::nanmax(worst, verify::nanmax(rec, verify::nanmax(ou, ov)));
         return {worst, bad};
     }

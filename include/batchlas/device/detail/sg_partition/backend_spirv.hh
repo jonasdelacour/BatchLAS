@@ -36,8 +36,8 @@ inline constexpr bool is_fp_v = std::is_same_v<T, float> || std::is_same_v<T, do
 
 template <class T>
 struct is_complex : std::false_type {};
-template <class R>
-struct is_complex<std::complex<R>> : std::bool_constant<is_fp_v<R>> {};
+template <class Real>
+struct is_complex<std::complex<Real>> : std::bool_constant<is_fp_v<Real>> {};
 
 // Canonical fixed-width type, so long / long long pick one overload.
 template <class T>

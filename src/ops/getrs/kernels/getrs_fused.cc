@@ -123,23 +123,23 @@ template <> struct GetrsFusedRegs120<std::complex<double>> {
 
 enum class FusedBody { kNoTrans, kTrans, kPotrs };
 
-template <typename T>
+template <typename Scalar>
 constexpr int getrs_fused_regs_for(int nrhs, FusedBody body, int cuda_cc) {
     const int i = getrs_fused_nr_bucket(nrhs);
     const auto pick = [&](const int* nt, const int* tr, const int* po) {
         return body == FusedBody::kTrans ? tr[i] : body == FusedBody::kNoTrans ? nt[i] : po[i];
     };
     if (batchlas::is_sm120_family(cuda_cc)) {
-        using R = GetrsFusedRegs120<T>;
+        using R = GetrsFusedRegs120<Scalar>;
         return pick(R::notrans, R::trans, R::potrs);
     }
-    using R = GetrsFusedRegs<T>;
+    using R = GetrsFusedRegs<Scalar>;
     return pick(R::notrans, R::trans, R::potrs);
 }
 
 // The sm_89 potrs row may only widen the old max(notrans, trans) charge, never narrow it.
-template <typename T> constexpr bool potrs_row_covers_getrs() {
-    using R = GetrsFusedRegs<T>;
+template <typename Scalar> constexpr bool potrs_row_covers_getrs() {
+    using R = GetrsFusedRegs<Scalar>;
     for (int i = 0; i < 4; ++i)
         if (R::potrs[i] < std::max(R::notrans[i], R::trans[i])) return false;
     return true;
@@ -151,7 +151,7 @@ static_assert(potrs_row_covers_getrs<float>() && potrs_row_covers_getrs<double>(
 // The work-group width: ~ n/2 clamped to [64, 1024], then capped by the register gate.
 // `register_gate` is false only on Metal: the rows are NVIDIA ptxas counts, and every Metal
 // pipeline measured reports 1024 threads (the compiler spills rather than lowering the cap).
-template <typename T>
+template <typename Scalar>
 inline int getrs_fused_wg(int n, int nrhs, int max_wg, FusedBody body, int cuda_cc, bool register_gate = true) {
     int wg = 32;
     while (wg < n / 2 && wg < 1024) wg *= 2;
@@ -160,7 +160,7 @@ inline int getrs_fused_wg(int n, int nrhs, int max_wg, FusedBody body, int cuda_
     // Per SUB-PARTITION, never `65536 / regs`: that spelling leaves zero margin at some
     // widths. evidence: docs/perf/lu.md#the-register-cap-that-binds-is-per-sub-partition
     if (register_gate) {
-        const int regs = getrs_fused_regs_for<T>(nrhs, body, cuda_cc) + kGetrsFusedRegMargin;
+        const int regs = getrs_fused_regs_for<Scalar>(nrhs, body, cuda_cc) + kGetrsFusedRegMargin;
         int cap = resident::sm89_max_work_group(regs);   // already a multiple of the sub-group
         if (cap < 32) cap = 32;
         if (wg > cap) wg = cap;
@@ -194,20 +194,20 @@ template <class Ex, class MA, class MB> BATCHLAS_DEVICE_INLINE void stage(const 
     device::lacpy<device::Part::Full, Transpose::NoTrans, device::alg::DivMod>(ex, a, b);
 }
 
-template <typename T, int NR> class GetrsFusedNKernel;
-template <typename T, int NR> class GetrsFusedTKernel;
+template <typename Scalar, int NR> class GetrsFusedNKernel;
+template <typename Scalar, int NR> class GetrsFusedTKernel;
 
-// NoTrans: apply F to B, solve L y = F b (unit lower), solve U x = y. ONE body for every T; against
+// NoTrans: apply F to B, solve L y = F b (unit lower), solve U x = y. ONE body for every Scalar; against
 // the deleted complex<float> hand body it is 0.96-1.01x at nrhs <= 4, 1.02-1.05x at nrhs 6-8.
-template <typename T, int NR>
+template <typename Scalar, int NR>
 Event fused_launch_notrans(Queue& ctx,
-                           const T* A, int lda, int strideA,
-                           T* B, int ldb, int strideB,
+                           const Scalar* A, int lda, int strideA,
+                           Scalar* B, int ldb, int strideB,
                            const int* piv, int pstride,
                            int n, int nrhs, int batch, int wg, int nb, const std::uint8_t* mask) {
-    using DM = DevMap<T>;
+    using DM = DevMap<Scalar>;
     using D = typename DM::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     const D* const Ap = reinterpret_cast<const D*>(A);
     D* const Bp = reinterpret_cast<D*>(B);
@@ -219,7 +219,7 @@ Event fused_launch_notrans(Queue& ctx,
 
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<D, 1> slm(sycl::range<1>(slm_elems), h);
-        batchlas::impl::parallel_for<GetrsFusedNKernel<T, NR>>(h,
+        batchlas::impl::parallel_for<GetrsFusedNKernel<Scalar, NR>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
@@ -287,16 +287,16 @@ Event fused_launch_notrans(Queue& ctx,
 // the OUTPUT and reverses it; getting that wrong is the classic silently-wrong getrs.
 // Both solves are the DOT form, because op(U)[i][j] = op(U[j][i]): the reduction runs
 // down a CONTIGUOUS COLUMN of A.
-template <typename T, int NR>
+template <typename Scalar, int NR>
 Event fused_launch_trans(Queue& ctx,
-                         const T* A, int lda, int strideA,
-                         T* B, int ldb, int strideB,
+                         const Scalar* A, int lda, int strideA,
+                         Scalar* B, int ldb, int strideB,
                          const int* piv, int pstride,
                          int n, int nrhs, int batch, int wg, int nb, bool conj,
                          const std::uint8_t* mask) {
-    using DM = DevMap<T>;
+    using DM = DevMap<Scalar>;
     using D = typename DM::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     const D* const Ap = reinterpret_cast<const D*>(A);
     D* const Bp = reinterpret_cast<D*>(B);
@@ -309,7 +309,7 @@ Event fused_launch_trans(Queue& ctx,
 
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<D, 1> slm(sycl::range<1>(slm_elems), h);
-        batchlas::impl::parallel_for<GetrsFusedTKernel<T, NR>>(h,
+        batchlas::impl::parallel_for<GetrsFusedTKernel<Scalar, NR>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
@@ -377,7 +377,7 @@ Event fused_launch_trans(Queue& ctx,
     return ctx.get_event();
 }
 
-template <typename T, int NR, bool Lower> class PotrsFusedKernel;
+template <typename Scalar, int NR, bool Lower> class PotrsFusedKernel;
 
 // The lane slot of one right-hand side in the potrs block solve: the power of two >= jb, at least 4.
 inline int potrs_slot_width(int jb) { return jb <= 4 ? 4 : jb <= 8 ? 8 : jb <= 16 ? 16 : 32; }
@@ -393,14 +393,14 @@ inline int potrs_slots(int w, int nrhs, int cs) {
 // the DOT form (column-parallel, one sub-group per column); Upper is the mirror image,
 // U^H in the dot form and U in the axpy form. Each form reads A down a CONTIGUOUS
 // column -- the reason the two triangles are not solved by one spelling.
-template <typename T, int NR, bool Lower>
+template <typename Scalar, int NR, bool Lower>
 Event potrs_fused_launch(Queue& ctx,
-                         const T* A, int lda, int strideA,
-                         T* B, int ldb, int strideB,
+                         const Scalar* A, int lda, int strideA,
+                         Scalar* B, int ldb, int strideB,
                          int n, int nrhs, int batch, int wg, int nb, const std::uint8_t* mask) {
-    using DM = DevMap<T>;
+    using DM = DevMap<Scalar>;
     using D = typename DM::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     const D* const Ap = reinterpret_cast<const D*>(A);
     D* const Bp = reinterpret_cast<D*>(B);
@@ -413,7 +413,7 @@ Event potrs_fused_launch(Queue& ctx,
 
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<D, 1> slm(sycl::range<1>(slm_elems), h);
-        batchlas::impl::parallel_for<PotrsFusedKernel<T, NR, Lower>>(h,
+        batchlas::impl::parallel_for<PotrsFusedKernel<Scalar, NR, Lower>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
@@ -635,9 +635,9 @@ Event fused_dispatch_nr(Queue& ctx, bool trans, bool conj,
 // asked of the DEVICE, and the largest nb the tier ever uses is charged, not this
 // call's. resident::hole_padded is NOT monotone, so the largest admissible request is the
 // budget when it exceeds resident::kLaunchHoleHi and min(budget, resident::kLaunchHoleLo) otherwise.
-template <typename T>
+template <typename Scalar>
 std::size_t getrs_fused_max_rhs_elems(std::size_t slm_budget_bytes) {
-    using D = typename sycl_device::DevMap<T>::type;
+    using D = typename sycl_device::DevMap<Scalar>::type;
     const std::size_t admissible =
         (slm_budget_bytes > resident::kLaunchHoleHi) ? slm_budget_bytes
                                           : std::min(slm_budget_bytes, resident::kLaunchHoleLo);
@@ -659,20 +659,20 @@ std::size_t getrs_fused_max_rhs_elems(std::size_t slm_budget_bytes) {
 
 // WORKSPACE: ZERO -- the RHS is permuted and solved in local memory and written back in
 // place. Nothing is dereferenced; a measuring pass hands this null data pointers.
-template <typename T>
+template <typename Scalar>
 std::size_t getrs_fused_buffer_size(Queue&,
-                                    const MatrixView<T, MatrixFormat::Dense>&,
-                                    const MatrixView<T, MatrixFormat::Dense>&,
+                                    const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                    const MatrixView<Scalar, MatrixFormat::Dense>&,
                                     Transpose) {
     return 0;
 }
 
 // src/ops/getrs/getrs.cc's can_run(Cta) mirrors these checks (R3); keep the two in step.
 // The entry point is also reachable directly, so every gate is applied here.
-template <typename T>
+template <typename Scalar>
 Event getrs_fused_dispatch(Queue& ctx,
-                           const MatrixView<T, MatrixFormat::Dense>& A,
-                           const MatrixView<T, MatrixFormat::Dense>& B,
+                           const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                           const MatrixView<Scalar, MatrixFormat::Dense>& B,
                            Transpose transA,
                            Span<int64_t> pivots,
                            Span<std::byte> workspace) {
@@ -699,11 +699,11 @@ Event getrs_fused_dispatch(Queue& ctx,
     const std::size_t local_mem = dev.get_property(DeviceProperty::LOCAL_MEM_SIZE);
     const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
     const std::size_t need = static_cast<std::size_t>(n) * static_cast<std::size_t>(nrhs);
-    if (need > getrs_fused_max_rhs_elems<T>(budget)) {
+    if (need > getrs_fused_max_rhs_elems<Scalar>(budget)) {
         throw batchlas::invalid_argument(
             "getrs_fused: n * nrhs = " + std::to_string(need) +
             " exceeds this device's resident-RHS capacity (" +
-            std::to_string(getrs_fused_max_rhs_elems<T>(budget)) +
+            std::to_string(getrs_fused_max_rhs_elems<Scalar>(budget)) +
             " elements). This is a CAPACITY ceiling, not a speed one: route the "
             "call to the `blocked` choice instead (BATCHLAS_GETRS_ROUTE=blocked).");
     }
@@ -722,11 +722,11 @@ Event getrs_fused_dispatch(Queue& ctx,
 
     const int nb = getrs_fused_nb(n);
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
-    const int wg = getrs_fused_wg<T>(n, nrhs, max_wg,
-                                     trans ? FusedBody::kTrans : FusedBody::kNoTrans,
-                                     dev.cuda_compute_capability(), !impl::is_metal(impl::backend_of(*ctx)));
+    const int wg = getrs_fused_wg<Scalar>(n, nrhs, max_wg,
+                                          trans ? FusedBody::kTrans : FusedBody::kNoTrans,
+                                          dev.cuda_compute_capability(), !impl::is_metal(impl::backend_of(*ctx)));
 
-    return fused_dispatch_nr<T>(
+    return fused_dispatch_nr<Scalar>(
         ctx,
         trans,
         /*conj=*/transA == Transpose::ConjTrans,

@@ -7,21 +7,21 @@
 
 namespace batchlas {
 
-template <typename T>
+template <typename Real>
 struct LasclKernel;
 
 // One batched 2-D launch; each element applies core lascl's safe steps (every item computes the
 // same steps, so no step is a separate kernel). Inactive batch items are not touched.
-template <MatrixFormat MType, typename T>
-Event lascl(Queue& ctx, const MatrixView<T, MType>& mat, T cfrom, T cto) {
+template <MatrixFormat MType, typename Real>
+Event lascl(Queue& ctx, const MatrixView<Real, MType>& mat, Real cfrom, Real cto) {
     static_assert(MType == MatrixFormat::Dense, "lascl: dense format");
     const std::uint8_t* mk = detail::mask_ptr(detail::call_mask("lascl", mat));
-    detail::require_device_fp64<T>(ctx, "lascl");
+    detail::require_device_fp64<Real>(ctx, "lascl");
     const int m = mat.rows(), n = mat.cols(), batch = mat.batch_size();
     if (m == 0 || n == 0 || batch == 0) return ctx.get_event();
     const bool masked = mk != nullptr;  // a captured null pointer can read as non-null on AdaptiveCpp Metal
     const auto av = mat.kernel_view();
-    ctx->parallel_for<LasclKernel<T>>(device::batched2d_range(batch, m, n, device::batched2d_shape(m, n)), [=](sycl::nd_item<3> it) {
+    ctx->parallel_for<LasclKernel<Real>>(device::batched2d_range(batch, m, n, device::batched2d_shape(m, n)), [=](sycl::nd_item<3> it) {
         const device::Grid2D<> ex{it};
         ex.for_each_batch(batch, [&](int b) {
             if (masked && !mk[b]) return;

@@ -18,11 +18,11 @@ using namespace device_core_test;
 
 namespace {
 
-template <class T> class DeviceCoreReduceTest : public DeviceCoreTest<T> {};
+template <class Scalar> class DeviceCoreReduceTest : public DeviceCoreTest<Scalar> {};
 TYPED_TEST_SUITE(DeviceCoreReduceTest, AllTypes);
 
 struct Plus {
-    template <class T> T operator()(const T& a, const T& b) const { return batchlas::device::Arith<T>::add(a, b); }
+    template <class Scalar> Scalar operator()(const Scalar& a, const Scalar& b) const { return batchlas::device::Arith<Scalar>::add(a, b); }
 };
 
 // butterfly<Lo, Hi> on a sub-group: lane l ends with the sum over lanes that agree with l

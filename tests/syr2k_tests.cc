@@ -15,9 +15,9 @@
 
 using namespace batchlas;
 
-template <typename T, Backend B>
+template <typename Real, Backend B>
 struct Syr2kConfig {
-    using ScalarType = T;
+    using ScalarType = Real;
     static constexpr Backend BackendVal = B;
 };
 

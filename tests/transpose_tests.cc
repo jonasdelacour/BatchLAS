@@ -9,12 +9,12 @@
 using namespace batchlas;
 #if BATCHLAS_HAS_GPU_BACKEND
 
-template <typename T>
+template <typename Real>
 class TransposeTest : public ::testing::Test {
 protected:
     void SetUp() override {
         // A GPU without fp64 (Metal) has no double kernels: double runs on the host, as NETLIB.
-        if constexpr (test_utils::kNativeGpuLacksFp64 && !std::is_same_v<T, float>) {
+        if constexpr (test_utils::kNativeGpuLacksFp64 && !std::is_same_v<Real, float>) {
 #if !BATCHLAS_HAS_CPU_TARGET
             GTEST_SKIP() << "the GPU has no fp64 and the build no CPU target";
 #endif

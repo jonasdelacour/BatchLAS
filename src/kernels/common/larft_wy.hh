@@ -22,25 +22,25 @@
 
 namespace batchlas::wy {
 
-template <typename Tag, typename T, int WG> class LarftKernelName;
-template <typename Tag, typename T> class PackVKernelName;
+template <typename Tag, typename Scalar, int WG> class LarftKernelName;
+template <typename Tag, typename Scalar> class PackVKernelName;
 
 namespace detail {
 
 // LARFT (Forward, Columnwise): T (ib x ib, upper) from unit-lower V (m x ib); one work-group per
 // matrix on device::larft (include/batchlas/device/lapack/larft.hh), the only larft.
-template <typename Tag, typename T, int WG>
+template <typename Tag, typename Scalar, int WG>
 sycl::event larft_forward_columnwise_wg(Queue& q,
-                                        T* t_data, int ld_t, int stride_t,
-                                        const T* v_data, int ld_v, int stride_v,
+                                        Scalar* t_data, int ld_t, int stride_t,
+                                        const Scalar* v_data, int ld_v, int stride_v,
                                         int m, int ib,
-                                        const T* tau_data, int tau_stride,
+                                        const Scalar* tau_data, int tau_stride,
                                         int tau_offset, int batch,
                                         const std::uint8_t* mask) {
     static_assert(WG % 32 == 0, "WG must be a whole number of 32-wide sub-groups");
 
     return q->submit([&](sycl::handler& h) {
-        batchlas::impl::parallel_for<LarftKernelName<Tag, T, WG>>(h,
+        batchlas::impl::parallel_for<LarftKernelName<Tag, Scalar, WG>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * static_cast<size_t>(WG)),
                               sycl::range<1>(static_cast<size_t>(WG))),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
@@ -61,18 +61,18 @@ sycl::event larft_forward_columnwise_wg(Queue& q,
 
 // Dispatcher over the work-group ladder. device::gemv needs 32-wide sub-groups: a launch-time
 // check, never an in-kernel test.
-template <typename Tag, typename T>
+template <typename Tag, typename Scalar>
 sycl::event larft_forward_columnwise_batched(Queue& q,
-                                             T* t_data, int ld_t, int stride_t,
-                                             const T* v_data, int ld_v, int stride_v,
+                                             Scalar* t_data, int ld_t, int stride_t,
+                                             const Scalar* v_data, int ld_v, int stride_v,
                                              int m, int ib,
-                                             const T* tau_data, int tau_stride,
+                                             const Scalar* tau_data, int tau_stride,
                                              int tau_offset, int batch,
                                              const std::uint8_t* mask = nullptr) {
     if (!q.device().supports_sub_group_size(32))
         throw batchlas::unsupported("larft: the device has no 32-wide sub-groups");
     const auto pick = [&]<int WG>(std::integral_constant<int, WG>) {
-        return detail::larft_forward_columnwise_wg<Tag, T, WG>(
+        return detail::larft_forward_columnwise_wg<Tag, Scalar, WG>(
             q, t_data, ld_t, stride_t, v_data, ld_v, stride_v, m, ib,
             tau_data, tau_stride, tau_offset, batch, mask);
     };
@@ -90,23 +90,23 @@ sycl::event larft_forward_columnwise_batched(Queue& q,
 // trailing update below can be three plain GEMMs rather than a trmm ladder over
 // the triangular top block.
 // ---------------------------------------------------------------------------
-template <typename Tag, typename T>
+template <typename Tag, typename Scalar>
 sycl::event pack_v_panel_batched(Queue& q,
-                                 T* v_out, int ld_v_out, int stride_v_out,
-                                 const MatrixView<T, MatrixFormat::Dense>& a,
+                                 Scalar* v_out, int ld_v_out, int stride_v_out,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& a,
                                  int i0, int ib, int nq,
                                  const std::uint8_t* mask = nullptr) {
     const int m = nq - i0;
     const int ld_a = a.ld();
     const int stride_a = a.stride();
-    const T* a_ptr = a.data_ptr();
+    const Scalar* a_ptr = a.data_ptr();
     const int batch = a.batch_size();
 
     return q->submit([&](sycl::handler& h) {
         // DIM 2 IS THE ROW, NOT THE COLUMN: dim 2 is fastest-varying and both operands
         // are column-major, so the column there is uncoalesced (32 sectors per warp, not 4).
         // evidence: docs/perf/qr.md#larft_wyhh-pack_v-indexes-the-row-fastest
-        batchlas::impl::parallel_for<PackVKernelName<Tag, T>>(h,
+        batchlas::impl::parallel_for<PackVKernelName<Tag, Scalar>>(h,
             sycl::range<3>(static_cast<size_t>(batch), static_cast<size_t>(ib),
                            static_cast<size_t>(m)),
             [=](sycl::id<3> idx) {
@@ -114,9 +114,9 @@ sycl::event pack_v_panel_batched(Queue& q,
                 if (mask != nullptr && mask[b] == 0) return;  // I3
                 const int c = static_cast<int>(idx[1]);
                 const int r = static_cast<int>(idx[2]);
-                T val = T(0);
+                Scalar val = Scalar(0);
                 if (r == c) {
-                    val = T(1);
+                    val = Scalar(1);
                 } else if (r > c) {
                     val = a_ptr[static_cast<std::ptrdiff_t>(b) * stride_a + (i0 + r) + (i0 + c) * ld_a];
                 }

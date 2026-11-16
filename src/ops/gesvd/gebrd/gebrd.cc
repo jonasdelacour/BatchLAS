@@ -18,27 +18,27 @@ namespace {
 
 // Item b of a host vector view through its own operator()(i, b): device::item's ItemVec swaps two
 // registers of the float kernel's SASS.
-template <class T> struct ItemOf {
-    VectorView<T> v;
+template <class Scalar> struct ItemOf {
+    VectorView<Scalar> v;
     int32_t b;
-    T& operator()(int i) const { return v(i, b); }
+    Scalar& operator()(int i) const { return v(i, b); }
     int size() const { return v.size(); }
 };
 
-// One work-item per matrix, every T (device::gebd2). The launch sits in a function per type, so
+// One work-item per matrix, every Scalar (device::gebd2). The launch sits in a function per type, so
 // each scalar type compiles one kernel whatever the Backend.
-template <typename T>
+template <typename Scalar>
 Event gebd2_launch(Queue& ctx,
-                   const MatrixView<T, MatrixFormat::Dense>& a,
-                   const VectorView<typename base_type<T>::type>& d,
-                   const VectorView<typename base_type<T>::type>& e,
-                   const VectorView<T>& tauq,
-                   const VectorView<T>& taup,
+                   const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                   const VectorView<typename base_type<Scalar>::type>& d,
+                   const VectorView<typename base_type<Scalar>::type>& e,
+                   const VectorView<Scalar>& tauq,
+                   const VectorView<Scalar>& taup,
                    const std::uint8_t* mask) {
     const int32_t m = static_cast<int32_t>(a.rows());
     const int32_t n = static_cast<int32_t>(a.cols());
     const int32_t batch = static_cast<int32_t>(a.batch_size());
-    using RealT = typename base_type<T>::type;
+    using RealT = typename base_type<Scalar>::type;
 
     ctx->submit([&](sycl::handler& cgh) {
         auto A = a.kernel_view();
@@ -51,7 +51,8 @@ Event gebd2_launch(Queue& ctx,
             const int32_t b = static_cast<int32_t>(tid[0]);
             if (mask != nullptr && mask[b] == 0) return;  // I3: an inactive item is untouched
             (void)device::gebd2(device::Thread{}, device::mat(A.data() + static_cast<int64_t>(b) * A.stride(), m, n, A.ld()),
-                                ItemOf<RealT>{D, b}, ItemOf<RealT>{E, b}, ItemOf<T>{TAUQ, b}, ItemOf<T>{TAUP, b});
+                                ItemOf<RealT>{D, b}, ItemOf<RealT>{E, b}, ItemOf<Scalar>{TAUQ, b},
+                                ItemOf<Scalar>{TAUP, b});
         });
     });
 
@@ -60,13 +61,13 @@ Event gebd2_launch(Queue& ctx,
 
 }  // namespace
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event gebrd_unblocked(Queue& ctx,
-                      const MatrixView<T, MatrixFormat::Dense>& a,
-                      const VectorView<typename base_type<T>::type>& d,
-                      const VectorView<typename base_type<T>::type>& e,
-                      const VectorView<T>& tauq,
-                      const VectorView<T>& taup) {
+                      const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                      const VectorView<typename base_type<Scalar>::type>& d,
+                      const VectorView<typename base_type<Scalar>::type>& e,
+                      const VectorView<Scalar>& tauq,
+                      const VectorView<Scalar>& taup) {
     const std::uint8_t* const mask =
         ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("gebrd_unblocked", a, d, e, tauq, taup));
     static_cast<void>(B);
@@ -74,7 +75,7 @@ Event gebrd_unblocked(Queue& ctx,
     if (a.rows() < a.cols()) {
         throw batchlas::invalid_argument("gebrd_unblocked: current implementation requires rows >= cols");
     }
-    return gebd2_launch<T>(ctx, a, d, e, tauq, taup, mask);
+    return gebd2_launch<Scalar>(ctx, a, d, e, tauq, taup, mask);
 }
 
 #define GEBRD_INSTANTIATE(back, fp) \

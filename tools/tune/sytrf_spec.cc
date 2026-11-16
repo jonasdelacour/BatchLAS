@@ -26,14 +26,14 @@ namespace {
 
 namespace F = ops::sytrf;
 
-template <typename T>
+template <typename Scalar>
 struct SytrfProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     int n, batch, ld;
     std::size_t sa, sb;
-    UnifiedVector<T> A0, A, B0, X;
-    UnifiedVector<T*> pA0, pA, pB0, pX;
+    UnifiedVector<Scalar> A0, A, B0, X;
+    UnifiedVector<Scalar*> pA0, pA, pB0, pX;
     MV A0v, Av, B0v, Xv;
     UnifiedVector<std::int64_t> piv;
     UnifiedVector<std::int32_t> info;
@@ -51,7 +51,7 @@ struct SytrfProblem {
         (void)B0v.fill_random(q, false, 777);
         q.wait();
     }
-    std::size_t workspace() { return sytrf_buffer_size<kBackend, T>(q, Av, Uplo::Lower); }
+    std::size_t workspace() { return sytrf_buffer_size<kBackend, Scalar>(q, Av, Uplo::Lower); }
     void reset() {
         (void)MV::copy(q, Av, A0v);
         q.wait();
@@ -61,15 +61,16 @@ struct SytrfProblem {
         for (std::int64_t& p : piv) p = 0;
     }
     void run(Span<std::byte> ws) {
-        (void)sytrf<kBackend, T>(q, Av, Uplo::Lower, piv.to_span(), ws, info.to_span());
+        (void)sytrf<kBackend, Scalar>(q, Av, Uplo::Lower, piv.to_span(), ws, info.to_span());
         q.wait();
     }
     std::pair<double, int> verify() {
         int bad = 0;
         for (int b = 0; b < batch; ++b) bad += info[std::size_t(b)] != 0;
         (void)MV::copy(q, Xv, B0v);
-        UnifiedVector<std::byte> sws(std::max<std::size_t>(1, sytrs_buffer_size<kBackend, T>(q, Av, Xv, Uplo::Lower)));
-        (void)sytrs<kBackend, T>(q, Av, Xv, Uplo::Lower, piv.to_span(), sws.to_span());
+        UnifiedVector<std::byte> sws(std::max<std::size_t>(1, sytrs_buffer_size<kBackend,
+                                                           Scalar>(q, Av, Xv, Uplo::Lower)));
+        (void)sytrs<kBackend, Scalar>(q, Av, Xv, Uplo::Lower, piv.to_span(), sws.to_span());
         q.wait();
         return {MV::solve_residual(q, A0v, Xv, B0v), bad};
     }

@@ -29,10 +29,10 @@ namespace ops::gesvd {
 
 using select::overloaded;
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
-template <typename T>
-using SV = Span<typename base_type<T>::type>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+template <typename Scalar>
+using SV = Span<typename base_type<Scalar>::type>;
 
 // The call after canonicalisation: Thin is rewritten to All wherever the two coincide, once,
 // so sizing and running see the same jobs (enums.hh).
@@ -43,22 +43,22 @@ struct Job {
     bool vectors() const { return jobu != SvdVectors::None || jobvh != SvdVectors::None; }
 };
 
-template <typename T>
-Job canonical(const MV<T>& A, SvdVectors jobu, SvdVectors jobvh, std::optional<Uplo> herm) {
+template <typename Scalar>
+Job canonical(const MV<Scalar>& A, SvdVectors jobu, SvdVectors jobvh, std::optional<Uplo> herm) {
     const std::int64_t k = std::min<std::int64_t>(A.rows(), A.cols());
     return {canonical_jobu(jobu, A.rows(), k), canonical_jobvh(jobvh, A.cols(), k), herm};
 }
 
-template <typename T>
-select::Key key_of(const MV<T>& A, const Job& j) {
+template <typename Scalar>
+select::Key key_of(const MV<Scalar>& A, const Job& j) {
     const char* herm = !j.herm ? "N" : (*j.herm == Uplo::Lower ? "L" : "U");
     const char* vec = j.thin() ? "thin" : (j.vectors() ? "all" : "none");
     return {{"herm", herm}, {"vec", vec}, {"m", A.rows()}, {"n", A.cols()}};
 }
 
 // A batch whose items sit ld * cols apart: gesvdjBatched takes no stride argument.
-template <typename T>
-bool packed(const MV<T>& M) {
+template <typename Scalar>
+bool packed(const MV<Scalar>& M) {
     return M.batch_size() == 1 || M.stride() == static_cast<std::int64_t>(M.ld()) * M.cols();
 }
 
@@ -70,10 +70,11 @@ bool packed(const MV<T>& M) {
 // faults inside it, docs/perf/gesvd.md), nothing on ROCm, LAPACKE on the host. Every family runs each item at the top-level (m, n): no heterogeneous batch.
 // Masked: every native family and NETLIB's host loop skip an inactive item (Blocked wherever every
 // child it reaches does, gesvd_blocked_honours_mask); a strided vendor call cannot.
-template <Backend B, typename T>
-bool can_run(const GesvdChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& U, const MV<T>& Vh,
+template <Backend B, typename Scalar>
+bool can_run(const GesvdChoice& c, const select::Device& d, const MV<Scalar>& A, const MV<Scalar>& U,
+             const MV<Scalar>& Vh,
              const Job& j) {
-    constexpr bool kReal = std::is_same_v<T, typename base_type<T>::type>;
+    constexpr bool kReal = std::is_same_v<Scalar, typename base_type<Scalar>::type>;
     const std::int64_t m = A.rows(), n = A.cols(), md = std::max(m, n);
     const bool masked = detail::any_batch_mask(A, U, Vh);
     const bool homogeneous = !A.is_heterogeneous();
@@ -86,14 +87,15 @@ bool can_run(const GesvdChoice& c, const select::Device& d, const MV<T>& A, cons
     return std::visit(overloaded{
         [&](Jacobi) {
             const auto budget = static_cast<std::size_t>(std::max<std::int64_t>(0, d.slm_budget));
-            return native && d.has_sg32 && !j.herm && md <= ops::gesvd::gesvd_jacobi_max_dim<T>(j.vectors(), budget);
+            return native && d.has_sg32 && !j.herm && md <= ops::gesvd::gesvd_jacobi_max_dim<Scalar>(j.vectors(),
+                                                                                                     budget);
         },
         [&](Cta) {
             const bool form = j.herm ? square : kReal;
             return native && d.has_sg32 && md <= ops::gesvd::kGesvdCtaMaxDim && !j.thin() && form;
         },
         [&](Blocked) {
-            const bool mask_ok = !masked || ops::gesvd::gesvd_blocked_honours_mask<B, T>(
+            const bool mask_ok = !masked || ops::gesvd::gesvd_blocked_honours_mask<B, Scalar>(
                                                 m, n, j.jobu != SvdVectors::None, j.jobvh != SvdVectors::None);
             return native && mask_ok && (!j.herm || square);
         },
@@ -102,113 +104,127 @@ bool can_run(const GesvdChoice& c, const select::Device& d, const MV<T>& A, cons
 }
 
 // Exactly the chosen family's need (R5).
-template <Backend B, typename T>
-std::size_t workspace(Queue& q, const GesvdChoice& c, const MV<T>& A, SV<T> s, const MV<T>& U, const MV<T>& Vh,
+template <Backend B, typename Scalar>
+std::size_t workspace(Queue& q, const GesvdChoice& c, const MV<Scalar>& A, SV<Scalar> s, const MV<Scalar>& U,
+                      const MV<Scalar>& Vh,
                       const Job& j) {
     return std::visit(overloaded{
-        [&](Jacobi) { return gesvdj_cta_buffer_size<B, T>(q, A, s, U, Vh, j.jobu, j.jobvh); },
+        [&](Jacobi) { return gesvdj_cta_buffer_size<B, Scalar>(q, A, s, U, Vh, j.jobu, j.jobvh); },
         [&](Cta) {
-            return j.herm ? gesvd_cta_buffer_size<B, T>(q, A, s, U, Vh, j.jobu, j.jobvh, *j.herm)
-                          : gesvd_cta_buffer_size<B, T>(q, A, s, U, Vh, j.jobu, j.jobvh);
+            return j.herm ? gesvd_cta_buffer_size<B, Scalar>(q, A, s, U, Vh, j.jobu, j.jobvh, *j.herm)
+                          : gesvd_cta_buffer_size<B, Scalar>(q, A, s, U, Vh, j.jobu, j.jobvh);
         },
         [&](Blocked) {
-            return j.herm ? gesvd_blocked_buffer_size<B, T>(q, A, s, U, Vh, j.jobu, j.jobvh, *j.herm)
-                          : gesvd_blocked_buffer_size<B, T>(q, A, s, U, Vh, j.jobu, j.jobvh);
+            return j.herm ? gesvd_blocked_buffer_size<B, Scalar>(q, A, s, U, Vh, j.jobu, j.jobvh, *j.herm)
+                          : gesvd_blocked_buffer_size<B, Scalar>(q, A, s, U, Vh, j.jobu, j.jobvh);
         },
         [&](Vendor) -> std::size_t {
             if constexpr (select::has_library<B>(spec.vendor))
-                return backend::gesvd_vendor_buffer_size<B, T>(q, A, s, U, Vh, j.jobu, j.jobvh);
-            else select::no_vendor<B, T>(spec);
+                return backend::gesvd_vendor_buffer_size<B, Scalar>(q, A, s, U, Vh, j.jobu, j.jobvh);
+            else select::no_vendor<B, Scalar>(spec);
         },
     }, c);
 }
 
 // Every driver clears or stores `info` itself, and exactly one runs. Jacobi gets default
 // GesvdjParams: no sweep cap is reachable from the public entry point.
-template <Backend B, typename T>
-Event launch(Queue& q, const GesvdChoice& c, const MV<T>& A, SV<T> s, const MV<T>& U, const MV<T>& Vh,
+template <Backend B, typename Scalar>
+Event launch(Queue& q, const GesvdChoice& c, const MV<Scalar>& A, SV<Scalar> s, const MV<Scalar>& U,
+             const MV<Scalar>& Vh,
              const Job& j, Span<std::byte> ws, Span<int32_t> info) {
     return std::visit(overloaded{
-        [&](Jacobi) { return gesvdj_cta<B, T>(q, A, s, U, Vh, j.jobu, j.jobvh, ws, GesvdjParams<T>(), info); },
+        [&](Jacobi) { return gesvdj_cta<B, Scalar>(q, A, s, U, Vh, j.jobu, j.jobvh, ws, GesvdjParams<Scalar>(),
+                                                   info); },
         [&](Cta) {
-            return j.herm ? gesvd_cta<B, T>(q, A, s, U, Vh, j.jobu, j.jobvh, *j.herm, ws, info)
-                          : gesvd_cta<B, T>(q, A, s, U, Vh, j.jobu, j.jobvh, ws, info);
+            return j.herm ? gesvd_cta<B, Scalar>(q, A, s, U, Vh, j.jobu, j.jobvh, *j.herm, ws, info)
+                          : gesvd_cta<B, Scalar>(q, A, s, U, Vh, j.jobu, j.jobvh, ws, info);
         },
         [&](Blocked) {
-            return j.herm ? gesvd_blocked<B, T>(q, A, s, U, Vh, j.jobu, j.jobvh, *j.herm, ws, info)
-                          : gesvd_blocked<B, T>(q, A, s, U, Vh, j.jobu, j.jobvh, ws, info);
+            return j.herm ? gesvd_blocked<B, Scalar>(q, A, s, U, Vh, j.jobu, j.jobvh, *j.herm, ws, info)
+                          : gesvd_blocked<B, Scalar>(q, A, s, U, Vh, j.jobu, j.jobvh, ws, info);
         },
         [&](Vendor) -> Event {
             if constexpr (select::has_library<B>(spec.vendor))
-                return backend::gesvd_vendor<B, T>(q, A, s, U, Vh, j.jobu, j.jobvh, ws, info);
-            else select::no_vendor<B, T>(spec);
+                return backend::gesvd_vendor<B, Scalar>(q, A, s, U, Vh, j.jobu, j.jobvh, ws, info);
+            else select::no_vendor<B, Scalar>(spec);
         },
     }, c);
 }
 
-template <Backend B, typename T>
-Event run(Queue& ctx, const MV<T>& A, SV<T> s, const MV<T>& U, const MV<T>& Vh, SvdVectors jobu, SvdVectors jobvh,
+template <Backend B, typename Scalar>
+Event run(Queue& ctx, const MV<Scalar>& A, SV<Scalar> s, const MV<Scalar>& U, const MV<Scalar>& Vh, SvdVectors jobu,
+          SvdVectors jobvh,
           std::optional<Uplo> herm, Span<std::byte> ws, Span<int32_t> info) {
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     (void)detail::call_mask("gesvd", A, U, Vh);
-    const Job j = canonical<T>(A, jobu, jobvh, herm);
+    const Job j = canonical<Scalar>(A, jobu, jobvh, herm);
     // The coverage row's key: m, n, k = min(m, n); uplo is the Hermitian triangle (general: Lower).
     // The scope opens before sizing, so a driver that refuses the shape still leaves its row, as before.
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = std::min<std::int64_t>(A.rows(), A.cols()),
                                 .batch = A.batch_size(), .uplo = herm.value_or(Uplo::Lower)};
-    const select::Key key = key_of<T>(A, j);
-    return select::run<B, T>(
-        spec, ctx, key, candidates<T>(), [&](const auto& c, const auto& d) { return can_run<B, T>(c, d, A, U, Vh, j); },
+    const select::Key key = key_of<Scalar>(A, j);
+    return select::run<B, Scalar>(
+        spec, ctx, key, candidates<Scalar>(), [&](const auto& c,
+                                                  const auto& d) { return can_run<B, Scalar>(c, d, A, U, Vh, j); },
         shape, key, [&](const auto& c) {
-            if (ws.size() < workspace<B, T>(ctx, c, A, s, U, Vh, j))
+            if (ws.size() < workspace<B, Scalar>(ctx, c, A, s, U, Vh, j))
                 throw batchlas::workspace_error("gesvd: insufficient workspace for chosen provider");
             // The native drivers need an in-order queue.
             return select::on_in_order_queue(ctx,
-                                             [&](Queue& q) { return launch<B, T>(q, c, A, s, U, Vh, j, ws, info); });
+                                             [&](Queue& q) { return launch<B, Scalar>(q, c, A, s, U, Vh, j, ws,
+                                                                                      info); });
         });
 }
 
-template <Backend B, typename T>
-std::size_t size(Queue& ctx, const MV<T>& A, SV<T> s, const MV<T>& U, const MV<T>& Vh, SvdVectors jobu,
+template <Backend B, typename Scalar>
+std::size_t size(Queue& ctx, const MV<Scalar>& A, SV<Scalar> s, const MV<Scalar>& U, const MV<Scalar>& Vh,
+                 SvdVectors jobu,
                  SvdVectors jobvh, std::optional<Uplo> herm) {
     if (A.batch_size() == 0) return 0;
     (void)detail::call_mask("gesvd", A, U, Vh);
-    const Job j = canonical<T>(A, jobu, jobvh, herm);
-    const auto c = select::pick<B, T>(spec, ctx, key_of<T>(A, j), candidates<T>(),
-                                      [&](const auto& k, const auto& d) { return can_run<B, T>(k, d, A, U, Vh, j); });
-    return workspace<B, T>(ctx, c, A, s, U, Vh, j);
+    const Job j = canonical<Scalar>(A, jobu, jobvh, herm);
+    const auto c = select::pick<B, Scalar>(spec, ctx, key_of<Scalar>(A, j), candidates<Scalar>(),
+                                           [&](const auto& k,
+                                               const auto& d) { return can_run<B, Scalar>(k, d, A, U, Vh, j); });
+    return workspace<B, Scalar>(ctx, c, A, s, U, Vh, j);
 }
 
 }  // namespace ops::gesvd
 
-template <Backend B, typename T>
-Event gesvd(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<typename base_type<T>::type> singular_values,
-            const MatrixView<T, MatrixFormat::Dense>& U, const MatrixView<T, MatrixFormat::Dense>& Vh, SvdVectors jobu,
+template <Backend B, typename Scalar>
+Event gesvd(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+            Span<typename base_type<Scalar>::type> singular_values,
+            const MatrixView<Scalar, MatrixFormat::Dense>& U, const MatrixView<Scalar, MatrixFormat::Dense>& Vh,
+            SvdVectors jobu,
             SvdVectors jobvh, Span<std::byte> workspace, Span<int32_t> info) {
-    return ops::gesvd::run<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, std::nullopt, workspace, info);
+    return ops::gesvd::run<B, Scalar>(ctx, A, singular_values, U, Vh, jobu, jobvh, std::nullopt, workspace, info);
 }
 
-template <Backend B, typename T>
-Event gesvd(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<typename base_type<T>::type> singular_values,
-            const MatrixView<T, MatrixFormat::Dense>& U, const MatrixView<T, MatrixFormat::Dense>& Vh, SvdVectors jobu,
+template <Backend B, typename Scalar>
+Event gesvd(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+            Span<typename base_type<Scalar>::type> singular_values,
+            const MatrixView<Scalar, MatrixFormat::Dense>& U, const MatrixView<Scalar, MatrixFormat::Dense>& Vh,
+            SvdVectors jobu,
             SvdVectors jobvh, Uplo hermitian_uplo, Span<std::byte> workspace, Span<int32_t> info) {
-    return ops::gesvd::run<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, hermitian_uplo, workspace, info);
+    return ops::gesvd::run<B, Scalar>(ctx, A, singular_values, U, Vh, jobu, jobvh, hermitian_uplo, workspace, info);
 }
 
-template <Backend B, typename T>
-size_t gesvd_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                         Span<typename base_type<T>::type> singular_values, const MatrixView<T, MatrixFormat::Dense>& U,
-                         const MatrixView<T, MatrixFormat::Dense>& Vh, SvdVectors jobu, SvdVectors jobvh) {
-    return ops::gesvd::size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, std::nullopt);
+template <Backend B, typename Scalar>
+size_t gesvd_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         Span<typename base_type<Scalar>::type> singular_values, const MatrixView<Scalar,
+                         MatrixFormat::Dense>& U,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& Vh, SvdVectors jobu, SvdVectors jobvh) {
+    return ops::gesvd::size<B, Scalar>(ctx, A, singular_values, U, Vh, jobu, jobvh, std::nullopt);
 }
 
-template <Backend B, typename T>
-size_t gesvd_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                         Span<typename base_type<T>::type> singular_values, const MatrixView<T, MatrixFormat::Dense>& U,
-                         const MatrixView<T, MatrixFormat::Dense>& Vh, SvdVectors jobu, SvdVectors jobvh,
+template <Backend B, typename Scalar>
+size_t gesvd_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         Span<typename base_type<Scalar>::type> singular_values, const MatrixView<Scalar,
+                         MatrixFormat::Dense>& U,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& Vh, SvdVectors jobu, SvdVectors jobvh,
                          Uplo hermitian_uplo) {
-    return ops::gesvd::size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, hermitian_uplo);
+    return ops::gesvd::size<B, Scalar>(ctx, A, singular_values, U, Vh, jobu, jobvh, hermitian_uplo);
 }
 
 #define GESVD_INSTANTIATE(B_, fp)                                                                       \

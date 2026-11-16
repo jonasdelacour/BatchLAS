@@ -50,16 +50,16 @@ constexpr int kPeriod = 3;
 constexpr Transpose N = Transpose::NoTrans, Tr = Transpose::Trans, Cj = Transpose::ConjTrans;
 constexpr int kTerms = 10;  // products per C element: at most 4 per stored row (NoTrans), about 7 per column (Trans), + beta
 
-template <class T> T poison_v() { return T(real_of<T>(1e3)); }
-template <class T> T nan_v() { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }
-template <class T> LD<T> cj_if(LD<T> v, bool on) {
-    if constexpr (is_cplx<T>) return on ? std::conj(v) : v;
+template <class Scalar> Scalar poison_v() { return Scalar(real_of<Scalar>(1e3)); }
+template <class Scalar> Scalar nan_v() { return Scalar(std::numeric_limits<real_of<Scalar>>::quiet_NaN()); }
+template <class Scalar> LD<Scalar> cj_if(LD<Scalar> v, bool on) {
+    if constexpr (is_cplx<Scalar>) return on ? std::conj(v) : v;
     else return v;
 }
-template <class T> double rel(T got, LD<T> ref, long double scale) {
+template <class Scalar> double rel(Scalar got, LD<Scalar> ref, long double scale) {
     const long double d = std::abs(wide(got) - ref);
     if (std::isnan(d)) return std::numeric_limits<double>::infinity();
-    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<T>>::min()));
+    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<Scalar>>::min()));
 }
 template <class T> int bit_mismatches(const std::vector<T>& a, const std::vector<T>& b) {
     int bad = 0;
@@ -75,23 +75,23 @@ template <int WG, class F> void launch(sycl::queue& q, std::size_t groups, F f) 
 bool fits_wg(sycl::queue& q, int wg) { return q.get_device().get_info<sycl::info::device::max_work_group_size>() >= std::size_t(wg); }
 
 // ---- spmm problem: stored A ar x ac, op(A) rows_out x kk, op(B) kk x nrhs, C rows_out x nrhs --
-template <class T> struct Spmm {
+template <class Scalar> struct Spmm {
     int ar = 37, ac = 29, nrhs = 19;
     int kk = 0, rows_out = 0, brows = 0, bcols = 0, ldb = 0, strb = 0, ldc = 0, strc = 0, ms = 0, os = 0, max_nnz = 0;
     Transpose ta = N, tb = N;
-    std::vector<T> a_val, b, c0;
+    std::vector<Scalar> a_val, b, c0;
     std::vector<int> a_ro, a_ci;
     int row_nnz(int r, int q) const { return (r * 7 + q) % 5; }  // 0..4: empty rows included
     int col_of(int r, int t, int q) const { return (r * 3 + t * 5 + q) % ac; }
-    T B(int q, int r, int c) const { return b[std::size_t(q) * strb + std::size_t(c) * ldb + r]; }
-    LD<T> opB(int q, int j, int c) const {
+    Scalar B(int q, int r, int c) const { return b[std::size_t(q) * strb + std::size_t(c) * ldb + r]; }
+    LD<Scalar> opB(int q, int j, int c) const {
         if (tb == N) return wide(B(q, j, c));
-        return cj_if<T>(wide(B(q, c, j)), tb == Cj);
+        return cj_if<Scalar>(wide(B(q, c, j)), tb == Cj);
     }
 };
 
-template <class T> Spmm<T> make_spmm(Transpose ta, Transpose tb, bool nan_a, bool nan_c) {
-    Spmm<T> d;
+template <class Scalar> Spmm<Scalar> make_spmm(Transpose ta, Transpose tb, bool nan_a, bool nan_c) {
+    Spmm<Scalar> d;
     d.ta = ta;
     d.tb = tb;
     d.kk = ta == N ? d.ac : d.ar;
@@ -109,11 +109,11 @@ template <class T> Spmm<T> make_spmm(Transpose ta, Transpose tb, bool nan_a, boo
     d.strb = d.ldb * d.bcols + 7;
     d.ldc = d.rows_out + 2;
     d.strc = d.ldc * d.nrhs + 5;
-    d.a_val.assign(std::size_t(d.ms) * kBatch, poison_v<T>());  // in-range poison past each item's nnz
+    d.a_val.assign(std::size_t(d.ms) * kBatch, poison_v<Scalar>());  // in-range poison past each item's nnz
     d.a_ci.assign(std::size_t(d.ms) * kBatch, 0);
     d.a_ro.assign(std::size_t(d.os) * kBatch, 0);
-    d.b.assign(std::size_t(d.strb) * kBatch, poison_v<T>());
-    d.c0.assign(std::size_t(d.strc) * kBatch, poison_v<T>());
+    d.b.assign(std::size_t(d.strb) * kBatch, poison_v<Scalar>());
+    d.c0.assign(std::size_t(d.strc) * kBatch, poison_v<Scalar>());
     for (int bi = 0; bi < kBatch; ++bi) {
         const int q = bi % kPeriod;
         int p = 0;
@@ -121,33 +121,33 @@ template <class T> Spmm<T> make_spmm(Transpose ta, Transpose tb, bool nan_a, boo
             d.a_ro[std::size_t(bi) * d.os + r] = p;
             for (int t = 0; t < d.row_nnz(r, q); ++t, ++p) {
                 d.a_ci[std::size_t(bi) * d.ms + p] = d.col_of(r, t, q);
-                d.a_val[std::size_t(bi) * d.ms + p] = nan_a ? nan_v<T>() : val<T>(1000003u * q + 31u * r + t);
+                d.a_val[std::size_t(bi) * d.ms + p] = nan_a ? nan_v<Scalar>() : val<Scalar>(1000003u * q + 31u * r + t);
             }
         }
         d.a_ro[std::size_t(bi) * d.os + d.ar] = p;
         for (int c = 0; c < d.bcols; ++c)
-            for (int r = 0; r < d.brows; ++r) d.b[std::size_t(bi) * d.strb + std::size_t(c) * d.ldb + r] = val<T>(7000003u * (q + 1) + 977u * c + r);
+            for (int r = 0; r < d.brows; ++r) d.b[std::size_t(bi) * d.strb + std::size_t(c) * d.ldb + r] = val<Scalar>(7000003u * (q + 1) + 977u * c + r);
         for (int c = 0; c < d.nrhs; ++c)
             for (int r = 0; r < d.rows_out; ++r)
-                d.c0[std::size_t(bi) * d.strc + std::size_t(c) * d.ldc + r] = nan_c ? nan_v<T>() : val<T>(9000011u * (q + 1) + 613u * c + r);
+                d.c0[std::size_t(bi) * d.strc + std::size_t(c) * d.ldc + r] = nan_c ? nan_v<Scalar>() : val<Scalar>(9000011u * (q + 1) + 613u * c + r);
     }
     return d;
 }
 
 // The worst relative error of C over the representatives against the long-double reference (and,
 // on the same scale, against `other` when given); counts pad elements that are no longer poison.
-template <class T>
-double spmm_worst(const Spmm<T>& d, const std::vector<T>& got, T alpha, T beta, int* pads_moved, const std::vector<T>* other = nullptr,
+template <class Scalar>
+double spmm_worst(const Spmm<Scalar>& d, const std::vector<Scalar>& got, Scalar alpha, Scalar beta, int* pads_moved, const std::vector<Scalar>* other = nullptr,
                   double* vs_other = nullptr) {
-    const bool az = batchlas::device::Arith<T>::is_zero(alpha), bz = batchlas::device::Arith<T>::is_zero(beta);
+    const bool az = batchlas::device::Arith<Scalar>::is_zero(alpha), bz = batchlas::device::Arith<Scalar>::is_zero(beta);
     double worst = 0;
     for (int q = 0; q < kPeriod; ++q) {
-        std::vector<LD<T>> ref(std::size_t(d.rows_out) * d.nrhs, LD<T>(0));
+        std::vector<LD<Scalar>> ref(std::size_t(d.rows_out) * d.nrhs, LD<Scalar>(0));
         std::vector<long double> sc(ref.size(), 0.0L);
         for (int i = 0; i < d.ar && !az; ++i)
             for (int p = d.a_ro[std::size_t(q) * d.os + i]; p < d.a_ro[std::size_t(q) * d.os + i + 1]; ++p) {
                 const int j = d.a_ci[std::size_t(q) * d.ms + p];
-                const LD<T> a = cj_if<T>(wide(d.a_val[std::size_t(q) * d.ms + p]), d.ta == Cj);
+                const LD<Scalar> a = cj_if<Scalar>(wide(d.a_val[std::size_t(q) * d.ms + p]), d.ta == Cj);
                 const int r = d.ta == N ? i : j, k = d.ta == N ? j : i;
                 for (int c = 0; c < d.nrhs; ++c) {
                     ref[std::size_t(c) * d.rows_out + r] += a * d.opB(q, k, c);
@@ -157,8 +157,8 @@ double spmm_worst(const Spmm<T>& d, const std::vector<T>& got, T alpha, T beta, 
         for (int c = 0; c < d.nrhs; ++c)
             for (int r = 0; r < d.rows_out; ++r) {
                 const std::size_t e = std::size_t(c) * d.rows_out + r, at = std::size_t(q) * d.strc + std::size_t(c) * d.ldc + r;
-                const LD<T> cold = bz ? LD<T>(0) : wide(d.c0[at]);
-                const LD<T> want = wide(alpha) * ref[e] + wide(beta) * cold;
+                const LD<Scalar> cold = bz ? LD<Scalar>(0) : wide(d.c0[at]);
+                const LD<Scalar> want = wide(alpha) * ref[e] + wide(beta) * cold;
                 const long double s = std::abs(wide(alpha)) * sc[e] + std::abs(wide(beta)) * std::abs(cold);
                 worst = std::max(worst, rel(got[at], want, s));
                 if (other) *vs_other = std::max(*vs_other, rel(got[at], wide((*other)[at]), s));
@@ -169,21 +169,21 @@ double spmm_worst(const Spmm<T>& d, const std::vector<T>& got, T alpha, T beta, 
         for (int e = 0; e < d.strc; ++e) {
             const int c = e / d.ldc, r = e % d.ldc;
             const bool live = c < d.nrhs && r < d.rows_out;
-            if (!live) moved += !same_bits(got[std::size_t(bi) * d.strc + e], poison_v<T>());
+            if (!live) moved += !same_bits(got[std::size_t(bi) * d.strc + e], poison_v<Scalar>());
         }
     *pads_moved = moved;
     return worst;
 }
 
-template <Transpose TA, Transpose TB, int WG, class Tier = batchlas::device::tier::upto<1>, class T>
-void device_spmm(sycl::queue& q, const Spmm<T>& d, KernelMatrixView<T, MatrixFormat::CSR> akv, const T* bp, T* cp, T alpha, T beta) {
+template <Transpose TA, Transpose TB, int WG, class Tier = batchlas::device::tier::upto<1>, class Scalar>
+void device_spmm(sycl::queue& q, const Spmm<Scalar>& d, KernelMatrixView<Scalar, MatrixFormat::CSR> akv, const Scalar* bp, Scalar* cp, Scalar alpha, Scalar beta) {
     const int brows = d.brows, bcols = d.bcols, ldb = d.ldb, strb = d.strb, crows = d.rows_out, nrhs = d.nrhs, ldc = d.ldc,
               strc = d.strc;
     launch<WG>(q, kBatch, [=](sycl::nd_item<1> it) {
         const int b = static_cast<int>(it.get_group(0));
         const batchlas::device::WorkGroup<WG> ex{it};
-        const batchlas::device::ItemMat<const T> B{bp, b, strb, ldb, brows, bcols};
-        const batchlas::device::ItemMat<T> C{cp, b, strc, ldc, crows, nrhs};
+        const batchlas::device::ItemMat<const Scalar> B{bp, b, strb, ldb, brows, bcols};
+        const batchlas::device::ItemMat<Scalar> C{cp, b, strc, ldc, crows, nrhs};
         (void)batchlas::device::spmm<TA, TB, Tier>(ex, alpha, batchlas::device::csr_item(akv, b), B, beta, C);
     });
 }
@@ -254,9 +254,9 @@ protected:
 };
 TYPED_TEST_SUITE(DeviceApiSparse, AllTypes);
 
-template <class T> T cval(double re, double im) {
-    if constexpr (is_cplx<T>) return T(real_of<T>(re), real_of<T>(im));
-    else return T(real_of<T>(re));
+template <class Scalar> Scalar cval(double re, double im) {
+    if constexpr (is_cplx<Scalar>) return Scalar(real_of<Scalar>(re), real_of<Scalar>(im));
+    else return Scalar(real_of<Scalar>(re));
 }
 
 TYPED_TEST(DeviceApiSparse, SpmmNoTransIsTheHostGatherBitForBit) {
@@ -300,16 +300,16 @@ TYPED_TEST(DeviceApiSparse, SpmmBreakIsSeenByBothComparators) {
 // A batch of n x n diagonally dominant CSR matrices sharing one sorted pattern, values per
 // representative: rows < 100 couple only upward (one L level of 100 rows: split over the items of
 // a 32-item work-group), rows >= 100 couple to rows i - 100, i - 50 and i - 1 (a chain of levels).
-template <class T> struct Iluk {
+template <class Scalar> struct Iluk {
     static constexpr int n = 150, nrhs = 2;
     int nnz = 0, ld = n + 3, stride = (n + 3) * nrhs + 5;
-    UnifiedVector<T> val, rhs, out_host, out_dev;
+    UnifiedVector<Scalar> val, rhs, out_host, out_dev;
     UnifiedVector<int> ro, ci;
-    std::optional<ILUKPreconditioner<T>> M;
+    std::optional<ILUKPreconditioner<Scalar>> M;
 };
 
-template <class T> void make_iluk(Iluk<T>& d, Queue& ctx) {
-    constexpr int n = Iluk<T>::n;
+template <class Scalar> void make_iluk(Iluk<Scalar>& d, Queue& ctx) {
+    constexpr int n = Iluk<Scalar>::n;
     std::vector<int> ro1{0}, ci1;
     for (int i = 0; i < n; ++i) {
         if (i < 100) {
@@ -322,7 +322,7 @@ template <class T> void make_iluk(Iluk<T>& d, Queue& ctx) {
         ro1.push_back(static_cast<int>(ci1.size()));
     }
     d.nnz = static_cast<int>(ci1.size());
-    d.val = UnifiedVector<T>(std::size_t(d.nnz) * kBatch);
+    d.val = UnifiedVector<Scalar>(std::size_t(d.nnz) * kBatch);
     d.ci = UnifiedVector<int>(std::size_t(d.nnz) * kBatch);
     d.ro = UnifiedVector<int>(std::size_t(n + 1) * kBatch);
     for (int b = 0; b < kBatch; ++b) {
@@ -331,62 +331,62 @@ template <class T> void make_iluk(Iluk<T>& d, Queue& ctx) {
         for (int i = 0; i < n; ++i)
             for (int p = ro1[i]; p < ro1[i + 1]; ++p) {
                 d.ci[std::size_t(b) * d.nnz + p] = ci1[p];
-                const T v = val<T>(500009u * (q + 1) + 7u * p);
-                d.val[std::size_t(b) * d.nnz + p] = ci1[p] == i ? v + T(real_of<T>(6)) : v;
+                const Scalar v = val<Scalar>(500009u * (q + 1) + 7u * p);
+                d.val[std::size_t(b) * d.nnz + p] = ci1[p] == i ? v + Scalar(real_of<Scalar>(6)) : v;
             }
     }
-    MatrixView<T, MatrixFormat::CSR> A(d.val.data(), d.ro.data(), d.ci.data(), n, n, NonZeros{d.nnz}, d.nnz, n + 1, kBatch);
-    ILUKParams<T> params;
+    MatrixView<Scalar, MatrixFormat::CSR> A(d.val.data(), d.ro.data(), d.ci.data(), n, n, NonZeros{d.nnz}, d.nnz, n + 1, kBatch);
+    ILUKParams<Scalar> params;
     params.levels_of_fill = 1;
     d.M.emplace(iluk_factorize(ctx, A, params));
     const std::size_t len = std::size_t(d.stride) * kBatch;
-    d.rhs = UnifiedVector<T>(len);
-    d.out_host = UnifiedVector<T>(len);
-    d.out_dev = UnifiedVector<T>(len);
-    for (std::size_t e = 0; e < len; ++e) d.rhs[e] = d.out_host[e] = d.out_dev[e] = poison_v<T>();
+    d.rhs = UnifiedVector<Scalar>(len);
+    d.out_host = UnifiedVector<Scalar>(len);
+    d.out_dev = UnifiedVector<Scalar>(len);
+    for (std::size_t e = 0; e < len; ++e) d.rhs[e] = d.out_host[e] = d.out_dev[e] = poison_v<Scalar>();
     for (int b = 0; b < kBatch; ++b)
-        for (int c = 0; c < Iluk<T>::nrhs; ++c)
-            for (int i = 0; i < n; ++i) d.rhs[std::size_t(b) * d.stride + std::size_t(c) * d.ld + i] = val<T>(300007u * (b % kPeriod) + 211u * c + i);
+        for (int c = 0; c < Iluk<Scalar>::nrhs; ++c)
+            for (int i = 0; i < n; ++i) d.rhs[std::size_t(b) * d.stride + std::size_t(c) * d.ld + i] = val<Scalar>(300007u * (b % kPeriod) + 211u * c + i);
 }
 
 // The device iluk_apply over every (item, column) system; skip_l breaks it (no L solve).
-template <int WG, class T> void device_iluk(sycl::queue& q, Iluk<T>& d, bool skip_l) {
+template <int WG, class Scalar> void device_iluk(sycl::queue& q, Iluk<Scalar>& d, bool skip_l) {
     const auto batch = batchlas::device::iluk_batch(d.M->view());
-    const T* rp = d.rhs.data();
-    T* yp = d.out_dev.data();
-    const int nrhs = Iluk<T>::nrhs, ld = d.ld, stride = d.stride;
+    const Scalar* rp = d.rhs.data();
+    Scalar* yp = d.out_dev.data();
+    const int nrhs = Iluk<Scalar>::nrhs, ld = d.ld, stride = d.stride;
     launch<WG>(q, std::size_t(kBatch) * nrhs, [=](sycl::nd_item<1> it) {
         const int g = static_cast<int>(it.get_group(0));
         const int b = g / nrhs, col = g % nrhs;
         const batchlas::device::WorkGroup<WG> ex{it};
         auto F = batch.item(b);
         if (skip_l) F.l_levels = 0;
-        const batchlas::device::BasedVec<const T> r{rp, b * stride + col * ld};
-        const batchlas::device::BasedVec<T> y{yp, b * stride + col * ld};
+        const batchlas::device::BasedVec<const Scalar> r{rp, b * stride + col * ld};
+        const batchlas::device::BasedVec<Scalar> y{yp, b * stride + col * ld};
         (void)batchlas::device::iluk_apply<batchlas::device::tier::Blocked<1>>(ex, F, r, y);
     });
 }
 
 // Normwise forward error per column against L U x = rhs solved in long double from the factor.
-template <class T> double iluk_worst(const Iluk<T>& d, const UnifiedVector<T>& got) {
-    constexpr int n = Iluk<T>::n;
+template <class Scalar> double iluk_worst(const Iluk<Scalar>& d, const UnifiedVector<Scalar>& got) {
+    constexpr int n = Iluk<Scalar>::n;
     const auto lu = d.M->lu.view();
-    const T* v = lu.data_ptr();
+    const Scalar* v = lu.data_ptr();
     const auto ro = lu.row_offsets();
     const auto ci = lu.col_indices();
     double worst = 0;
     for (int q = 0; q < kPeriod; ++q)
-        for (int c = 0; c < Iluk<T>::nrhs; ++c) {
-            std::vector<LD<T>> x(n);
+        for (int c = 0; c < Iluk<Scalar>::nrhs; ++c) {
+            std::vector<LD<Scalar>> x(n);
             const std::size_t vb = std::size_t(q) * lu.matrix_stride(), rb = std::size_t(q) * lu.offset_stride();
             for (int i = 0; i < n; ++i) {
-                LD<T> s = wide(d.rhs[std::size_t(q) * d.stride + std::size_t(c) * d.ld + i]);
+                LD<Scalar> s = wide(d.rhs[std::size_t(q) * d.stride + std::size_t(c) * d.ld + i]);
                 for (int p = ro[rb + i]; p < ro[rb + i + 1]; ++p)
                     if (ci[vb + p] < i) s -= wide(v[vb + p]) * x[ci[vb + p]];
                 x[i] = s;
             }
             for (int i = n - 1; i >= 0; --i) {
-                LD<T> s = x[i], dg = LD<T>(1);
+                LD<Scalar> s = x[i], dg = LD<Scalar>(1);
                 for (int p = ro[rb + i]; p < ro[rb + i + 1]; ++p) {
                     if (ci[vb + p] > i) s -= wide(v[vb + p]) * x[ci[vb + p]];
                     if (ci[vb + p] == i) dg = wide(v[vb + p]);
@@ -460,45 +460,46 @@ TYPED_TEST(DeviceApiSparse, IlukApplyBreakIsSeenByBothComparators) {
 // < 60 couple only upward (one elimination level of 60 rows, split over a 32-item work-group);
 // row i >= 60 also couples to i - 7, whose U entries fill (i, i - 4) and (i, i + 4) (about 23
 // levels). Item strides padded by `pad`: values poison, indices and offsets in range (0).
-template <class T> struct IlukA {
+template <class Scalar> struct IlukA {
     static constexpr int n = 150;
     int nnz = 0, ms = 0, os = 0;
-    UnifiedVector<T> val;
+    UnifiedVector<Scalar> val;
     UnifiedVector<int> ro, ci;
-    MatrixView<T, MatrixFormat::CSR> view(int batch) const {
-        return MatrixView<T, MatrixFormat::CSR>(val.data(), ro.data(), ci.data(), n, n, NonZeros{nnz}, ms, os, batch);
+    MatrixView<Scalar, MatrixFormat::CSR> view(int batch) const {
+        return MatrixView<Scalar, MatrixFormat::CSR>(val.data(), ro.data(), ci.data(), n, n, NonZeros{nnz}, ms, os,
+                                                     batch);
     }
 };
 
 // zero_pivot_row >= 0: that row's diagonal is exactly 0 in the items b % kPeriod == 1.
-template <class T> IlukA<T> make_iluk_a(int pad, int zero_pivot_row = -1) {
-    constexpr int n = IlukA<T>::n;
+template <class Scalar> IlukA<Scalar> make_iluk_a(int pad, int zero_pivot_row = -1) {
+    constexpr int n = IlukA<Scalar>::n;
     std::vector<int> ro1{0}, ci1;
     for (int i = 0; i < n; ++i) {
         for (int j : {i - 7, i, i + 3, i + 11})
             if (j >= 0 && j < n && (j != i - 7 || i >= 60)) ci1.push_back(j);
         ro1.push_back(static_cast<int>(ci1.size()));
     }
-    IlukA<T> d;
+    IlukA<Scalar> d;
     d.nnz = static_cast<int>(ci1.size());
     d.ms = d.nnz + pad;
     d.os = n + 1 + pad;
-    d.val = UnifiedVector<T>(std::size_t(d.ms) * kBatch);
+    d.val = UnifiedVector<Scalar>(std::size_t(d.ms) * kBatch);
     d.ci = UnifiedVector<int>(std::size_t(d.ms) * kBatch);
     d.ro = UnifiedVector<int>(std::size_t(d.os) * kBatch);
     for (int b = 0; b < kBatch; ++b) {
         const int q = b % kPeriod;
         for (int e = 0; e < d.os; ++e) d.ro[std::size_t(b) * d.os + e] = e <= n ? ro1[e] : 0;
         for (int p = d.nnz; p < d.ms; ++p) {
-            d.val[std::size_t(b) * d.ms + p] = poison_v<T>();
+            d.val[std::size_t(b) * d.ms + p] = poison_v<Scalar>();
             d.ci[std::size_t(b) * d.ms + p] = 0;
         }
         for (int i = 0; i < n; ++i)
             for (int p = ro1[i]; p < ro1[i + 1]; ++p) {
                 const std::size_t at = std::size_t(b) * d.ms + p;
-                const T v = val<T>(700001u * (q + 1) + 13u * p);
+                const Scalar v = val<Scalar>(700001u * (q + 1) + 13u * p);
                 d.ci[at] = ci1[p];
-                d.val[at] = ci1[p] != i ? v : (i == zero_pivot_row && q == 1 ? T(0) : v + T(real_of<T>(6)));
+                d.val[at] = ci1[p] != i ? v : (i == zero_pivot_row && q == 1 ? Scalar(0) : v + Scalar(real_of<Scalar>(6)));
             }
     }
     return d;
@@ -512,15 +513,15 @@ char iluk_pin() {
 
 // device iluk_factorize of every item in a user-style kernel: M at item stride mst, the value
 // every work-item returned at info[b * WG + lid].
-template <int WG, class T>
-void device_iluk_factorize(sycl::queue& q, const IlukA<T>& d, const batchlas::device::IlukPlan& plan, const batchlas::device::IlukOptions<T>& opts, T* mv, int mst,
+template <int WG, class Scalar>
+void device_iluk_factorize(sycl::queue& q, const IlukA<Scalar>& d, const batchlas::device::IlukPlan& plan, const batchlas::device::IlukOptions<Scalar>& opts, Scalar* mv, int mst,
                            int* info) {
-    const T* av = d.val.data();
+    const Scalar* av = d.val.data();
     const int ms = d.ms;
     launch<WG>(q, kBatch, [=](sycl::nd_item<1> it) {
         const int b = static_cast<int>(it.get_group(0));
         const batchlas::device::WorkGroup<WG> ex{it};
-        const int r = batchlas::device::iluk_factorize<batchlas::device::tier::Blocked<1>>(ex, batchlas::device::BasedVec<const T>{av, b * ms}, plan, batchlas::device::BasedVec<T>{mv, b * mst}, opts);
+        const int r = batchlas::device::iluk_factorize<batchlas::device::tier::Blocked<1>>(ex, batchlas::device::BasedVec<const Scalar>{av, b * ms}, plan, batchlas::device::BasedVec<Scalar>{mv, b * mst}, opts);
         info[std::size_t(b) * WG + ex.lid()] = r;
     });
 }
@@ -531,10 +532,10 @@ struct FactorCmp {
     int bits = 0, unmatched = 0, pads = 0;
     double worst = 0;  // max over items of max |dev - want| / max |want|
 };
-template <class T> FactorCmp compare_factor(const batchlas::device::IlukPlan& plan, const T* dev, int mst, const ILUKPreconditioner<T>& M, int batch) {
+template <class Scalar> FactorCmp compare_factor(const batchlas::device::IlukPlan& plan, const Scalar* dev, int mst, const ILUKPreconditioner<Scalar>& M, int batch) {
     FactorCmp r;
     const auto lu = M.lu.view();
-    const T* hv = lu.data_ptr();
+    const Scalar* hv = lu.data_ptr();
     const auto hro = lu.row_offsets();
     const auto hci = lu.col_indices();
     for (int b = 0; b < batch; ++b) {
@@ -547,7 +548,7 @@ template <class T> FactorCmp compare_factor(const batchlas::device::IlukPlan& pl
             for (int s = plan.ro[i]; s < plan.ro[i + 1]; ++s) {
                 while (hp < he && hci[vb + hp] < plan.col[s]) ++hp;
                 const bool stored = hp < he && hci[vb + hp] == plan.col[s];
-                const T want = stored ? hv[vb + hp] : T(0);
+                const Scalar want = stored ? hv[vb + hp] : Scalar(0);
                 matched += stored;
                 r.bits += !same_bits(dev[db + s], want);
                 num = std::max<long double>(num, std::abs(wide(dev[db + s]) - wide(want)));
@@ -555,26 +556,27 @@ template <class T> FactorCmp compare_factor(const batchlas::device::IlukPlan& pl
             }
             r.unmatched += (he - hro[rb + i]) - matched;
         }
-        for (int e = plan.nnz; e < mst; ++e) r.pads += !same_bits(dev[db + e], poison_v<T>());
+        for (int e = plan.nnz; e < mst; ++e) r.pads += !same_bits(dev[db + e], poison_v<Scalar>());
         r.worst = std::max(r.worst, std::isnan(num) ? std::numeric_limits<double>::infinity() : static_cast<double>(num / den));
     }
     return r;
 }
 
 // Over the representatives: {fill slots kept, fill slots dropped} (fill = no entry of A lands there).
-template <class T> std::array<int, 2> fill_split(const batchlas::device::IlukPlan& plan, const T* dev, int mst) {
+template <class Scalar> std::array<int, 2> fill_split(const batchlas::device::IlukPlan& plan, const Scalar* dev,
+                                                      int mst) {
     std::vector<char> from_a(std::size_t(plan.nnz), 0);
     for (int p = 0; p < plan.a_nnz; ++p)
         if (plan.a_to_slot[p] >= 0) from_a[std::size_t(plan.a_to_slot[p])] = 1;
     std::array<int, 2> out{0, 0};
     for (int q = 0; q < kPeriod; ++q)
         for (int s = 0; s < plan.nnz; ++s)
-            if (!from_a[std::size_t(s)]) ++out[same_bits(dev[std::size_t(q) * mst + s], T(0)) ? 1 : 0];
+            if (!from_a[std::size_t(s)]) ++out[same_bits(dev[std::size_t(q) * mst + s], Scalar(0)) ? 1 : 0];
     return out;
 }
 
-template <class T> void expect_iluk_factorize_thin(Dev& dev, const char* what, const ILUKParams<T>& params) {
-    const IlukA<T> d = make_iluk_a<T>(/*pad=*/5);
+template <class Scalar> void expect_iluk_factorize_thin(Dev& dev, const char* what, const ILUKParams<Scalar>& params) {
+    const IlukA<Scalar> d = make_iluk_a<Scalar>(/*pad=*/5);
     const auto A = d.view(kBatch);
     const auto host = iluk_factorize(*dev.ctx, A, params);
     const auto storage = ops::iluk::iluk_plan(A, params);
@@ -582,7 +584,7 @@ template <class T> void expect_iluk_factorize_thin(Dev& dev, const char* what, c
     ASSERT_GT(plan.nnz, d.nnz) << what << ": the symbolic pattern has no fill";
     ASSERT_GT(plan.levels, 2) << what;
     const int mst = plan.nnz + 3;
-    UnifiedVector<T> m(std::size_t(mst) * kBatch);
+    UnifiedVector<Scalar> m(std::size_t(mst) * kBatch);
     UnifiedVector<int> info(std::size_t(kBatch) * 1024);
     const auto opts = batchlas::device::iluk_options(params);
     auto check = [&](int wg, const char* how) {
@@ -598,7 +600,7 @@ template <class T> void expect_iluk_factorize_thin(Dev& dev, const char* what, c
         EXPECT_GT(split[1], 0) << what << ": no fill dropped (threshold not straddled)";
     };
     auto reset = [&] {
-        for (std::size_t e = 0; e < m.size(); ++e) m[e] = poison_v<T>();
+        for (std::size_t e = 0; e < m.size(); ++e) m[e] = poison_v<Scalar>();
         for (std::size_t e = 0; e < info.size(); ++e) info[e] = -7;
     };
     reset();
@@ -629,22 +631,23 @@ TYPED_TEST(DeviceApiSparse, IlukFactorizeIsTheHostFactorBitForBit) {
 }
 
 // x = U^{-1} L^{-1} rhs in long double from item b's host factor (the stored, stabilised diagonal).
-template <class T> std::vector<LD<T>> ilu_solve_ref(const ILUKPreconditioner<T>& M, int b, const T* rhs) {
+template <class Scalar> std::vector<LD<Scalar>> ilu_solve_ref(const ILUKPreconditioner<Scalar>& M, int b,
+                                                              const Scalar* rhs) {
     const auto lu = M.lu.view();
-    const T* v = lu.data_ptr();
+    const Scalar* v = lu.data_ptr();
     const auto ro = lu.row_offsets();
     const auto ci = lu.col_indices();
     const std::size_t vb = std::size_t(b) * lu.matrix_stride(), rb = std::size_t(b) * lu.offset_stride();
     const int n = M.n;
-    std::vector<LD<T>> x(static_cast<std::size_t>(n));
+    std::vector<LD<Scalar>> x(static_cast<std::size_t>(n));
     for (int i = 0; i < n; ++i) {
-        LD<T> s = wide(rhs[i]);
+        LD<Scalar> s = wide(rhs[i]);
         for (int p = ro[rb + i]; p < ro[rb + i + 1]; ++p)
             if (ci[vb + p] < i) s -= wide(v[vb + p]) * x[std::size_t(ci[vb + p])];
         x[std::size_t(i)] = s;
     }
     for (int i = n - 1; i >= 0; --i) {
-        LD<T> s = x[std::size_t(i)], dg = LD<T>(1);
+        LD<Scalar> s = x[std::size_t(i)], dg = LD<Scalar>(1);
         for (int p = ro[rb + i]; p < ro[rb + i + 1]; ++p) {
             if (ci[vb + p] > i) s -= wide(v[vb + p]) * x[std::size_t(ci[vb + p])];
             if (ci[vb + p] == i) dg = wide(v[vb + p]);

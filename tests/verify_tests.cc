@@ -32,7 +32,7 @@ using batchlas::verify::Check;
 
 namespace {
 const double kNaN = std::numeric_limits<double>::quiet_NaN();
-template <typename T> using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar> using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 }  // namespace
 
 TEST(Scalar, NanmaxPropagates) {
@@ -394,7 +394,7 @@ namespace {
 using cfloat = std::complex<float>;
 using cdouble = std::complex<double>;
 
-template <typename T> T sentinel() { return MV<T>::make(-777.0, -555.0); }
+template <typename Scalar> Scalar sentinel() { return MV<Scalar>::make(-777.0, -555.0); }
 
 }  // namespace
 

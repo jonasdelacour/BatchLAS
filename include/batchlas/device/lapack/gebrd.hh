@@ -84,34 +84,34 @@ BATCHLAS_DEVICE_INLINE int gebd2(const Ex& ex, const MA& A, const RV& d, const R
 }
 
 namespace detail {
-// gebd2's lane form (real T): one problem's n x n tile in local memory, lane l of the P-lane
+// gebd2's lane form (real types): one problem's n x n tile in local memory, lane l of the P-lane
 // partition owning row l (column l in the left update), each reflector from larfg_lanes. Every
 // barrier is work-group wide: a dead partition runs a zero tile and stores nothing. A function,
 // not the kernel lambda's body, so the lambda calls no view operator() (SemaSYCL entry quirk).
-template <class T, class Ex, class TM, class AV, class RV, class TV>
+template <class Real, class Ex, class TM, class AV, class RV, class TV>
 BATCHLAS_DEVICE_INLINE void gebd2_tile(const Ex& ex, const sycl::nd_item<1>& it, const TM& tile, const AV& a, const RV& d,
                                        const RV& e, const TV& tauq, const TV& taup, int32_t n, bool live) {
     const int32_t lane = ex.lid();
     for (int32_t c = 0; c < n; ++c) {
         if (lane < n) {
-            tile(lane, c) = live ? a(lane, c) : T(0);
+            tile(lane, c) = live ? a(lane, c) : Real(0);
         }
     }
     it.barrier(sycl::access::fence_space::local_space);
 
     for (int32_t i = 0; i < n; ++i) {
         // H(i) annihilates tile(i+1:n, i); lane j > i then applies it to column j.
-        T alpha_l = T(0);
+        Real alpha_l = Real(0);
         if (lane == i) {
             alpha_l = tile(i, i);
         }
-        T x_l = T(0);
+        Real x_l = Real(0);
         const bool x_l_active = (lane > i && lane < n);
         if (x_l_active) {
             x_l = tile(lane, i);
         }
 
-        const T tau_l = device::larfg_lanes(ex, n - i, i, alpha_l, x_l, x_l_active);
+        const Real tau_l = device::larfg_lanes(ex, n - i, i, alpha_l, x_l, x_l_active);
         if (lane == i) {
             tile(i, i) = alpha_l;
             if (live) {
@@ -131,17 +131,17 @@ BATCHLAS_DEVICE_INLINE void gebd2_tile(const Ex& ex, const sycl::nd_item<1>& it,
         if (i >= n - 1) continue;
 
         // G(i) annihilates tile(i, i+2:n); lane r > i then applies it to row r.
-        T alpha_r = T(0);
+        Real alpha_r = Real(0);
         if (lane == i + 1) {
             alpha_r = tile(i, i + 1);
         }
-        T x_r = T(0);
+        Real x_r = Real(0);
         const bool x_r_active = (lane > i + 1 && lane < n);
         if (x_r_active) {
             x_r = tile(i, lane);
         }
 
-        const T tau_r = device::larfg_lanes(ex, n - (i + 1), i + 1, alpha_r, x_r, x_r_active);
+        const Real tau_r = device::larfg_lanes(ex, n - (i + 1), i + 1, alpha_r, x_r, x_r_active);
         if (lane == i + 1) {
             tile(i, i + 1) = alpha_r;
             if (live) {
@@ -160,7 +160,7 @@ BATCHLAS_DEVICE_INLINE void gebd2_tile(const Ex& ex, const sycl::nd_item<1>& it,
     }
 
     if (live && lane == n - 1) {
-        taup(n - 1) = T(0);
+        taup(n - 1) = Real(0);
     }
 
     for (int32_t c = 0; c < n; ++c) {
@@ -193,50 +193,50 @@ template <int P> inline constexpr bool cta_width_v = P == 4 || P == 8 || P == 16
 // tier::Blocked<NB>: one matrix per WorkGroup<256>; the trailing update's L3 configuration (its
 // threads fix the work-group), labrd's two NB-long products and the trailing gemm's tiles in local
 // memory, X (m x NB) and Y (n x NB) in the caller's global slice.
-template <class T> using GebrdBlockedCfg = l3::cfg::RegTiled<T, 32, 32, 8, 2, 2>;
+template <class Scalar> using GebrdBlockedCfg = l3::cfg::RegTiled<Scalar, 32, 32, 8, 2, 2>;
 inline constexpr int blocked_wg = 256;
 inline constexpr int blocked_nb = 16;  // the default panel width (the host's gebrd_block_size)
-template <class T> struct GebrdBlockedPlan {
-    WsSlot<T> work;  // local: wa (NB), wx (NB)
-    WsSlot<T> smem;  // local: the L3 stage of GebrdBlockedCfg<T>
-    WsSlot<T> x, y;  // global: X (ld m), Y (ld n)
+template <class Scalar> struct GebrdBlockedPlan {
+    WsSlot<Scalar> work;  // local: wa (NB), wx (NB)
+    WsSlot<Scalar> smem;  // local: the L3 stage of GebrdBlockedCfg<Scalar>
+    WsSlot<Scalar> x, y;  // global: X (ld m), Y (ld n)
     WorkspaceSize size;
 };
-template <int NB, class T> constexpr GebrdBlockedPlan<T> labrd_plan(int m, int n) {
+template <int NB, class Scalar> constexpr GebrdBlockedPlan<Scalar> labrd_plan(int m, int n) {
     Plan p;
-    const WsSlot<T> work = p.take<T>(WsSpace::Local, std::size_t(2) * NB);
-    const WsSlot<T> smem = p.take<T>(WsSpace::Local, std::size_t(l3::smem_elems<GebrdBlockedCfg<T>>()));
-    const WsSlot<T> x = p.take<T>(WsSpace::Global, std::size_t(m) * NB);
-    const WsSlot<T> y = p.take<T>(WsSpace::Global, std::size_t(n) * NB);
+    const WsSlot<Scalar> work = p.take<Scalar>(WsSpace::Local, std::size_t(2) * NB);
+    const WsSlot<Scalar> smem = p.take<Scalar>(WsSpace::Local, std::size_t(l3::smem_elems<GebrdBlockedCfg<Scalar>>()));
+    const WsSlot<Scalar> x = p.take<Scalar>(WsSpace::Global, std::size_t(m) * NB);
+    const WsSlot<Scalar> y = p.take<Scalar>(WsSpace::Global, std::size_t(n) * NB);
     return {work, smem, x, y, p.size()};
 }
 }  // namespace detail
 
 // tier::Cta<P>, P in {4, 8, 16, 32}: one matrix per P-lane partition (SgpPartition<P>) of a
 // sub-group-32 launch, its P x P tile in local memory; the work-group size is any multiple of 32
-// (32 / P matrices per sub-group). Real T only.
-template <int P, class T> struct tier_info<routine::gebrd, tier::Cta<P>, T> {
+// (32 / P matrices per sub-group). Real Scalar only.
+template <int P, class Scalar> struct tier_info<routine::gebrd, tier::Cta<P>, Scalar> {
     static_assert(detail::cta_width_v<P>, "gebrd: tier::Cta<P> needs P in {4, 8, 16, 32}");
     static constexpr int wg_size = 32, sg_size = 32;
     static constexpr int matrices_per_sub_group = 32 / P;
     using executor = SgpPartition<P>;
     static constexpr int per_group = wg_size / P;
-    static constexpr bool admits(int n) { return !Arith<T>::is_complex && n >= 1 && n <= P; }
-    static constexpr WorkspaceSize buffer_size(int) { return detail::gebrd_cta_plan<P, T>().size; }
+    static constexpr bool admits(int n) { return !Arith<Scalar>::is_complex && n >= 1 && n <= P; }
+    static constexpr WorkspaceSize buffer_size(int) { return detail::gebrd_cta_plan<P, Scalar>().size; }
 };
-// tier::Blocked<NB> (1 <= NB <= 64, the panel width): any m >= n, every T, on a WorkGroup<256, 32>.
+// tier::Blocked<NB> (1 <= NB <= 64, the panel width): any m >= n, every Scalar, on a WorkGroup<256, 32>.
 // buffer_size(n) is the square problem's, buffer_size(m, n) any other (Cta has no (m, n) form).
-template <int NB, class A, class T> struct tier_info<routine::gebrd, tier::Blocked<NB, A>, T> {
+template <int NB, class A, class Scalar> struct tier_info<routine::gebrd, tier::Blocked<NB, A>, Scalar> {
     static_assert(NB >= 1 && NB <= 64, "gebrd: tier::Blocked<NB> needs 1 <= NB <= 64 (the host panel's bound)");
     static constexpr int wg_size = detail::blocked_wg, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 1; }
-    static constexpr WorkspaceSize buffer_size(int n) { return detail::labrd_plan<NB, T>(n, n).size; }
-    static constexpr WorkspaceSize buffer_size(int m, int n) { return detail::labrd_plan<NB, T>(m, n).size; }
+    static constexpr WorkspaceSize buffer_size(int n) { return detail::labrd_plan<NB, Scalar>(n, n).size; }
+    static constexpr WorkspaceSize buffer_size(int m, int n) { return detail::labrd_plan<NB, Scalar>(m, n).size; }
 };
-template <class T> struct tiers<routine::gebrd, T> {
-    using type = std::conditional_t<Arith<T>::is_complex, tier::list<tier::Blocked<detail::blocked_nb>>,
+template <class Scalar> struct tiers<routine::gebrd, Scalar> {
+    using type = std::conditional_t<Arith<Scalar>::is_complex, tier::list<tier::Blocked<detail::blocked_nb>>,
                                     tier::list<tier::Cta<4>, tier::Cta<8>, tier::Cta<16>, tier::Cta<32>,
                                                tier::Blocked<detail::blocked_nb>>>;
 };

@@ -32,8 +32,8 @@ using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename device::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
+template <class Scalar> using real_of = typename device::Arith<Scalar>::real_t;
+template <class Scalar> constexpr bool is_cplx = device::Arith<Scalar>::is_complex;
 
 constexpr int kBatch = 1024;  // saturating batch: items repeat with period kPeriod
 constexpr int kPeriod = 3;
@@ -44,29 +44,29 @@ std::uint64_t mix(std::uint64_t x) {
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
     return x ^ (x >> 31);
 }
-template <class R> R uval(std::uint64_t i) { return static_cast<R>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
-template <class T> T val(std::uint64_t i) {
-    if constexpr (is_cplx<T>) return T(uval<real_of<T>>(2 * i), uval<real_of<T>>(2 * i + 1));
-    else return uval<T>(i);
+template <class Real> Real uval(std::uint64_t i) { return static_cast<Real>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
+template <class Scalar> Scalar val(std::uint64_t i) {
+    if constexpr (is_cplx<Scalar>) return Scalar(uval<real_of<Scalar>>(2 * i), uval<real_of<Scalar>>(2 * i + 1));
+    else return uval<Scalar>(i);
 }
-template <class T> T mk(real_of<T> re, real_of<T> im) {
-    if constexpr (is_cplx<T>) return T(re, im);
+template <class Scalar> Scalar mk(real_of<Scalar> re, real_of<Scalar> im) {
+    if constexpr (is_cplx<Scalar>) return Scalar(re, im);
     else return re;
 }
 
 // kPeriod representatives (edited by fix) copied to every item b from representative b % kPeriod.
-template <class T, class Fix> std::vector<T> batched(int per_item, std::uint64_t seed, Fix fix) {
-    std::vector<T> h(static_cast<std::size_t>(kBatch) * per_item);
+template <class Scalar, class Fix> std::vector<Scalar> batched(int per_item, std::uint64_t seed, Fix fix) {
+    std::vector<Scalar> h(static_cast<std::size_t>(kBatch) * per_item);
     for (int b = 0; b < kPeriod; ++b) {
-        for (int i = 0; i < per_item; ++i) h[std::size_t(b) * per_item + i] = val<T>(seed + std::uint64_t(b) * 1000003u + i);
+        for (int i = 0; i < per_item; ++i) h[std::size_t(b) * per_item + i] = val<Scalar>(seed + std::uint64_t(b) * 1000003u + i);
         fix(h.data() + std::size_t(b) * per_item);
     }
     for (int b = kPeriod; b < kBatch; ++b)
         std::copy_n(h.data() + std::size_t(b % kPeriod) * per_item, per_item, h.data() + std::size_t(b) * per_item);
     return h;
 }
-template <class T> std::vector<T> batched(int per_item, std::uint64_t seed) {
-    return batched<T>(per_item, seed, [](T*) {});
+template <class Scalar> std::vector<Scalar> batched(int per_item, std::uint64_t seed) {
+    return batched<Scalar>(per_item, seed, [](Scalar*) {});
 }
 
 template <class T> bool same_bits(const T& a, const T& b) { return std::memcmp(&a, &b, sizeof(T)) == 0; }
@@ -110,12 +110,12 @@ struct Dev {
     std::vector<void*> ptrs;
 };
 
-template <class T> class DeviceLapackJacobiTest : public ::testing::Test {
+template <class Scalar> class DeviceLapackJacobiTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx) GTEST_SKIP() << "no SYCL device visible";
         if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "device tests launch sub-group size 32";
-        if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
+        if (test_utils::lacks_fp64<Scalar>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
 };
@@ -123,16 +123,16 @@ protected:
 using Types = ::testing::Types<float, double, std::complex<float>, std::complex<double>>;
 TYPED_TEST_SUITE(DeviceLapackJacobiTest, Types);
 
-template <class T> using LD = std::conditional_t<is_cplx<T>, std::complex<long double>, long double>;
-template <class T> LD<T> wide(T v) { return LD<T>(v); }
-template <class T> LD<T> conj_h(LD<T> v) {
-    if constexpr (is_cplx<T>) return std::conj(v);
+template <class Scalar> using LD = std::conditional_t<is_cplx<Scalar>, std::complex<long double>, long double>;
+template <class Scalar> LD<Scalar> wide(Scalar v) { return LD<Scalar>(v); }
+template <class Scalar> LD<Scalar> conj_h(LD<Scalar> v) {
+    if constexpr (is_cplx<Scalar>) return std::conj(v);
     else return v;
 }
-template <class T> double rel(T got, LD<T> ref, long double scale) {
-    const long double d = std::abs(LD<T>(got) - ref);
+template <class Scalar> double rel(Scalar got, LD<Scalar> ref, long double scale) {
+    const long double d = std::abs(LD<Scalar>(got) - ref);
     if (std::isnan(d)) return std::numeric_limits<double>::infinity();
-    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<T>>::min()));
+    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<Scalar>>::min()));
 }
 
 // ---- pivot schedule ------------------------------------------------------------------------
@@ -175,9 +175,9 @@ TEST(DeviceLapackJacobiSchedule, RoundRobinCoversEveryPairOnce) {
 
 // ---- sym_schur2 ----------------------------------------------------------------------------
 
-template <class T> struct Case2 {
-    real_of<T> app, aqq;
-    T apq;
+template <class Scalar> struct Case2 {
+    real_of<Scalar> app, aqq;
+    Scalar apq;
     int expect;  // 1 active, 0 identity
 };
 
@@ -256,8 +256,8 @@ TYPED_TEST(DeviceLapackJacobiTest, SymSchur2DiagonalisesOrReturnsIdentity) {
 
 // ---- rotation rounds: a two-sided Jacobi eigensolver on one partition ------------------------
 
-template <class T> struct SweepOut {
-    std::vector<T> a, z;
+template <class Scalar> struct SweepOut {
+    std::vector<Scalar> a, z;
     std::vector<int> sweeps;
 };
 
@@ -383,11 +383,11 @@ template <class T, int P, class Ops> SweepOut<T> jacobi_sweeps(Dev& dev, int n) 
     return out;
 }
 
-template <class T, int P> void jacobi_case(Dev& dev, int n) {
+template <class Scalar, int P> void jacobi_case(Dev& dev, int n) {
     SCOPED_TRACE(::testing::Message() << "P " << P << " n " << n);
-    const auto nat = jacobi_sweeps<T, P, device::arith::Native>(dev, n);
-    const auto expl = jacobi_sweeps<T, P, device::arith::Explicit>(dev, n);
-    if constexpr (!is_cplx<T>) {
+    const auto nat = jacobi_sweeps<Scalar, P, device::arith::Native>(dev, n);
+    const auto expl = jacobi_sweeps<Scalar, P, device::arith::Explicit>(dev, n);
+    if constexpr (!is_cplx<Scalar>) {
         int d = 0;
         for (std::size_t i = 0; i < nat.a.size(); ++i) d += !same_bits(nat.a[i], expl.a[i]) + !same_bits(nat.z[i], expl.z[i]);
         EXPECT_EQ(d, 0) << "arith::Explicit must equal arith::Native for real T";

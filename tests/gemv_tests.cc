@@ -24,9 +24,9 @@
 
 using namespace batchlas;
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct TestConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 
@@ -35,11 +35,11 @@ using MyTypes = typename test_utils::backend_types<TestConfig>::type;
 // These tests used a relative tolerance of the old test_utils::tolerance vendor-comparison bound (1e-5 float,
 // 2e-5 cfloat, 1e-10 double, 2e-10 cdouble), which the relative bound exceeds at long reductions in float.
 // The Slack keeps it.
-template <typename T>
+template <typename Scalar>
 batchlas::verify::Slack vendor_comparison_slack(int k) {
-    constexpr double rel_tol = batchlas::is_std_complex_v<T> ? (std::is_same_v<batchlas::float_t<T>, float> ? 2e-5 : 2e-10)
-                                                                      : (std::is_same_v<T, float> ? 1e-5 : 1e-10);
-    return {std::min(1.0, rel_tol / batchlas::verify::bound<T>(batchlas::verify::Check::blas, k)),
+    constexpr double rel_tol = batchlas::is_std_complex_v<Scalar> ? (std::is_same_v<batchlas::float_t<Scalar>, float> ? 2e-5 : 2e-10)
+                                                                      : (std::is_same_v<Scalar, float> ? 1e-5 : 1e-10);
+    return {std::min(1.0, rel_tol / batchlas::verify::bound<Scalar>(batchlas::verify::Check::blas, k)),
             "the old relative tolerance, kept"};
 }
 
@@ -225,13 +225,13 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithAlphaBeta) {
 namespace {
 
 // Magnitudes stay in [-1, 1] so a ~100-term reduction does not cancel; complex values here have a non-zero imaginary part.
-template <typename T>
-T gemv_cov_value(int seed) {
-    using R = typename batchlas::base_type<T>::type;
+template <typename Scalar>
+Scalar gemv_cov_value(int seed) {
+    using R = typename batchlas::base_type<Scalar>::type;
     const R re = static_cast<R>(std::sin(0.7 * seed + 0.3));
     const R im = static_cast<R>(std::cos(1.3 * seed + 1.1));
-    if constexpr (test_utils::is_complex<T>::value) {
-        return T(re, im);
+    if constexpr (test_utils::is_complex<Scalar>::value) {
+        return Scalar(re, im);
     } else {
         (void)im;
         return re;

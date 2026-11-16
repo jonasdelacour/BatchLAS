@@ -37,9 +37,9 @@ using namespace batchlas;
 
 namespace {
 
-template <class T> using real_of = typename device::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
-template <class T> using LD = std::conditional_t<is_cplx<T>, std::complex<long double>, long double>;
+template <class Scalar> using real_of = typename device::Arith<Scalar>::real_t;
+template <class Scalar> constexpr bool is_cplx = device::Arith<Scalar>::is_complex;
+template <class Scalar> using LD = std::conditional_t<is_cplx<Scalar>, std::complex<long double>, long double>;
 
 constexpr int kBatch = 1024;
 constexpr int kPeriod = 3;
@@ -52,60 +52,60 @@ std::uint64_t mix(std::uint64_t x) {
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
     return x ^ (x >> 31);
 }
-template <class R> R uval(std::uint64_t i) { return static_cast<R>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
-template <class T> T val(std::uint64_t i) {
-    if constexpr (is_cplx<T>) return T(uval<real_of<T>>(2 * i), uval<real_of<T>>(2 * i + 1));
-    else return uval<T>(i);
+template <class Real> Real uval(std::uint64_t i) { return static_cast<Real>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
+template <class Scalar> Scalar val(std::uint64_t i) {
+    if constexpr (is_cplx<Scalar>) return Scalar(uval<real_of<Scalar>>(2 * i), uval<real_of<Scalar>>(2 * i + 1));
+    else return uval<Scalar>(i);
 }
-template <class T> long double cabs1(LD<T> v) {
-    if constexpr (is_cplx<T>) return std::fabs(v.real()) + std::fabs(v.imag());
+template <class Scalar> long double cabs1(LD<Scalar> v) {
+    if constexpr (is_cplx<Scalar>) return std::fabs(v.real()) + std::fabs(v.imag());
     else return std::fabs(v);
 }
 
 // A = P0 L0 U0, |L0(i,j)| <= 0.17 below a unit diagonal, |U0(j,j)| >= 1: partial pivoting picks
 // P0's rows with a 4x margin (cabs1 included). `singular` zeroes U0's last column: that Schur
 // column stays EXACTLY zero and info = n.
-template <class T> std::vector<T> lu_input(int n, int ld, std::uint64_t seed, bool singular) {
-    using R = real_of<T>;
-    std::vector<LD<T>> L(std::size_t(n) * n, LD<T>(0)), U(std::size_t(n) * n, LD<T>(0));
+template <class Scalar> std::vector<Scalar> lu_input(int n, int ld, std::uint64_t seed, bool singular) {
+    using R = real_of<Scalar>;
+    std::vector<LD<Scalar>> L(std::size_t(n) * n, LD<Scalar>(0)), U(std::size_t(n) * n, LD<Scalar>(0));
     for (int i = 0; i < n; ++i)
         for (int j = 0; j <= i; ++j)
-            L[i + std::size_t(j) * n] = i == j ? LD<T>(1) : LD<T>(val<T>(seed + 7u * i + 1000u * j)) * (long double)0.17;
+            L[i + std::size_t(j) * n] = i == j ? LD<Scalar>(1) : LD<Scalar>(val<Scalar>(seed + 7u * i + 1000u * j)) * (long double)0.17;
     for (int j = 0; j < n; ++j)
         for (int c = j; c < n; ++c) {
-            LD<T> u = LD<T>(val<T>(seed + 99991u + 13u * j + 1777u * c));
-            if (c == j) u = LD<T>(T(R(1.5) + R(0.5) * uval<R>(seed + 31u * j))) + u * (long double)0.1;
-            U[j + std::size_t(c) * n] = (singular && c == n - 1) ? LD<T>(0) : u;
+            LD<Scalar> u = LD<Scalar>(val<Scalar>(seed + 99991u + 13u * j + 1777u * c));
+            if (c == j) u = LD<Scalar>(Scalar(R(1.5) + R(0.5) * uval<R>(seed + 31u * j))) + u * (long double)0.1;
+            U[j + std::size_t(c) * n] = (singular && c == n - 1) ? LD<Scalar>(0) : u;
         }
     std::vector<int> perm(n);
     std::iota(perm.begin(), perm.end(), 0);
     for (int i = n - 1; i > 0; --i) std::swap(perm[i], perm[mix(seed + 555u + i) % std::uint64_t(i + 1)]);
-    std::vector<T> a(std::size_t(ld) * n, T(R(kPadPoison)));
+    std::vector<Scalar> a(std::size_t(ld) * n, Scalar(R(kPadPoison)));
     for (int i = 0; i < n; ++i)
         for (int c = 0; c < n; ++c) {
-            LD<T> s = 0;
+            LD<Scalar> s = 0;
             for (int j = 0; j < n; ++j) s += L[i + std::size_t(j) * n] * U[j + std::size_t(c) * n];
-            a[perm[i] + std::size_t(c) * ld] = static_cast<T>(s);
+            a[perm[i] + std::size_t(c) * ld] = static_cast<Scalar>(s);
         }
     return a;
 }
 
 // LAPACK ?GETF2 in long double, cabs1 metric: 1-based pivots and info.
-template <class T> void oracle(const T* a0, int n, int ld, std::vector<int>& ipiv, int& info) {
-    std::vector<LD<T>> a(std::size_t(ld) * n);
-    for (std::size_t i = 0; i < a.size(); ++i) a[i] = LD<T>(a0[i]);
-    auto at = [&](int i, int j) -> LD<T>& { return a[i + std::size_t(j) * ld]; };
+template <class Scalar> void oracle(const Scalar* a0, int n, int ld, std::vector<int>& ipiv, int& info) {
+    std::vector<LD<Scalar>> a(std::size_t(ld) * n);
+    for (std::size_t i = 0; i < a.size(); ++i) a[i] = LD<Scalar>(a0[i]);
+    auto at = [&](int i, int j) -> LD<Scalar>& { return a[i + std::size_t(j) * ld]; };
     ipiv.assign(n, 0);
     info = 0;
     for (int k = 0; k < n; ++k) {
         int p = k;
         long double best = -1;
         for (int i = k; i < n; ++i)
-            if (cabs1<T>(at(i, k)) > best) best = cabs1<T>(at(i, k)), p = i;
+            if (cabs1<Scalar>(at(i, k)) > best) best = cabs1<Scalar>(at(i, k)), p = i;
         ipiv[k] = p + 1;
         for (int c = 0; c < n; ++c) std::swap(at(k, c), at(p, c));
-        const LD<T> d = at(k, k);
-        if (d == LD<T>(0)) {
+        const LD<Scalar> d = at(k, k);
+        if (d == LD<Scalar>(0)) {
             if (info == 0) info = k + 1;
             continue;
         }
@@ -116,18 +116,19 @@ template <class T> void oracle(const T* a0, int n, int ld, std::vector<int>& ipi
 }
 
 // One batch, run twice from the same bytes: by the host route and by the device op.
-template <class T> struct Prob {
+template <class Scalar> struct Prob {
     int n, ld, stride;
-    std::vector<T> a0;
-    UnifiedVector<T> a_host, a_dev;
+    std::vector<Scalar> a0;
+    UnifiedVector<Scalar> a_host, a_dev;
     UnifiedVector<std::int64_t> piv_host;
     UnifiedVector<std::int32_t> piv_dev, info_host, info_dev;
     Prob(int n_, std::uint64_t seed)
-        : n(n_), ld(n_ + 3), stride((n_ + 3) * n_ + kGap), a0(std::size_t(stride) * kBatch, T(real_of<T>(kPadPoison))),
+        : n(n_), ld(n_ + 3), stride((n_ + 3) * n_ + kGap), a0(std::size_t(stride) * kBatch,
+                                                              Scalar(real_of<Scalar>(kPadPoison))),
           a_host(a0.size()), a_dev(a0.size()), piv_host(std::size_t(n_) * kBatch, 0), piv_dev(std::size_t(n_) * kBatch, -1),
           info_host(kBatch, -12345), info_dev(kBatch, -12345) {
         for (int r = 0; r < kPeriod; ++r) {
-            const auto a = lu_input<T>(n, ld, seed + 104729u * r, r == 1);
+            const auto a = lu_input<Scalar>(n, ld, seed + 104729u * r, r == 1);
             for (int b = r; b < kBatch; b += kPeriod) std::copy(a.begin(), a.end(), a0.begin() + std::size_t(stride) * b);
         }
         std::copy(a0.begin(), a0.end(), a_host.data());
@@ -138,23 +139,24 @@ template <class T> struct Prob {
 
 enum class Route { Tiny, Cta };
 
-template <class T> void run_host(Queue& ctx, Prob<T>& p, Route r) {
-    const MatrixView<T, MatrixFormat::Dense> A(p.a_host.data(), p.n, p.n, p.ld, p.stride, kBatch);
+template <class Scalar> void run_host(Queue& ctx, Prob<Scalar>& p, Route r) {
+    const MatrixView<Scalar, MatrixFormat::Dense> A(p.a_host.data(), p.n, p.n, p.ld, p.stride, kBatch);
     if (r == Route::Tiny) {
-        UnifiedVector<std::byte> ws(std::max<std::size_t>(1, ops::getrf::getrf_tiny_buffer_size<T>(ctx, A)));
-        (void)ops::getrf::getrf_tiny_dispatch<T>(ctx, A, p.piv_host.to_span(), ws.to_span(), p.info_host.to_span());
+        UnifiedVector<std::byte> ws(std::max<std::size_t>(1, ops::getrf::getrf_tiny_buffer_size<Scalar>(ctx, A)));
+        (void)ops::getrf::getrf_tiny_dispatch<Scalar>(ctx, A, p.piv_host.to_span(), ws.to_span(),
+                                                      p.info_host.to_span());
     } else {
-        UnifiedVector<std::byte> ws(std::max<std::size_t>(1, ops::getrf::getrf_cta_buffer_size<T>(ctx, A)));
-        (void)ops::getrf::getrf_cta_dispatch<T>(ctx, A, p.piv_host.to_span(), ws.to_span(), p.info_host.to_span());
+        UnifiedVector<std::byte> ws(std::max<std::size_t>(1, ops::getrf::getrf_cta_buffer_size<Scalar>(ctx, A)));
+        (void)ops::getrf::getrf_cta_dispatch<Scalar>(ctx, A, p.piv_host.to_span(), ws.to_span(), p.info_host.to_span());
     }
     ctx.wait();
 }
 
 // The user's kernel: Reg on 64-item groups of Partition<part_size>, Cta on one WorkGroup per
 // matrix; `dead` is a matrix the kernel passes live = false for (the deliberate break).
-template <class Tier, class T> void run_device(Queue& ctx, Prob<T>& p, int dead = -1) {
-    using I = device::tier_info<device::routine::getrf, Tier, T>;
-    T* a = p.a_dev.data();
+template <class Tier, class Scalar> void run_device(Queue& ctx, Prob<Scalar>& p, int dead = -1) {
+    using I = device::tier_info<device::routine::getrf, Tier, Scalar>;
+    Scalar* a = p.a_dev.data();
     std::int32_t* piv = p.piv_dev.data();
     std::int32_t* info = p.info_dev.data();
     const int n = p.n, ld = p.ld, stride = p.stride, batch = kBatch;
@@ -173,7 +175,7 @@ template <class Tier, class T> void run_device(Queue& ctx, Prob<T>& p, int dead 
          }).wait_and_throw();
     } else {
         constexpr int WG = I::wg_size;
-        const device::WorkspaceSize ws = device::buffer_size<device::routine::getrf, Tier, T>(n);
+        const device::WorkspaceSize ws = device::buffer_size<device::routine::getrf, Tier, Scalar>(n);
         q.submit([&](sycl::handler& h) {
              sycl::local_accessor<std::byte, 1> lm(sycl::range<1>(ws.local_bytes), h);
              h.parallel_for(sycl::nd_range<1>(std::size_t(batch) * WG, WG), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
@@ -189,11 +191,11 @@ template <class Tier, class T> void run_device(Queue& ctx, Prob<T>& p, int dead 
 }
 
 // Items whose bytes (matrix, its pads and the gap after it), pivots or info differ between the two runs.
-template <class T> std::vector<int> mismatches(const Prob<T>& p) {
+template <class Scalar> std::vector<int> mismatches(const Prob<Scalar>& p) {
     std::vector<int> bad;
     for (int b = 0; b < kBatch; ++b) {
         bool same = std::memcmp(p.a_host.data() + std::size_t(p.stride) * b, p.a_dev.data() + std::size_t(p.stride) * b,
-                                sizeof(T) * std::size_t(p.stride)) == 0;
+                                sizeof(Scalar) * std::size_t(p.stride)) == 0;
         for (int k = 0; k < p.n; ++k) same = same && p.host_piv(std::size_t(b) * p.n + k) == p.piv_dev[std::size_t(b) * p.n + k];
         same = same && p.info_host[b] == p.info_dev[b];
         if (!same) bad.push_back(b);
@@ -203,12 +205,12 @@ template <class T> std::vector<int> mismatches(const Prob<T>& p) {
 
 // The device run on its own: every item bit-identical to its representative, and the
 // representatives' pivots and info those of the oracle.
-template <class T> void check_device(const Prob<T>& p, const char* what) {
+template <class Scalar> void check_device(const Prob<Scalar>& p, const char* what) {
     int bitdiff = 0;
     for (int b = kPeriod; b < kBatch; ++b) {
         const int r = b % kPeriod;
         bitdiff += std::memcmp(p.a_dev.data() + std::size_t(p.stride) * b, p.a_dev.data() + std::size_t(p.stride) * r,
-                               sizeof(T) * std::size_t(p.ld) * p.n) != 0;
+                               sizeof(Scalar) * std::size_t(p.ld) * p.n) != 0;
         for (int k = 0; k < p.n; ++k) bitdiff += p.piv_dev[std::size_t(b) * p.n + k] != p.piv_dev[std::size_t(r) * p.n + k];
         bitdiff += p.info_dev[b] != p.info_dev[r];
     }
@@ -225,22 +227,23 @@ template <class T> void check_device(const Prob<T>& p, const char* what) {
 
 // The host cta route's own ceiling (its occupancy-scaled local-memory gate, getrf_cta.cc): above
 // it the host route throws, so only the device op runs there, against the oracle.
-template <class T> int host_cta_cap(Queue& ctx) {
+template <class Scalar> int host_cta_cap(Queue& ctx) {
     const auto lm = static_cast<std::size_t>(ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
-    return ops::getrf::getrf_cta_max_n_for_slm<T>(resident::device_slm_budget(lm));
+    return ops::getrf::getrf_cta_max_n_for_slm<Scalar>(resident::device_slm_budget(lm));
 }
-template <class T> bool host_runs(Queue& ctx, int n, Route r) { return r == Route::Tiny || n <= host_cta_cap<T>(ctx); }
+template <class Scalar> bool host_runs(Queue& ctx, int n,
+                                       Route r) { return r == Route::Tiny || n <= host_cta_cap<Scalar>(ctx); }
 
 // Whether one work-group of the tier launches with its workspace at order n: acpp Metal's 32 KiB
 // less its wg * 8 B runtime scratch stops complex<float> Cta<64> below n = 64.
-template <class Tier, class T> bool device_holds(Queue& ctx, int n) {
-    using I = device::tier_info<device::routine::getrf, Tier, T>;
-    return device::buffer_size<device::routine::getrf, Tier, T>(n).local_bytes <= batchlas::impl::local_mem_bytes(sycl_queue(ctx).get_device(), I::wg_size);
+template <class Tier, class Scalar> bool device_holds(Queue& ctx, int n) {
+    using I = device::tier_info<device::routine::getrf, Tier, Scalar>;
+    return device::buffer_size<device::routine::getrf, Tier, Scalar>(n).local_bytes <= batchlas::impl::local_mem_bytes(sycl_queue(ctx).get_device(), I::wg_size);
 }
 
-template <class Tier, class T> void expect_thin_launcher(Queue& ctx, int n, Route route, const char* what) {
-    Prob<T> p(n, 0x5eedu + 977u * n);
-    const bool host = host_runs<T>(ctx, n, route);
+template <class Tier, class Scalar> void expect_thin_launcher(Queue& ctx, int n, Route route, const char* what) {
+    Prob<Scalar> p(n, 0x5eedu + 977u * n);
+    const bool host = host_runs<Scalar>(ctx, n, route);
     if (host) run_host(ctx, p, route);
     run_device<Tier>(ctx, p);
     if (host) {
@@ -255,22 +258,22 @@ template <class Tier> std::string tier_name() {
     else if constexpr (device::tier::is_blocked_v<Tier>) return "Blocked<" + std::to_string(Tier::nb) + ">";
     else return "Cta<" + std::to_string(Tier::n_max) + ">";
 }
-template <class T> std::string picked(const device::DeviceLimits& lim, int n) {
+template <class Scalar> std::string picked(const device::DeviceLimits& lim, int n) {
     std::string s;
     try {
-        device::with_tier<device::routine::getrf, T>(lim, n, [&]<class Tier>(Tier) { s = tier_name<Tier>(); });
+        device::with_tier<device::routine::getrf, Scalar>(lim, n, [&]<class Tier>(Tier) { s = tier_name<Tier>(); });
     } catch (const batchlas::invalid_argument& e) {
         s = e.what();
     }
     return s;
 }
 
-template <class T> class DeviceApiGetrfTest : public ::testing::Test {
+template <class Scalar> class DeviceApiGetrfTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (ctx.device().type != DeviceType::GPU) GTEST_SKIP() << "the host tiny and cta routes are GPU only";
         if (!ctx.device().supports_sub_group_size(32)) GTEST_SKIP() << "the tiers launch sub-group size 32";
-        if (test_utils::lacks_fp64<T>(sycl_queue(ctx).get_device())) GTEST_SKIP() << "device has no fp64";
+        if (test_utils::lacks_fp64<Scalar>(sycl_queue(ctx).get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Queue ctx{Device::default_device()};
 };

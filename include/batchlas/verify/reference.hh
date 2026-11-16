@@ -164,8 +164,8 @@ template <typename E> bool getrf_pivots(int m, int n, std::vector<E>& a, std::ve
 /// @param[out] ipiv  resized to \f$\min(m, n)\f$; the 1-based row pivots on success
 /// @return as for the vector overload
 /// @throws batchlas::unsupported for `double` or `std::complex<double>` data if the host dgemm is known to be wrong
-template <typename T> bool getrf_pivots(const MatrixView<T, MatrixFormat::Dense>& A, int item, std::vector<std::int32_t>& ipiv) {
-    auto a = detail::item_vector<T>(A, item);
+template <typename Scalar> bool getrf_pivots(const MatrixView<Scalar, MatrixFormat::Dense>& A, int item, std::vector<std::int32_t>& ipiv) {
+    auto a = detail::item_vector<Scalar>(A, item);
     return getrf_pivots(A.rows(), A.cols(), a, ipiv);
 }
 
@@ -216,9 +216,10 @@ inline bool tridiagonal_eigenvalues(std::vector<double>& d, std::vector<double>&
 /// @param[out] w     resized to \f$n\f$; the ascending eigenvalues on success
 /// @return as for the vector overload
 /// @throws batchlas::unsupported if the host dgemm the reference runs on is known to be wrong (the data is
-///         promoted to double precision, so this applies to every `T`)
-template <typename T> bool eigenvalues(const MatrixView<T, MatrixFormat::Dense>& A, int item, std::vector<double>& w) {
-    auto a = detail::item_vector<typename MatrixView<T, MatrixFormat::Dense>::promoted_type>(A, item);
+///         promoted to double precision, so this applies to every `Scalar`)
+template <typename Scalar> bool eigenvalues(const MatrixView<Scalar, MatrixFormat::Dense>& A, int item,
+                                            std::vector<double>& w) {
+    auto a = detail::item_vector<typename MatrixView<Scalar, MatrixFormat::Dense>::promoted_type>(A, item);
     return eigenvalues(A.rows(), a, w);
 }
 
@@ -228,9 +229,9 @@ template <typename T> bool eigenvalues(const MatrixView<T, MatrixFormat::Dense>&
 /// @param[out] s     resized to \f$\min(m, n)\f$; the descending singular values on success
 /// @return as for the vector overload
 /// @throws batchlas::unsupported if the host dgemm the reference runs on is known to be wrong (the data is
-///         promoted to double precision, so this applies to every `T`)
-template <typename T> bool singular_values(const MatrixView<T, MatrixFormat::Dense>& A, int item, std::vector<double>& s) {
-    auto a = detail::item_vector<typename MatrixView<T, MatrixFormat::Dense>::promoted_type>(A, item);
+///         promoted to double precision, so this applies to every `Scalar`)
+template <typename Scalar> bool singular_values(const MatrixView<Scalar, MatrixFormat::Dense>& A, int item, std::vector<double>& s) {
+    auto a = detail::item_vector<typename MatrixView<Scalar, MatrixFormat::Dense>::promoted_type>(A, item);
     return singular_values(A.rows(), A.cols(), a, s);
 }
 
@@ -240,11 +241,11 @@ template <typename T> bool singular_values(const MatrixView<T, MatrixFormat::Den
 /// @param[out] tau   resized to \f$\min(m, n)\f$; the reflector scales on success
 /// @return as for the vector overload
 /// @throws batchlas::unsupported if the host dgemm the reference runs on is known to be wrong (the data is
-///         promoted to double precision, so this applies to every `T`)
-template <typename T>
-bool geqrf_tau(const MatrixView<T, MatrixFormat::Dense>& A, int item,
-               std::vector<typename MatrixView<T, MatrixFormat::Dense>::promoted_type>& tau) {
-    auto a = detail::item_vector<typename MatrixView<T, MatrixFormat::Dense>::promoted_type>(A, item);
+///         promoted to double precision, so this applies to every `Scalar`)
+template <typename Scalar>
+bool geqrf_tau(const MatrixView<Scalar, MatrixFormat::Dense>& A, int item,
+               std::vector<typename MatrixView<Scalar, MatrixFormat::Dense>::promoted_type>& tau) {
+    auto a = detail::item_vector<typename MatrixView<Scalar, MatrixFormat::Dense>::promoted_type>(A, item);
     return geqrf_tau(A.rows(), A.cols(), a, tau);
 }
 

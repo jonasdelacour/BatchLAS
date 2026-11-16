@@ -48,12 +48,12 @@ namespace {
 namespace gi = batchlas::ops::getri;
 using C = gi::GetriChoice;
 using Pin = select::ScopedPin<C>;
-template <typename T>
-using MVof = MatrixView<T, MatrixFormat::Dense>;
-template <typename T>
-using RealOf = typename batchlas::base_type<T>::type;
-template <typename T>
-constexpr bool kCx = test_utils::is_complex<T>::value;
+template <typename Scalar>
+using MVof = MatrixView<Scalar, MatrixFormat::Dense>;
+template <typename Scalar>
+using RealOf = typename batchlas::base_type<Scalar>::type;
+template <typename Scalar>
+constexpr bool kCx = test_utils::is_complex<Scalar>::value;
 
 template <typename T>
 bool same_bits(T a, T b) {
@@ -63,10 +63,10 @@ bool same_bits(T a, T b) {
 // The transcribed preference (route_getri.hh at 424a45bc, the transcribed commit): Blocked for
 // float from order 128 and cfloat from order 256, the vendor otherwise. Written from the deleted
 // predicate, not read from the tables, so a table that drifts from it goes red.
-template <typename T>
+template <typename Scalar>
 const char* old_auto(int n) {
-    if constexpr (std::is_same_v<T, float>) return n >= 128 ? "blocked" : "vendor";
-    else if constexpr (std::is_same_v<T, std::complex<float>>) return n >= 256 ? "blocked" : "vendor";
+    if constexpr (std::is_same_v<Scalar, float>) return n >= 128 ? "blocked" : "vendor";
+    else if constexpr (std::is_same_v<Scalar, std::complex<float>>) return n >= 256 ? "blocked" : "vendor";
     else return "vendor";
 }
 const char* old_auto_dtype(const std::string& dt, int n) {
@@ -84,49 +84,49 @@ struct Spec {
 // A (factored in place by the public getrf) and C share one buffer of a large finite poison,
 // at padded lds and strides that are not ld * n. A must survive getri bit for bit; C's pads
 // and the gaps must too.
-template <typename T>
+template <typename Scalar>
 struct Inv {
     Spec s;
     int lda = 0, sa = 0, ldc = 0, sc = 0;
     std::size_t coff = 0;
-    UnifiedVector<T> mem;
-    std::vector<T> mem0;                   // after getrf, before getri
-    std::vector<T> a0;  // the matrix getrf factored, column-major per item
+    UnifiedVector<Scalar> mem;
+    std::vector<Scalar> mem0;                   // after getrf, before getri
+    std::vector<Scalar> a0;  // the matrix getrf factored, column-major per item
     UnifiedVector<int64_t> piv;
     UnifiedVector<int32_t> info;
-    UnifiedVector<T*> aptr, cptr;
+    UnifiedVector<Scalar*> aptr, cptr;
 
-    MVof<T> A() { return {mem.data(), s.n, s.n, lda, sa, s.batch, aptr.data()}; }
-    MVof<T> Cv() { return {mem.data() + coff, s.n, s.n, ldc, sc, s.batch, cptr.data()}; }
+    MVof<Scalar> A() { return {mem.data(), s.n, s.n, lda, sa, s.batch, aptr.data()}; }
+    MVof<Scalar> Cv() { return {mem.data() + coff, s.n, s.n, ldc, sc, s.batch, cptr.data()}; }
     std::size_t ai(int it, int i, int j) const { return std::size_t(it) * sa + std::size_t(j) * lda + i; }
     std::size_t ci(int it, int i, int j) const { return coff + std::size_t(it) * sc + std::size_t(j) * ldc + i; }
 };
 
-template <typename T>
-T poison() {
-    return MVof<T>::make(RealOf<T>(-9.75e3), RealOf<T>(4.5e3));
+template <typename Scalar>
+Scalar poison() {
+    return MVof<Scalar>::make(RealOf<Scalar>(-9.75e3), RealOf<Scalar>(4.5e3));
 }
 
 // Strictly diagonally dominant with its rows permuted, so getrf pivots; every entry has a
 // nonzero imaginary part.
-template <typename T>
-void fill_a(Inv<T>& p) {
-    using R = RealOf<T>;
+template <typename Scalar>
+void fill_a(Inv<Scalar>& p) {
+    using R = RealOf<Scalar>;
     const Spec& s = p.s;
     std::mt19937 gen(s.seed);
     std::uniform_real_distribution<R> u(R(-1), R(1));
     const int reps = s.period > 0 ? std::min(s.period, s.batch) : s.batch;
-    p.a0.assign(std::size_t(reps) * s.n * s.n, T{});
+    p.a0.assign(std::size_t(reps) * s.n * s.n, Scalar{});
     for (int it = 0; it < reps; ++it) {
         std::vector<int> perm(s.n);
         for (int i = 0; i < s.n; ++i) perm[i] = i;
         std::shuffle(perm.begin(), perm.end(), gen);
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.n; ++i) {
-                T v = MVof<T>::make(R(s.n) + R(1.5), R(0.25));
+                Scalar v = MVof<Scalar>::make(R(s.n) + R(1.5), R(0.25));
                 if (i != j) {
                     const auto re = u(gen), im = u(gen);
-                    v = MVof<T>::make(re, im);
+                    v = MVof<Scalar>::make(re, im);
                 }
                 p.mem[p.ai(it, perm[i], j)] = v;
                 p.a0[std::size_t(it) * s.n * s.n + std::size_t(j) * s.n + perm[i]] = v;
@@ -139,16 +139,16 @@ void fill_a(Inv<T>& p) {
 
 // ||A0 C - I||_F / (||A0||_F ||C||_F), worst over @p items, A0 and C promoted to double. A0 and C
 // are packed in @p items order (a0 holds only the representatives of a repeating batch).
-template <typename T>
-double residual(Queue& ctx, const Inv<T>& p, const std::vector<int>& items) {
+template <typename Scalar>
+double residual(Queue& ctx, const Inv<Scalar>& p, const std::vector<int>& items) {
     const int n = p.s.n, g = int(items.size());
-    Matrix<T> a(n, n, g);
+    Matrix<Scalar> a(n, n, g);
     for (int k = 0; k < g; ++k) {
         const int rep = p.s.period > 0 ? items[k] % std::min(p.s.period, p.s.batch) : items[k];
         std::copy_n(p.a0.data() + std::size_t(rep) * n * n, std::size_t(n) * n, a.data().data() + std::size_t(k) * n * n);
     }
-    const auto c = MVof<T>(const_cast<T*>(p.mem.data()) + p.coff, n, n, p.ldc, p.sc, p.s.batch).template astype<T>(items);
-    return MVof<T>::solve_residual(ctx, a, c, MVof<T>(nullptr, 0, 0, 1), a.all_items());
+    const auto c = MVof<Scalar>(const_cast<Scalar*>(p.mem.data()) + p.coff, n, n, p.ldc, p.sc, p.s.batch).template astype<Scalar>(items);
+    return MVof<Scalar>::solve_residual(ctx, a, c, MVof<Scalar>(nullptr, 0, 0, 1), a.all_items());
 }
 
 std::string label(const Spec& s) { return "n=" + std::to_string(s.n) + " batch=" + std::to_string(s.batch); }
@@ -196,14 +196,14 @@ void install_getri_table(const std::string& dtype, const std::string& dev, const
 }
 
 // A view whose data is never dereferenced: getri_buffer_size reads metadata only.
-template <typename T>
-MVof<T> meta_view(int rows, int cols, int batch) {
-    return {static_cast<T*>(nullptr), rows, cols, std::max(rows, 1), std::max(rows, 1) * std::max(cols, 1), batch};
+template <typename Scalar>
+MVof<Scalar> meta_view(int rows, int cols, int batch) {
+    return {static_cast<Scalar*>(nullptr), rows, cols, std::max(rows, 1), std::max(rows, 1) * std::max(cols, 1), batch};
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;

@@ -17,28 +17,29 @@ namespace batchlas::backend {
 
 namespace {
 
-template <Backend B, typename T>
-int sytrf_lwork(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
+template <Backend B, typename Scalar>
+int sytrf_lwork(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A) {
     static LinalgHandle<B> handle;
     handle.setStream(ctx);
     int lwork = 0;
-    call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSsytrf_bufferSize, cusolverDnDsytrf_bufferSize,
-                                                 cusolverDnCsytrf_bufferSize, cusolverDnZsytrf_bufferSize, handle,
-                                                 A.rows(), A.data_ptr(), A.ld(), &lwork);
+    call_backend<Scalar, BackendLibrary::CUSOLVER, B>(cusolverDnSsytrf_bufferSize, cusolverDnDsytrf_bufferSize,
+                                                      cusolverDnCsytrf_bufferSize, cusolverDnZsytrf_bufferSize, handle,
+                                                      A.rows(), A.data_ptr(), A.ld(), &lwork);
     return lwork < 1 ? 1 : lwork;
 }
 
-template <typename T>
+template <typename Scalar>
 struct SytrfVendorLayout {
-    Span<T> work;
+    Span<Scalar> work;
     Span<int32_t> info;
 };
 
-template <Backend B, typename T>
-SytrfVendorLayout<T> sytrf_vendor_layout(Queue& ctx, BumpAllocator& pool, const MatrixView<T, MatrixFormat::Dense>& A,
-                                         Span<int32_t> info_out) {
-    SytrfVendorLayout<T> l;
-    l.work = pool.allocate<T>(ctx, static_cast<size_t>(sytrf_lwork<B, T>(ctx, A)));
+template <Backend B, typename Scalar>
+SytrfVendorLayout<Scalar> sytrf_vendor_layout(Queue& ctx, BumpAllocator& pool, const MatrixView<Scalar,
+                                              MatrixFormat::Dense>& A,
+                                              Span<int32_t> info_out) {
+    SytrfVendorLayout<Scalar> l;
+    l.work = pool.allocate<Scalar>(ctx, static_cast<size_t>(sytrf_lwork<B, Scalar>(ctx, A)));
     const auto batch = static_cast<size_t>(A.batch_size());
     l.info = info_out.size() >= batch ? info_out : pool.allocate<int32_t>(ctx, batch);
     return l;
@@ -46,18 +47,19 @@ SytrfVendorLayout<T> sytrf_vendor_layout(Queue& ctx, BumpAllocator& pool, const 
 
 }  // namespace
 
-template <Backend B, typename T>
-size_t sytrf_vendor_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo /*uplo*/) {
-    return workspace_bytes([&](BumpAllocator& p) { return sytrf_vendor_layout<B, T>(ctx, p, A, Span<int32_t>{}); });
+template <Backend B, typename Scalar>
+size_t sytrf_vendor_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, Uplo /*uplo*/) {
+    return workspace_bytes([&](BumpAllocator& p) { return sytrf_vendor_layout<B, Scalar>(ctx, p, A,
+                                                                                         Span<int32_t>{}); });
 }
 
-template <Backend B, typename T>
-Event sytrf_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, Span<int64_t> pivots,
+template <Backend B, typename Scalar>
+Event sytrf_vendor(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, Uplo uplo, Span<int64_t> pivots,
                    Span<std::byte> workspace, Span<int32_t> info_out) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::sytrf, "sytrf_vendor", B, A);
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::sytrf, "sytrf_vendor", B, A);
     static LinalgHandle<B> handle;
     BumpAllocator pool(workspace);
-    const auto l = sytrf_vendor_layout<B, T>(ctx, pool, A, info_out);
+    const auto l = sytrf_vendor_layout<B, Scalar>(ctx, pool, A, info_out);
     const int lwork = static_cast<int>(l.work.size());
     int* const piv = pivots.as_span<int>().data();
     const auto view = A;
@@ -65,11 +67,11 @@ Event sytrf_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo
         handle.setStream(stream);
         const int n = view.rows();
         for (int b = 0; b < view.batch_size(); ++b) {
-            call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSsytrf, cusolverDnDsytrf, cusolverDnCsytrf,
-                                                         cusolverDnZsytrf, handle, uplo, n,
-                                                         view.data_ptr() + static_cast<size_t>(b) * view.stride(),
-                                                         view.ld(), piv + static_cast<size_t>(b) * n, l.work.data(),
-                                                         lwork, l.info.data() + b);
+            call_backend<Scalar, BackendLibrary::CUSOLVER, B>(cusolverDnSsytrf, cusolverDnDsytrf, cusolverDnCsytrf,
+                                                              cusolverDnZsytrf, handle, uplo, n,
+                                                              view.data_ptr() + static_cast<size_t>(b) * view.stride(),
+                                                              view.ld(), piv + static_cast<size_t>(b) * n,
+                                                              l.work.data(), lwork, l.info.data() + b);
         }
     });
     return ctx.create_event_after_external_work();

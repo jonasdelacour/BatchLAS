@@ -43,52 +43,52 @@ using batchlas::verify::Check;
 namespace {
 
 constexpr int kWG = 256;
-template <class T> using Cfg = batchlas::device::l3::cfg::RegTiled<T, 32, 32, 8, 2, 2>;
+template <class Scalar> using Cfg = batchlas::device::l3::cfg::RegTiled<Scalar, 32, 32, 8, 2, 2>;
 static_assert(Cfg<float>::threads == kWG);
 constexpr int kItems = 3;
 constexpr int kM = 45, kN = 70, kK = 37;
 constexpr Transpose kNT = Transpose::NoTrans, kTr = Transpose::Trans, kCT = Transpose::ConjTrans;
 
-template <class T> T pad_value() { return T(real_of<T>(1e30)); }
+template <class Scalar> Scalar pad_value() { return Scalar(real_of<Scalar>(1e30)); }
 
 // A batch of column-major rows x cols matrices, ld = rows + 3, stride = ld * cols + 5; every
 // element outside the matrices is pad_value().
-template <class T> struct HostMat {
+template <class Scalar> struct HostMat {
     int rows, cols, ld, items;
     std::size_t stride;
-    std::vector<T> h;
+    std::vector<Scalar> h;
     HostMat(int r, int c, int n_items, std::uint64_t seed)
-        : rows(r), cols(c), ld(r + 3), items(n_items), stride(std::size_t(r + 3) * c + 5), h(stride * n_items, pad_value<T>()) {
+        : rows(r), cols(c), ld(r + 3), items(n_items), stride(std::size_t(r + 3) * c + 5), h(stride * n_items, pad_value<Scalar>()) {
         for (int q = 0; q < items; ++q)
             for (int j = 0; j < cols; ++j)
-                for (int i = 0; i < rows; ++i) at(q, i, j) = val<T>(seed * 1000003u + off(q, i, j));
+                for (int i = 0; i < rows; ++i) at(q, i, j) = val<Scalar>(seed * 1000003u + off(q, i, j));
     }
     std::size_t off(int q, int i, int j) const { return std::size_t(q) * stride + i + std::size_t(j) * ld; }
-    T& at(int q, int i, int j) { return h[off(q, i, j)]; }
-    const T& at(int q, int i, int j) const { return h[off(q, i, j)]; }
-    LD<T> w(int q, int i, int j) const { return wide(at(q, i, j)); }
+    Scalar& at(int q, int i, int j) { return h[off(q, i, j)]; }
+    const Scalar& at(int q, int i, int j) const { return h[off(q, i, j)]; }
+    LD<Scalar> w(int q, int i, int j) const { return wide(at(q, i, j)); }
     bool inside(std::size_t e) const {
         const std::size_t r = e % stride;
         return r < std::size_t(ld) * cols && int(r % ld) < rows;
     }
 };
 
-template <class T> struct DevMat {
-    T* p;
+template <class Scalar> struct DevMat {
+    Scalar* p;
     int rows, cols, ld;
     std::size_t stride;
-    batchlas::device::l3::Global<T> g(int q) const { return {p + std::size_t(q) * stride, ld, rows, cols}; }
+    batchlas::device::l3::Global<Scalar> g(int q) const { return {p + std::size_t(q) * stride, ld, rows, cols}; }
 };
-template <class T> DevMat<T> to_dev(Dev& d, const HostMat<T>& m) { return {d.up(m.h), m.rows, m.cols, m.ld, m.stride}; }
+template <class Scalar> DevMat<Scalar> to_dev(Dev& d, const HostMat<Scalar>& m) { return {d.up(m.h), m.rows, m.cols, m.ld, m.stride}; }
 
-template <class T> LD<T> opw(const HostMat<T>& a, int q, int i, int j, Transpose tr) {
+template <class Scalar> LD<Scalar> opw(const HostMat<Scalar>& a, int q, int i, int j, Transpose tr) {
     if (tr == Transpose::NoTrans) return a.w(q, i, j);
-    const LD<T> v = a.w(q, j, i);
-    if constexpr (is_cplx<T>) return tr == Transpose::ConjTrans ? std::conj(v) : v;
+    const LD<Scalar> v = a.w(q, j, i);
+    if constexpr (is_cplx<Scalar>) return tr == Transpose::ConjTrans ? std::conj(v) : v;
     else return v;
 }
-template <class T> LD<T> cj(LD<T> v) {
-    if constexpr (is_cplx<T>) return std::conj(v);
+template <class Scalar> LD<Scalar> cj(LD<Scalar> v) {
+    if constexpr (is_cplx<Scalar>) return std::conj(v);
     else return v;
 }
 
@@ -99,7 +99,7 @@ struct Worst {
 };
 
 // Elements outside the matrices (ld and stride pads) are unchanged, bit for bit.
-template <class T> int pads_changed(const HostMat<T>& before, const std::vector<T>& after) {
+template <class Scalar> int pads_changed(const HostMat<Scalar>& before, const std::vector<Scalar>& after) {
     int bad = 0;
     for (std::size_t e = 0; e < after.size(); ++e)
         if (!before.inside(e) && !same_bits(before.h[e], after[e])) ++bad;
@@ -107,8 +107,9 @@ template <class T> int pads_changed(const HostMat<T>& before, const std::vector<
 }
 
 // The kernel every case launches: items work-groups of kWG, f(ex, item, ws), the stage in ws.local.
-template <class T, class F> void launch(Dev& d, int items, F f) {
-    d.template run<kWG>(items, batchlas::device::l3::smem_bytes<Cfg<T>>(), [=](sycl::nd_item<1> it, unsigned char* lm) {
+template <class Scalar, class F> void launch(Dev& d, int items, F f) {
+    d.template run<kWG>(items, batchlas::device::l3::smem_bytes<Cfg<Scalar>>(),
+                        [=](sycl::nd_item<1> it, unsigned char* lm) {
         const batchlas::device::WorkGroup<kWG> ex{it};
         const batchlas::device::Workspace ws{
             sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(reinterpret_cast<std::byte*>(lm)),
@@ -117,7 +118,7 @@ template <class T, class F> void launch(Dev& d, int items, F f) {
     });
 }
 
-template <class T> class DeviceApiL3Test : public DeviceCoreTest<T> {};
+template <class Scalar> class DeviceApiL3Test : public DeviceCoreTest<Scalar> {};
 TYPED_TEST_SUITE(DeviceApiL3Test, AllTypes);
 
 // ---- gemm ---------------------------------------------------------------------------------
@@ -360,22 +361,23 @@ TYPED_TEST(DeviceApiL3Test, Syr2kHer2kEveryUploTrans) {
 // ---- trmm, trsm ---------------------------------------------------------------------------
 
 // op(A) with the implied structure, from a triangle whose other half (and a Unit diagonal) is NaN.
-template <class T, Uplo UL, Transpose TR, Diag DG> LD<T> tri_w(const HostMat<T>& a, int q, int i, int j) {
+template <class Scalar, Uplo UL, Transpose TR, Diag DG> LD<Scalar> tri_w(const HostMat<Scalar>& a, int q, int i,
+                                                                         int j) {
     const int r = TR == kNT ? i : j, c = TR == kNT ? j : i;
-    if (r == c) return DG == Diag::Unit ? LD<T>(1) : opw(a, q, i, j, TR);
+    if (r == c) return DG == Diag::Unit ? LD<Scalar>(1) : opw(a, q, i, j, TR);
     const bool stored = UL == Uplo::Lower ? r > c : r < c;
-    return stored ? opw(a, q, i, j, TR) : LD<T>(0);
+    return stored ? opw(a, q, i, j, TR) : LD<Scalar>(0);
 }
 // A graded triangle: diagonal 2 .. 3 (+ an imaginary part), off-diagonal |a| < 0.5 / n.
-template <class T, Uplo UL, Diag DG> HostMat<T> graded_triangle(int na, std::uint64_t seed) {
-    HostMat<T> A(na, na, kItems, seed);
-    using R = real_of<T>;
+template <class Scalar, Uplo UL, Diag DG> HostMat<Scalar> graded_triangle(int na, std::uint64_t seed) {
+    HostMat<Scalar> A(na, na, kItems, seed);
+    using R = real_of<Scalar>;
     for (int q = 0; q < kItems; ++q)
         for (int j = 0; j < na; ++j)
             for (int i = 0; i < na; ++i) {
                 const bool stored = UL == Uplo::Lower ? i > j : i < j;
-                if (i == j) A.at(q, i, j) = DG == Diag::Unit ? batchlas::device::qnan<T>() : T(R(2) + R(i) / R(na)) + (is_cplx<T> ? val<T>(q + i) * T(R(0.25)) : T(0));
-                else A.at(q, i, j) = stored ? A.at(q, i, j) * T(R(0.5) / R(na)) : batchlas::device::qnan<T>();
+                if (i == j) A.at(q, i, j) = DG == Diag::Unit ? batchlas::device::qnan<Scalar>() : Scalar(R(2) + R(i) / R(na)) + (is_cplx<Scalar> ? val<Scalar>(q + i) * Scalar(R(0.25)) : Scalar(0));
+                else A.at(q, i, j) = stored ? A.at(q, i, j) * Scalar(R(0.5) / R(na)) : batchlas::device::qnan<Scalar>();
             }
     return A;
 }
@@ -411,11 +413,11 @@ template <class T, Side SD, Uplo UL, Transpose TR, Diag DG> void check_trmm(Dev&
     EXPECT_EQ(pads_changed(C, got), 0);
 }
 
-template <class T, Side SD, Uplo UL> void check_trmm_ops(Dev& d) {
-    check_trmm<T, SD, UL, kNT, Diag::NonUnit>(d);
-    check_trmm<T, SD, UL, kTr, Diag::Unit>(d);
-    check_trmm<T, SD, UL, kCT, Diag::NonUnit>(d);
-    check_trmm<T, SD, UL, kNT, Diag::Unit>(d);
+template <class Scalar, Side SD, Uplo UL> void check_trmm_ops(Dev& d) {
+    check_trmm<Scalar, SD, UL, kNT, Diag::NonUnit>(d);
+    check_trmm<Scalar, SD, UL, kTr, Diag::Unit>(d);
+    check_trmm<Scalar, SD, UL, kCT, Diag::NonUnit>(d);
+    check_trmm<Scalar, SD, UL, kNT, Diag::Unit>(d);
 }
 
 TYPED_TEST(DeviceApiL3Test, TrmmEverySideUploTransDiag) {
@@ -475,11 +477,11 @@ template <class T, Side SD, Uplo UL, Transpose TR, Diag DG, bool AlphaOne> void 
     EXPECT_EQ(pads_changed(B, got), 0);
 }
 
-template <class T, Side SD, Uplo UL> void check_trsm_ops(Dev& d) {
-    check_trsm<T, SD, UL, kNT, Diag::NonUnit, false>(d);
-    check_trsm<T, SD, UL, kTr, Diag::Unit, false>(d);
-    check_trsm<T, SD, UL, kCT, Diag::NonUnit, true>(d);
-    check_trsm<T, SD, UL, kNT, Diag::Unit, true>(d);
+template <class Scalar, Side SD, Uplo UL> void check_trsm_ops(Dev& d) {
+    check_trsm<Scalar, SD, UL, kNT, Diag::NonUnit, false>(d);
+    check_trsm<Scalar, SD, UL, kTr, Diag::Unit, false>(d);
+    check_trsm<Scalar, SD, UL, kCT, Diag::NonUnit, true>(d);
+    check_trsm<Scalar, SD, UL, kNT, Diag::Unit, true>(d);
 }
 
 TYPED_TEST(DeviceApiL3Test, TrsmEverySideUploTransDiag) {

@@ -22,41 +22,41 @@ namespace batchlas {
 // Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
 // src/util/template-instantiations.hh. Keep in sync with the declarations below.
 namespace sig {
-template <typename T>
+template <typename Scalar>
 using gesvd_vendor = Event(Queue&,
-                           const MatrixView<T, MatrixFormat::Dense>&,
-                           Span<typename base_type<T>::type>,
-                           const MatrixView<T, MatrixFormat::Dense>&,
-                           const MatrixView<T, MatrixFormat::Dense>&,
+                           const MatrixView<Scalar, MatrixFormat::Dense>&,
+                           Span<typename base_type<Scalar>::type>,
+                           const MatrixView<Scalar, MatrixFormat::Dense>&,
+                           const MatrixView<Scalar, MatrixFormat::Dense>&,
                            SvdVectors, SvdVectors, Span<std::byte>, Span<int32_t>);
 
-template <typename T>
+template <typename Scalar>
 using gesvd_vendor_buffer_size = size_t(Queue&,
-                                        const MatrixView<T, MatrixFormat::Dense>&,
-                                        Span<typename base_type<T>::type>,
-                                        const MatrixView<T, MatrixFormat::Dense>&,
-                                        const MatrixView<T, MatrixFormat::Dense>&,
+                                        const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                        Span<typename base_type<Scalar>::type>,
+                                        const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                        const MatrixView<Scalar, MatrixFormat::Dense>&,
                                         SvdVectors, SvdVectors);
 
 // The public entry points (src/ops/gesvd/gesvd.cc). `_hermitian` adds the Uplo parameter.
-template <typename T>
-using gesvd = Event(Queue&, const MatrixView<T, MatrixFormat::Dense>&, Span<typename base_type<T>::type>,
-                    const MatrixView<T, MatrixFormat::Dense>&, const MatrixView<T, MatrixFormat::Dense>&,
+template <typename Scalar>
+using gesvd = Event(Queue&, const MatrixView<Scalar, MatrixFormat::Dense>&, Span<typename base_type<Scalar>::type>,
+                    const MatrixView<Scalar, MatrixFormat::Dense>&, const MatrixView<Scalar, MatrixFormat::Dense>&,
                     SvdVectors, SvdVectors, Span<std::byte>, Span<int32_t>);
-template <typename T>
-using gesvd_hermitian = Event(Queue&, const MatrixView<T, MatrixFormat::Dense>&,
-                              Span<typename base_type<T>::type>, const MatrixView<T, MatrixFormat::Dense>&,
-                              const MatrixView<T, MatrixFormat::Dense>&, SvdVectors, SvdVectors, Uplo,
+template <typename Scalar>
+using gesvd_hermitian = Event(Queue&, const MatrixView<Scalar, MatrixFormat::Dense>&,
+                              Span<typename base_type<Scalar>::type>, const MatrixView<Scalar, MatrixFormat::Dense>&,
+                              const MatrixView<Scalar, MatrixFormat::Dense>&, SvdVectors, SvdVectors, Uplo,
                               Span<std::byte>, Span<int32_t>);
-template <typename T>
-using gesvd_buffer_size = size_t(Queue&, const MatrixView<T, MatrixFormat::Dense>&,
-                                 Span<typename base_type<T>::type>, const MatrixView<T, MatrixFormat::Dense>&,
-                                 const MatrixView<T, MatrixFormat::Dense>&, SvdVectors, SvdVectors);
-template <typename T>
-using gesvd_buffer_size_hermitian = size_t(Queue&, const MatrixView<T, MatrixFormat::Dense>&,
-                                           Span<typename base_type<T>::type>,
-                                           const MatrixView<T, MatrixFormat::Dense>&,
-                                           const MatrixView<T, MatrixFormat::Dense>&, SvdVectors, SvdVectors,
+template <typename Scalar>
+using gesvd_buffer_size = size_t(Queue&, const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                 Span<typename base_type<Scalar>::type>, const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>&, SvdVectors, SvdVectors);
+template <typename Scalar>
+using gesvd_buffer_size_hermitian = size_t(Queue&, const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                           Span<typename base_type<Scalar>::type>,
+                                           const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                           const MatrixView<Scalar, MatrixFormat::Dense>&, SvdVectors, SvdVectors,
                                            Uplo);
 }  // namespace sig
 
@@ -75,7 +75,7 @@ using gesvd_buffer_size_hermitian = size_t(Queue&, const MatrixView<T, MatrixFor
 /// (e.g. `jacobi`, `vendor`). Asynchronous: returns once the work is enqueued.
 ///
 /// @tparam B  backend the call is compiled for
-/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @tparam Scalar  scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in] ctx              queue the work is enqueued on
 /// @param[in,out] A            batch of \f$m \times n\f$ matrices; overwritten (destroyed)
 /// @param[out] singular_values \f$k\f$ real singular values per batch item, packed, descending
@@ -108,12 +108,12 @@ using gesvd_buffer_size_hermitian = size_t(Queue&, const MatrixView<T, MatrixFor
 /// @see @ref selection_tables, @ref perf_gesvd, @ref design_gesvd,
 ///      @ref md_docs_2cpp-api (convergence status)
 /// @ingroup api_svd
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event gesvd(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A,
-                         Span<typename base_type<T>::type> singular_values,
-                         const MatrixView<T, MatrixFormat::Dense>& U,
-                         const MatrixView<T, MatrixFormat::Dense>& Vh,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         Span<typename base_type<Scalar>::type> singular_values,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& U,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& Vh,
                          SvdVectors jobu,
                          SvdVectors jobvh,
                          Span<std::byte> workspace,
@@ -127,7 +127,7 @@ BATCHLAS_API Event gesvd(Queue& ctx,
 /// wherever that family can be chosen, e.g. `Upper` with \f$n > 32\f$.
 /// @pre `A` is square
 /// @tparam B  backend the call is compiled for
-/// @tparam T  scalar type
+/// @tparam Scalar  scalar type
 /// @param[in] ctx              queue the work is enqueued on
 /// @param[in,out] A            batch of \f$n \times n\f$ Hermitian matrices; overwritten (destroyed)
 /// @param[out] singular_values \f$n\f$ real singular values per batch item, packed, descending
@@ -142,12 +142,12 @@ BATCHLAS_API Event gesvd(Queue& ctx,
 ///                             span = not requested
 /// @return event of the last enqueued kernel
 /// @ingroup api_svd
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event gesvd(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A,
-                         Span<typename base_type<T>::type> singular_values,
-                         const MatrixView<T, MatrixFormat::Dense>& U,
-                         const MatrixView<T, MatrixFormat::Dense>& Vh,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         Span<typename base_type<Scalar>::type> singular_values,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& U,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& Vh,
                          SvdVectors jobu,
                          SvdVectors jobvh,
                          Uplo hermitian_uplo,
@@ -160,7 +160,7 @@ BATCHLAS_API Event gesvd(Queue& ctx,
 // evidence: docs/design/vendor-independence.md#info-spans-on-syev-gesvd-and-steqr-forwarder-or-default
 /// @brief gesvd() without the convergence status (`info` empty).
 /// @tparam B  backend the call is compiled for
-/// @tparam T  scalar type
+/// @tparam Scalar  scalar type
 /// @param[in] ctx              queue the work is enqueued on
 /// @param[in,out] A            batch of \f$m \times n\f$ matrices; overwritten (destroyed)
 /// @param[out] singular_values \f$k = \min(m, n)\f$ real singular values per batch item, descending
@@ -171,21 +171,21 @@ BATCHLAS_API Event gesvd(Queue& ctx,
 /// @param[out] workspace       scratch of at least gesvd_buffer_size() bytes; contents undefined on return
 /// @return event of the last enqueued kernel
 /// @ingroup api_svd
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 inline Event gesvd(Queue& ctx,
-            const MatrixView<T, MatrixFormat::Dense>& A,
-            Span<typename base_type<T>::type> singular_values,
-            const MatrixView<T, MatrixFormat::Dense>& U,
-            const MatrixView<T, MatrixFormat::Dense>& Vh,
+            const MatrixView<Scalar, MatrixFormat::Dense>& A,
+            Span<typename base_type<Scalar>::type> singular_values,
+            const MatrixView<Scalar, MatrixFormat::Dense>& U,
+            const MatrixView<Scalar, MatrixFormat::Dense>& Vh,
             SvdVectors jobu,
             SvdVectors jobvh,
             Span<std::byte> workspace) {
-    return gesvd<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, workspace, Span<int32_t>{});
+    return gesvd<B, Scalar>(ctx, A, singular_values, U, Vh, jobu, jobvh, workspace, Span<int32_t>{});
 }
 
 /// @brief Hermitian gesvd() without the convergence status (`info` empty).
 /// @tparam B  backend the call is compiled for
-/// @tparam T  scalar type
+/// @tparam Scalar  scalar type
 /// @param[in] ctx              queue the work is enqueued on
 /// @param[in,out] A            batch of \f$n \times n\f$ Hermitian matrices; overwritten (destroyed)
 /// @param[out] singular_values \f$n\f$ real singular values per batch item, descending
@@ -197,18 +197,18 @@ inline Event gesvd(Queue& ctx,
 /// @param[out] workspace       scratch of at least gesvd_buffer_size() bytes; contents undefined on return
 /// @return event of the last enqueued kernel
 /// @ingroup api_svd
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 inline Event gesvd(Queue& ctx,
-            const MatrixView<T, MatrixFormat::Dense>& A,
-            Span<typename base_type<T>::type> singular_values,
-            const MatrixView<T, MatrixFormat::Dense>& U,
-            const MatrixView<T, MatrixFormat::Dense>& Vh,
+            const MatrixView<Scalar, MatrixFormat::Dense>& A,
+            Span<typename base_type<Scalar>::type> singular_values,
+            const MatrixView<Scalar, MatrixFormat::Dense>& U,
+            const MatrixView<Scalar, MatrixFormat::Dense>& Vh,
             SvdVectors jobu,
             SvdVectors jobvh,
             Uplo hermitian_uplo,
             Span<std::byte> workspace) {
-    return gesvd<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, hermitian_uplo, workspace,
-                       Span<int32_t>{});
+    return gesvd<B, Scalar>(ctx, A, singular_values, U, Vh, jobu, jobvh, hermitian_uplo, workspace,
+                            Span<int32_t>{});
 }
 
 /// @brief Workspace, in bytes, that gesvd() needs for the same arguments.
@@ -216,7 +216,7 @@ inline Event gesvd(Queue& ctx,
 /// Canonicalises `jobu`/`jobvh` and makes the same kernel choice as the call does, so
 /// the size is for the kernel that will run. `info` does not affect it.
 /// @tparam B  backend the call is compiled for
-/// @tparam T  scalar type
+/// @tparam Scalar  scalar type
 /// @param[in] ctx              queue the call will run on
 /// @param[in] A                batch of \f$m \times n\f$ matrices that will be passed; not modified
 /// @param[in] singular_values  singular-value span that will be passed; not modified
@@ -226,18 +226,18 @@ inline Event gesvd(Queue& ctx,
 /// @param[in] jobvh            which rows of `Vh` will be computed
 /// @return required workspace size in bytes
 /// @ingroup api_svd_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t gesvd_buffer_size(Queue& ctx,
-                                      const MatrixView<T, MatrixFormat::Dense>& A,
-                                      Span<typename base_type<T>::type> singular_values,
-                                      const MatrixView<T, MatrixFormat::Dense>& U,
-                                      const MatrixView<T, MatrixFormat::Dense>& Vh,
+                                      const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                      Span<typename base_type<Scalar>::type> singular_values,
+                                      const MatrixView<Scalar, MatrixFormat::Dense>& U,
+                                      const MatrixView<Scalar, MatrixFormat::Dense>& Vh,
                                       SvdVectors jobu,
                                       SvdVectors jobvh);
 
 /// @brief Workspace, in bytes, for the Hermitian gesvd().
 /// @tparam B  backend the call is compiled for
-/// @tparam T  scalar type
+/// @tparam Scalar  scalar type
 /// @param[in] ctx              queue the call will run on
 /// @param[in] A                batch of \f$n \times n\f$ Hermitian matrices that will be passed; not modified
 /// @param[in] singular_values  singular-value span that will be passed; not modified
@@ -248,12 +248,12 @@ BATCHLAS_API size_t gesvd_buffer_size(Queue& ctx,
 /// @param[in] hermitian_uplo   triangle of `A` the native kernels will read
 /// @return required workspace size in bytes
 /// @ingroup api_svd_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t gesvd_buffer_size(Queue& ctx,
-                                      const MatrixView<T, MatrixFormat::Dense>& A,
-                                      Span<typename base_type<T>::type> singular_values,
-                                      const MatrixView<T, MatrixFormat::Dense>& U,
-                                      const MatrixView<T, MatrixFormat::Dense>& Vh,
+                                      const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                      Span<typename base_type<Scalar>::type> singular_values,
+                                      const MatrixView<Scalar, MatrixFormat::Dense>& U,
+                                      const MatrixView<Scalar, MatrixFormat::Dense>& Vh,
                                       SvdVectors jobu,
                                       SvdVectors jobvh,
                                       Uplo hermitian_uplo);
@@ -270,7 +270,7 @@ namespace batchlas::backend {
 /// @brief The vendor solver's SVD (cuSOLVER `gesvdjBatched` or a LAPACKE loop), as
 ///        gesvd()'s `vendor` kernel family calls it; same contract as the general gesvd().
 /// @tparam B  backend the call is compiled for
-/// @tparam T  scalar type
+/// @tparam Scalar  scalar type
 /// @param[in] ctx              queue the work is enqueued on
 /// @param[in,out] A            batch of \f$m \times n\f$ matrices; overwritten (destroyed)
 /// @param[out] singular_values \f$k = \min(m, n)\f$ real singular values per batch item, descending
@@ -287,12 +287,12 @@ namespace batchlas::backend {
 /// @throws batchlas::convergence_error on NETLIB for a non-converged item when
 ///         `info_out` is empty
 /// @ingroup api_dispatch
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event gesvd_vendor(Queue& ctx,
-                                const MatrixView<T, MatrixFormat::Dense>& A,
-                                Span<typename base_type<T>::type> singular_values,
-                                const MatrixView<T, MatrixFormat::Dense>& U,
-                                const MatrixView<T, MatrixFormat::Dense>& Vh,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                Span<typename base_type<Scalar>::type> singular_values,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& U,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& Vh,
                                 SvdVectors jobu,
                                 SvdVectors jobvh,
                                 Span<std::byte> workspace,
@@ -300,7 +300,7 @@ BATCHLAS_API Event gesvd_vendor(Queue& ctx,
 
 /// @brief Workspace, in bytes, for backend::gesvd_vendor().
 /// @tparam B  backend the call is compiled for
-/// @tparam T  scalar type
+/// @tparam Scalar  scalar type
 /// @param[in] ctx              queue the call will run on
 /// @param[in] A                batch of \f$m \times n\f$ matrices that will be passed; not modified
 /// @param[in] singular_values  singular-value span that will be passed; not modified
@@ -310,12 +310,12 @@ BATCHLAS_API Event gesvd_vendor(Queue& ctx,
 /// @param[in] jobvh            which rows of `Vh` will be computed
 /// @return required workspace size in bytes
 /// @ingroup api_dispatch
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t gesvd_vendor_buffer_size(Queue& ctx,
-                                             const MatrixView<T, MatrixFormat::Dense>& A,
-                                             Span<typename base_type<T>::type> singular_values,
-                                             const MatrixView<T, MatrixFormat::Dense>& U,
-                                             const MatrixView<T, MatrixFormat::Dense>& Vh,
+                                             const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                             Span<typename base_type<Scalar>::type> singular_values,
+                                             const MatrixView<Scalar, MatrixFormat::Dense>& U,
+                                             const MatrixView<Scalar, MatrixFormat::Dense>& Vh,
                                              SvdVectors jobu,
                                              SvdVectors jobvh);
 

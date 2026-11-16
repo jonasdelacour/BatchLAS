@@ -28,9 +28,9 @@ namespace detail {
 
 // A secular root x = origin + tau; converged = the iteration met its error bound (false: it ran
 // out of max_iter, the merge reports info > 0). laed4 returns it as (info, origin, tau).
-template <class T> struct SecularRoot {
-    T origin;
-    T tau;
+template <class Real> struct SecularRoot {
+    Real origin;
+    Real tau;
     bool converged;
 };
 
@@ -45,24 +45,26 @@ template <class Ex, class T> BATCHLAS_DEVICE_INLINE T uniform(const Ex& ex, T v)
     else return ex.uniform(v);
 }
 
-template <class T, class Ex> struct Eval {
-    T secular_value;
-    T secular_derivative;
-    T lower_sum;
-    T lower_derivative;
-    T upper_sum;
-    T upper_derivative;
-    T error_estimate;
+template <class Real, class Ex> struct Eval {
+    Real secular_value;
+    Real secular_derivative;
+    Real lower_sum;
+    Real lower_derivative;
+    Real upper_sum;
+    Real upper_derivative;
+    Real error_estimate;
 };
 
-template <class T> BATCHLAS_DEVICE_HELPER void update_bounds(T secular_value, T tau, T& lower_bound, T& upper_bound) {
-    if (secular_value <= T(0)) lower_bound = sycl::fmax(lower_bound, tau);
-    if (secular_value > T(0)) upper_bound = sycl::fmin(upper_bound, tau);
+template <class Real> BATCHLAS_DEVICE_HELPER void update_bounds(Real secular_value, Real tau, Real& lower_bound,
+                                                                Real& upper_bound) {
+    if (secular_value <= Real(0)) lower_bound = sycl::fmax(lower_bound, tau);
+    if (secular_value > Real(0)) upper_bound = sycl::fmin(upper_bound, tau);
 }
 
-template <class T> BATCHLAS_DEVICE_HELPER T bounded_step(T step, T tau, T lower_bound, T upper_bound, T secular_value) {
+template <class Real> BATCHLAS_DEVICE_HELPER Real bounded_step(Real step, Real tau, Real lower_bound, Real upper_bound,
+                                                               Real secular_value) {
     if (tau + step > upper_bound || tau + step < lower_bound) {
-        step = (secular_value < T(0)) ? (upper_bound - tau) / T(2) : (lower_bound - tau) / T(2);
+        step = (secular_value < Real(0)) ? (upper_bound - tau) / Real(2) : (lower_bound - tau) / Real(2);
     }
     return step;
 }
@@ -70,18 +72,18 @@ template <class T> BATCHLAS_DEVICE_HELPER T bounded_step(T step, T tau, T lower_
 // The secular function at x = origin + tau without the terms i in [lower_end, upper_start):
 // per item the sums of z_i^2 / (d_i - x), of (z_i / (d_i - x))^2 and of the running sums (the
 // laed4 error term) below and above that window, then six reductions over the executor.
-template <class T, class Ex, class DV, class ZV>
-BATCHLAS_DEVICE_HELPER Eval<T, Ex> evaluate(const Ex& ex, const DV& d_prob, const ZV& z_prob, std::int32_t dd, std::int32_t pole_index,
-                                         std::int32_t skip, T origin, T tau, T rho_inv) {
+template <class Real, class Ex, class DV, class ZV>
+BATCHLAS_DEVICE_HELPER Eval<Real, Ex> evaluate(const Ex& ex, const DV& d_prob, const ZV& z_prob, std::int32_t dd, std::int32_t pole_index,
+                                         std::int32_t skip, Real origin, Real tau, Real rho_inv) {
     const std::int32_t lower_end = pole_index + (skip < 0 ? 1 : 0);
     const std::int32_t upper_start = pole_index + 1 + (skip < 0 ? 0 : skip);
 
-    T low_s = T(0), low_d = T(0), low_err = T(0);
-    T up_s = T(0), up_d = T(0), up_err = T(0);
-    auto accumulate = [&](std::int32_t i, T& s, T& d, T& err) {
-        const T shifted = d_prob(i) - origin - tau;
-        const T w = z_prob(i);
-        const T ratio = w / shifted;
+    Real low_s = Real(0), low_d = Real(0), low_err = Real(0);
+    Real up_s = Real(0), up_d = Real(0), up_err = Real(0);
+    auto accumulate = [&](std::int32_t i, Real& s, Real& d, Real& err) {
+        const Real shifted = d_prob(i) - origin - tau;
+        const Real w = z_prob(i);
+        const Real ratio = w / shifted;
         s += w * ratio;  // one expression: contracted to an FMA (two statements are not)
         d += ratio * ratio;
         err += s;
@@ -89,7 +91,7 @@ BATCHLAS_DEVICE_HELPER Eval<T, Ex> evaluate(const Ex& ex, const DV& d_prob, cons
     for_each_owned(ex, lower_end, [&](std::int32_t i) { accumulate(i, low_s, low_d, low_err); });
     for_each_owned(ex, Range{upper_start, dd}, [&](std::int32_t i) { accumulate(i, up_s, up_d, up_err); });
 
-    const auto r = allreduce(ex, std::array<T, 6>{low_s, low_d, low_err, up_s, up_d, up_err});
+    const auto r = allreduce(ex, std::array<Real, 6>{low_s, low_d, low_err, up_s, up_d, up_err});
     low_s = r[0], low_d = r[1], low_err = r[2], up_s = r[3], up_d = r[4], up_err = r[5];
 
     return {rho_inv + low_s + up_s, low_d + up_d, low_s, low_d, up_s, up_d, sycl::fabs(low_err) + sycl::fabs(up_err)};
@@ -100,8 +102,8 @@ struct NoScratch {};
 
 // d - origin into one item's scratch (a Thread's), once per root: the evaluations then run on
 // (scratch, 0), the same values with one subtraction per term less. Returns the poles to use.
-template <class T, class Ex, class DV, class SV>
-BATCHLAS_DEVICE_INLINE const auto& shift_poles(const DV& d_prob, const SV& scratch, std::int32_t dd, T origin) {
+template <class Real, class Ex, class DV, class SV>
+BATCHLAS_DEVICE_INLINE const auto& shift_poles(const DV& d_prob, const SV& scratch, std::int32_t dd, Real origin) {
     if constexpr (std::is_same_v<SV, NoScratch>) {
         return d_prob;
     } else {
@@ -111,16 +113,16 @@ BATCHLAS_DEVICE_INLINE const auto& shift_poles(const DV& d_prob, const SV& scrat
     }
 }
 
-template <class T, class Ex> struct EvalState {
-    Eval<T, Ex> eval;
-    T err;
-    T ratio_sq;
+template <class Real, class Ex> struct EvalState {
+    Eval<Real, Ex> eval;
+    Real err;
+    Real ratio_sq;
 };
 
-template <class T, class Ex>
-BATCHLAS_DEVICE_HELPER T roc_step(Eval<T, Ex>& eval, T sk, T sk1, T zk2, T zk12, T pole_k, T pole_k1, bool origin_lower, bool use_fixed,
-                               T wi_ratio_sq) {
-    T qc;
+template <class Real, class Ex>
+BATCHLAS_DEVICE_HELPER Real roc_step(Eval<Real, Ex>& eval, Real sk, Real sk1, Real zk2, Real zk12, Real pole_k, Real pole_k1, bool origin_lower, bool use_fixed,
+                               Real wi_ratio_sq) {
+    Real qc;
     if (use_fixed) {
         if (origin_lower) {
             qc = eval.secular_value - sk1 * eval.secular_derivative - (pole_k - pole_k1) * zk2 / (sk * sk);
@@ -136,12 +138,12 @@ BATCHLAS_DEVICE_HELPER T roc_step(Eval<T, Ex>& eval, T sk, T sk1, T zk2, T zk12,
         qc = eval.secular_value - sk * eval.lower_derivative - sk1 * eval.upper_derivative;
     }
 
-    T qa = (sk + sk1) * eval.secular_value - sk * sk1 * eval.secular_derivative;
-    T qb = sk * sk1 * eval.secular_value;
-    T step;
+    Real qa = (sk + sk1) * eval.secular_value - sk * sk1 * eval.secular_derivative;
+    Real qb = sk * sk1 * eval.secular_value;
+    Real step;
 
-    if (qc == T(0)) {
-        if (qa == T(0)) {
+    if (qc == Real(0)) {
+        if (qa == Real(0)) {
             if (use_fixed) {
                 if (origin_lower) {
                     qa = zk2 + sk1 * sk1 * (eval.lower_derivative + eval.upper_derivative);
@@ -154,11 +156,11 @@ BATCHLAS_DEVICE_HELPER T roc_step(Eval<T, Ex>& eval, T sk, T sk1, T zk2, T zk12,
         }
         step = qb / qa;
     } else {
-        const T disc = sycl::sqrt(sycl::fabs(qa * qa - T(4) * qb * qc));
-        step = (qa <= T(0)) ? (qa - disc) / (T(2) * qc) : T(2) * qb / (qa + disc);
+        const Real disc = sycl::sqrt(sycl::fabs(qa * qa - Real(4) * qb * qc));
+        step = (qa <= Real(0)) ? (qa - disc) / (Real(2) * qc) : Real(2) * qb / (qa + disc);
     }
 
-    if (eval.secular_value * step >= T(0)) {
+    if (eval.secular_value * step >= Real(0)) {
         step = -eval.secular_value / eval.secular_derivative;
     }
 
@@ -167,83 +169,83 @@ BATCHLAS_DEVICE_HELPER T roc_step(Eval<T, Ex>& eval, T sk, T sk1, T zk2, T zk12,
 
 // Root k < dd - 1, in (d_k, d_{k+1}): the origin is the nearer pole (the sign of f at the
 // midpoint), then ROC steps with the fixed-weight / middle-way switch.
-template <class T, class Ex, class DV, class SV = NoScratch>
-BATCHLAS_DEVICE_HELPER SecularRoot<T> solve_inner(const Ex& ex_in, const DV& d_prob, const DV& z_prob, std::int32_t dd, std::int32_t k, T rho,
+template <class Real, class Ex, class DV, class SV = NoScratch>
+BATCHLAS_DEVICE_HELPER SecularRoot<Real> solve_inner(const Ex& ex_in, const DV& d_prob, const DV& z_prob, std::int32_t dd, std::int32_t k, Real rho,
                                               std::int32_t max_iter, const SV& scratch = {}) {
     const Ex ex = ex_in;  // one load of the group fields, not one per owned loop
-    const T rho_inv = T(1) / rho;
-    const T pole_k = d_prob(k);
-    const T pole_k1 = d_prob(k + 1);
-    const T gap = pole_k1 - pole_k;
+    const Real rho_inv = Real(1) / rho;
+    const Real pole_k = d_prob(k);
+    const Real pole_k1 = d_prob(k + 1);
+    const Real gap = pole_k1 - pole_k;
 
-    const T midpoint = (pole_k + pole_k1) / T(2);
-    auto eval = evaluate<T>(ex, d_prob, z_prob, dd, k, 1, T(0), midpoint, rho_inv);
-    const T sec_no_poles = eval.secular_value;
-    const T zk2 = z_prob(k) * z_prob(k);
-    const T zk12 = z_prob(k + 1) * z_prob(k + 1);
-    const T f_mid = sec_no_poles + T(2) * (zk12 - zk2) / gap;
+    const Real midpoint = (pole_k + pole_k1) / Real(2);
+    auto eval = evaluate<Real>(ex, d_prob, z_prob, dd, k, 1, Real(0), midpoint, rho_inv);
+    const Real sec_no_poles = eval.secular_value;
+    const Real zk2 = z_prob(k) * z_prob(k);
+    const Real zk12 = z_prob(k + 1) * z_prob(k + 1);
+    const Real f_mid = sec_no_poles + Real(2) * (zk12 - zk2) / gap;
 
-    const bool origin_lower = (f_mid > T(0));
-    T origin, tau, lower_bound, upper_bound;
+    const bool origin_lower = (f_mid > Real(0));
+    Real origin, tau, lower_bound, upper_bound;
     std::int32_t wi;
 
     if (origin_lower) {
         origin = pole_k;
         wi = k;
-        lower_bound = T(0);
-        upper_bound = gap / T(2);
-        const T a = sec_no_poles * gap + zk2 + zk12;
-        const T b = zk2 * gap;
-        const T disc = sycl::sqrt(sycl::fabs(a * a - T(4) * b * sec_no_poles));
-        tau = (a > T(0)) ? T(2) * b / (a + disc) : (a - disc) / (T(2) * sec_no_poles);
+        lower_bound = Real(0);
+        upper_bound = gap / Real(2);
+        const Real a = sec_no_poles * gap + zk2 + zk12;
+        const Real b = zk2 * gap;
+        const Real disc = sycl::sqrt(sycl::fabs(a * a - Real(4) * b * sec_no_poles));
+        tau = (a > Real(0)) ? Real(2) * b / (a + disc) : (a - disc) / (Real(2) * sec_no_poles);
     } else {
         origin = pole_k1;
         wi = k + 1;
-        lower_bound = -gap / T(2);
-        upper_bound = T(0);
-        const T a = sec_no_poles * gap - zk2 - zk12;
-        const T b = zk12 * gap;
-        const T disc = sycl::sqrt(sycl::fabs(a * a + T(4) * b * sec_no_poles));
-        tau = (a < T(0)) ? T(2) * b / (a - disc) : -(a + disc) / (T(2) * sec_no_poles);
+        lower_bound = -gap / Real(2);
+        upper_bound = Real(0);
+        const Real a = sec_no_poles * gap - zk2 - zk12;
+        const Real b = zk12 * gap;
+        const Real disc = sycl::sqrt(sycl::fabs(a * a + Real(4) * b * sec_no_poles));
+        tau = (a < Real(0)) ? Real(2) * b / (a - disc) : -(a + disc) / (Real(2) * sec_no_poles);
     }
 
     constexpr bool kScratch = !std::is_same_v<SV, NoScratch>;
-    const auto& dv = shift_poles<T, Ex>(d_prob, scratch, dd, origin);
-    const T o = kScratch ? T(0) : origin;
+    const auto& dv = shift_poles<Real, Ex>(d_prob, scratch, dd, origin);
+    const Real o = kScratch ? Real(0) : origin;
 
-    auto update_eval = [&](T current_tau) {
-        EvalState<T, Ex> state;
-        state.eval = evaluate<T>(ex, dv, z_prob, dd, wi, 0, o, current_tau, rho_inv);
-        const T shifted_wi = dv(wi) - o - current_tau;
-        const T z_wi = z_prob(wi);
-        const T ratio_wi = z_wi / shifted_wi;
+    auto update_eval = [&](Real current_tau) {
+        EvalState<Real, Ex> state;
+        state.eval = evaluate<Real>(ex, dv, z_prob, dd, wi, 0, o, current_tau, rho_inv);
+        const Real shifted_wi = dv(wi) - o - current_tau;
+        const Real z_wi = z_prob(wi);
+        const Real ratio_wi = z_wi / shifted_wi;
         state.ratio_sq = ratio_wi * ratio_wi;
         state.eval.secular_derivative += state.ratio_sq;
-        const T pole_contrib = z_wi * ratio_wi;
+        const Real pole_contrib = z_wi * ratio_wi;
         state.eval.secular_value += pole_contrib;
 
-        state.err = state.eval.error_estimate + T(8) * (state.eval.upper_sum - state.eval.lower_sum) + T(2) * rho_inv +
-                    T(3) * sycl::fabs(pole_contrib) + sycl::fabs(current_tau) * state.eval.secular_derivative;
+        state.err = state.eval.error_estimate + Real(8) * (state.eval.upper_sum - state.eval.lower_sum) + Real(2) * rho_inv +
+                    Real(3) * sycl::fabs(pole_contrib) + sycl::fabs(current_tau) * state.eval.secular_derivative;
         return state;
     };
 
     auto state = update_eval(tau);
     eval = state.eval;
-    T err = state.err;
-    T ratio_sq = state.ratio_sq;
+    Real err = state.err;
+    Real ratio_sq = state.ratio_sq;
 
-    if (uniform(ex, sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err)) {
+    if (uniform(ex, sycl::fabs(eval.secular_value) <= std::numeric_limits<Real>::epsilon() * err)) {
         return {origin, tau, true};  // converged before the first iteration
     }
 
     update_bounds(eval.secular_value, tau, lower_bound, upper_bound);
 
-    T sk = dv(k) - o - tau;
-    T sk1 = dv(k + 1) - o - tau;
-    T step = roc_step(eval, sk, sk1, zk2, zk12, pole_k, pole_k1, origin_lower, true, ratio_sq);
+    Real sk = dv(k) - o - tau;
+    Real sk1 = dv(k + 1) - o - tau;
+    Real step = roc_step(eval, sk, sk1, zk2, zk12, pole_k, pole_k1, origin_lower, true, ratio_sq);
     step = bounded_step(step, tau, lower_bound, upper_bound, eval.secular_value);
 
-    T prev_f = eval.secular_value;
+    Real prev_f = eval.secular_value;
     tau += step;
 
     state = update_eval(tau);
@@ -251,13 +253,13 @@ BATCHLAS_DEVICE_HELPER SecularRoot<T> solve_inner(const Ex& ex_in, const DV& d_p
     err = state.err;
     ratio_sq = state.ratio_sq;
 
-    bool use_fixed = (origin_lower ? -eval.secular_value : eval.secular_value) > (sycl::fabs(prev_f) / T(10));
+    bool use_fixed = (origin_lower ? -eval.secular_value : eval.secular_value) > (sycl::fabs(prev_f) / Real(10));
 
     // Hoisted out of the loop condition: a root that ran out of max_iter must be told apart
     // from one that converged (the merge reports it through info).
     bool converged = false;
     for (std::int32_t iter = 1; iter < max_iter; ++iter) {
-        if (uniform(ex, sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err)) {
+        if (uniform(ex, sycl::fabs(eval.secular_value) <= std::numeric_limits<Real>::epsilon() * err)) {
             converged = true;
             break;
         }
@@ -278,7 +280,7 @@ BATCHLAS_DEVICE_HELPER SecularRoot<T> solve_inner(const Ex& ex_in, const DV& d_p
         err = state.err;
         ratio_sq = state.ratio_sq;
 
-        if (eval.secular_value * prev_f > T(0) && sycl::fabs(eval.secular_value) > sycl::fabs(prev_f) / T(10)) {
+        if (eval.secular_value * prev_f > Real(0) && sycl::fabs(eval.secular_value) > sycl::fabs(prev_f) / Real(10)) {
             use_fixed = !use_fixed;
         }
     }
@@ -287,101 +289,101 @@ BATCHLAS_DEVICE_HELPER SecularRoot<T> solve_inner(const Ex& ex_in, const DV& d_p
 }
 
 // Root dd - 1, in (d_{dd-1}, d_{dd-1} + rho), origin the last pole; dd == 1 is exact.
-template <class T, class Ex, class DV, class SV = NoScratch>
-BATCHLAS_DEVICE_HELPER SecularRoot<T> solve_last(const Ex& ex_in, const DV& d_prob, const DV& z_prob, std::int32_t dd, T rho,
+template <class Real, class Ex, class DV, class SV = NoScratch>
+BATCHLAS_DEVICE_HELPER SecularRoot<Real> solve_last(const Ex& ex_in, const DV& d_prob, const DV& z_prob, std::int32_t dd, Real rho,
                                              std::int32_t max_iter, const SV& scratch = {}) {
     const Ex ex = ex_in;  // one load of the group fields, not one per owned loop
-    const T rho_inv = T(1) / rho;
+    const Real rho_inv = Real(1) / rho;
 
     // dd == 1 has no second pole: `prev` below would be -1 and d_prob(prev) would read outside
     // the problem (a negative offset can fault). With one pole the secular equation
     // 1/rho + z0^2/(d0 - x) = 0 solves exactly: x = d0 + rho z0^2.
     if (dd <= 1) {
-        const T z0 = z_prob(0);
+        const Real z0 = z_prob(0);
         return {d_prob(0), rho * z0 * z0, true};
     }
 
     const std::int32_t last = dd - 1;
     const std::int32_t prev = dd - 2;
-    const T d_last = d_prob(last);
-    const T d_prev = d_prob(prev);
-    const T origin = d_last;
+    const Real d_last = d_prob(last);
+    const Real d_prev = d_prob(prev);
+    const Real origin = d_last;
     constexpr bool kScratch = !std::is_same_v<SV, NoScratch>;
-    const auto& dv = shift_poles<T, Ex>(d_prob, scratch, dd, origin);
-    const T o = kScratch ? T(0) : origin;
-    T d_prev_o = d_prev, d_last_o = d_last;  // d - o at the two poles
+    const auto& dv = shift_poles<Real, Ex>(d_prob, scratch, dd, origin);
+    const Real o = kScratch ? Real(0) : origin;
+    Real d_prev_o = d_prev, d_last_o = d_last;  // d - o at the two poles
     if constexpr (kScratch) d_prev_o = scratch(prev), d_last_o = scratch(last);
 
-    const T mid_tau = rho / T(2);
-    auto eval = evaluate<T>(ex, dv, z_prob, dd, prev, 1, o, mid_tau, rho_inv);
-    const T sec_no_poles = eval.secular_value;
-    const T zk2 = z_prob(prev) * z_prob(prev);
-    const T zk12 = z_prob(last) * z_prob(last);
-    const T f_init = sec_no_poles + zk2 / (d_prev_o - o - mid_tau) - T(2) * zk12 * rho_inv;
+    const Real mid_tau = rho / Real(2);
+    auto eval = evaluate<Real>(ex, dv, z_prob, dd, prev, 1, o, mid_tau, rho_inv);
+    const Real sec_no_poles = eval.secular_value;
+    const Real zk2 = z_prob(prev) * z_prob(prev);
+    const Real zk12 = z_prob(last) * z_prob(last);
+    const Real f_init = sec_no_poles + zk2 / (d_prev_o - o - mid_tau) - Real(2) * zk12 * rho_inv;
 
-    T tau, lower_bound, upper_bound;
-    const T gap = d_last - d_prev;
+    Real tau, lower_bound, upper_bound;
+    const Real gap = d_last - d_prev;
 
-    if (f_init > T(0)) {
-        lower_bound = T(0);
-        upper_bound = rho / T(2);
-        const T a = -sec_no_poles * gap + zk2 + zk12;
-        const T b = zk12 * gap;
-        const T disc = sycl::sqrt(sycl::fabs(a * a + T(4) * b * sec_no_poles));
-        tau = (a < T(0)) ? T(2) * b / (disc - a) : (a + disc) / (T(2) * sec_no_poles);
+    if (f_init > Real(0)) {
+        lower_bound = Real(0);
+        upper_bound = rho / Real(2);
+        const Real a = -sec_no_poles * gap + zk2 + zk12;
+        const Real b = zk12 * gap;
+        const Real disc = sycl::sqrt(sycl::fabs(a * a + Real(4) * b * sec_no_poles));
+        tau = (a < Real(0)) ? Real(2) * b / (disc - a) : (a + disc) / (Real(2) * sec_no_poles);
     } else {
-        lower_bound = rho / T(2);
+        lower_bound = rho / Real(2);
         upper_bound = rho;
-        const T bound_check = zk2 / (gap + rho) + zk12 / rho;
+        const Real bound_check = zk2 / (gap + rho) + zk12 / rho;
         if (sec_no_poles <= bound_check) {
             tau = rho;
         } else {
-            const T a = -sec_no_poles * gap + zk2 + zk12;
-            const T b = zk12 * gap;
-            const T disc = sycl::sqrt(sycl::fabs(a * a + T(4) * b * sec_no_poles));
-            tau = (a < T(0)) ? T(2) * b / (disc - a) : (a + disc) / (T(2) * sec_no_poles);
+            const Real a = -sec_no_poles * gap + zk2 + zk12;
+            const Real b = zk12 * gap;
+            const Real disc = sycl::sqrt(sycl::fabs(a * a + Real(4) * b * sec_no_poles));
+            tau = (a < Real(0)) ? Real(2) * b / (disc - a) : (a + disc) / (Real(2) * sec_no_poles);
         }
     }
 
-    eval = evaluate<T>(ex, dv, z_prob, dd, prev, -1, o, tau, rho_inv);
+    eval = evaluate<Real>(ex, dv, z_prob, dd, prev, -1, o, tau, rho_inv);
 
-    T err = eval.error_estimate + sycl::fabs(tau) * (eval.upper_derivative + eval.lower_derivative) -
-            T(8) * (eval.upper_sum + eval.lower_sum) - eval.upper_sum + rho_inv;
+    Real err = eval.error_estimate + sycl::fabs(tau) * (eval.upper_derivative + eval.lower_derivative) -
+            Real(8) * (eval.upper_sum + eval.lower_sum) - eval.upper_sum + rho_inv;
 
-    if (sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err) {
+    if (sycl::fabs(eval.secular_value) <= std::numeric_limits<Real>::epsilon() * err) {
         return {origin, tau, true};  // converged before the first iteration
     }
 
     update_bounds(eval.secular_value, tau, lower_bound, upper_bound);
 
-    T sk = d_prev_o - o - tau;
-    T sk1 = d_last_o - o - tau;
-    T qc = sycl::fabs(eval.secular_value - sk * eval.lower_derivative - sk1 * eval.upper_derivative);
-    T qa = (sk + sk1) * eval.secular_value - sk * sk1 * (eval.lower_derivative + eval.upper_derivative);
-    T qb = sk * sk1 * eval.secular_value;
-    T step;
+    Real sk = d_prev_o - o - tau;
+    Real sk1 = d_last_o - o - tau;
+    Real qc = sycl::fabs(eval.secular_value - sk * eval.lower_derivative - sk1 * eval.upper_derivative);
+    Real qa = (sk + sk1) * eval.secular_value - sk * sk1 * (eval.lower_derivative + eval.upper_derivative);
+    Real qb = sk * sk1 * eval.secular_value;
+    Real step;
 
-    if (qc == T(0)) {
+    if (qc == Real(0)) {
         step = upper_bound - tau;
     } else {
-        const T disc = sycl::sqrt(sycl::fabs(qa * qa - T(4) * qb * qc));
-        step = (qa >= T(0)) ? (qa + disc) / (T(2) * qc) : T(2) * qb / (qa - disc);
+        const Real disc = sycl::sqrt(sycl::fabs(qa * qa - Real(4) * qb * qc));
+        step = (qa >= Real(0)) ? (qa + disc) / (Real(2) * qc) : Real(2) * qb / (qa - disc);
     }
 
-    if (eval.secular_value * step > T(0)) {
+    if (eval.secular_value * step > Real(0)) {
         step = -eval.secular_value / (eval.lower_derivative + eval.upper_derivative);
     }
 
     step = bounded_step(step, tau, lower_bound, upper_bound, eval.secular_value);
     tau += step;
 
-    eval = evaluate<T>(ex, dv, z_prob, dd, prev, -1, o, tau, rho_inv);
+    eval = evaluate<Real>(ex, dv, z_prob, dd, prev, -1, o, tau, rho_inv);
     err = eval.error_estimate + sycl::fabs(tau) * (eval.upper_derivative + eval.lower_derivative) -
-          T(8) * (eval.upper_sum + eval.lower_sum) - eval.upper_sum + rho_inv;
+          Real(8) * (eval.upper_sum + eval.lower_sum) - eval.upper_sum + rho_inv;
 
     bool converged = false;
     for (std::int32_t iter = 1; iter < max_iter; ++iter) {
-        if (uniform(ex, sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err)) {
+        if (uniform(ex, sycl::fabs(eval.secular_value) <= std::numeric_limits<Real>::epsilon() * err)) {
             converged = true;
             break;
         }
@@ -395,19 +397,19 @@ BATCHLAS_DEVICE_HELPER SecularRoot<T> solve_last(const Ex& ex_in, const DV& d_pr
         qa = (sk + sk1) * eval.secular_value - sk * sk1 * (eval.lower_derivative + eval.upper_derivative);
         qb = sk * sk1 * eval.secular_value;
 
-        const T disc = sycl::sqrt(sycl::fabs(qa * qa - T(4) * qb * qc));
-        step = (qa >= T(0)) ? (qa + disc) / (T(2) * qc) : T(2) * qb / (qa - disc);
+        const Real disc = sycl::sqrt(sycl::fabs(qa * qa - Real(4) * qb * qc));
+        step = (qa >= Real(0)) ? (qa + disc) / (Real(2) * qc) : Real(2) * qb / (qa - disc);
 
-        if (eval.secular_value * step > T(0)) {
+        if (eval.secular_value * step > Real(0)) {
             step = -eval.secular_value / (eval.lower_derivative + eval.upper_derivative);
         }
 
         step = bounded_step(step, tau, lower_bound, upper_bound, eval.secular_value);
         tau += step;
 
-        eval = evaluate<T>(ex, dv, z_prob, dd, prev, -1, o, tau, rho_inv);
+        eval = evaluate<Real>(ex, dv, z_prob, dd, prev, -1, o, tau, rho_inv);
         err = eval.error_estimate + sycl::fabs(tau) * (eval.upper_derivative + eval.lower_derivative) -
-              T(8) * (eval.upper_sum + eval.lower_sum) - eval.upper_sum + rho_inv;
+              Real(8) * (eval.upper_sum + eval.lower_sum) - eval.upper_sum + rho_inv;
     }
 
     return {origin, tau, converged};
@@ -415,15 +417,15 @@ BATCHLAS_DEVICE_HELPER SecularRoot<T> solve_last(const Ex& ex_in, const DV& d_pr
 
 // laed4's body: root k as a SecularRoot. Not force-inlined: the callers' code stays the one it
 // was when laed4 itself returned the root.
-template <class Ex, class DV, class T, class SV>
-BATCHLAS_DEVICE_HELPER SecularRoot<T> secular_root(const Ex& ex, const DV& d, const DV& z, std::int32_t dd, std::int32_t k, T rho,
-                                                   std::int32_t max_iter, const SV& scratch) {
-    if constexpr (sizeof(T) < 8 || std::is_same_v<SV, NoScratch>) {
-        if (k == dd - 1) return solve_last<T>(ex, d, z, dd, rho, max_iter);
-        return solve_inner<T>(ex, d, z, dd, k, rho, max_iter);
+template <class Ex, class DV, class Real, class SV>
+BATCHLAS_DEVICE_HELPER SecularRoot<Real> secular_root(const Ex& ex, const DV& d, const DV& z, std::int32_t dd, std::int32_t k, Real rho,
+                                                      std::int32_t max_iter, const SV& scratch) {
+    if constexpr (sizeof(Real) < 8 || std::is_same_v<SV, NoScratch>) {
+        if (k == dd - 1) return solve_last<Real>(ex, d, z, dd, rho, max_iter);
+        return solve_inner<Real>(ex, d, z, dd, k, rho, max_iter);
     } else {
-        if (k == dd - 1) return solve_last<T>(ex, d, z, dd, rho, max_iter, scratch);
-        return solve_inner<T>(ex, d, z, dd, k, rho, max_iter, scratch);
+        if (k == dd - 1) return solve_last<Real>(ex, d, z, dd, rho, max_iter, scratch);
+        return solve_inner<Real>(ex, d, z, dd, k, rho, max_iter, scratch);
     }
 }
 
@@ -437,8 +439,8 @@ BATCHLAS_DEVICE_HELPER SecularRoot<T> secular_root(const Ex& ex, const DV& d, co
 /// item, contents undefined on return; the same root. FP64 holds d - origin there (one
 /// subtraction per term less); float ignores it (its strided reads cost more than the
 /// subtraction). `evidence: docs/perf/stedc.md#stedc-one-secular-solver`
-template <class Ex, class DV, class T, class SV = detail::NoScratch>
-BATCHLAS_DEVICE_INLINE int laed4(const Ex& ex, const DV& d, const DV& z, int dd, int k, T rho, T& origin, T& tau, int max_iter,
+template <class Ex, class DV, class Real, class SV = detail::NoScratch>
+BATCHLAS_DEVICE_INLINE int laed4(const Ex& ex, const DV& d, const DV& z, int dd, int k, Real rho, Real& origin, Real& tau, int max_iter,
                                  const SV& scratch = {}) {
     const auto root = detail::secular_root(ex, d, z, dd, k, rho, max_iter, scratch);
     origin = root.origin;

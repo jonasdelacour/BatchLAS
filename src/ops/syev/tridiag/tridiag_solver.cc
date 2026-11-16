@@ -39,36 +39,36 @@ inline constexpr int kTridiagMaxIterations = 30;
 using TridiagEx = device::RtGroup<>;
 
 // Q(:, k:k+1) := Q(:, k:k+1) H_k for the n reflectors H_k = I - 2 v_k v_k^T of one QR sweep.
-template <typename T>
-void apply_all_reflections(const TridiagEx& ex, const Span<T> V, const int n, const int m, const int ld, T* Q) {
+template <typename Real>
+void apply_all_reflections(const TridiagEx& ex, const Span<Real> V, const int n, const int m, const int ld, Real* Q) {
     const auto q = device::mat(Q, m, n + 1, ld);
-    for (int k = 0; k < n; k++) device::rot<device::alg::RotReflector2>(ex, device::Givens<T>{V[2 * k], V[2 * k + 1]}, q.col(k), q.col(k + 1));
+    for (int k = 0; k < n; k++) device::rot<device::alg::RotReflector2>(ex, device::Givens<Real>{V[2 * k], V[2 * k + 1]}, q.col(k), q.col(k + 1));
 }
 
 // One explicit shifted QR step on the leading n x n block: T - shift = Q R, T := R Q + shift, Q
 // the product of n - 1 2x2 reflectors (kept in Vout for the eigenvector update). D, L, U are
 // the diagonal, sub- and super-diagonal; U[n+1:] is the second super-diagonal R fills in.
-template <typename T>
-void T_QTQ(const TridiagEx& ex, const int n, const Span<T> D, const Span<T> L, const Span<T> U, const Span<T> Vout, T shift=0) {
+template <typename Real>
+void T_QTQ(const TridiagEx& ex, const int n, const Span<Real> D, const Span<Real> L, const Span<Real> U, const Span<Real> Vout, Real shift=0) {
     const auto d = device::vec(D.data(), n);
-    auto U2 = [&](int k) -> T& { return U[(n + 1) + k]; };
+    auto U2 = [&](int k) -> Real& { return U[(n + 1) + k]; };
     // (I - 2 v v^T) on three scattered pairs, unrolled at compile time: the pointers stay in registers.
-    auto refl3 = [](const device::Givens<T>& g, const auto& x, const auto& y) BATCHLAS_DEVICE_BODY {
+    auto refl3 = [](const device::Givens<Real>& g, const auto& x, const auto& y) BATCHLAS_DEVICE_BODY {
         device::static_for<3>([&](auto i) BATCHLAS_DEVICE_BODY { device::rot<device::alg::RotReflector2>(g, x(i), y(i)); });
     };
 
     // L[n-1] couples the active block to the deflated part below it; L[n] may be past the end.
-    const T l_nm1 = L[n-1];
+    const Real l_nm1 = L[n-1];
 
     ex.barrier(device::Mem::Global);
 
-    device::map(ex, d, [=](T x) { return x - shift; }, d);
-    device::map(ex, device::vec(U.data() + (n + 1), n), [] { return T(0); });
+    device::map(ex, d, [=](Real x) { return x - shift; }, d);
+    device::map(ex, device::vec(U.data() + (n + 1), n), [] { return Real(0); });
     device::copy(ex, device::vec(L.data(), n - 1), device::vec(U.data(), n - 1));
-    device::map(ex, device::vec(Vout.data(), 2 * (n - 1)), [] { return T(0); });
+    device::map(ex, device::vec(Vout.data(), 2 * (n - 1)), [] { return Real(0); });
     if (ex.leader()) {
-        L[n - 1] = T(0);
-        U[n - 1] = T(0);
+        L[n - 1] = Real(0);
+        U[n - 1] = Real(0);
     }
 
     ex.barrier(device::Mem::Global);
@@ -76,22 +76,22 @@ void T_QTQ(const TridiagEx& ex, const int n, const Span<T> D, const Span<T> L, c
     // Q^T from the left: H_k zeroes L[k] (rows k, k+1; columns k, k+1, k+2).
     if (ex.leader()) {
         for (int k = 0; k < n - 1; k++) {
-            if (L[k] != T(0)) {
+            if (L[k] != Real(0)) {
                 const auto v = device::house2(D[k], L[k]);
                 Vout[2 * k] = v[0];
                 Vout[2 * k + 1] = v[1];
-                refl3(device::Givens<T>{v[0], v[1]}, device::refs(D[k], U[k], U2(k)), device::refs(L[k], D[k + 1], U[k + 1]));
+                refl3(device::Givens<Real>{v[0], v[1]}, device::refs(D[k], U[k], U2(k)), device::refs(L[k], D[k + 1], U[k + 1]));
             }
         }
     }
 
     // Q from the right, H_0 on columns 0, 1. Row 1 reads the annihilated L[0] as an exact zero.
     if (ex.leader()) {
-        const std::array<T, 2> v{Vout[0], Vout[1]};
-        const T t1 = T(0) + D[1] * v[1];
-        device::rot<device::alg::RotReflector2>(device::Givens<T>{v[0], v[1]}, D[0], U[0]);
-        L[0] -= T(2) * v[0] * t1;
-        D[1] -= T(2) * v[1] * t1;
+        const std::array<Real, 2> v{Vout[0], Vout[1]};
+        const Real t1 = Real(0) + D[1] * v[1];
+        device::rot<device::alg::RotReflector2>(device::Givens<Real>{v[0], v[1]}, D[0], U[0]);
+        L[0] -= Real(2) * v[0] * t1;
+        D[1] -= Real(2) * v[1] * t1;
     }
 
     ex.barrier(device::Mem::Global);
@@ -99,14 +99,14 @@ void T_QTQ(const TridiagEx& ex, const int n, const Span<T> D, const Span<T> L, c
     // H_k on columns k, k+1 (rows k-1, k, k+1).
     if (ex.leader()) {
         for (int k = 1; k < n - 1; k++) {
-            const std::array<T, 2> v{Vout[2 * k], Vout[2 * k + 1]};
-            refl3(device::Givens<T>{v[0], v[1]}, device::refs(U[k - 1], D[k], L[k]), device::refs(U2(k - 1), U[k], D[k + 1]));
+            const std::array<Real, 2> v{Vout[2 * k], Vout[2 * k + 1]};
+            refl3(device::Givens<Real>{v[0], v[1]}, device::refs(U[k - 1], D[k], L[k]), device::refs(U2(k - 1), U[k], D[k + 1]));
         }
     }
 
     ex.barrier(device::Mem::Global);
 
-    device::map(ex, d, [=](T x) { return x + shift; }, d);
+    device::map(ex, d, [=](Real x) { return x + shift; }, d);
     device::copy(ex, device::vec(U.data(), n - 1), device::vec(L.data(), n - 1));
 
     ex.barrier(device::Mem::Global);
@@ -123,27 +123,27 @@ inline bool tridiag_smem_fits(Queue& ctx, size_t bytes) {
     return impl::local_mem_bytes(ctx->get_device(), 32) >= bytes;
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Real>
 Event tridiagonal_solver(Queue& ctx,
-                         Span<T> alphas,
-                         Span<T> betas,
-                         Span<typename base_type<T>::type> W,
+                         Span<Real> alphas,
+                         Span<Real> betas,
+                         Span<typename base_type<Real>::type> W,
                          Span<std::byte> workspace,
                          JobType jobz,
-                         const MatrixView<T, MatrixFormat::Dense>& Q,
+                         const MatrixView<Real, MatrixFormat::Dense>& Q,
                          size_t n,
                          size_t batch_size) {
     const std::uint8_t* mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("tridiagonal_solver", Q));
-    using real_t = typename base_type<T>::type;
+    using real_t = typename base_type<Real>::type;
     auto pool = BumpAllocator(workspace);
 
-    auto smem_required = sizeof(T) * (3 * n + 3 * (n + 1));
+    auto smem_required = sizeof(Real) * (3 * n + 3 * (n + 1));
     bool smem_possible = tridiag_smem_fits(ctx, smem_required);
 
-    auto V_reflectors = pool.allocate<T>(ctx, !smem_possible ? 2 * n * batch_size : 0);
-    auto D_global = pool.allocate<T>(ctx, !smem_possible ? (n+1) * batch_size : 0);
-    auto U_global = pool.allocate<T>(ctx, !smem_possible ? 2 * (n + 1) * batch_size : 0);
-    auto L_global = pool.allocate<T>(ctx, !smem_possible ? n * batch_size : 0);
+    auto V_reflectors = pool.allocate<Real>(ctx, !smem_possible ? 2 * n * batch_size : 0);
+    auto D_global = pool.allocate<Real>(ctx, !smem_possible ? (n+1) * batch_size : 0);
+    auto U_global = pool.allocate<Real>(ctx, !smem_possible ? 2 * (n + 1) * batch_size : 0);
+    auto L_global = pool.allocate<Real>(ctx, !smem_possible ? n * batch_size : 0);
     UnifiedVector<int32_t> status(batch_size, 0);
     int32_t* status_ptr = status.data();
 
@@ -152,10 +152,10 @@ Event tridiagonal_solver(Queue& ctx,
         auto Vdata = Q.data_ptr();
         auto Vld = Q.ld();
 
-        sycl::local_accessor<T, 1> D_smem(sycl::range<1>(smem_possible ? n + 1 : 0), h);
-        sycl::local_accessor<T, 1> L_smem(sycl::range<1>(smem_possible ? n : 0), h);
-        sycl::local_accessor<T, 1> U_smem(sycl::range<1>(smem_possible ? 2 * (n + 1) : 0), h);
-        sycl::local_accessor<T, 1> V_smem(sycl::range<1>(smem_possible ? 2 * n : 0), h);
+        sycl::local_accessor<Real, 1> D_smem(sycl::range<1>(smem_possible ? n + 1 : 0), h);
+        sycl::local_accessor<Real, 1> L_smem(sycl::range<1>(smem_possible ? n : 0), h);
+        sycl::local_accessor<Real, 1> U_smem(sycl::range<1>(smem_possible ? 2 * (n + 1) : 0), h);
+        sycl::local_accessor<Real, 1> V_smem(sycl::range<1>(smem_possible ? 2 * n : 0), h);
 
         batchlas::impl::parallel_for(h, sycl::nd_range<1>(batch_size*32, 32), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
@@ -164,10 +164,11 @@ Event tridiagonal_solver(Queue& ctx,
             auto cta = item.get_group();
 
             bool failed = false;
-            auto solve = [&](Span<T> D, Span<T> L, Span<T> U, Span<T> Vlocal) __attribute__((always_inline)) {
+            auto solve = [&](Span<Real> D, Span<Real> L, Span<Real> U,
+                             Span<Real> Vlocal) __attribute__((always_inline)) {
                 const int nn = int(n);
                 const auto d = device::vec(D.data(), nn);
-                T* batch_Q = Vdata + bid * Vstride;
+                Real* batch_Q = Vdata + bid * Vstride;
 
                 if (jobz == JobType::EigenVectors) device::laset(ex, device::Zero{}, device::One{}, device::mat(batch_Q, nn, nn, int(Vld)));
                 // One fused pass with the legacy int64 bound. Two device::copy calls, or one fused
@@ -192,8 +193,8 @@ Event tridiagonal_solver(Queue& ctx,
                     int it = 0;
                     while (uniform(std::abs(L[k-1]) > eps * (std::abs(D[k-1]) + std::abs(D[k])))) {
                         if (it++ == kTridiagMaxIterations) { failed = true; break; }
-                        const auto [l0, l1] = device::lae2(T(D[k-1]), T(L[k-1]), T(D[k]));  // values: no generic re-reads
-                        const T shift = std::abs(l0 - D[k]) < std::abs(l1 - D[k]) ? l0 : l1;
+                        const auto [l0, l1] = device::lae2(Real(D[k-1]), Real(L[k-1]), Real(D[k]));  // values: no generic re-reads
+                        const Real shift = std::abs(l0 - D[k]) < std::abs(l1 - D[k]) ? l0 : l1;
                         T_QTQ(ex, k+1, D, L, U, Vlocal, shift);
                         if (jobz == JobType::EigenVectors) {
                             apply_all_reflections(ex, Vlocal, k, nn, int(Vld), batch_Q);
@@ -202,8 +203,8 @@ Event tridiagonal_solver(Queue& ctx,
                 }
                 if (ex.leader()) status_ptr[bid] = failed ? 1 : 0;
 
-                device::map(ex, device::vec(W.data() + bid * n, nn), [](T x) -> real_t {
-                    if constexpr (device::Arith<T>::is_complex) return x.real();
+                device::map(ex, device::vec(W.data() + bid * n, nn), [](Real x) -> real_t {
+                    if constexpr (device::Arith<Real>::is_complex) return x.real();
                     else return x;
                 }, d);
             };
@@ -212,11 +213,11 @@ Event tridiagonal_solver(Queue& ctx,
             // memory at run time is rejected ("Conflicting address space information in PHI node").
             // There the solve is emitted once per storage; elsewhere once, on selected pointers.
             auto smem = [&]() BATCHLAS_DEVICE_BODY {
-                return std::array<Span<T>, 4>{Span(&D_smem[0], n + 1), Span(&L_smem[0], n),
+                return std::array<Span<Real>, 4>{Span(&D_smem[0], n + 1), Span(&L_smem[0], n),
                                                Span(&U_smem[0], 2 * (n + 1)), Span(&V_smem[0], 2 * n)};
             };
             auto gmem = [&]() BATCHLAS_DEVICE_BODY {
-                return std::array<Span<T>, 4>{Span(D_global.data() + bid * (n + 1), n + 1),
+                return std::array<Span<Real>, 4>{Span(D_global.data() + bid * (n + 1), n + 1),
                                                Span(L_global.data() + bid * n, n),
                                                Span(U_global.data() + bid * 2 * (n + 1), 2 * (n + 1)),
                                                Span(V_reflectors.data() + bid * 2 * n, 2 * n)};
@@ -238,15 +239,15 @@ Event tridiagonal_solver(Queue& ctx,
     return ctx.get_event();
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Real>
 size_t tridiagonal_solver_buffer_size(Queue& ctx, size_t n, size_t batch_size, JobType /*jobz*/) {
-    auto smem_required = sizeof(T) * (3 * n + 3 * (n + 1));
+    auto smem_required = sizeof(Real) * (3 * n + 3 * (n + 1));
     bool smem_possible = tridiag_smem_fits(ctx, smem_required);
     size_t size = 0;
-    size += BumpAllocator::allocation_size<T>(ctx, !smem_possible ? 2*n*batch_size : 0);
-    size += BumpAllocator::allocation_size<T>(ctx, !smem_possible ? (n+1)*batch_size : 0);
-    size += BumpAllocator::allocation_size<T>(ctx, !smem_possible ? 2*(n+1)*batch_size : 0);
-    size += BumpAllocator::allocation_size<T>(ctx, !smem_possible ? n*batch_size : 0);
+    size += BumpAllocator::allocation_size<Real>(ctx, !smem_possible ? 2*n*batch_size : 0);
+    size += BumpAllocator::allocation_size<Real>(ctx, !smem_possible ? (n+1)*batch_size : 0);
+    size += BumpAllocator::allocation_size<Real>(ctx, !smem_possible ? 2*(n+1)*batch_size : 0);
+    size += BumpAllocator::allocation_size<Real>(ctx, !smem_possible ? n*batch_size : 0);
     return size;
 }
 

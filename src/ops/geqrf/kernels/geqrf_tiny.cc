@@ -23,7 +23,7 @@
 
 // Outside the anonymous namespace: a kernel name may not name an internal-linkage entity.
 namespace batchlas {
-template <typename T, int N, int C, bool Masked> class GeqrfTinyKernel;
+template <typename Scalar, int N, int C, bool Masked> class GeqrfTinyKernel;
 }  // namespace batchlas
 
 namespace batchlas {
@@ -33,7 +33,7 @@ namespace {
 
 // THE LAUNCH GATES. The register table lives next to the chunk rule that reads it; a second
 // copy here let a MODEL choose the chunk width while a PROBE gated the launch. evidence: docs/perf/qr.md#the-tiny-tier-register-table
-template <typename T> using TinyDev = typename sycl_device::DevMap<T>::type;
+template <typename Scalar> using TinyDev = typename sycl_device::DevMap<Scalar>::type;
 
 constexpr int geqrf_tiny_worst_regs() {
     int worst = 0;
@@ -78,17 +78,17 @@ BATCHLAS_GEQRF_TINY_CELL_ASSERT(sycl_device::Cx<double>, 16)
 
 // cdouble's N = 32 cell is excluded by INSTANTIATION BUDGET, not by physics.
 // evidence: docs/perf/qr.md#the-cdouble-n32-cell
-template <typename T>
+template <typename Scalar>
 constexpr int geqrf_tiny_type_ceiling() {
-    return std::is_same_v<T, std::complex<double>> ? 16 : 32;
+    return std::is_same_v<Scalar, std::complex<double>> ? 16 : 32;
 }
 
 // Local memory ONE work-group asks for, at the derived chunk width.
-template <typename T, int N>
+template <typename Scalar, int N>
 constexpr std::size_t geqrf_tiny_wg_bytes() {
-    constexpr int C = geqrf_native::geqrf_tiny_chunk<TinyDev<T>, N>();
+    constexpr int C = geqrf_native::geqrf_tiny_chunk<TinyDev<Scalar>, N>();
     return static_cast<std::size_t>(geqrf_native::geqrf_tiny_matrices_per_wg<N>()) *
-           geqrf_native::geqrf_tiny_slm_elems(N, C) * sizeof(T);
+           geqrf_native::geqrf_tiny_slm_elems(N, C) * sizeof(Scalar);
 }
 
 // No request lands near the (47104, 49664] launch hole, so geqrf_cta.cc's padding is not carried.
@@ -99,16 +99,16 @@ static_assert(geqrf_tiny_wg_bytes<double, 32>() < resident::kLaunchHoleLo,
 
 // Masked: the mask folds into `live` (I2), a template so the unmasked kernel is unchanged (the fold
 // cost potrf tiny 2-4.5%). evidence: docs/design/masked-batches.md#masked-batches-kernel-contract
-template <typename T, int N, bool Masked>
-Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int batch,
-                        T* tau_ptr, const std::uint8_t* mask) {
+template <typename Scalar, int N, bool Masked>
+Event geqrf_tiny_launch(Queue& ctx, Scalar* a_ptr, int ld, int stride, int n, int batch,
+                        Scalar* tau_ptr, const std::uint8_t* mask) {
     // Re-typed HERE: std::complex's Annex-G operator* is an isnan branch plus a libcall.
-    using DM = sycl_device::DevMap<T>;
+    using DM = sycl_device::DevMap<Scalar>;
     using D = typename DM::type;
     using R = device::real_t<D>;
     using Ar = device::Arith<D>;
     using Fa = device::FmaArith<D>;  // arith::Fma: sycl_device::dev_mul / dev_div bit for bit
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     constexpr int C = geqrf_native::geqrf_tiny_chunk<D, N>();
     constexpr int SLDA = geqrf_native::geqrf_tiny_slda(C);
@@ -128,7 +128,7 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
         sycl::local_accessor<D, 1> scratch(
             sycl::range<1>(static_cast<std::size_t>(M) * kPerMatrix), h);
 
-        batchlas::impl::parallel_for<GeqrfTinyKernel<T, N, C, Masked>>(h,
+        batchlas::impl::parallel_for<GeqrfTinyKernel<Scalar, N, C, Masked>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) *
                                              static_cast<std::size_t>(WG)),
                               sycl::range<1>(static_cast<std::size_t>(WG))),
@@ -230,22 +230,22 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
 
 }  // namespace
 
-template <typename T>
+template <typename Scalar>
 int geqrf_tiny_max_n_for_slm(std::size_t slm_budget_bytes) {
     // A walk with a break, not a max: per-work-group bytes are NOT monotone in N, and
     // can_run advertises the contiguous range n <= max_n, so the ceiling must be the
     // largest N at which every smaller bucket also fits.
     const std::size_t slice = resident::occupancy_budget(slm_budget_bytes);
-    constexpr int ceiling = geqrf_tiny_type_ceiling<T>();
+    constexpr int ceiling = geqrf_tiny_type_ceiling<Scalar>();
 
-    if (geqrf_tiny_wg_bytes<T, 8>() > slice) return 0;
-    if (ceiling < 16 || geqrf_tiny_wg_bytes<T, 16>() > slice) return 8;
-    if (ceiling < 32 || geqrf_tiny_wg_bytes<T, 32>() > slice) return 16;
+    if (geqrf_tiny_wg_bytes<Scalar, 8>() > slice) return 0;
+    if (ceiling < 16 || geqrf_tiny_wg_bytes<Scalar, 16>() > slice) return 8;
+    if (ceiling < 32 || geqrf_tiny_wg_bytes<Scalar, 32>() > slice) return 16;
     return 32;
 }
 
-template <typename T>
-std::size_t geqrf_tiny_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
+template <typename Scalar>
+std::size_t geqrf_tiny_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A) {
     // Zero, and monotone in (rows, cols, batch) by being constant. Must not dereference
     // A.data_ptr(): band_reduction.cc sizes against a null-data dummy view.
     static_cast<void>(ctx);
@@ -253,13 +253,13 @@ std::size_t geqrf_tiny_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat:
     return 0;
 }
 
-template <typename T>
+template <typename Scalar>
 unsigned geqrf_tiny_debug_launch(Queue& ctx, int n) {
     const auto dev = ctx.device();
     if (dev.type != DeviceType::GPU || !dev.supports_sub_group_size(32)) return 0u;
     const std::size_t budget =
         resident::device_slm_budget(dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
-    if (n < 1 || n > geqrf_tiny_max_n_for_slm<T>(budget)) return 0u;
+    if (n < 1 || n > geqrf_tiny_max_n_for_slm<Scalar>(budget)) return 0u;
     switch (tiny_native::tiny_bucket_ge(n)) {
         case 8:  return (8u << 16)  | unsigned(geqrf_native::geqrf_tiny_matrices_per_wg<8>());
         case 16: return (16u << 16) | unsigned(geqrf_native::geqrf_tiny_matrices_per_wg<16>());
@@ -268,10 +268,10 @@ unsigned geqrf_tiny_debug_launch(Queue& ctx, int n) {
     }
 }
 
-template <typename T>
+template <typename Scalar>
 Event geqrf_tiny_dispatch(Queue& ctx,
-                          const MatrixView<T, MatrixFormat::Dense>& A,
-                          Span<T> tau,
+                          const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                          Span<Scalar> tau,
                           Span<std::byte> workspace) {
     static_cast<void>(workspace);
 
@@ -289,21 +289,21 @@ Event geqrf_tiny_dispatch(Queue& ctx,
 
     const std::size_t budget =
         resident::device_slm_budget(dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
-    const int max_n = geqrf_tiny_max_n_for_slm<T>(budget);
+    const int max_n = geqrf_tiny_max_n_for_slm<Scalar>(budget);
     if (n > max_n) {
         throw batchlas::invalid_argument(
             "geqrf_tiny: order " + std::to_string(n) + " is above this type's tiny ceiling (" +
             std::to_string(max_n) + ") on this device's local-memory budget");
     }
 
-    T* const a_ptr = A.data_ptr();
-    T* const tau_ptr = tau.data();
+    Scalar* const a_ptr = A.data_ptr();
+    Scalar* const tau_ptr = tau.data();
     const int ld = static_cast<int>(A.ld());
     const int stride = static_cast<int>(A.stride());
     const std::uint8_t* const mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("geqrf_tiny", A));
     const auto launch = [&]<int NB>(std::integral_constant<int, NB>) {
-        return mask ? geqrf_tiny_launch<T, NB, true>(ctx, a_ptr, ld, stride, n, batch, tau_ptr, mask)
-                    : geqrf_tiny_launch<T, NB, false>(ctx, a_ptr, ld, stride, n, batch, tau_ptr, nullptr);
+        return mask ? geqrf_tiny_launch<Scalar, NB, true>(ctx, a_ptr, ld, stride, n, batch, tau_ptr, mask)
+                    : geqrf_tiny_launch<Scalar, NB, false>(ctx, a_ptr, ld, stride, n, batch, tau_ptr, nullptr);
     };
 
     // Explicit throw, never a silent leading-submatrix solve. The N = 32 arm sits under
@@ -315,7 +315,7 @@ Event geqrf_tiny_dispatch(Queue& ctx,
     if (bucket == 16) {
         return launch(std::integral_constant<int, 16>{});
     }
-    if constexpr (geqrf_tiny_type_ceiling<T>() >= 32) {
+    if constexpr (geqrf_tiny_type_ceiling<Scalar>() >= 32) {
         if (bucket == 32) {
             return launch(std::integral_constant<int, 32>{});
         }

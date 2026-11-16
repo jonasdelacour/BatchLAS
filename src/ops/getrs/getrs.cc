@@ -25,11 +25,11 @@ namespace ops::getrs {
 
 using select::overloaded;
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
-template <typename T>
-select::Key key_of(const MV<T>& A, const MV<T>& B) {
+template <typename Scalar>
+select::Key key_of(const MV<Scalar>& A, const MV<Scalar>& B) {
     return {{"n", A.rows()}, {"nrhs", B.cols()}, {"batch", A.batch_size()}};
 }
 
@@ -38,8 +38,8 @@ select::Key key_of(const MV<T>& A, const MV<T>& B) {
 // disagreeing) is left to the vendor, as before. NETLIB writes true int64 pivots where the
 // natives read packed 1-based int32, a silent wrong answer, so no native runs under it.
 // Masked: cta, blocked and NETLIB's host loop skip an inactive item; the strided vendor calls cannot.
-template <Backend B, typename T>
-bool can_run(const GetrsChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& Bm) {
+template <Backend B, typename Scalar>
+bool can_run(const GetrsChoice& c, const select::Device& d, const MV<Scalar>& A, const MV<Scalar>& Bm) {
     const bool masked = detail::any_batch_mask(A, Bm);
     const std::int64_t n = A.rows(), nrhs = Bm.cols();
     const bool conforming = A.cols() == n && Bm.rows() == n && Bm.batch_size() == A.batch_size();
@@ -48,7 +48,7 @@ bool can_run(const GetrsChoice& c, const select::Device& d, const MV<T>& A, cons
     return std::visit(overloaded{
         [&](Cta) {
             // The fused work-group never drops below 32 lanes (getrs_fused_wg).
-            const auto cap = ops::getrs::getrs_fused_max_rhs_elems<T>(static_cast<std::size_t>(d.slm_budget));
+            const auto cap = ops::getrs::getrs_fused_max_rhs_elems<Scalar>(static_cast<std::size_t>(d.slm_budget));
             return native && d.max_wg >= 32 &&
                    nrhs <= ops::getrs::kGetrsFusedMaxRhs &&
                    static_cast<std::size_t>(n) * static_cast<std::size_t>(nrhs) <= cap;
@@ -60,46 +60,48 @@ bool can_run(const GetrsChoice& c, const select::Device& d, const MV<T>& A, cons
     }, c);
 }
 
-template <Backend B, typename T>
-Event launch(Queue& q, const GetrsChoice& c, const MV<T>& A, const MV<T>& Bm, Transpose transA,
+template <Backend B, typename Scalar>
+Event launch(Queue& q, const GetrsChoice& c, const MV<Scalar>& A, const MV<Scalar>& Bm, Transpose transA,
              Span<std::int64_t> pivots, Span<std::byte> ws) {
     return std::visit(overloaded{
-        [&](Cta) { return ops::getrs::getrs_fused_dispatch<T>(q, A, Bm, transA, pivots, ws); },
+        [&](Cta) { return ops::getrs::getrs_fused_dispatch<Scalar>(q, A, Bm, transA, pivots, ws); },
         [&](Blocked) {
-            return ops::getrs::getrs_blocked_dispatch<T>(
+            return ops::getrs::getrs_blocked_dispatch<Scalar>(
                 q, A, Bm, transA, pivots, ws,
-                [](Queue& c2, const MV<T>& ta, const MV<T>& tb, T talpha, Side tside, Uplo tuplo, Transpose ttrans,
-                   Diag tdiag) { return trsm<B, T>(c2, ta, tb, talpha, tside, tuplo, ttrans, tdiag); });
+                [](Queue& c2, const MV<Scalar>& ta, const MV<Scalar>& tb, Scalar talpha, Side tside, Uplo tuplo,
+                   Transpose ttrans,
+                   Diag tdiag) { return trsm<B, Scalar>(c2, ta, tb, talpha, tside, tuplo, ttrans, tdiag); });
         },
         [&](Vendor) -> Event {
             if constexpr (select::has_library<B>(spec.vendor))
-                return backend::getrs_vendor<B, T>(q, A, Bm, transA, pivots, ws);
-            else select::no_vendor<B, T>(spec);
+                return backend::getrs_vendor<B, Scalar>(q, A, Bm, transA, pivots, ws);
+            else select::no_vendor<B, Scalar>(spec);
         },
     }, c);
 }
 
 // Exactly the chosen family's need (R5). Nothing here dereferences A or B: a measuring pass
 // hands null data pointers.
-template <Backend B, typename T>
-std::size_t workspace(Queue& q, const GetrsChoice& c, const MV<T>& A, const MV<T>& Bm, Transpose transA) {
+template <Backend B, typename Scalar>
+std::size_t workspace(Queue& q, const GetrsChoice& c, const MV<Scalar>& A, const MV<Scalar>& Bm, Transpose transA) {
     return std::visit(overloaded{
-        [&](Cta) { return ops::getrs::getrs_fused_buffer_size<T>(q, A, Bm, transA); },
-        [&](Blocked) { return ops::getrs::getrs_blocked_buffer_size<T>(q, A, Bm, transA); },
+        [&](Cta) { return ops::getrs::getrs_fused_buffer_size<Scalar>(q, A, Bm, transA); },
+        [&](Blocked) { return ops::getrs::getrs_blocked_buffer_size<Scalar>(q, A, Bm, transA); },
         [&](Vendor) -> std::size_t {
             if constexpr (select::has_library<B>(spec.vendor))
-                return backend::getrs_vendor_buffer_size<B, T>(q, A, Bm, transA);
-            else select::no_vendor<B, T>(spec);
+                return backend::getrs_vendor_buffer_size<B, Scalar>(q, A, Bm, transA);
+            else select::no_vendor<B, Scalar>(spec);
         },
     }, c);
 }
 
 }  // namespace ops::getrs
 
-template <Backend Back, typename T>
-Event getrs(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
+template <Backend Back, typename Scalar>
+Event getrs(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, const MatrixView<Scalar,
+            MatrixFormat::Dense>& B,
             Transpose transA, Span<int64_t> pivots, Span<std::byte> workspace) {
-    getrs_validate_params<T>(A, B);
+    getrs_validate_params<Scalar>(A, B);
     // Both operands carry the call's mask whichever brought it, so the solves' children see it.
     const auto mask = detail::call_mask("getrs", A, B);
     const bool adopt = !mask.empty() && A.batch_size() == B.batch_size();
@@ -110,23 +112,23 @@ Event getrs(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matri
     // The coverage row's key: m = k = order, n = nrhs, and transA (the field separating rows).
     const coverage::Shape shape{.m = A.rows(), .n = B.cols(), .k = A.rows(), .batch = A.batch_size(),
                                 .transA = transA};
-    const select::Key key = ops::getrs::key_of<T>(A, B);
-    return select::run<Back, T>(
-        ops::getrs::spec, ctx, key, ops::getrs::candidates<T>(),
-        [&](const auto& c, const auto& d) { return ops::getrs::can_run<Back, T>(c, d, A, B); }, shape, key,
-        [&](const auto& c) { return ops::getrs::launch<Back, T>(ctx, c, Am, Bmk, transA, pivots, workspace); });
+    const select::Key key = ops::getrs::key_of<Scalar>(A, B);
+    return select::run<Back, Scalar>(
+        ops::getrs::spec, ctx, key, ops::getrs::candidates<Scalar>(),
+        [&](const auto& c, const auto& d) { return ops::getrs::can_run<Back, Scalar>(c, d, A, B); }, shape, key,
+        [&](const auto& c) { return ops::getrs::launch<Back, Scalar>(ctx, c, Am, Bmk, transA, pivots, workspace); });
 }
 
-template <Backend Back, typename T>
-size_t getrs_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                         const MatrixView<T, MatrixFormat::Dense>& B, Transpose transA) {
-    getrs_validate_params<T>(A, B);
+template <Backend Back, typename Scalar>
+size_t getrs_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& B, Transpose transA) {
+    getrs_validate_params<Scalar>(A, B);
     (void)detail::call_mask("getrs_buffer_size", A, B);
     if (A.batch_size() == 0) return 0;
-    const auto c = select::pick<Back, T>(
-        ops::getrs::spec, ctx, ops::getrs::key_of<T>(A, B), ops::getrs::candidates<T>(),
-        [&](const auto& k, const auto& d) { return ops::getrs::can_run<Back, T>(k, d, A, B); });
-    return ops::getrs::workspace<Back, T>(ctx, c, A, B, transA);
+    const auto c = select::pick<Back, Scalar>(
+        ops::getrs::spec, ctx, ops::getrs::key_of<Scalar>(A, B), ops::getrs::candidates<Scalar>(),
+        [&](const auto& k, const auto& d) { return ops::getrs::can_run<Back, Scalar>(k, d, A, B); });
+    return ops::getrs::workspace<Back, Scalar>(ctx, c, A, B, transA);
 }
 
 #define GETRS_INSTANTIATE(B_, fp) \

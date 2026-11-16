@@ -30,9 +30,9 @@ using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename device::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
-template <class T> using dev_of = typename sycl_device::DevMap<T>::type;
+template <class Scalar> using real_of = typename device::Arith<Scalar>::real_t;
+template <class Scalar> constexpr bool is_cplx = device::Arith<Scalar>::is_complex;
+template <class Scalar> using dev_of = typename sycl_device::DevMap<Scalar>::type;
 
 constexpr int kBatch = 1024;  // saturating batch: items repeat with period kPeriod
 constexpr int kPeriod = 3;
@@ -43,19 +43,19 @@ std::uint64_t mix(std::uint64_t x) {
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
     return x ^ (x >> 31);
 }
-template <class R> R uval(std::uint64_t i) { return static_cast<R>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
-template <class T> T val(std::uint64_t i) {
-    if constexpr (is_cplx<T>) return T(uval<real_of<T>>(2 * i), uval<real_of<T>>(2 * i + 1));
-    else return uval<T>(i);
+template <class Real> Real uval(std::uint64_t i) { return static_cast<Real>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
+template <class Scalar> Scalar val(std::uint64_t i) {
+    if constexpr (is_cplx<Scalar>) return Scalar(uval<real_of<Scalar>>(2 * i), uval<real_of<Scalar>>(2 * i + 1));
+    else return uval<Scalar>(i);
 }
-template <class T> T nan_v() { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }
-template <class T> T poison_v() { return T(real_of<T>(1e30)); }
+template <class Scalar> Scalar nan_v() { return Scalar(std::numeric_limits<real_of<Scalar>>::quiet_NaN()); }
+template <class Scalar> Scalar poison_v() { return Scalar(real_of<Scalar>(1e30)); }
 
 // kPeriod representatives, copied to every item b from representative b % kPeriod.
-template <class T> std::vector<T> batched(int per_item, std::uint64_t seed) {
-    std::vector<T> h(std::size_t(kBatch) * per_item);
+template <class Scalar> std::vector<Scalar> batched(int per_item, std::uint64_t seed) {
+    std::vector<Scalar> h(std::size_t(kBatch) * per_item);
     for (int b = 0; b < kPeriod; ++b)
-        for (int i = 0; i < per_item; ++i) h[std::size_t(b) * per_item + i] = val<T>(seed + std::uint64_t(b) * 1000003u + i);
+        for (int i = 0; i < per_item; ++i) h[std::size_t(b) * per_item + i] = val<Scalar>(seed + std::uint64_t(b) * 1000003u + i);
     for (int b = kPeriod; b < kBatch; ++b)
         std::copy_n(h.data() + std::size_t(b % kPeriod) * per_item, per_item, h.data() + std::size_t(b) * per_item);
     return h;
@@ -91,12 +91,12 @@ struct Dev {
     std::vector<void*> ptrs;
 };
 
-template <class T> class DeviceLapackSparseTest : public ::testing::Test {
+template <class Scalar> class DeviceLapackSparseTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx) GTEST_SKIP() << "no SYCL device visible";
         if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "device tests launch sub-group size 32";
-        if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
+        if (test_utils::lacks_fp64<Scalar>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
 };
@@ -104,37 +104,37 @@ protected:
 using Types = ::testing::Types<float, double, std::complex<float>, std::complex<double>>;
 TYPED_TEST_SUITE(DeviceLapackSparseTest, Types);
 
-template <class T> using LD = std::conditional_t<is_cplx<T>, std::complex<long double>, long double>;
-template <class T> LD<T> wide(T v) { return LD<T>(v); }
-template <class T> T conj_h(T v) {
-    if constexpr (is_cplx<T>) return std::conj(v);
+template <class Scalar> using LD = std::conditional_t<is_cplx<Scalar>, std::complex<long double>, long double>;
+template <class Scalar> LD<Scalar> wide(Scalar v) { return LD<Scalar>(v); }
+template <class Scalar> Scalar conj_h(Scalar v) {
+    if constexpr (is_cplx<Scalar>) return std::conj(v);
     else return v;
 }
-template <class T> double rel(T got, LD<T> ref, long double scale) {
-    const long double d = std::abs(LD<T>(got) - ref);
+template <class Scalar> double rel(Scalar got, LD<Scalar> ref, long double scale) {
+    const long double d = std::abs(LD<Scalar>(got) - ref);
     if (std::isnan(d)) return std::numeric_limits<double>::infinity();
-    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<T>>::min()));
+    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<Scalar>>::min()));
 }
-template <class T> dev_of<T> to_dev(T v) {
-    dev_of<T> d;
-    std::memcpy(&d, &v, sizeof(T));
+template <class Scalar> dev_of<Scalar> to_dev(Scalar v) {
+    dev_of<Scalar> d;
+    std::memcpy(&d, &v, sizeof(Scalar));
     return d;
 }
 
 // Host replay of arith::Fma, operation for operation (std::fma is correctly rounded like sycl::fma).
-template <class T> void h_mac(T& acc, T a, T b) {
-    if constexpr (is_cplx<T>) {
+template <class Scalar> void h_mac(Scalar& acc, Scalar a, Scalar b) {
+    if constexpr (is_cplx<Scalar>) {
         auto re = std::fma(a.real(), b.real(), acc.real());
         re = std::fma(-a.imag(), b.imag(), re);
         auto im = std::fma(a.real(), b.imag(), acc.imag());
         im = std::fma(a.imag(), b.real(), im);
-        acc = T(re, im);
+        acc = Scalar(re, im);
     } else {
         acc = std::fma(a, b, acc);
     }
 }
-template <class T> T h_mul(T a, T b) {
-    if constexpr (is_cplx<T>) return T(std::fma(a.real(), b.real(), -a.imag() * b.imag()), std::fma(a.real(), b.imag(), a.imag() * b.real()));
+template <class Scalar> Scalar h_mul(Scalar a, Scalar b) {
+    if constexpr (is_cplx<Scalar>) return Scalar(std::fma(a.real(), b.real(), -a.imag() * b.imag()), std::fma(a.real(), b.imag(), a.imag() * b.real()));
     else return a * b;
 }
 

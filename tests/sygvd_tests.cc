@@ -42,16 +42,16 @@ namespace {
 namespace ts = test_support;
 using ts::Live;
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
 // B's condition scale 10^(2 decades) (see scaled): 1e2 in single precision, 1e4 in double.
-template <typename T>
-constexpr double b_cond() { return std::is_same_v<batchlas::float_t<T>, float> ? 1e2 : 1e4; }
+template <typename Scalar>
+constexpr double b_cond() { return std::is_same_v<batchlas::float_t<Scalar>, float> ? 1e2 : 1e4; }
 
 // The generalized residual and normalization scale with cond(B).
-template <typename T>
-verify::Slack cond_slack() { return {4.0 * b_cond<T>(), "generalized problem: error ~ cond(B)"}; }
+template <typename Scalar>
+verify::Slack cond_slack() { return {4.0 * b_cond<Scalar>(), "generalized problem: error ~ cond(B)"}; }
 
 // sygst's residual on a badly scaled B = D S D follows S, not cond(B): at most 17x the bound at cond(B) 1e6
 // (double), under 1x at 1e3 (float) (2026-10-27); far tighter than cond_slack, so a subtle defect shows.
@@ -59,24 +59,24 @@ inline verify::Slack graded_slack() { return {32.0, "graded B: the reduction's e
 
 // S := D S D in place, D_i = 10^(decades (i / (n - 1) - 1/2)): entries spread over 10^(2 decades) on a
 // well-conditioned S. Local: no shared generator or MatrixView facility scales rows and columns.
-template <typename T>
-void scaled(Matrix<T>& S, double decades) {
+template <typename Scalar>
+void scaled(Matrix<Scalar>& S, double decades) {
     const int n = S.rows();
     std::vector<double> D(n);
     for (int i = 0; i < n; ++i) D[i] = std::pow(10.0, decades * (n > 1 ? double(i) / (n - 1) - 0.5 : 0.0));
     for (int b = 0; b < S.batch_size(); ++b)
         for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i) S(i, j, b) *= batchlas::float_t<T>(D[i] * D[j]);
+            for (int i = 0; i < n; ++i) S(i, j, b) *= batchlas::float_t<Scalar>(D[i] * D[j]);
 }
 
 // A0 (random Hermitian) and B0 = D S D, D taking cond(B) to ~`cond`: S is fill_random_spd's with its diagonal
 // raised to 2.5 n, so its off-diagonal stays ~1/(4n) of it (a larger one makes sygst's error follow cond(B)).
 // Whole and packed, one item when identical; a and b in padded, poisoned storage (A ld n + 3, stride + 5;
 // B ld n + 2, stride + 7) holding their uplo triangles.
-template <typename T>
+template <typename Scalar>
 struct Gen {
     Uplo uplo;
-    Matrix<T> A0, B0, a, b;
+    Matrix<Scalar> A0, B0, a, b;
 };
 
 using sygvd_test::items_of;

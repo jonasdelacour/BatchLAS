@@ -25,16 +25,16 @@ namespace batchlas {
 // Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
 // src/util/template-instantiations.hh. Keep in sync with the declarations below.
 namespace sig {
-template <typename T>
+template <typename Scalar>
 using posv = Event(Queue&,
-                   const MatrixView<T, MatrixFormat::Dense>&,
-                   const MatrixView<T, MatrixFormat::Dense>&,
+                   const MatrixView<Scalar, MatrixFormat::Dense>&,
+                   const MatrixView<Scalar, MatrixFormat::Dense>&,
                    Uplo, Span<std::byte>, Span<int32_t>);
 
-template <typename T>
+template <typename Scalar>
 using posv_buffer_size = size_t(Queue&,
-                                const MatrixView<T, MatrixFormat::Dense>&,
-                                const MatrixView<T, MatrixFormat::Dense>&,
+                                const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                const MatrixView<Scalar, MatrixFormat::Dense>&,
                                 Uplo);
 }  // namespace sig
 
@@ -49,9 +49,9 @@ using posv_buffer_size = size_t(Queue&,
 /// @ingroup api_factorizations_lowlevel
 // Stricter than potrf's validator on purpose: with no vendor arm, a
 // non-conforming pair would otherwise surface as a misleading "no route" error.
-template <typename T>
-inline void posv_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
-                                 const MatrixView<T, MatrixFormat::Dense>& B,
+template <typename Scalar>
+inline void posv_validate_params(const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& B,
                                  Uplo uplo) {
     if (A.rows() < 0 || A.cols() < 0 || B.rows() < 0 || B.cols() < 0) {
         throw batchlas::invalid_argument(
@@ -92,7 +92,7 @@ inline void posv_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 ///
 /// Asynchronous: A, B and @p info are readable after the returned event is waited on.
 /// @tparam Back  backend; the backend-deducing overload takes it from `ctx.backend()`
-/// @tparam T     scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @tparam Scalar     scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in] ctx         queue the kernels are enqueued on
 /// @param[in,out] A       batch of \f$n \times n\f$ Hermitian positive-definite matrices;
 ///                        overwritten with the Cholesky factor
@@ -106,10 +106,10 @@ inline void posv_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 /// @return event of the last enqueued kernel
 /// @throws batchlas::invalid_argument if posv_validate_params() rejects the call
 /// @ingroup api_factorizations
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 BATCHLAS_API Event posv(Queue& ctx,
-                        const MatrixView<T, MatrixFormat::Dense>& A,
-                        const MatrixView<T, MatrixFormat::Dense>& B,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& B,
                         Uplo uplo,
                         Span<std::byte> workspace,
                         Span<int32_t> info);
@@ -118,7 +118,7 @@ BATCHLAS_API Event posv(Queue& ctx,
 ///
 /// Takes the same operands as the call, so both resolve the same route.
 /// @tparam Back  backend; the backend-deducing overload takes it from `ctx.backend()`
-/// @tparam T     scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @tparam Scalar     scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in] ctx   queue the call will run on
 /// @param[in] A     batch of \f$n \times n\f$ matrices, as passed to posv()
 /// @param[in] B     batch of \f$n \times \mathrm{nrhs}\f$ right-hand sides, as passed to posv()
@@ -126,15 +126,15 @@ BATCHLAS_API Event posv(Queue& ctx,
 /// @return the workspace size in bytes
 /// @throws batchlas::invalid_argument if posv_validate_params() rejects the operands
 /// @ingroup api_factorizations_lowlevel
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 BATCHLAS_API size_t posv_buffer_size(Queue& ctx,
-                                     const MatrixView<T, MatrixFormat::Dense>& A,
-                                     const MatrixView<T, MatrixFormat::Dense>& B,
+                                     const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                     const MatrixView<Scalar, MatrixFormat::Dense>& B,
                                      Uplo uplo);
 
 /// @brief posv() without per-item status (`info` not requested).
 /// @tparam Back  backend
-/// @tparam T     scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @tparam Scalar     scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in] ctx         queue the kernels are enqueued on
 /// @param[in,out] A       batch of \f$n \times n\f$ Hermitian positive-definite matrices;
 ///                        overwritten with the Cholesky factor
@@ -145,13 +145,13 @@ BATCHLAS_API size_t posv_buffer_size(Queue& ctx,
 /// @return event of the last enqueued kernel
 /// @ingroup api_factorizations
 // Not a defaulted `info`: the sig:: aliases are function types (see potrf.hh).
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 inline Event posv(Queue& ctx,
-                  const MatrixView<T, MatrixFormat::Dense>& A,
-                  const MatrixView<T, MatrixFormat::Dense>& B,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& B,
                   Uplo uplo,
                   Span<std::byte> workspace) {
-    return posv<Back, T>(ctx, A, B, uplo, workspace, Span<int32_t>{});
+    return posv<Back, Scalar>(ctx, A, B, uplo, workspace, Span<int32_t>{});
 }
 
 BATCHLAS_DISPATCH_ON_QUEUE(posv)

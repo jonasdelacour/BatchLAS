@@ -12,27 +12,27 @@
 
 namespace batchlas {
 
-template <Backend B, typename T>
+template <Backend B, typename Real>
 void stedc_merge_fused(Queue& ctx,
-                       const VectorView<T>& eigenvalues,
-                       const VectorView<T>& v,
-                       const Span<T>& rho,
+                       const VectorView<Real>& eigenvalues,
+                       const VectorView<Real>& v,
+                       const Span<Real>& rho,
                        const Span<int32_t>& n_reduced,
-                       const MatrixView<T, MatrixFormat::Dense>& Qprime,
-                       const VectorView<T>& temp_lambdas,
-                       const StedcParams<T>& params,
+                       const MatrixView<Real, MatrixFormat::Dense>& Qprime,
+                       const VectorView<Real>& temp_lambdas,
+                       const StedcParams<Real>& params,
                        int32_t* info,
                        int64_t info_nodes_per_item);
 
-template <Backend B, typename T>
+template <Backend B, typename Real>
 void stedc_merge_fused_cta(Queue& ctx,
-                           const VectorView<T>& eigenvalues,
-                           const VectorView<T>& v,
-                           const Span<T>& rho,
+                           const VectorView<Real>& eigenvalues,
+                           const VectorView<Real>& v,
+                           const Span<Real>& rho,
                            const Span<int32_t>& n_reduced,
-                           const MatrixView<T, MatrixFormat::Dense>& Qprime,
-                           const VectorView<T>& temp_lambdas,
-                           const StedcParams<T>& params,
+                           const MatrixView<Real, MatrixFormat::Dense>& Qprime,
+                           const VectorView<Real>& temp_lambdas,
+                           const StedcParams<Real>& params,
                            int32_t* info,
                            int64_t info_nodes_per_item);
 
@@ -43,15 +43,15 @@ void stedc_merge_fused_cta(Queue& ctx,
 //   n_reduced    – number of non-deflated poles per batch item
 // Outputs: Qprime (\f$n \times n\f$, identity for deflated columns), temp_lambdas (unsorted),
 // info (per-item status or nullptr; divide the node index by info_nodes_per_item).
-template <Backend B, typename T>
+template <Backend B, typename Real>
 void stedc_merge_dispatch(Queue& ctx,
-                          const VectorView<T>& eigenvalues,
-                          const VectorView<T>& v,
-                          const Span<T>& rho,
+                          const VectorView<Real>& eigenvalues,
+                          const VectorView<Real>& v,
+                          const Span<Real>& rho,
                           const Span<int32_t>& n_reduced,
-                          const MatrixView<T, MatrixFormat::Dense>& Qprime,
-                          const VectorView<T>& temp_lambdas,
-                          const StedcParams<T>& params,
+                          const MatrixView<Real, MatrixFormat::Dense>& Qprime,
+                          const VectorView<Real>& temp_lambdas,
+                          const StedcParams<Real>& params,
                           // Per-item status or nullptr; see info_nodes_per_item above.
                           int32_t* info,
                           int64_t info_nodes_per_item);

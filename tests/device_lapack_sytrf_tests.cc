@@ -64,8 +64,8 @@ namespace {
 namespace ts = test_support;
 using ts::Live;
 
-template <class T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <class Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
 constexpr int kBatch = 1024;
 constexpr std::size_t kCanary = 64;
@@ -95,53 +95,53 @@ static_assert(device::buffer_size<device::routine::sysv<Uplo::Upper>, device::ti
 static_assert(std::is_same_v<device::resolve_tier_t<device::routine::sysv<Uplo::Upper>, float, device::tier::upto<4096>>, device::tier::Blocked<1>>);
 
 // ---- data ---------------------------------------------------------------------------------------
-template <class T>
-T draw(std::mt19937& g) {
+template <class Scalar>
+Scalar draw(std::mt19937& g) {
     std::uniform_real_distribution<double> u(-1.0, 1.0);
     const double re = u(g), im = u(g);
-    return MV<T>::make(re, im);
+    return MV<Scalar>::make(re, im);
 }
 
 // Item b of the full symmetric batch (complex: symmetric, not Hermitian). b % 16 picks its kind:
 // 5 a zero row and column (singular: info > 0), 9 a NaN off the diagonal, 12 a dominant diagonal
 // (1 x 1 pivots, no interchange), 14 a zero diagonal (2 x 2 pivots); the rest uniform in [-1, 1].
-template <class T>
-Matrix<T> symmetric_batch(int n, unsigned seed) {
-    Matrix<T> full(n, n, kBatch);
+template <class Scalar>
+Matrix<Scalar> symmetric_batch(int n, unsigned seed) {
+    Matrix<Scalar> full(n, n, kBatch);
     std::mt19937 g(seed);
     const double nan = std::numeric_limits<double>::quiet_NaN();
     for (int b = 0; b < kBatch; ++b) {
         const int kind = b % 16;
         for (int j = 0; j < n; ++j)
             for (int i = j; i < n; ++i) {
-                T v = draw<T>(g);
-                if (kind == 5 && (i == n / 2 || j == n / 2)) v = T{};
-                if (kind == 12 && i == j) v = MV<T>::make((j % 2 ? -1.0 : 1.0) * (n + 2), 0.5);
-                if (kind == 14 && i == j) v = T{};
+                Scalar v = draw<Scalar>(g);
+                if (kind == 5 && (i == n / 2 || j == n / 2)) v = Scalar{};
+                if (kind == 12 && i == j) v = MV<Scalar>::make((j % 2 ? -1.0 : 1.0) * (n + 2), 0.5);
+                if (kind == 14 && i == j) v = Scalar{};
                 full(i, j, b) = full(j, i, b) = v;
             }
-        if (kind == 9 && n >= 2) full(1, 0, b) = full(0, 1, b) = MV<T>::make(nan, nan);
+        if (kind == 9 && n >= 2) full(1, 0, b) = full(0, 1, b) = MV<Scalar>::make(nan, nan);
     }
     return full;
 }
 
 // The uplo triangle of `full` in padded storage (ld n + 3, item gap 7), poison elsewhere.
-template <class T>
-Matrix<T> stored(const Matrix<T>& full, Uplo uplo) {
-    Matrix<T> a = ts::padded<T>(full.rows(), full.cols(), full.batch_size(), 3, 7);
-    ts::store<T>(a, full, Live::triangle(uplo));
+template <class Scalar>
+Matrix<Scalar> stored(const Matrix<Scalar>& full, Uplo uplo) {
+    Matrix<Scalar> a = ts::padded<Scalar>(full.rows(), full.cols(), full.batch_size(), 3, 7);
+    ts::store<Scalar>(a, full, Live::triangle(uplo));
     return a;
 }
 
-template <class T>
-Matrix<T> rhs(int n, int nrhs, unsigned seed, int batch = kBatch) {
-    Matrix<T> src(n, nrhs, batch);
+template <class Scalar>
+Matrix<Scalar> rhs(int n, int nrhs, unsigned seed, int batch = kBatch) {
+    Matrix<Scalar> src(n, nrhs, batch);
     std::mt19937 g(seed);
     for (int b = 0; b < batch; ++b)
         for (int c = 0; c < nrhs; ++c)
-            for (int i = 0; i < n; ++i) src(i, c, b) = draw<T>(g);
-    Matrix<T> m = ts::padded<T>(n, nrhs, batch, 2, 5);
-    ts::store<T>(m, src);
+            for (int i = 0; i < n; ++i) src(i, c, b) = draw<Scalar>(g);
+    Matrix<Scalar> m = ts::padded<Scalar>(n, nrhs, batch, 2, 5);
+    ts::store<Scalar>(m, src);
     return m;
 }
 
@@ -163,9 +163,9 @@ inline int singular_m(int b, int n) {
 }
 inline int phys_of(Uplo uplo, int n, int i) { return uplo == Uplo::Upper ? n - 1 - i : i; }
 
-template <class T>
-Matrix<T> blocked_batch(int n, int batch, Uplo uplo, unsigned seed) {
-    Matrix<T> full(n, n, batch);
+template <class Scalar>
+Matrix<Scalar> blocked_batch(int n, int batch, Uplo uplo, unsigned seed) {
+    Matrix<Scalar> full(n, n, batch);
     std::mt19937 g(seed);
     const double nan = std::numeric_limits<double>::quiet_NaN();
     for (int b = 0; b < batch; ++b) {
@@ -173,21 +173,21 @@ Matrix<T> blocked_batch(int n, int batch, Uplo uplo, unsigned seed) {
         const int m = singular_m(b, n);
         for (int j = 0; j < n; ++j)
             for (int i = j; i < n; ++i) {  // logical lower triangle
-                T v = draw<T>(g);
+                Scalar v = draw<Scalar>(g);
                 if (kd == BKind::pairs) {
                     const bool pair = i == j + 1 && j % 2 == 0, last = i == j && j == n - 1 && n % 2 == 1;
-                    v = pair ? MV<T>::make(n + 2.0 + j, 0.5) : last ? MV<T>::make(n + 2.0, 0.5) : T{};
+                    v = pair ? MV<Scalar>::make(n + 2.0 + j, 0.5) : last ? MV<Scalar>::make(n + 2.0, 0.5) : Scalar{};
                 }
                 if (kd == BKind::singular) {
-                    if (i >= m || j >= m) v = T{};
-                    else if (i == j) v = MV<T>::make((j % 2 ? -1.0 : 1.0) * (n + 2), 0.5);
+                    if (i >= m || j >= m) v = Scalar{};
+                    else if (i == j) v = MV<Scalar>::make((j % 2 ? -1.0 : 1.0) * (n + 2), 0.5);
                 }
                 const int pi = phys_of(uplo, n, i), pj = phys_of(uplo, n, j);
                 full(pi, pj, b) = full(pj, pi, b) = v;
             }
         if (kd == BKind::nan && n >= 2) {
             const int p1 = phys_of(uplo, n, 1), p0 = phys_of(uplo, n, 0);
-            full(p1, p0, b) = full(p0, p1, b) = MV<T>::make(nan, nan);
+            full(p1, p0, b) = full(p0, p1, b) = MV<Scalar>::make(nan, nan);
         }
     }
     return full;
@@ -203,18 +203,18 @@ inline std::vector<int32_t> forced_ipiv(BKind kd, int n, Uplo uplo) {
 }
 
 // ---- comparisons --------------------------------------------------------------------------------
-template <class T>
-bool has_nan(const T& v) {
-    if constexpr (std::is_floating_point_v<T>) return std::isnan(v);
+template <class Scalar>
+bool has_nan(const Scalar& v) {
+    if constexpr (std::is_floating_point_v<Scalar>) return std::isnan(v);
     else return std::isnan(v.real()) || std::isnan(v.imag());
 }
 
-template <class T>
-::testing::AssertionResult same_storage(const Matrix<T>& x, const Matrix<T>& y, const char* what) {
+template <class Scalar>
+::testing::AssertionResult same_storage(const Matrix<Scalar>& x, const Matrix<Scalar>& y, const char* what) {
     if (x.stride() != y.stride() || x.batch_size() != y.batch_size()) return ::testing::AssertionFailure() << what << ": layouts differ";
     const std::size_t count = static_cast<std::size_t>(x.stride()) * x.batch_size();
     for (std::size_t e = 0; e < count; ++e)
-        if (std::memcmp(x.data_ptr() + e, y.data_ptr() + e, sizeof(T)) != 0)
+        if (std::memcmp(x.data_ptr() + e, y.data_ptr() + e, sizeof(Scalar)) != 0)
             return ::testing::AssertionFailure() << what << " differs at element " << e << " (item " << e / x.stride() << ")";
     return ::testing::AssertionSuccess();
 }
@@ -328,10 +328,10 @@ struct Outs {
     unsigned char* canary;  // kCanary bytes per work-group
 };
 
-template <Uplo UL, class Tier, int WG, class T>
-void dev_sytrf(sycl::queue& q, const Matrix<T>& a, int32_t* ipiv, Outs o, int wg, std::size_t ws_offset = 0, Gws gw = {}) {
+template <Uplo UL, class Tier, int WG, class Scalar>
+void dev_sytrf(sycl::queue& q, const Matrix<Scalar>& a, int32_t* ipiv, Outs o, int wg, std::size_t ws_offset = 0, Gws gw = {}) {
     const int n = a.rows();
-    const std::size_t need = device::buffer_size<device::routine::sytrf<UL>, Tier, T>(n).local_bytes;
+    const std::size_t need = device::buffer_size<device::routine::sytrf<UL>, Tier, Scalar>(n).local_bytes;
     const auto av = a.kernel_view();
     launch(
         q, wg, need + kCanary,
@@ -347,10 +347,10 @@ void dev_sytrf(sycl::queue& q, const Matrix<T>& a, int32_t* ipiv, Outs o, int wg
         a.batch_size());
 }
 
-template <Uplo UL, class Tier, int WG, class T>
-void dev_sytrs(sycl::queue& q, const Matrix<T>& a, const Matrix<T>& bm, const int32_t* ipiv, Outs o, int wg, Gws gw = {}) {
+template <Uplo UL, class Tier, int WG, class Scalar>
+void dev_sytrs(sycl::queue& q, const Matrix<Scalar>& a, const Matrix<Scalar>& bm, const int32_t* ipiv, Outs o, int wg, Gws gw = {}) {
     const int n = a.rows(), nrhs = bm.cols();
-    const std::size_t need = device::buffer_size<device::routine::sytrs<UL>, Tier, T>(n, nrhs).local_bytes;
+    const std::size_t need = device::buffer_size<device::routine::sytrs<UL>, Tier, Scalar>(n, nrhs).local_bytes;
     const auto av = a.kernel_view();
     const auto bv = bm.kernel_view();
     launch(
@@ -367,10 +367,11 @@ void dev_sytrs(sycl::queue& q, const Matrix<T>& a, const Matrix<T>& bm, const in
         a.batch_size());
 }
 
-template <Uplo UL, class Tier, int WG, class T>
-void dev_sysv(sycl::queue& q, const Matrix<T>& a, const Matrix<T>& bm, int32_t* ipiv, Outs o, int wg, Gws gw = {}) {
+template <Uplo UL, class Tier, int WG, class Scalar>
+void dev_sysv(sycl::queue& q, const Matrix<Scalar>& a, const Matrix<Scalar>& bm, int32_t* ipiv, Outs o, int wg,
+              Gws gw = {}) {
     const int n = a.rows(), nrhs = bm.cols();
-    const std::size_t need = device::buffer_size<device::routine::sysv<UL>, Tier, T>(n, nrhs).local_bytes;
+    const std::size_t need = device::buffer_size<device::routine::sysv<UL>, Tier, Scalar>(n, nrhs).local_bytes;
     const auto av = a.kernel_view();
     const auto bv = bm.kernel_view();
     launch(
@@ -898,11 +899,11 @@ TYPED_TEST(DeviceApiSytrfTest, ArgumentErrorsAreUniformAndWriteNothing) {
 // ---- with_tier: host side, mock device limits ----------------------------------------------------
 device::DeviceLimits big_limits() { return {std::size_t(100) << 10, {16, 32}, 1024, true}; }
 
-template <class Rt, class T, class List = device::tiers_t<Rt, T>>
+template <class Rt, class Scalar, class List = device::tiers_t<Rt, Scalar>>
 std::string pick(const device::DeviceLimits& lim, int n) {
     std::string got = "none";
     try {
-        device::with_tier<Rt, T, List>(lim, n, [&]<class Tier>(Tier) {
+        device::with_tier<Rt, Scalar, List>(lim, n, [&]<class Tier>(Tier) {
             if constexpr (requires { Tier::nb; }) got = "blocked" + std::to_string(Tier::nb);
             else got = "cta" + std::to_string(Tier::n_max);
         });

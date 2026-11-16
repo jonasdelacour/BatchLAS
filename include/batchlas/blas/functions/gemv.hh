@@ -12,22 +12,22 @@ namespace batchlas {
 // Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
 // src/util/template-instantiations.hh. Keep in sync with the declarations below.
 namespace sig {
-template <typename T>
+template <typename Scalar>
 using gemv = Event(Queue&,
-                   const MatrixView<T, MatrixFormat::Dense>&,
-                   const VectorView<T>&,
-                   const VectorView<T>&,
-                   T, T, Transpose);
+                   const MatrixView<Scalar, MatrixFormat::Dense>&,
+                   const VectorView<Scalar>&,
+                   const VectorView<Scalar>&,
+                   Scalar, Scalar, Transpose);
 
 // Spelled out, not aliased to sig::gemv: a vendor parameter order may differ
 // from the public one (trsm's alpha is last).
-template <typename T>
+template <typename Scalar>
 using gemv_vendor = Event(Queue&,
-                          const MatrixView<T, MatrixFormat::Dense>&,
-                          const VectorView<T>&,
-                          const VectorView<T>&,
-                          T,
-                          T,
+                          const MatrixView<Scalar, MatrixFormat::Dense>&,
+                          const VectorView<Scalar>&,
+                          const VectorView<Scalar>&,
+                          Scalar,
+                          Scalar,
                           Transpose);
 }  // namespace sig
 
@@ -40,11 +40,11 @@ using gemv_vendor = Event(Queue&,
 /// `NoTrans`, and the other way round under `Trans` / `ConjTrans`. The vectors'
 /// `inc` (element spacing) and `stride` (batch spacing) are honoured.
 ///
-/// Also callable as `gemv(ctx, A, x, y, GemvOptions<T>{...})`, with owning
+/// Also callable as `gemv(ctx, A, x, y, GemvOptions<Scalar>{...})`, with owning
 /// `Matrix` / `Vector` arguments, and without `B` (taken from `ctx.backend()`).
 ///
 /// @tparam B  backend the call is compiled for; must match `ctx`'s device
-/// @tparam T  scalar type: `float`, `double`, `std::complex<float>` or `std::complex<double>`
+/// @tparam Scalar  scalar type: `float`, `double`, `std::complex<float>` or `std::complex<double>`
 /// @param[in]     ctx     queue the work is enqueued on
 /// @param[in]     A       batch of \f$m \times n\f$ matrices \f$A_b\f$; read only
 /// @param[in]     X       batch of vectors \f$x_b\f$, length \f$n\f$ under `NoTrans`, else \f$m\f$; read only
@@ -61,13 +61,13 @@ using gemv_vendor = Event(Queue&,
 ///       refuse goes to the vendor library, which reports it.
 /// @see GemvOptions, @ref md_docs_2cpp-api
 /// @ingroup api_blas2
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event gemv(Queue& ctx,
-                        const MatrixView<T, MatrixFormat::Dense>& A,
-                        const VectorView<T>& X,
-                        const VectorView<T>& Y,
-                        T alpha,
-                        T beta,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                        const VectorView<Scalar>& X,
+                        const VectorView<Scalar>& Y,
+                        Scalar alpha,
+                        Scalar beta,
                         Transpose transA);
 
 }  // namespace batchlas
@@ -83,7 +83,7 @@ namespace batchlas::backend {
 /// kernel family. Same arguments and semantics as batchlas::gemv:
 /// \f$y_b := \alpha \, \mathrm{op}(A_b) \, x_b + \beta \, y_b\f$.
 /// @tparam B  vendor backend this definition is compiled for
-/// @tparam T  scalar type
+/// @tparam Scalar  scalar type
 /// @param[in]     ctx     queue the work is enqueued on
 /// @param[in]     A       batch of \f$m \times n\f$ matrices \f$A_b\f$; read only
 /// @param[in]     X       batch of vectors \f$x_b\f$, length \f$n\f$ under `NoTrans`, else \f$m\f$; read only
@@ -94,13 +94,13 @@ namespace batchlas::backend {
 /// @param[in]     transA  selects \f$\mathrm{op}(A)\f$: \f$A\f$, \f$A^T\f$ or \f$A^H\f$
 /// @return event of the last enqueued vendor call; `Y` is valid once it completes
 /// @ingroup api_dispatch
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event gemv_vendor(Queue& ctx,
-                               const MatrixView<T, MatrixFormat::Dense>& A,
-                               const VectorView<T>& X,
-                               const VectorView<T>& Y,
-                               T alpha,
-                               T beta,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                               const VectorView<Scalar>& X,
+                               const VectorView<Scalar>& Y,
+                               Scalar alpha,
+                               Scalar beta,
                                Transpose transA);
 
 }  // namespace batchlas::backend

@@ -29,8 +29,8 @@ using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename device::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
+template <class Scalar> using real_of = typename device::Arith<Scalar>::real_t;
+template <class Scalar> constexpr bool is_cplx = device::Arith<Scalar>::is_complex;
 
 constexpr int kBatch = 1024;
 constexpr int kPeriod = 3;
@@ -41,34 +41,34 @@ std::uint64_t mix(std::uint64_t x) {
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
     return x ^ (x >> 31);
 }
-template <class R> R uval(std::uint64_t i) { return static_cast<R>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
-template <class T> T val(std::uint64_t i) {
-    if constexpr (is_cplx<T>) return T(uval<real_of<T>>(2 * i), uval<real_of<T>>(2 * i + 1));
-    else return uval<T>(i);
+template <class Real> Real uval(std::uint64_t i) { return static_cast<Real>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
+template <class Scalar> Scalar val(std::uint64_t i) {
+    if constexpr (is_cplx<Scalar>) return Scalar(uval<real_of<Scalar>>(2 * i), uval<real_of<Scalar>>(2 * i + 1));
+    else return uval<Scalar>(i);
 }
 // kBatch items of per_item values; item b repeats representative b % kPeriod.
-template <class T> std::vector<T> batched(int per_item, std::uint64_t seed) {
-    std::vector<T> h(std::size_t(kBatch) * per_item);
+template <class Scalar> std::vector<Scalar> batched(int per_item, std::uint64_t seed) {
+    std::vector<Scalar> h(std::size_t(kBatch) * per_item);
     for (int b = 0; b < kBatch; ++b)
-        for (int i = 0; i < per_item; ++i) h[std::size_t(b) * per_item + i] = val<T>(seed + std::uint64_t(b % kPeriod) * 1000003u + i);
+        for (int i = 0; i < per_item; ++i) h[std::size_t(b) * per_item + i] = val<Scalar>(seed + std::uint64_t(b % kPeriod) * 1000003u + i);
     return h;
 }
-template <class T> T nan_v() { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }
-template <class T> std::vector<T> poisoned(std::size_t n) { return std::vector<T>(n, nan_v<T>()); }
+template <class Scalar> Scalar nan_v() { return Scalar(std::numeric_limits<real_of<Scalar>>::quiet_NaN()); }
+template <class Scalar> std::vector<Scalar> poisoned(std::size_t n) { return std::vector<Scalar>(n, nan_v<Scalar>()); }
 template <class T> bool same_bits(const T& a, const T& b) { return std::memcmp(&a, &b, sizeof(T)) == 0; }
-template <class T> bool is_nan(const T& v) {
-    if constexpr (is_cplx<T>) return std::isnan(v.real());
+template <class Scalar> bool is_nan(const Scalar& v) {
+    if constexpr (is_cplx<Scalar>) return std::isnan(v.real());
     else return std::isnan(v);
 }
-template <class T> T conj_h(T v) {
-    if constexpr (is_cplx<T>) return std::conj(v);
+template <class Scalar> Scalar conj_h(Scalar v) {
+    if constexpr (is_cplx<Scalar>) return std::conj(v);
     else return v;
 }
-template <class T> using LD = std::conditional_t<is_cplx<T>, std::complex<long double>, long double>;
-template <class T> double rel(T got, LD<T> ref, long double scale) {
-    const long double d = std::abs(LD<T>(got) - ref);
+template <class Scalar> using LD = std::conditional_t<is_cplx<Scalar>, std::complex<long double>, long double>;
+template <class Scalar> double rel(Scalar got, LD<Scalar> ref, long double scale) {
+    const long double d = std::abs(LD<Scalar>(got) - ref);
     if (std::isnan(d)) return std::numeric_limits<double>::infinity();
-    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<T>>::min()));
+    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<Scalar>>::min()));
 }
 
 struct Dev {
@@ -105,11 +105,11 @@ struct Dev {
     std::vector<void*> ptrs;
 };
 
-template <class T> class DeviceLapackGesvdOrmbrTest : public ::testing::Test {
+template <class Scalar> class DeviceLapackGesvdOrmbrTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx.device().supports_sub_group_size(32)) GTEST_SKIP() << "the WorkGroup cases launch sub-group size 32";
-        if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
+        if (test_utils::lacks_fp64<Scalar>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
 };

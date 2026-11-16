@@ -33,14 +33,14 @@ int gesv_batch(const std::string& dtype, int n) {
     return b;
 }
 
-template <typename T>
+template <typename Scalar>
 struct GesvProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     int n, nrhs, batch, lda, ldb;
     std::size_t sa, sb;
-    UnifiedVector<T> A0, A, B0, X;
-    UnifiedVector<T*> pA0, pA, pB0, pX;
+    UnifiedVector<Scalar> A0, A, B0, X;
+    UnifiedVector<Scalar*> pA0, pA, pB0, pX;
     MV A0v, Av, B0v, Xv;
     UnifiedVector<std::int64_t> piv;
     UnifiedVector<std::int32_t> info;
@@ -58,7 +58,7 @@ struct GesvProblem {
         (void)B0v.fill_random(q, false, 777);
         q.wait();
     }
-    std::size_t workspace() { return gesv_buffer_size<kBackend, T>(q, Av, Xv); }
+    std::size_t workspace() { return gesv_buffer_size<kBackend, Scalar>(q, Av, Xv); }
     void reset() {  // the solve overwrites A with the factor and B with X
         (void)MV::copy(q, Av, A0v);
         (void)MV::copy(q, Xv, B0v);
@@ -68,7 +68,7 @@ struct GesvProblem {
         for (int b = 0; b < batch; ++b) info[std::size_t(b)] = 0;
     }
     void run(Span<std::byte> ws) {
-        (void)gesv<kBackend, T>(q, Av, Xv, piv.to_span(), ws, info.to_span());
+        (void)gesv<kBackend, Scalar>(q, Av, Xv, piv.to_span(), ws, info.to_span());
         q.wait();
     }
     std::pair<double, int> verify() {

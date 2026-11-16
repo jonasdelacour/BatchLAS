@@ -16,23 +16,23 @@ namespace {
 // computes only one of them and folds it in twice. That halves the arithmetic
 // against a literal reading of the formula, and is why this route can beat the
 // vendor by more than herk's does.
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_HER2K(minibench::State& state) {
-    using real_t = typename base_type<T>::type;
+    using real_t = typename base_type<Scalar>::type;
     const size_t n = state.range(0);
     const size_t k = state.range(1);
     const size_t batch = state.range(3);
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    auto A = Matrix<T>::Random(n, k, false, batch);
-    auto Bm = Matrix<T>::Random(n, k, false, batch);
-    auto C = Matrix<T>::Random(n, n, false, batch);
+    auto A = Matrix<Scalar>::Random(n, k, false, batch);
+    auto Bm = Matrix<Scalar>::Random(n, k, false, batch);
+    auto C = Matrix<Scalar>::Random(n, n, false, batch);
 
     state.SetKernel(q,
                     std::move(A),
                     std::move(Bm),
                     bench::pristine(C),
-                    T(1),
+                    Scalar(1),
                     real_t(1),
                     Uplo::Lower,
                     Transpose::NoTrans,

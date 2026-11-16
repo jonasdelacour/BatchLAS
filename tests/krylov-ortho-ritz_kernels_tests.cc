@@ -28,8 +28,8 @@ using namespace batchlas;
 
 namespace {
 
-template <class T> using real_of = typename device::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
+template <class Scalar> using real_of = typename device::Arith<Scalar>::real_t;
+template <class Scalar> constexpr bool is_cplx = device::Arith<Scalar>::is_complex;
 
 constexpr int kPeriod = 3;
 constexpr double kPoison = 1.0e6;  // in range, finite: an op that writes padding changes it
@@ -40,24 +40,24 @@ std::uint64_t mix(std::uint64_t x) {
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
     return x ^ (x >> 31);
 }
-template <class R> R uval(std::uint64_t i) { return static_cast<R>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
-template <class T> T val(std::uint64_t i) {
-    if constexpr (is_cplx<T>) return T(uval<real_of<T>>(2 * i), uval<real_of<T>>(2 * i + 1));
-    else return uval<T>(i);
+template <class Real> Real uval(std::uint64_t i) { return static_cast<Real>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
+template <class Scalar> Scalar val(std::uint64_t i) {
+    if constexpr (is_cplx<Scalar>) return Scalar(uval<real_of<Scalar>>(2 * i), uval<real_of<Scalar>>(2 * i + 1));
+    else return uval<Scalar>(i);
 }
 
 // kPeriod representatives copied to every item b from representative b % kPeriod.
-template <class T> std::vector<T> batched(int batch, int per_item, std::uint64_t seed) {
-    std::vector<T> h(static_cast<std::size_t>(batch) * per_item);
+template <class Scalar> std::vector<Scalar> batched(int batch, int per_item, std::uint64_t seed) {
+    std::vector<Scalar> h(static_cast<std::size_t>(batch) * per_item);
     for (int b = 0; b < kPeriod; ++b)
-        for (int i = 0; i < per_item; ++i) h[std::size_t(b) * per_item + i] = val<T>(seed + std::uint64_t(b) * 1000003u + i);
+        for (int i = 0; i < per_item; ++i) h[std::size_t(b) * per_item + i] = val<Scalar>(seed + std::uint64_t(b) * 1000003u + i);
     for (int b = kPeriod; b < batch; ++b)
         std::copy_n(h.data() + std::size_t(b % kPeriod) * per_item, per_item, h.data() + std::size_t(b) * per_item);
     return h;
 }
 
 template <class T> bool same_bits(const T& a, const T& b) { return std::memcmp(&a, &b, sizeof(T)) == 0; }
-template <class T> T poison() { return T(static_cast<real_of<T>>(kPoison)); }
+template <class Scalar> Scalar poison() { return Scalar(static_cast<real_of<Scalar>>(kPoison)); }
 
 // Items whose results differ from their representative's.
 template <class T> int bit_twins(const std::vector<T>& h, int batch, std::size_t per_item) {
@@ -96,10 +96,10 @@ struct Dev {
     std::vector<void*> ptrs;
 };
 
-template <class T> class KrylovKernelsTest : public ::testing::Test {
+template <class Scalar> class KrylovKernelsTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
+        if (test_utils::lacks_fp64<Scalar>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
 };

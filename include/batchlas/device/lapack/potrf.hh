@@ -110,7 +110,7 @@ namespace detail {
 // potf2's Rsqrt policy for the SLM forms: core inv_sqrt (rsqrt.approx + one Newton step on NVPTX
 // float, decision 10).
 struct InvSqrt {
-    template <class R> BATCHLAS_DEVICE_INLINE static R inv_sqrt(R a, R sqrt_a) { return ::batchlas::device::inv_sqrt(a, sqrt_a); }
+    template <class Real> BATCHLAS_DEVICE_INLINE static Real inv_sqrt(Real a, Real sqrt_a) { return ::batchlas::device::inv_sqrt(a, sqrt_a); }
 };
 
 // ---- the register tier: one matrix per Partition<N>, lane r holds row r of L ---------------
@@ -432,9 +432,9 @@ namespace detail {
 
 // A Hermitian matrix read through its lower triangle (i >= c), uplo at run time: p[i + c ld], or
 // conj(p[c + i ld]) when upper. A = U^H U is the lower recurrence on this view.
-template <class T> struct HermLower {
-    using value_type = std::remove_cv_t<T>;
-    T* p;
+template <class Scalar> struct HermLower {
+    using value_type = std::remove_cv_t<Scalar>;
+    Scalar* p;
     int ld;
     bool upper;
     BATCHLAS_DEVICE_INLINE value_type operator()(int i, int c) const {
@@ -445,16 +445,16 @@ template <class T> struct HermLower {
 // A local tile through a local-space pointer, so every access stays LDS/STS even where a body is
 // not inlined (the slot's tile is &acc[0] + slot * size: core's accessor base cannot carry it).
 template <class T> using local_ptr_t = sycl::multi_ptr<T, sycl::access::address_space::local_space, sycl::access::decorated::no>;
-template <class T> using SlmMat = Mat<T, Dyn, Dyn, Dyn, Mem::Local, Cyclic, local_ptr_t<T>, std::ptrdiff_t>;
-template <int M, int N, class T> using SlmTile = Mat<T, Ext<M>, Ext<N>, Ext<M>, Mem::Local, Cyclic, local_ptr_t<T>, int>;
+template <class Scalar> using SlmMat = Mat<Scalar, Dyn, Dyn, Dyn, Mem::Local, Cyclic, local_ptr_t<Scalar>, std::ptrdiff_t>;
+template <int M, int N, class Scalar> using SlmTile = Mat<Scalar, Ext<M>, Ext<N>, Ext<M>, Mem::Local, Cyclic, local_ptr_t<Scalar>, int>;
 
 template <class T> BATCHLAS_DEVICE_INLINE local_ptr_t<T> local_ptr(T* p) {
     return sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(p);
 }
-template <class T> BATCHLAS_DEVICE_INLINE SlmMat<T> slm_mat(T* p, int m, int n, int ld) {
+template <class Scalar> BATCHLAS_DEVICE_INLINE SlmMat<Scalar> slm_mat(Scalar* p, int m, int n, int ld) {
     return {local_ptr(p), Dyn{m}, Dyn{n}, Dyn{ld}};
 }
-template <int M, int N, class T> BATCHLAS_DEVICE_INLINE SlmTile<M, N, T> slm_tile(T* p) { return {local_ptr(p), {}, {}, {}}; }
+template <int M, int N, class Scalar> BATCHLAS_DEVICE_INLINE SlmTile<M, N, Scalar> slm_tile(Scalar* p) { return {local_ptr(p), {}, {}, {}}; }
 
 // dst(i, c) := src(i, c) for c <= i < n, diagonal made real (Hermitian input), and 0 in every
 // other row i < dst.rows(): the whole dst.rows() x n block (pad rows too) is written once.
@@ -682,13 +682,13 @@ template <Scope SC> inline void cta_barrier(const sycl::nd_item<1>& it) {
 
 // ONE matrix (S, diag, fail, off, Ag already offset). `upper` is a load/store transform: A = U^H U
 // is the same recurrence on S(i,c) = conj(A(c,i)). The scope's items are the executor.
-template <typename D, typename R, int NB, int TS, Scope SC>
+template <typename D, typename Real, int NB, int TS, Scope SC>
 inline void potrf_cta_run(const sycl::nd_item<1>& it, const sycl::sub_group& sg, bool p1_active, D* __restrict S, int lda,
-                     R* __restrict diag, int* __restrict fail, int* __restrict off, D* __restrict Ag, int ldg, int n,
+                     Real* __restrict diag, int* __restrict fail, int* __restrict off, D* __restrict Ag, int ldg, int n,
                      bool upper) {
     const RtGroup<SC> ex(it);
     const auto A = slm_mat(S, lda, n, lda);  // lda rows: the pad rows too
-    const Vec<R, Ext<NB>, Unit, Mem::Local> dg{diag, {}};
+    const Vec<Real, Ext<NB>, Unit, Mem::Local> dg{diag, {}};
     const int m2_0 = (n > NB) ? (n - NB) : 0;
     const int Rt0 = (m2_0 + TS - 1) / TS;
 
@@ -734,20 +734,20 @@ inline void potrf_cta_run(const sycl::nd_item<1>& it, const sycl::sub_group& sg,
 
 // ---- the public op's plumbing ------------------------------------------------------------------
 // std::complex operands are re-typed to the POD Cx at the pointer boundary (no Annex-G operator*).
-template <class T> struct dev_scalar {
-    using type = T;
+template <class Scalar> struct dev_scalar {
+    using type = Scalar;
 };
-template <class R> struct dev_scalar<std::complex<R>> {
-    using type = Cx<R>;
+template <class Real> struct dev_scalar<std::complex<Real>> {
+    using type = Cx<Real>;
 };
-template <class T> using dev_scalar_t = typename dev_scalar<std::remove_cv_t<T>>::type;
+template <class Scalar> using dev_scalar_t = typename dev_scalar<std::remove_cv_t<Scalar>>::type;
 template <class MA> BATCHLAS_DEVICE_INLINE dev_scalar_t<typename MA::value_type>* base_ptr(const MA& a) {
     return reinterpret_cast<dev_scalar_t<typename MA::value_type>*>(&a(0, 0));
 }
 template <class MA> BATCHLAS_DEVICE_INLINE int ld_of(const MA& a) { return static_cast<int>(a.ld); }
 
 // The register tier's order ceiling per type (complex<double>: a 32-row RowFrag spills).
-template <class T> inline constexpr int reg_max_n = (Arith<T>::is_complex && std::is_same_v<real_t<T>, double>) ? 16 : 32;
+template <class Scalar> inline constexpr int reg_max_n = (Arith<Scalar>::is_complex && std::is_same_v<real_t<Scalar>, double>) ? 16 : 32;
 
 template <Uplo UL, int N, class Ex, class MA> BATCHLAS_DEVICE_INLINE int potrf_reg_op(const Ex& ex, const MA& a, bool live) {
     using T = typename MA::value_type;
@@ -785,23 +785,23 @@ BATCHLAS_DEVICE_INLINE int potrf_cta_op(const WorkGroup<WG, SG>& ex, const MA& a
 
 // ---- the Blocked tier (and potrs / posv / potri's): any n on the in-group L3 -------------------
 // The L3 configuration of every Cholesky-family Blocked tier: 32 x 32 tiles, 8-deep slabs, 2 x 2
-// per item, so the executor is WorkGroup<256, 32>. Compile-time from T only (design B.3).
-template <class T> using PotrfBlockedCfg = l3::cfg::RegTiled<T, 32, 32, 8, 2, 2>;
+// per item, so the executor is WorkGroup<256, 32>. Compile-time from Scalar only (design B.3).
+template <class Scalar> using PotrfBlockedCfg = l3::cfg::RegTiled<Scalar, 32, 32, 8, 2, 2>;
 inline constexpr int kBlockedWg = 256;
 static_assert(PotrfBlockedCfg<float>::threads == kBlockedWg);
 
 // One plan for size and carve. The L3 stage slot is first in every Cholesky-family plan, so
 // posv's potrs carves the same bytes potrf did (potrs.hh static_asserts it).
-template <class T, int NB> struct PotrfBlockedPlan {
-    using D = dev_scalar_t<T>;
-    WsSlot<T> smem;     // BlockedCfg<T>'s stages
+template <class Scalar, int NB> struct PotrfBlockedPlan {
+    using D = dev_scalar_t<Scalar>;
+    WsSlot<Scalar> smem;     // BlockedCfg<Scalar>'s stages
     WsSlot<D> blk;      // the NB x NB diagonal block, ld NB
     WsSlot<real_t<D>> diag;
     WsSlot<int> fail;   // info of the current panel, written by lane 0 of sub-group 0
     WorkspaceSize size;
     static constexpr PotrfBlockedPlan make() {
         Plan p;
-        const auto s = p.take<T>(WsSpace::Local, static_cast<std::size_t>(PotrfBlockedCfg<T>::smem_elems));
+        const auto s = p.take<Scalar>(WsSpace::Local, static_cast<std::size_t>(PotrfBlockedCfg<Scalar>::smem_elems));
         const auto b = p.take<D>(WsSpace::Local, static_cast<std::size_t>(NB) * NB);
         const auto d = p.take<real_t<D>>(WsSpace::Local, static_cast<std::size_t>(NB));
         const auto f = p.take<int>(WsSpace::Local, 1);
@@ -992,16 +992,16 @@ template <Uplo UL> struct potrf {
 };
 }  // namespace routine
 
-template <Uplo UL, int N, bool Exact, class T> struct tier_info<routine::potrf<UL>, tier::Reg<N, Exact>, T> {
+template <Uplo UL, int N, bool Exact, class Scalar> struct tier_info<routine::potrf<UL>, tier::Reg<N, Exact>, Scalar> {
     static constexpr int wg_size = 32;  // one sub-group: 32 / N matrices
     static constexpr int sg_size = 32;
     using executor = Partition<N>;
     static constexpr int per_group = wg_size / N;
-    static constexpr bool admits(int n) { return n >= 0 && n <= N && N <= detail::reg_max_n<T>; }
+    static constexpr bool admits(int n) { return n >= 0 && n <= N && N <= detail::reg_max_n<Scalar>; }
     static constexpr WorkspaceSize buffer_size(int) { return {}; }
 };
-template <Uplo UL, int N, class Alg, class T> struct tier_info<routine::potrf<UL>, tier::Cta<N, Alg>, T> {
-    using D = detail::dev_scalar_t<T>;
+template <Uplo UL, int N, class Alg, class Scalar> struct tier_info<routine::potrf<UL>, tier::Cta<N, Alg>, Scalar> {
+    using D = detail::dev_scalar_t<Scalar>;
     static constexpr int wg_size = detail::cta_items(N, detail::CtaConst<D>::nb, detail::CtaConst<D>::ts);
     static constexpr int sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
@@ -1009,16 +1009,16 @@ template <Uplo UL, int N, class Alg, class T> struct tier_info<routine::potrf<UL
     static constexpr bool admits(int n) { return n >= 0 && n <= N; }
     static constexpr WorkspaceSize buffer_size(int n) { return detail::PotrfCtaPlan<D>::make(n).size; }
 };
-template <Uplo UL, int NB, class Alg, class T> struct tier_info<routine::potrf<UL>, tier::Blocked<NB, Alg>, T> {
+template <Uplo UL, int NB, class Alg, class Scalar> struct tier_info<routine::potrf<UL>, tier::Blocked<NB, Alg>, Scalar> {
     static constexpr int wg_size = detail::kBlockedWg;
     static constexpr int sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
-    static constexpr bool admits(int n) { return n >= 0 && NB <= detail::reg_max_n<T>; }
-    static constexpr WorkspaceSize buffer_size(int) { return detail::PotrfBlockedPlan<T, NB>::make().size; }
+    static constexpr bool admits(int n) { return n >= 0 && NB <= detail::reg_max_n<Scalar>; }
+    static constexpr WorkspaceSize buffer_size(int) { return detail::PotrfBlockedPlan<Scalar, NB>::make().size; }
 };
-template <Uplo UL, class T> struct tiers<routine::potrf<UL>, T> {
-    using type = std::conditional_t<(detail::reg_max_n<T> >= 32),
+template <Uplo UL, class Scalar> struct tiers<routine::potrf<UL>, Scalar> {
+    using type = std::conditional_t<(detail::reg_max_n<Scalar> >= 32),
                                     tier::list<tier::Reg<8>, tier::Reg<16>, tier::Reg<32>, tier::Cta<64>, tier::Cta<128>, tier::Blocked<32>>,
                                     tier::list<tier::Reg<8>, tier::Reg<16>, tier::Cta<64>, tier::Cta<128>, tier::Blocked<16>>>;
 };

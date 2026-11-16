@@ -51,23 +51,23 @@ std::string label(const Shape& s) {
 
 using test_support::spread;
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Problem {
     Queue& q;
     Shape s;
-    Matrix<T> A;
+    Matrix<Scalar> A;
     UnifiedVector<std::int64_t> piv;
     UnifiedVector<std::int32_t> info;
 
     Problem(Queue& queue, const Shape& shape)
-        : q(queue), s(shape), A(test_support::padded<T>(s.m, s.n, s.batch)),
+        : q(queue), s(shape), A(test_support::padded<Scalar>(s.m, s.n, s.batch)),
           piv(std::size_t(std::min(s.m, s.n)) * s.batch), info(std::size_t(s.batch)) {}
 
     // NETLIB writes int64 pivots; every native family packs 1-based int32 in the span's first half.
     static constexpr bool kInt64Pivots = B == Backend::NETLIB;
 
     void fill() {
-        T* p = A.data_ptr();
+        Scalar* p = A.data_ptr();
         const std::size_t per = std::size_t(A.stride()), ld = std::size_t(A.ld());
         for (std::size_t b = 0; b < std::size_t(s.batch); ++b)
             for (std::size_t j = 0; j < std::size_t(s.n); ++j)
@@ -75,7 +75,8 @@ struct Problem {
                     const std::size_t item = s.identical ? 0 : b, e = i + j * ld;
                     // Item 5 has a zero third column: info = 3 there (an active item in the masks).
                     const bool zero = !s.identical && b == 5 && j == 2;
-                    p[b * per + e] = zero ? T(0) : MatrixView<T>::make(spread(item, e, 1), spread(item, e, 2));
+                    p[b * per + e] = zero ? Scalar(0) : MatrixView<Scalar>::make(spread(item, e, 1),
+                                                                                 spread(item, e, 2));
                 }
     }
     mc::Case make_case() {
@@ -87,16 +88,16 @@ struct Problem {
         // Auto, and blocked's trsm and gemm, take the vendor unmasked and a native family masked.
         c.masked_reference = (s.spelling == "auto" || s.spelling == "blocked") && (B == Backend::CUDA || B == Backend::ROCM);
         c.prepare = [this] {
-            std::fill_n(A.data_ptr(), std::size_t(A.stride()) * s.batch, test_support::poison<T>());
+            std::fill_n(A.data_ptr(), std::size_t(A.stride()) * s.batch, test_support::poison<Scalar>());
             fill();
             std::fill(piv.begin(), piv.end(), std::int64_t(0x5A5A5A5A5A5A5A5A));
             std::fill(info.begin(), info.end(), std::int32_t(-77));
         };
         c.call = [this](Span<const std::uint8_t> mask, Span<std::byte> ws) {
-            getrf<B, T>(q, A.view().with_batch_mask(mask), piv.to_span(), ws, info.to_span());
+            getrf<B, Scalar>(q, A.view().with_batch_mask(mask), piv.to_span(), ws, info.to_span());
         };
         c.buffer_size = [this](Span<const std::uint8_t> mask) {
-            return getrf_buffer_size<B, T>(q, A.view().with_batch_mask(mask));
+            return getrf_buffer_size<B, Scalar>(q, A.view().with_batch_mask(mask));
         };
         c.outputs = [this] {
             const std::size_t mn = std::size_t(std::min(s.m, s.n));

@@ -80,9 +80,9 @@ const verify::Slack kClosedFormN16{0.16, "old bound 1e-5 absolute, ||T||_2 = 2"}
 
 }  // namespace
 
-template <typename T, Backend B>
+template <typename Real, Backend B>
 struct SteqrConfig {
-    using ScalarType = T;
+    using ScalarType = Real;
     static constexpr Backend BackendVal = B;
 };
 

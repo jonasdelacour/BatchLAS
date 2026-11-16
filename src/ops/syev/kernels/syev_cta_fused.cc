@@ -32,7 +32,7 @@ namespace batchlas {
 
 // Kernel name tag. Must live outside the anonymous namespace so it does not
 // depend on internal-linkage entities.
-template <typename T, size_t P, bool ComputeVectors>
+template <typename Scalar, size_t P, bool ComputeVectors>
 class SyevCtaFusedKernel;
 
 // Multiplier used when the caller passes 0 (the default): two warps per work-group
@@ -40,9 +40,9 @@ class SyevCtaFusedKernel;
 // P == 32 loses on graded input, complex float at P == 8 loses about 1% through
 // syev, and double gains nothing. Tuned on sm_89 only.
 // evidence: docs/perf/steqr.md#work-group-multiplier
-template <typename T, size_t P, bool ComputeVectors>
+template <typename Scalar, size_t P, bool ComputeVectors>
 inline constexpr int32_t kSyevCtaFusedAutoWgMultiplier =
-    (std::is_same_v<T, float> && (P == 8 || P == 16)) ? 2 : 1;
+    (std::is_same_v<Scalar, float> && (P == 8 || P == 16)) ? 2 : 1;
 
 // ---------------------------------------------------------------------------
 // Monolithic (fused) CTA symmetric/Hermitian eigensolver: one problem stays resident
@@ -56,17 +56,17 @@ inline constexpr int32_t kSyevCtaFusedAutoWgMultiplier =
 // evidence: docs/perf/syev.md#syev-the-fused-cta-kernel-design
 // ---------------------------------------------------------------------------
 
-template <typename T, size_t P, bool ComputeVectors>
+template <typename Scalar, size_t P, bool ComputeVectors>
 inline void syev_cta_fused_impl(Queue& ctx,
-                                MatrixView<T, MatrixFormat::Dense>& a,
-                                typename base_type<T>::type* w_ptr,
+                                MatrixView<Scalar, MatrixFormat::Dense>& a,
+                                typename base_type<Scalar>::type* w_ptr,
                                 int32_t n,
                                 bool upper,
-                                const SteqrParams<T>& params,
+                                const SteqrParams<Scalar>& params,
                                 size_t cta_wg_size_multiplier,
                                 int32_t* info,
                                 const std::uint8_t* mask) {
-    using Real = typename base_type<T>::type;
+    using Real = typename base_type<Scalar>::type;
 
     const auto batch_size = a.batch_size();
 
@@ -80,7 +80,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
 
         // The tile layout of the one body (device/lapack/syev.hh cta_layout: real vectors on
         // ONE P+1-padded tile, Hermitian vectors with a separate real accumulator).
-        using Lay = device::detail::cta_layout<ComputeVectors, static_cast<int>(P), T>;
+        using Lay = device::detail::cta_layout<ComputeVectors, static_cast<int>(P), Scalar>;
         constexpr int32_t LDQ = Lay::ldq;
         constexpr int32_t LDA = Lay::lda;
         constexpr bool kSeparateQTile = Lay::separate_q;
@@ -90,7 +90,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
         const int32_t base_wg_size = std::lcm<int32_t>(static_cast<int32_t>(P), sg_size);
         // 0 asks for the tuned value; any explicit value is taken as given.
         int32_t wg_size_multiplier = cta_wg_size_multiplier == 0
-                                         ? kSyevCtaFusedAutoWgMultiplier<T, P, ComputeVectors>
+                                         ? kSyevCtaFusedAutoWgMultiplier<Scalar, P, ComputeVectors>
                                          : std::max<int32_t>(int32_t(1),
                                                              static_cast<int32_t>(cta_wg_size_multiplier));
         int32_t wg_size = base_wg_size * wg_size_multiplier;
@@ -104,7 +104,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
 
         // Clamp by local memory (real path: one tile + two length-P vectors, as sytrd_cta).
         {
-            const std::size_t bytes_per_prob = (kATileElems + 2 * static_cast<std::size_t>(P)) * sizeof(T)
+            const std::size_t bytes_per_prob = (kATileElems + 2 * static_cast<std::size_t>(P)) * sizeof(Scalar)
                                              + (kSeparateQTile ? kQTileElems * sizeof(Real) : 0);
             wg_size_multiplier = impl::cta_wg_multiplier("syev_cta_fused", wg_size_multiplier,
                                                          base_wg_size / static_cast<int32_t>(P), bytes_per_prob,
@@ -116,9 +116,9 @@ inline void syev_cta_fused_impl(Queue& ctx,
         const int32_t num_wg = (static_cast<int32_t>(batch_size) + probs_per_wg - 1) / probs_per_wg;
         const int32_t global_size = num_wg * wg_size;
 
-        auto A_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * kATileElems), cgh);
-        auto V_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
-        auto W_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
+        auto A_local = sycl::local_accessor<Scalar, 1>(sycl::range<1>(probs_per_wg * kATileElems), cgh);
+        auto V_local = sycl::local_accessor<Scalar, 1>(sycl::range<1>(probs_per_wg * P), cgh);
+        auto W_local = sycl::local_accessor<Scalar, 1>(sycl::range<1>(probs_per_wg * P), cgh);
         auto Q_local = sycl::local_accessor<Real, 1>(
             sycl::range<1>(kSeparateQTile ? (probs_per_wg * kQTileElems) : 1), cgh);
 
@@ -134,7 +134,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
         // A local so `[=]` copies a pointer; nullptr (status not requested) makes info_store a no-op.
         int32_t* const info_dev = info;
 
-        batchlas::impl::parallel_for<SyevCtaFusedKernel<T, P, ComputeVectors>>(cgh,
+        batchlas::impl::parallel_for<SyevCtaFusedKernel<Scalar, P, ComputeVectors>>(cgh,
             sycl::nd_range<1>(global_size, wg_size),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const auto wg = it.get_group();
@@ -167,7 +167,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
                 const device::detail::cta_opts o{max_sweeps, shift_strategy, do_sort, ascending};
                 // The one body (device::syev<J, UL, tier::Cta<P>>'s too): load, sytd2, sweeps,
                 // back-transform; the stores skip a dead chunk.
-                device::detail::syev_cta_run<T, P, ComputeVectors, LDA, LDQ>(
+                device::detail::syev_cta_run<Scalar, P, ComputeVectors, LDA, LDQ>(
                     part, solve_part, A_local, base_a, V_local, base_v, W_local, base_w, Q_local, base_q, A_prob,
                     device::mat(A_prob.data(), nn, nn, A_prob.ld()), W + static_cast<int64_t>(prob_id) * nn, nn, is_upper, live, o,
                     [&](bool failed) BATCHLAS_DEVICE_BODY {
@@ -179,14 +179,14 @@ inline void syev_cta_fused_impl(Queue& ctx,
     });
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event syev_cta_fused(Queue& ctx,
-                     const MatrixView<T, MatrixFormat::Dense>& a_in,
-                     Span<typename base_type<T>::type> eigenvalues,
+                     const MatrixView<Scalar, MatrixFormat::Dense>& a_in,
+                     Span<typename base_type<Scalar>::type> eigenvalues,
                      JobType jobz,
                      Uplo uplo,
                      const Span<std::byte>& ws,
-                     SteqrParams<T> steqr_params,
+                     SteqrParams<Scalar> steqr_params,
                      size_t cta_wg_size_multiplier,
                      Span<int32_t> info) {
     const std::uint8_t* mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("syev_cta_fused", a_in));
@@ -215,7 +215,7 @@ Event syev_cta_fused(Queue& ctx,
 
     // syev_cta's robustness bump, unless the caller tuned the params.
     {
-        const SteqrParams<T> defaults{};
+        const SteqrParams<Scalar> defaults{};
         if (steqr_params.max_sweeps == defaults.max_sweeps &&
             steqr_params.cta_shift_strategy == defaults.cta_shift_strategy) {
             steqr_params.max_sweeps = 400;
@@ -223,7 +223,7 @@ Event syev_cta_fused(Queue& ctx,
         }
     }
 
-    auto& a = const_cast<MatrixView<T, MatrixFormat::Dense>&>(a_in);
+    auto& a = const_cast<MatrixView<Scalar, MatrixFormat::Dense>&>(a_in);
     auto* w_ptr = eigenvalues.data();
 
     const int32_t n = static_cast<int32_t>(n64);
@@ -237,9 +237,9 @@ Event syev_cta_fused(Queue& ctx,
     auto launch = [&](auto P_tag) {
         constexpr size_t P = decltype(P_tag)::value;
         if (vectors) {
-            syev_cta_fused_impl<T, P, true>(ctx, a, w_ptr, n, upper, steqr_params, cta_wg_size_multiplier, info_ptr, mask);
+            syev_cta_fused_impl<Scalar, P, true>(ctx, a, w_ptr, n, upper, steqr_params, cta_wg_size_multiplier, info_ptr, mask);
         } else {
-            syev_cta_fused_impl<T, P, false>(ctx, a, w_ptr, n, upper, steqr_params, cta_wg_size_multiplier, info_ptr, mask);
+            syev_cta_fused_impl<Scalar, P, false>(ctx, a, w_ptr, n, upper, steqr_params, cta_wg_size_multiplier, info_ptr, mask);
         }
     };
 
@@ -256,11 +256,11 @@ Event syev_cta_fused(Queue& ctx,
     return ctx.get_event();
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t syev_cta_fused_buffer_size(Queue& ctx,
-                                  const MatrixView<T, MatrixFormat::Dense>& a,
+                                  const MatrixView<Scalar, MatrixFormat::Dense>& a,
                                   JobType jobz,
-                                  SteqrParams<T> steqr_params) {
+                                  SteqrParams<Scalar> steqr_params) {
     (void)ctx;
     (void)jobz;
     (void)steqr_params;

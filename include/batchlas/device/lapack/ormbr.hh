@@ -28,11 +28,11 @@ template <Vect VT, Side SD, Transpose TR> struct ormbr {
 };
 }  // namespace routine
 
-template <Vect VT, Side SD, Transpose TR, class T> struct tiers<routine::ormbr<VT, SD, TR>, T> {
+template <Vect VT, Side SD, Transpose TR, class Scalar> struct tiers<routine::ormbr<VT, SD, TR>, Scalar> {
     using type = tier::list<tier::Blocked<1>>;
 };
 // No workspace (C is updated in place); any work-group width runs it.
-template <Vect VT, Side SD, Transpose TR, class T> struct tier_info<routine::ormbr<VT, SD, TR>, tier::Blocked<1>, T> {
+template <Vect VT, Side SD, Transpose TR, class Scalar> struct tier_info<routine::ormbr<VT, SD, TR>, tier::Blocked<1>, Scalar> {
     static constexpr int wg_size = 256, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;

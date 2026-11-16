@@ -32,9 +32,9 @@ namespace ts = test_support;
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct OrmqrCtaConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 

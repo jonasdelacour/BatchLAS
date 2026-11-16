@@ -27,20 +27,20 @@ namespace {
 
 std::uint64_t test_hash(std::uint64_t i) { return (i + 1) * 0x9E3779B97F4A7C15ull; }
 
-// A positive integer below 2^(digits-1) / count: any partial sum of `count` of them is exact in T,
+// A positive integer below 2^(digits-1) / count: any partial sum of `count` of them is exact in Real,
 // so a group sum must be EXACT in any order, and a full sum keeps ~digits significant bits, so a
 // result rounded on its way out cannot pass.
-template <typename T>
-T exact_sum_value(std::uint64_t i, std::uint64_t count) {
-    const std::uint64_t m = (std::uint64_t(1) << (std::numeric_limits<T>::digits - 1)) / count;
-    return static_cast<T>(m / 2 + (test_hash(i) >> 11) % (m / 2 + 1));
+template <typename Real>
+Real exact_sum_value(std::uint64_t i, std::uint64_t count) {
+    const std::uint64_t m = (std::uint64_t(1) << (std::numeric_limits<Real>::digits - 1)) / count;
+    return static_cast<Real>(m / 2 + (test_hash(i) >> 11) % (m / 2 + 1));
 }
 
 // A signed value in [-0.5, 0.5) with a full mantissa, for max/min.
-template <typename T>
-T full_mantissa_value(std::uint64_t i) {
-    constexpr int kBits = std::numeric_limits<T>::digits;
-    return static_cast<T>(std::ldexp(static_cast<double>(test_hash(i) >> (64 - kBits)), -kBits)) - T(0.5);
+template <typename Real>
+Real full_mantissa_value(std::uint64_t i) {
+    constexpr int kBits = std::numeric_limits<Real>::digits;
+    return static_cast<Real>(std::ldexp(static_cast<double>(test_hash(i) >> (64 - kBits)), -kBits)) - Real(0.5);
 }
 
 template <typename T>
@@ -106,11 +106,11 @@ int check_portable_group_reductions(Queue& ctx, size_t wg, const char* where) {
     return bad;
 }
 
-template <typename T>
+template <typename Real>
 void check_portable_group_reductions_on(Queue& ctx, const char* where) {
     const size_t max_wg = std::min<size_t>(1024, ctx.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     for (size_t wg : {size_t(1), size_t(16), size_t(32), size_t(33), size_t(100), size_t(256), max_wg}) {
-        if (wg <= max_wg && check_portable_group_reductions<T>(ctx, wg, where) != 0) return;
+        if (wg <= max_wg && check_portable_group_reductions<Real>(ctx, wg, where) != 0) return;
     }
 }
 

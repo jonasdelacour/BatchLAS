@@ -33,9 +33,9 @@ using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename device::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
-template <class T> using LD = std::conditional_t<is_cplx<T>, std::complex<long double>, long double>;
+template <class Scalar> using real_of = typename device::Arith<Scalar>::real_t;
+template <class Scalar> constexpr bool is_cplx = device::Arith<Scalar>::is_complex;
+template <class Scalar> using LD = std::conditional_t<is_cplx<Scalar>, std::complex<long double>, long double>;
 
 constexpr int kBatch = 1024;
 constexpr int kPeriod = 4;
@@ -46,24 +46,24 @@ std::uint64_t mix(std::uint64_t x) {
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
     return x ^ (x >> 31);
 }
-template <class R> R uval(std::uint64_t i) { return static_cast<R>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
-template <class T> T val(std::uint64_t i) {
-    if constexpr (is_cplx<T>) return T(uval<real_of<T>>(2 * i), uval<real_of<T>>(2 * i + 1));
-    else return uval<T>(i);
+template <class Real> Real uval(std::uint64_t i) { return static_cast<Real>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
+template <class Scalar> Scalar val(std::uint64_t i) {
+    if constexpr (is_cplx<Scalar>) return Scalar(uval<real_of<Scalar>>(2 * i), uval<real_of<Scalar>>(2 * i + 1));
+    else return uval<Scalar>(i);
 }
 template <class T> bool same_bits(const T& a, const T& b) { return std::memcmp(&a, &b, sizeof(T)) == 0; }
-template <class T> T nan_of() { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }
+template <class Scalar> Scalar nan_of() { return Scalar(std::numeric_limits<real_of<Scalar>>::quiet_NaN()); }
 // Finite poison: a read of it moves the result far past any tolerance without a NaN.
-template <class T> T poison_of() {
-    if constexpr (is_cplx<T>) return T(real_of<T>(1e18), real_of<T>(-1e18));
-    else return T(1e18);
+template <class Scalar> Scalar poison_of() {
+    if constexpr (is_cplx<Scalar>) return Scalar(real_of<Scalar>(1e18), real_of<Scalar>(-1e18));
+    else return Scalar(1e18);
 }
 
 // kPeriod representatives (edited by fix(rep, item pointer)) copied to every item b from b % kPeriod.
-template <class T, class Fix> std::vector<T> batched(int per_item, std::uint64_t seed, Fix fix) {
-    std::vector<T> h(static_cast<std::size_t>(kBatch) * per_item);
+template <class Scalar, class Fix> std::vector<Scalar> batched(int per_item, std::uint64_t seed, Fix fix) {
+    std::vector<Scalar> h(static_cast<std::size_t>(kBatch) * per_item);
     for (int b = 0; b < kPeriod; ++b) {
-        for (int i = 0; i < per_item; ++i) h[std::size_t(b) * per_item + i] = val<T>(seed + std::uint64_t(b) * 1000003u + i);
+        for (int i = 0; i < per_item; ++i) h[std::size_t(b) * per_item + i] = val<Scalar>(seed + std::uint64_t(b) * 1000003u + i);
         fix(b, h.data() + std::size_t(b) * per_item);
     }
     for (int b = kPeriod; b < kBatch; ++b)
@@ -91,13 +91,13 @@ template <class T> int period_bitdiff(const std::vector<T>& got, int per_item) {
     return d;
 }
 
-template <class T> double rel(T got, LD<T> ref, long double scale) {
-    const long double d = std::abs(LD<T>(got) - ref);
+template <class Scalar> double rel(Scalar got, LD<Scalar> ref, long double scale) {
+    const long double d = std::abs(LD<Scalar>(got) - ref);
     if (std::isnan(d)) return std::numeric_limits<double>::infinity();
-    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<T>>::min()));
+    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<Scalar>>::min()));
 }
-template <class T> LD<T> conj_h(LD<T> v) {
-    if constexpr (is_cplx<T>) return std::conj(v);
+template <class Scalar> LD<Scalar> conj_h(LD<Scalar> v) {
+    if constexpr (is_cplx<Scalar>) return std::conj(v);
     else return v;
 }
 
@@ -133,12 +133,12 @@ struct Dev {
     std::vector<void*> ptrs;
 };
 
-template <class T> class DeviceLapackGeqrfTest : public ::testing::Test {
+template <class Scalar> class DeviceLapackGeqrfTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx) GTEST_SKIP() << "no SYCL device visible";
         if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "device tests launch sub-group size 32";
-        if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
+        if (test_utils::lacks_fp64<Scalar>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
 };
@@ -146,13 +146,13 @@ using Types = ::testing::Types<float, double, std::complex<float>, std::complex<
 TYPED_TEST_SUITE(DeviceLapackGeqrfTest, Types);
 
 // ---- Arith<sycl_device::Cx>: the predicates larfg_scalars reads on the kernels' scalar ----------
-template <class R> void cx_predicates() {
-    using Cx = sycl_device::Cx<R>;
+template <class Real> void cx_predicates() {
+    using Cx = sycl_device::Cx<Real>;
     using A = device::Arith<Cx>;
-    const R inf = std::numeric_limits<R>::infinity(), nan = std::numeric_limits<R>::quiet_NaN();
-    const R den = std::numeric_limits<R>::denorm_min();
-    const Cx cases[] = {{R(0), R(0)}, {R(-0.0), R(0)}, {R(0), R(-0.0)}, {den, R(0)}, {R(0), den}, {inf, R(0)},
-                        {R(0), -inf}, {nan, R(1)}, {R(1), nan}, {R(2), R(-3)}};
+    const Real inf = std::numeric_limits<Real>::infinity(), nan = std::numeric_limits<Real>::quiet_NaN();
+    const Real den = std::numeric_limits<Real>::denorm_min();
+    const Cx cases[] = {{Real(0), Real(0)}, {Real(-0.0), Real(0)}, {Real(0), Real(-0.0)}, {den, Real(0)}, {Real(0), den}, {inf, Real(0)},
+                        {Real(0), -inf}, {nan, Real(1)}, {Real(1), nan}, {Real(2), Real(-3)}};
     for (const Cx& c : cases) {
         EXPECT_EQ(A::is_zero(c), sycl_device::dev_is_zero(c)) << c.re << " " << c.im;
         EXPECT_EQ(A::isfinite(c), sycl_device::dev_isfinite(c)) << c.re << " " << c.im;
@@ -370,15 +370,16 @@ TYPED_TEST(DeviceLapackGeqrfTest, TeamSlotFolds) {
 // One reflector (column j = 2, tau) applied to a row-fragment panel two ways: team partials in
 // slots + ger (RtGroup<Group>, 64 items, rows >= m dead), and the local-tile column-sum form on
 // SgpPartition<8> (four 8 x 8 panels per sub-group, chunk C = 4). Host: (I - tau v v^H) A.
-template <class T> void host_frag_apply(const T* a, int m, int n, int j, T tau, std::vector<LD<T>>& out) {
-    out.assign(std::size_t(m) * n, LD<T>(0));
+template <class Scalar> void host_frag_apply(const Scalar* a, int m, int n, int j, Scalar tau,
+                                             std::vector<LD<Scalar>>& out) {
+    out.assign(std::size_t(m) * n, LD<Scalar>(0));
     for (int c = 0; c < n; ++c)
-        for (int r = 0; r < m; ++r) out[c * m + r] = LD<T>(a[c * m + r]);
-    auto v = [&](int r) { return r < j ? LD<T>(0) : (r == j ? LD<T>(1) : LD<T>(a[j * m + r])); };
+        for (int r = 0; r < m; ++r) out[c * m + r] = LD<Scalar>(a[c * m + r]);
+    auto v = [&](int r) { return r < j ? LD<Scalar>(0) : (r == j ? LD<Scalar>(1) : LD<Scalar>(a[j * m + r])); };
     for (int c = j + 1; c < n; ++c) {
-        LD<T> w(0);
-        for (int r = 0; r < m; ++r) w += conj_h<T>(v(r)) * out[c * m + r];
-        for (int r = 0; r < m; ++r) out[c * m + r] -= LD<T>(tau) * v(r) * w;
+        LD<Scalar> w(0);
+        for (int r = 0; r < m; ++r) w += conj_h<Scalar>(v(r)) * out[c * m + r];
+        for (int r = 0; r < m; ++r) out[c * m + r] -= LD<Scalar>(tau) * v(r) * w;
     }
 }
 

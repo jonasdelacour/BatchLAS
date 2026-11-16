@@ -26,9 +26,9 @@ using namespace batchlas;
 
 namespace {
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct OrmqrBlockedConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 
@@ -104,9 +104,9 @@ inline int32_t get_block_size_or_default(int32_t def) {
 // ||A0 - QR||_F / ||A0||_F by d ||R(j,:)|| / ||A0||_F, about d / sqrt(n) for an average row: 1.25e-6 at
 // n = 64, 1/49 of the float bound 16 n u = 6.1e-5. 1/64 catches it wherever ||R(j,:)|| >= 0.76 of the
 // average (j <= 45 of 64 on random input); measured need 0.007 of the unslacked bound.
-template <typename T>
+template <typename Scalar>
 batchlas::verify::Slack recon_slack() {
-    if constexpr (std::is_same_v<batchlas::float_t<T>, float>)
+    if constexpr (std::is_same_v<batchlas::float_t<Scalar>, float>)
         return {1.0 / 64, "the old 1e-5 entrywise tolerance vs the reference ormqr (1e-5/sqrt(64) = 1/49 of the bound)"};
     else
         return {1.0, "the library bound (double's old 1e-10 entrywise is looser)"};
@@ -356,24 +356,24 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceBatched) {
 
 // L2 batch chunking fixtures (docs/perf/qr.md#qr-l2-batch-chunking): k = 69 reflectors of order 73
 // (three blocks of 32) at a padded ld and odd stride, factored by the public geqrf.
-template <typename T>
+template <typename Scalar>
 struct ChunkProblem {
     static constexpr int nq = 73, k = 69, q = 37;
     int batch = 0, lda = nq + 5, sa = (nq + 5) * k + 11;
-    UnifiedVector<T> a, tau;
-    UnifiedVector<T*> ptrs;   // the vendor geqrf is a pointer-array API
-    MatrixView<T, MatrixFormat::Dense> A() { return {a.data(), nq, k, lda, sa, batch, ptrs.data()}; }
-    VectorView<T> tau_view() { return VectorView<T>(tau.data(), k, batch, 1, k); }
+    UnifiedVector<Scalar> a, tau;
+    UnifiedVector<Scalar*> ptrs;   // the vendor geqrf is a pointer-array API
+    MatrixView<Scalar, MatrixFormat::Dense> A() { return {a.data(), nq, k, lda, sa, batch, ptrs.data()}; }
+    VectorView<Scalar> tau_view() { return VectorView<Scalar>(tau.data(), k, batch, 1, k); }
 };
 
-template <typename T>
-ChunkProblem<T> make_chunk_problem(Queue& ctx, int batch, bool identical) {
-    ChunkProblem<T> p;
+template <typename Scalar>
+ChunkProblem<Scalar> make_chunk_problem(Queue& ctx, int batch, bool identical) {
+    ChunkProblem<Scalar> p;
     p.batch = batch;
-    p.a = UnifiedVector<T>(size_t(p.sa) * batch, T(-7));
-    p.tau = UnifiedVector<T>(size_t(p.k) * batch);
-    p.ptrs = UnifiedVector<T*>(size_t(batch), nullptr);
-    const auto R = Matrix<T, MatrixFormat::Dense>::Random(p.nq, p.k, false, identical ? 1 : batch, 4711u);
+    p.a = UnifiedVector<Scalar>(size_t(p.sa) * batch, Scalar(-7));
+    p.tau = UnifiedVector<Scalar>(size_t(p.k) * batch);
+    p.ptrs = UnifiedVector<Scalar*>(size_t(batch), nullptr);
+    const auto R = Matrix<Scalar, MatrixFormat::Dense>::Random(p.nq, p.k, false, identical ? 1 : batch, 4711u);
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < p.k; ++j)
             for (int i = 0; i < p.nq; ++i) p.a[size_t(b) * p.sa + size_t(j) * p.lda + i] = R(i, j, identical ? 0 : b);
@@ -386,16 +386,16 @@ ChunkProblem<T> make_chunk_problem(Queue& ctx, int batch, bool identical) {
 }
 
 // C (Left: nq x q, Right: q x nq) at its own padded ld and odd stride, random with a nonzero imaginary part.
-template <typename T>
-std::pair<UnifiedVector<T>, MatrixView<T, MatrixFormat::Dense>> make_chunk_c(int rows, int cols, int batch,
-                                                                            unsigned seed, bool identical) {
+template <typename Scalar>
+std::pair<UnifiedVector<Scalar>, MatrixView<Scalar, MatrixFormat::Dense>> make_chunk_c(int rows, int cols, int batch,
+                                                                                       unsigned seed, bool identical) {
     const int ldc = rows + 3, sc = ldc * cols + 7;
-    UnifiedVector<T> c(size_t(sc) * batch, T(5));
-    const auto R = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, false, identical ? 1 : batch, seed);
+    UnifiedVector<Scalar> c(size_t(sc) * batch, Scalar(5));
+    const auto R = Matrix<Scalar, MatrixFormat::Dense>::Random(rows, cols, false, identical ? 1 : batch, seed);
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < cols; ++j)
             for (int i = 0; i < rows; ++i) c[size_t(b) * sc + size_t(j) * ldc + i] = R(i, j, identical ? 0 : b);
-    MatrixView<T, MatrixFormat::Dense> v(c.data(), rows, cols, ldc, sc, batch);
+    MatrixView<Scalar, MatrixFormat::Dense> v(c.data(), rows, cols, ldc, sc, batch);
     return {std::move(c), v};
 }
 

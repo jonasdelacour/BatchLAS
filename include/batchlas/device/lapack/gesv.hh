@@ -16,13 +16,13 @@
 namespace batchlas::device::detail {
 
 // x[k] -= m * x[k]@src, k0 <= k < min(N, kend), where act; collective: every lane reaches every k.
-template <int N, class Px, class T>
-BATCHLAS_DEVICE_INLINE void ger_frag_bcast(const Px& px, T m, T (&x)[N], std::uint32_t src, int k0, int kend, bool act) {
-    using Ar = arith_t<arith::Fma, T>;
+template <int N, class Px, class Scalar>
+BATCHLAS_DEVICE_INLINE void ger_frag_bcast(const Px& px, Scalar m, Scalar (&x)[N], std::uint32_t src, int k0, int kend, bool act) {
+    using Ar = arith_t<arith::Fma, Scalar>;
 BATCHLAS_UNROLL_FULL
     for (int k = k0; k < N; ++k) {
         if (k >= kend) continue;
-        const T u = px.bcast(x[k], src);
+        const Scalar u = px.bcast(x[k], src);
         if (act) x[k] = Ar::sub(x[k], Ar::mul(m, u));
     }
 }
@@ -40,12 +40,12 @@ struct gesv {
 
 /// gesv's Blocked<NB>: getrf's Blocked executor and local plan; getrs reuses the same bytes.
 /// buffer_size(n[, nrhs]): nrhs does not enter it.
-template <int NB, class Alg, class T>
-struct tier_info<routine::gesv, tier::Blocked<NB, Alg>, T> : tier_info<routine::getrf, tier::Blocked<NB, Alg>, T> {
-    using tier_info<routine::getrf, tier::Blocked<NB, Alg>, T>::buffer_size;
+template <int NB, class Alg, class Scalar>
+struct tier_info<routine::gesv, tier::Blocked<NB, Alg>, Scalar> : tier_info<routine::getrf, tier::Blocked<NB, Alg>, Scalar> {
+    using tier_info<routine::getrf, tier::Blocked<NB, Alg>, Scalar>::buffer_size;
     static constexpr WorkspaceSize buffer_size(int n, int) { return buffer_size(n); }
 };
-template <class T> struct tiers<routine::gesv, T> {
+template <class Scalar> struct tiers<routine::gesv, Scalar> {
     using type = tier::list<tier::Blocked<32>>;
 };
 

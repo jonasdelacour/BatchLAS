@@ -15,9 +15,9 @@
 
 using namespace batchlas;
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct TrmmConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 
@@ -32,10 +32,10 @@ protected:
 TYPED_TEST_SUITE(TrmmTest, TrmmTestTypes);
 
 // Componentwise error of C = op(A) B (Left) or B op(A) (Right), A read as its triangle; k = A's order.
-template <typename T>
-double trmm_error(Queue& ctx, const Matrix<T>& A, const Matrix<T>& B, const Matrix<T>& C, Side side, Uplo uplo, Transpose trans,
+template <typename Scalar>
+double trmm_error(Queue& ctx, const Matrix<Scalar>& A, const Matrix<Scalar>& B, const Matrix<Scalar>& C, Side side, Uplo uplo, Transpose trans,
                   Diag diag) {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     auto tri = A.clone();
     tri.triangularize(ctx, uplo, diag).wait();
     if (side == Side::Left)

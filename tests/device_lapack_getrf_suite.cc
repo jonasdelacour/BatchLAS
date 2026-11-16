@@ -38,11 +38,11 @@ using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename device::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
+template <class Scalar> using real_of = typename device::Arith<Scalar>::real_t;
+template <class Scalar> constexpr bool is_cplx = device::Arith<Scalar>::is_complex;
 // The device scalar the kernels use: std::complex is re-typed to the POD Cx at the pointer.
-template <class T> using D_t = std::conditional_t<is_cplx<T>, sycl_device::Cx<real_of<T>>, T>;
-template <class T> D_t<T>* dv(T* p) { return reinterpret_cast<D_t<T>*>(p); }
+template <class Scalar> using D_t = std::conditional_t<is_cplx<Scalar>, sycl_device::Cx<real_of<Scalar>>, Scalar>;
+template <class Scalar> D_t<Scalar>* dv(Scalar* p) { return reinterpret_cast<D_t<Scalar>*>(p); }
 
 constexpr int kBatch = 1024;
 constexpr int kPeriod = 3;
@@ -53,16 +53,16 @@ std::uint64_t mix(std::uint64_t x) {
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
     return x ^ (x >> 31);
 }
-template <class R> R uval(std::uint64_t i) { return static_cast<R>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
-template <class T> T val(std::uint64_t i) {
-    if constexpr (is_cplx<T>) return T(uval<real_of<T>>(2 * i), uval<real_of<T>>(2 * i + 1));
-    else return uval<T>(i);
+template <class Real> Real uval(std::uint64_t i) { return static_cast<Real>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
+template <class Scalar> Scalar val(std::uint64_t i) {
+    if constexpr (is_cplx<Scalar>) return Scalar(uval<real_of<Scalar>>(2 * i), uval<real_of<Scalar>>(2 * i + 1));
+    else return uval<Scalar>(i);
 }
 template <class T> bool same_bits(const T& a, const T& b) { return std::memcmp(&a, &b, sizeof(T)) == 0; }
 
-template <class T> using LD = std::conditional_t<is_cplx<T>, std::complex<long double>, long double>;
-template <class T> long double cabs1(LD<T> v) {
-    if constexpr (is_cplx<T>) return std::fabs(v.real()) + std::fabs(v.imag());
+template <class Scalar> using LD = std::conditional_t<is_cplx<Scalar>, std::complex<long double>, long double>;
+template <class Scalar> long double cabs1(LD<Scalar> v) {
+    if constexpr (is_cplx<Scalar>) return std::fabs(v.real()) + std::fabs(v.imag());
     else return std::fabs(v);
 }
 
@@ -99,11 +99,11 @@ struct Dev {
     std::vector<void*> ptrs;
 };
 
-template <class T> class DeviceLapackGetf2Test : public ::testing::Test {
+template <class Scalar> class DeviceLapackGetf2Test : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx.device().supports_sub_group_size(32)) GTEST_SKIP() << "device tests launch sub-group size 32";
-        if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
+        if (test_utils::lacks_fp64<Scalar>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
 };
@@ -118,38 +118,38 @@ constexpr float kPadPoison = 1234.5f;
 // must pick P0's rows with a 4x margin (cabs1 included), so host and device agree on every
 // pivot whatever the rounding. `singular` zeroes U0's column kmax-1: that Schur column stays
 // EXACTLY zero, the last step's pivot is 0 and info fires. Pad rows [m, ld) hold kPadPoison.
-template <class T> std::vector<T> lu_input(int m, int n, int ld, std::uint64_t seed, bool singular) {
-    using R = real_of<T>;
+template <class Scalar> std::vector<Scalar> lu_input(int m, int n, int ld, std::uint64_t seed, bool singular) {
+    using R = real_of<Scalar>;
     const int kmax = std::min(m, n);
-    std::vector<LD<T>> L(std::size_t(m) * kmax, LD<T>(0)), U(std::size_t(kmax) * n, LD<T>(0));
+    std::vector<LD<Scalar>> L(std::size_t(m) * kmax, LD<Scalar>(0)), U(std::size_t(kmax) * n, LD<Scalar>(0));
     for (int i = 0; i < m; ++i)
         for (int j = 0; j < std::min(i + 1, kmax); ++j)
-            L[i + std::size_t(j) * m] = i == j ? LD<T>(1) : LD<T>(val<T>(seed + 7u * i + 1000u * j)) * (long double)0.17;
+            L[i + std::size_t(j) * m] = i == j ? LD<Scalar>(1) : LD<Scalar>(val<Scalar>(seed + 7u * i + 1000u * j)) * (long double)0.17;
     for (int j = 0; j < kmax; ++j)
         for (int c = j; c < n; ++c) {
-            LD<T> u = LD<T>(val<T>(seed + 99991u + 13u * j + 1777u * c));
-            if (c == j) u = LD<T>(T(R(1.5) + R(0.5) * uval<R>(seed + 31u * j))) + u * (long double)0.1;
-            U[j + std::size_t(c) * kmax] = (singular && c == kmax - 1) ? LD<T>(0) : u;
+            LD<Scalar> u = LD<Scalar>(val<Scalar>(seed + 99991u + 13u * j + 1777u * c));
+            if (c == j) u = LD<Scalar>(Scalar(R(1.5) + R(0.5) * uval<R>(seed + 31u * j))) + u * (long double)0.1;
+            U[j + std::size_t(c) * kmax] = (singular && c == kmax - 1) ? LD<Scalar>(0) : u;
         }
     std::vector<int> perm(m);
     std::iota(perm.begin(), perm.end(), 0);
     for (int i = m - 1; i > 0; --i) std::swap(perm[i], perm[mix(seed + 555u + i) % std::uint64_t(i + 1)]);
-    std::vector<T> a(std::size_t(ld) * n, T(R(kPadPoison)));
+    std::vector<Scalar> a(std::size_t(ld) * n, Scalar(R(kPadPoison)));
     for (int i = 0; i < m; ++i)
         for (int c = 0; c < n; ++c) {
-            LD<T> s = 0;
+            LD<Scalar> s = 0;
             for (int j = 0; j < kmax; ++j) s += L[i + std::size_t(j) * m] * U[j + std::size_t(c) * kmax];
-            a[perm[i] + std::size_t(c) * ld] = static_cast<T>(s);
+            a[perm[i] + std::size_t(c) * ld] = static_cast<Scalar>(s);
         }
     return a;
 }
 
 // kBatch items, item b a copy of representative b % kPeriod; representatives 1 and 2 singular.
-template <class T> std::vector<T> lu_batch(int m, int n, int ld, std::uint64_t seed) {
+template <class Scalar> std::vector<Scalar> lu_batch(int m, int n, int ld, std::uint64_t seed) {
     const std::size_t per = std::size_t(ld) * n;
-    std::vector<T> h(per * kBatch);
+    std::vector<Scalar> h(per * kBatch);
     for (int r = 0; r < kPeriod; ++r) {
-        const auto a = lu_input<T>(m, n, ld, seed + 104729u * r, r != 0);
+        const auto a = lu_input<Scalar>(m, n, ld, seed + 104729u * r, r != 0);
         std::copy(a.begin(), a.end(), h.begin() + per * r);
     }
     for (int b = kPeriod; b < kBatch; ++b) std::copy_n(h.data() + per * (b % kPeriod), per, h.data() + per * b);
@@ -163,21 +163,22 @@ inline std::vector<std::int32_t> info_in() {
 }
 
 // LAPACK ?GETF2 in long double with the cabs1 metric: pivots 1-based plus base, info.
-template <class T> void host_getf2(const T* a0, int m, int n, int ld, int base, std::vector<int>& ipiv, int& info) {
+template <class Scalar> void host_getf2(const Scalar* a0, int m, int n, int ld, int base, std::vector<int>& ipiv,
+                                        int& info) {
     const int kmax = std::min(m, n);
-    std::vector<LD<T>> a(std::size_t(ld) * n);
-    for (std::size_t i = 0; i < a.size(); ++i) a[i] = LD<T>(a0[i]);
-    auto at = [&](int i, int j) -> LD<T>& { return a[i + std::size_t(j) * ld]; };
+    std::vector<LD<Scalar>> a(std::size_t(ld) * n);
+    for (std::size_t i = 0; i < a.size(); ++i) a[i] = LD<Scalar>(a0[i]);
+    auto at = [&](int i, int j) -> LD<Scalar>& { return a[i + std::size_t(j) * ld]; };
     ipiv.assign(kmax, 0);
     for (int k = 0; k < kmax; ++k) {
         int p = k;
         long double best = -1;
         for (int i = k; i < m; ++i)
-            if (cabs1<T>(at(i, k)) > best) best = cabs1<T>(at(i, k)), p = i;
+            if (cabs1<Scalar>(at(i, k)) > best) best = cabs1<Scalar>(at(i, k)), p = i;
         ipiv[k] = base + p + 1;
         for (int c = 0; c < n; ++c) std::swap(at(k, c), at(p, c));
-        const LD<T> d = at(k, k);
-        if (d == LD<T>(0)) {
+        const LD<Scalar> d = at(k, k);
+        if (d == LD<Scalar>(0)) {
             if (info == 0) info = base + k + 1;
             continue;
         }
@@ -188,11 +189,12 @@ template <class T> void host_getf2(const T* a0, int m, int n, int ld, int base, 
 }
 
 // max_ij |P A - L U|_ij / (|L| |U|)_ij from the DEVICE factors f and pivots (componentwise).
-template <class T> double lu_resid(const T* a0, const T* f, const int* ipiv, int m, int n, int ld, int base) {
+template <class Scalar> double lu_resid(const Scalar* a0, const Scalar* f, const int* ipiv, int m, int n, int ld,
+                                        int base) {
     const int kmax = std::min(m, n);
-    std::vector<LD<T>> pa(std::size_t(m) * n);
+    std::vector<LD<Scalar>> pa(std::size_t(m) * n);
     for (int c = 0; c < n; ++c)
-        for (int i = 0; i < m; ++i) pa[i + std::size_t(c) * m] = LD<T>(a0[i + std::size_t(c) * ld]);
+        for (int i = 0; i < m; ++i) pa[i + std::size_t(c) * m] = LD<Scalar>(a0[i + std::size_t(c) * ld]);
     for (int k = 0; k < kmax; ++k) {
         const int p = ipiv[k] - base - 1;
         if (p < k || p >= m) return std::numeric_limits<double>::infinity();
@@ -201,15 +203,15 @@ template <class T> double lu_resid(const T* a0, const T* f, const int* ipiv, int
     double worst = 0;
     for (int i = 0; i < m; ++i)
         for (int j = 0; j < n; ++j) {
-            LD<T> lu = 0;
+            LD<Scalar> lu = 0;
             long double s = 0;
             for (int t = 0; t < std::min({i + 1, j + 1, kmax}); ++t) {
-                const LD<T> l = t == i ? LD<T>(1) : LD<T>(f[i + std::size_t(t) * ld]);
-                const LD<T> u = LD<T>(f[t + std::size_t(j) * ld]);
+                const LD<Scalar> l = t == i ? LD<Scalar>(1) : LD<Scalar>(f[i + std::size_t(t) * ld]);
+                const LD<Scalar> u = LD<Scalar>(f[t + std::size_t(j) * ld]);
                 lu += l * u, s += std::abs(l) * std::abs(u);
             }
             const long double d = std::abs(pa[i + std::size_t(j) * m] - lu);
-            const double r = static_cast<double>(d / std::max<long double>(s, std::numeric_limits<real_of<T>>::min()));
+            const double r = static_cast<double>(d / std::max<long double>(s, std::numeric_limits<real_of<Scalar>>::min()));
             worst = std::max(worst, std::isnan(r) ? std::numeric_limits<double>::infinity() : r);
         }
     return worst;
@@ -320,10 +322,10 @@ template <int N, class Px> struct KeyPivot {
     int n, lane, base;
     int* ipiv;
     std::int32_t& info;
-    template <class R> device::detail::PivotWinner argmax(int j, R mag, int rowid) const {
+    template <class Real> device::detail::PivotWinner argmax(int j, Real mag, int rowid) const {
         const bool cand = rowid >= j && rowid < n;
-        const device::ArgMax<R> a = device::argmax_allreduce(px, device::ArgMax<R>{((cand ? rowid : rowid + N) << 8) | lane, (cand && (mag == mag)) ? mag : R(-1)},
-                                                             device::alg::TieLowest{}, device::None{}, 0, R(-1));
+        const device::ArgMax<Real> a = device::argmax_allreduce(px, device::ArgMax<Real>{((cand ? rowid : rowid + N) << 8) | lane, (cand && (mag == mag)) ? mag : Real(-1)},
+                                                                device::alg::TieLowest{}, device::None{}, 0, Real(-1));
         return {a.index >> 8, a.index & 0xff};
     }
     void record(int j, device::detail::PivotWinner w) const {

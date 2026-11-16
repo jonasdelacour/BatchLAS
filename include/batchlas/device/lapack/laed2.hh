@@ -38,10 +38,10 @@ template <class Ex, class X, class Op> BATCHLAS_DEVICE_INLINE auto fold(const Ex
 /// |rho| u u^T with u = e_{m-1} + sign(rho) e_m (the diagonal corrections are -|rho|), so the
 /// Q2 half carries sign(rho); without it the merged vectors mix Q1 and Q2 with inconsistent
 /// signs. COLLECTIVE over ex; no trailing barrier.
-template <class Ex, class Z, class R1, class R2, class T>
-BATCHLAS_DEVICE_HELPER void laed2_merge_vector(const Ex& ex, const Z& z, int m, const R1& row1, const R2& row2, T sign) {
-    map(ex, z.head(m), [](T q) { return q / std::sqrt(T(2)); }, row1);
-    map(ex, z.tail(m), [=](T q) { return sign * q / std::sqrt(T(2)); }, row2);
+template <class Ex, class Z, class R1, class R2, class Real>
+BATCHLAS_DEVICE_HELPER void laed2_merge_vector(const Ex& ex, const Z& z, int m, const R1& row1, const R2& row2, Real sign) {
+    map(ex, z.head(m), [](Real q) { return q / std::sqrt(Real(2)); }, row1);
+    map(ex, z.tail(m), [=](Real q) { return sign * q / std::sqrt(Real(2)); }, row2);
 }
 }  // namespace detail
 

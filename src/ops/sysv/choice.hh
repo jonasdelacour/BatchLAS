@@ -17,7 +17,7 @@ struct Compose : select::NoFields<"compose"> {};  ///< public sytrf + sytrs; any
 
 using SysvChoice = std::variant<Cta, Compose>;  ///< no vendor family: a `vendor` pin warns and runs Auto
 
-template <class T>  /// Every compiled choice, once, in tie-break order (§6.3).
+template <class Scalar>  /// Every compiled choice, once, in tie-break order (§6.3).
 constexpr auto candidates() { return select::all_of<SysvChoice>(); }
 
 inline constexpr std::array<std::string_view, 1> kLastResort{"compose"};

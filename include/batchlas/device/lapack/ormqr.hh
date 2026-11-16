@@ -22,56 +22,56 @@ template <Side SD, Transpose TR> struct ormqr {
 }  // namespace routine
 
 namespace detail {
-template <class T> struct OrmqrSlots {
-    WsSlot<T> smem, v, t, work;
+template <class Scalar> struct OrmqrSlots {
+    WsSlot<Scalar> smem, v, t, work;
 };
 // ormqr's carve for C (m x n), k reflectors, block NB, appended to p (orgqr appends to its own).
-template <Side SD, int NB, class Cfg, class T> constexpr OrmqrSlots<T> ormqr_take(Plan& p, int m, int n) {
+template <Side SD, int NB, class Cfg, class Scalar> constexpr OrmqrSlots<Scalar> ormqr_take(Plan& p, int m, int n) {
     const std::size_t nq = static_cast<std::size_t>(SD == Side::Left ? m : n);
-    OrmqrSlots<T> s{};
-    s.smem = p.take<T>(WsSpace::Local, static_cast<std::size_t>(l3::smem_elems<Cfg>()));
-    s.v = p.take<T>(WsSpace::Global, nq * NB);
-    s.t = p.take<T>(WsSpace::Global, static_cast<std::size_t>(NB) * NB);
-    s.work = p.take<T>(WsSpace::Global, larfb_work_elems<SD>(m, n, NB));
+    OrmqrSlots<Scalar> s{};
+    s.smem = p.take<Scalar>(WsSpace::Local, static_cast<std::size_t>(l3::smem_elems<Cfg>()));
+    s.v = p.take<Scalar>(WsSpace::Global, nq * NB);
+    s.t = p.take<Scalar>(WsSpace::Global, static_cast<std::size_t>(NB) * NB);
+    s.work = p.take<Scalar>(WsSpace::Global, larfb_work_elems<SD>(m, n, NB));
     return s;
 }
-template <Side SD, int NB, class Cfg, class T> constexpr WorkspaceSize ormqr_size(int m, int n) {
+template <Side SD, int NB, class Cfg, class Scalar> constexpr WorkspaceSize ormqr_size(int m, int n) {
     Plan p;
-    (void)ormqr_take<SD, NB, Cfg, T>(p, m, n);
+    (void)ormqr_take<SD, NB, Cfg, Scalar>(p, m, n);
     return p.size();
 }
 
 // The blocks in application order: forward for Q^H C and C Q, backward for Q C and C Q^H.
-template <Side SD, Transpose TR, int NB, class Cfg, class Ex, class T>
-BATCHLAS_DEVICE_INLINE void ormqr_wy_blocks(const Ex& ex, const l3::Global<T>& a, const l3::Global<T>& c, int k, const T* tau,
-                                         const OrmqrSlots<T>& s, const Workspace& w) {
+template <Side SD, Transpose TR, int NB, class Cfg, class Ex, class Scalar>
+BATCHLAS_DEVICE_INLINE void ormqr_wy_blocks(const Ex& ex, const l3::Global<Scalar>& a, const l3::Global<Scalar>& c, int k, const Scalar* tau,
+                                         const OrmqrSlots<Scalar>& s, const Workspace& w) {
     const Workspace sm = sub_workspace(w, s.smem, s.work);
-    T* const vb = carve_global(w, s.v);
-    T* const tb = carve_global(w, s.t);
+    Scalar* const vb = carve_global(w, s.v);
+    Scalar* const tb = carve_global(w, s.t);
     constexpr bool forward = (SD == Side::Left) == (TR != Transpose::NoTrans);
     // i0 itself is the induction variable (a downward block count narrows to i27 on Metal).
     const int first = forward ? 0 : (k - 1) / NB * NB;
     for (int i0 = first; forward ? i0 < k : i0 >= 0; i0 += forward ? NB : -NB) {
         const int ib = k - i0 < NB ? k - i0 : NB;
-        const l3::Global<T> cs = SD == Side::Left ? l3::Global<T>{c.p + i0, c.ld, c.m - i0, c.n}
-                                                  : l3::Global<T>{c.p + static_cast<std::ptrdiff_t>(i0) * c.ld, c.ld, c.m, c.n - i0};
+        const l3::Global<Scalar> cs = SD == Side::Left ? l3::Global<Scalar>{c.p + i0, c.ld, c.m - i0, c.n}
+                                                  : l3::Global<Scalar>{c.p + static_cast<std::ptrdiff_t>(i0) * c.ld, c.ld, c.m, c.n - i0};
         larfb_from_panel<SD, TR, Cfg>(ex, a, i0, ib, tau, cs, vb, tb, NB, sm);
     }
 }
 }  // namespace detail
 
-template <Side SD, Transpose TR, int NB, class A, class T> struct tier_info<routine::ormqr<SD, TR>, tier::Blocked<NB, A>, T> {
-    using cfg = larfb_cfg_t<A, T>;
+template <Side SD, Transpose TR, int NB, class A, class Scalar> struct tier_info<routine::ormqr<SD, TR>, tier::Blocked<NB, A>, Scalar> {
+    using cfg = larfb_cfg_t<A, Scalar>;
     static constexpr int wg_size = cfg::threads, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
     /// C of m x n (Q of order m for Left, n for Right); k never changes the workspace.
-    static constexpr WorkspaceSize buffer_size(int m, int n) { return detail::ormqr_size<SD, NB, cfg, T>(m, n); }
+    static constexpr WorkspaceSize buffer_size(int m, int n) { return detail::ormqr_size<SD, NB, cfg, Scalar>(m, n); }
     static constexpr WorkspaceSize buffer_size(int n) { return buffer_size(n, n); }
 };
-template <Side SD, Transpose TR, class T> struct tiers<routine::ormqr<SD, TR>, T> {
-    using type = tier::list<tier::Blocked<larfb_default_nb<T>()>>;
+template <Side SD, Transpose TR, class Scalar> struct tiers<routine::ormqr<SD, TR>, Scalar> {
+    using type = tier::list<tier::Blocked<larfb_default_nb<Scalar>()>>;
 };
 
 /// @brief ?ORMQR / ?UNMQR in a kernel: C := op(Q) C (Left) or C op(Q) (Right) for one matrix.

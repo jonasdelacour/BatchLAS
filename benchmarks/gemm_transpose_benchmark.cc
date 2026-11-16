@@ -53,7 +53,7 @@ inline void GemmTransposeSizesNetlib(minibench::Benchmark* b) {
     }
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_GEMM_TRANSPOSE(minibench::State& state) {
     const size_t m = state.range(0);
     const size_t n = state.range(1);
@@ -67,17 +67,17 @@ void BM_GEMM_TRANSPOSE(minibench::State& state) {
     const size_t b_rows = transB == Transpose::NoTrans ? k : n;
     const size_t b_cols = transB == Transpose::NoTrans ? n : k;
 
-    auto A = Matrix<T>::Random(a_rows, a_cols, false, batch);
-    auto Bm = Matrix<T>::Random(b_rows, b_cols, false, batch);
-    auto C = Matrix<T>::Random(m, n, false, batch);
+    auto A = Matrix<Scalar>::Random(a_rows, a_cols, false, batch);
+    auto Bm = Matrix<Scalar>::Random(b_rows, b_cols, false, batch);
+    auto C = Matrix<Scalar>::Random(m, n, false, batch);
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
     state.SetKernel(q,
                     std::move(A),
                     std::move(Bm),
                     bench::pristine(C),
-                    T(1),
-                    static_cast<T>(bench_beta()),
+                    Scalar(1),
+                    static_cast<Scalar>(bench_beta()),
                     transA,
                     transB,
                     [](Queue& q, auto&&... xs) {

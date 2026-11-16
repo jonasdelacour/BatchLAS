@@ -47,32 +47,35 @@ using batchlas::verify::Check;
 constexpr int kBatch = 1024;
 constexpr int kPeriod = 3;
 
-template <class T> T poison() { return T(static_cast<real_of<T>>(1.0e6)); }
+template <class Scalar> Scalar poison() { return Scalar(static_cast<real_of<Scalar>>(1.0e6)); }
 
 // batch m x n matrices at (ld, stride), item b a copy of representative b % kPeriod, padding poisoned.
-template <class T> struct Host {
+template <class Scalar> struct Host {
     int m, n, ld, stride;
-    std::vector<T> h;
-    T& at(int b, int i, int j) { return h[std::size_t(b) * stride + std::size_t(j) * ld + i]; }
-    const T& at(int b, int i, int j) const { return h[std::size_t(b) * stride + std::size_t(j) * ld + i]; }
+    std::vector<Scalar> h;
+    Scalar& at(int b, int i, int j) { return h[std::size_t(b) * stride + std::size_t(j) * ld + i]; }
+    const Scalar& at(int b, int i, int j) const { return h[std::size_t(b) * stride + std::size_t(j) * ld + i]; }
 };
-template <class T> Host<T> make(int m, int n, std::uint64_t seed) {
-    Host<T> a{m, n, m + 3, (m + 3) * n + 5, std::vector<T>(std::size_t((m + 3) * n + 5) * kBatch, poison<T>())};
+template <class Scalar> Host<Scalar> make(int m, int n, std::uint64_t seed) {
+    Host<Scalar> a{m, n, m + 3, (m + 3) * n + 5, std::vector<Scalar>(std::size_t((m + 3) * n + 5) * kBatch,
+                                                                     poison<Scalar>())};
     for (int b = 0; b < kPeriod; ++b)
         for (int j = 0; j < n; ++j)
-            for (int i = 0; i < m; ++i) a.at(b, i, j) = val<T>(seed * 7919u + std::uint64_t(b) * 1000003u + std::uint64_t(j) * m + i);
+            for (int i = 0; i < m; ++i) a.at(b, i, j) = val<Scalar>(seed * 7919u + std::uint64_t(b) * 1000003u + std::uint64_t(j) * m + i);
     for (int b = kPeriod; b < kBatch; ++b)
-        std::memcpy(&a.h[std::size_t(b) * a.stride], &a.h[std::size_t(b % kPeriod) * a.stride], sizeof(T) * a.stride);
+        std::memcpy(&a.h[std::size_t(b) * a.stride], &a.h[std::size_t(b % kPeriod) * a.stride],
+                    sizeof(Scalar) * a.stride);
     return a;
 }
-template <class T> Matrix<T, MatrixFormat::Dense> to_matrix(Dev& dev, const Host<T>& a) {
-    Matrix<T, MatrixFormat::Dense> M(a.m, a.n, kBatch, a.ld, a.stride);
-    dev.q().memcpy(M.data_ptr(), a.h.data(), a.h.size() * sizeof(T)).wait();
+template <class Scalar> Matrix<Scalar, MatrixFormat::Dense> to_matrix(Dev& dev, const Host<Scalar>& a) {
+    Matrix<Scalar, MatrixFormat::Dense> M(a.m, a.n, kBatch, a.ld, a.stride);
+    dev.q().memcpy(M.data_ptr(), a.h.data(), a.h.size() * sizeof(Scalar)).wait();
     return M;
 }
-template <class T> std::vector<T> from_matrix(Dev& dev, const Matrix<T, MatrixFormat::Dense>& M, std::size_t count) {
-    std::vector<T> h(count);
-    dev.q().memcpy(h.data(), M.data_ptr(), count * sizeof(T)).wait();
+template <class Scalar> std::vector<Scalar> from_matrix(Dev& dev, const Matrix<Scalar, MatrixFormat::Dense>& M,
+                                                        std::size_t count) {
+    std::vector<Scalar> h(count);
+    dev.q().memcpy(h.data(), M.data_ptr(), count * sizeof(Scalar)).wait();
     return h;
 }
 template <class T> int bit_twins(const std::vector<T>& h, std::size_t per_item) {
@@ -83,13 +86,14 @@ template <class T> int bit_twins(const std::vector<T>& h, std::size_t per_item) 
 }
 inline sycl::nd_range<1> one_wg_per_item(int wg) { return sycl::nd_range<1>(std::size_t(kBatch) * wg, std::size_t(wg)); }
 
-template <class T> class DeviceApiUtil : public DeviceCoreTest<T> {};
+template <class Scalar> class DeviceApiUtil : public DeviceCoreTest<Scalar> {};
 TYPED_TEST_SUITE(DeviceApiUtil, AllTypes);
 
 // ---- norm -----------------------------------------------------------------------------------
 // The host's launch: one WorkGroup<WG> per item, WG = 32 for m n <= 1024, else 256.
-template <NormType NT, int WG, class T> std::vector<real_of<T>> device_norm(Dev& dev, const T* a, const Host<T>& s) {
-    auto* out = dev.alloc<real_of<T>>(kBatch, real_of<T>(-1));
+template <NormType NT, int WG, class Scalar> std::vector<real_of<Scalar>> device_norm(Dev& dev, const Scalar* a,
+                                                                                      const Host<Scalar>& s) {
+    auto* out = dev.alloc<real_of<Scalar>>(kBatch, real_of<Scalar>(-1));
     const int m = s.m, n = s.n, ld = s.ld, stride = s.stride;
     dev.q().parallel_for(one_wg_per_item(WG), [=](sycl::nd_item<1> it) {
         const batchlas::device::WorkGroup<WG> ex{it};
@@ -99,7 +103,7 @@ template <NormType NT, int WG, class T> std::vector<real_of<T>> device_norm(Dev&
     }).wait_and_throw();
     return dev.down(out, kBatch);
 }
-template <class T> long double ref_norm(NormType nt, const Host<T>& a, int b) {
+template <class Scalar> long double ref_norm(NormType nt, const Host<Scalar>& a, int b) {
     long double mx = 0, sq = 0, one = 0;
     std::vector<long double> row(a.m, 0.0L);
     for (int j = 0; j < a.n; ++j) {
@@ -134,7 +138,7 @@ template <NormType NT, int WG, class T> void check_norm(Dev& dev, const Host<T>&
     }
     EXPECT_VERIFY(T, Check::blas, a.m * a.n, worst);
 }
-template <int WG, class T> void check_norms(Dev& dev, const Host<T>& a) {
+template <int WG, class Scalar> void check_norms(Dev& dev, const Host<Scalar>& a) {
     check_norm<NormType::Max, WG>(dev, a);
     check_norm<NormType::One, WG>(dev, a);
     check_norm<NormType::Inf, WG>(dev, a);
@@ -188,7 +192,7 @@ TYPED_TEST(DeviceApiUtil, LasclIsTheHostRoute) {
 
 // ---- ritz_values ----------------------------------------------------------------------------
 // The in-group Level 3 preset of the 128-item work-groups below: 32 x 32 tiles, 4 x 2 per item.
-template <class T> using L3Cfg = batchlas::device::l3::cfg::RegTiled<T, 32, 32, 8, 4, 2>;
+template <class Scalar> using L3Cfg = batchlas::device::l3::cfg::RegTiled<Scalar, 32, 32, 8, 4, 2>;
 static_assert(L3Cfg<float>::threads == 128 && L3Cfg<std::complex<double>>::threads == 128);
 inline std::size_t r16(std::size_t bytes) { return (bytes + 15) / 16 * 16; }
 // A global workspace of batch * bytes, every byte 0xFF (a NaN in every T).
@@ -197,22 +201,23 @@ inline std::byte* nan_workspace(Dev& dev, std::size_t bytes) {
 }
 
 // The worst error of w against the long-double quotient, relative to sum |v_r| |A_rc| |v_c| / v^H v.
-template <class T> double ritz_worst(const std::vector<real_of<T>>& got, const Host<T>& A, const Host<T>& V) {
+template <class Scalar> double ritz_worst(const std::vector<real_of<Scalar>>& got, const Host<Scalar>& A,
+                                          const Host<Scalar>& V) {
     const int n = A.m, k = V.n;
     double worst = 0;
     for (int b = 0; b < kPeriod; ++b)
         for (int j = 0; j < k; ++j) {
-            LD<T> num = 0;
+            LD<Scalar> num = 0;
             long double den = 0, scale = 0;
             for (int r = 0; r < n; ++r) {
-                LD<T> av = 0;
+                LD<Scalar> av = 0;
                 long double abs_av = 0;
                 for (int c = 0; c < n; ++c) {
                     av += wide(A.at(b, r, c)) * wide(V.at(b, c, j));
                     abs_av += std::abs(wide(A.at(b, r, c))) * std::abs(wide(V.at(b, c, j)));
                 }
-                const LD<T> vr = wide(V.at(b, r, j));
-                if constexpr (is_cplx<T>) num += std::conj(vr) * av;
+                const LD<Scalar> vr = wide(V.at(b, r, j));
+                if constexpr (is_cplx<Scalar>) num += std::conj(vr) * av;
                 else num += vr * av;
                 den += std::norm(vr);
                 scale += std::abs(vr) * abs_av;
@@ -246,10 +251,10 @@ TYPED_TEST(DeviceApiUtil, RitzValuesMatchesReference) {
 }
 
 // The Blocked form: NB columns of V per in-group gemm into the NaN workspace (beta = Zero).
-template <class Tier, class T> std::vector<real_of<T>> device_ritz_blocked(Dev& dev, const T* ad, const Host<T>& A, const T* vd, const Host<T>& V) {
-    using R = real_of<T>;
+template <class Tier, class Scalar> std::vector<real_of<Scalar>> device_ritz_blocked(Dev& dev, const Scalar* ad, const Host<Scalar>& A, const Scalar* vd, const Host<Scalar>& V) {
+    using R = real_of<Scalar>;
     const int n = A.m, k = V.n;
-    const auto sz = batchlas::device::buffer_size<batchlas::device::routine::ritz_values<L3Cfg<T>>, Tier, T>(n, k);
+    const auto sz = batchlas::device::buffer_size<batchlas::device::routine::ritz_values<L3Cfg<Scalar>>, Tier, Scalar>(n, k);
     std::byte* gws = nan_workspace(dev, sz.global_bytes);
     R* w = dev.alloc<R>(std::size_t(kBatch) * k, R(-1));
     const int lda = A.ld, sa = A.stride, ldv = V.ld, sv = V.stride;
@@ -259,7 +264,7 @@ template <class Tier, class T> std::vector<real_of<T>> device_ritz_blocked(Dev& 
             const batchlas::device::WorkGroup<128, 32> ex{it};
             const int b = int(it.get_group_linear_id());
             const batchlas::device::Workspace ws{slm.template get_multi_ptr<sycl::access::decorated::yes>(), batchlas::device::global_slice(gws, sz, b)};
-            const int info = batchlas::device::ritz_values<Tier, L3Cfg<T>>(ex, batchlas::device::mat(ad + std::size_t(b) * sa, n, n, lda),
+            const int info = batchlas::device::ritz_values<Tier, L3Cfg<Scalar>>(ex, batchlas::device::mat(ad + std::size_t(b) * sa, n, n, lda),
                                                              batchlas::device::mat(vd + std::size_t(b) * sv, n, k, ldv), batchlas::device::vec(w + std::size_t(b) * k, k), ws);
             if (ex.leader() && info != 0) w[std::size_t(b) * k] = R(-7);
         });
@@ -292,19 +297,19 @@ TYPED_TEST(DeviceApiUtil, RitzValuesBlocked) {
 // ---- ortho ----------------------------------------------------------------------------------
 // The long-double CGS2 of the host op, in place on representative b. Gram-Schmidt, CholeskyQR and
 // block CGS2 give the same Q in exact arithmetic (the Q of A = Q R with R's diagonal > 0).
-template <class T> std::vector<LD<T>> ref_cgs2(const Host<T>& a, int b) {
+template <class Scalar> std::vector<LD<Scalar>> ref_cgs2(const Host<Scalar>& a, int b) {
     const int m = a.m, k = a.n;
-    std::vector<LD<T>> q(std::size_t(m) * k);
+    std::vector<LD<Scalar>> q(std::size_t(m) * k);
     for (int j = 0; j < k; ++j)
         for (int i = 0; i < m; ++i) q[std::size_t(j) * m + i] = wide(a.at(b, i, j));
-    std::vector<LD<T>> h(k);
+    std::vector<LD<Scalar>> h(k);
     for (int i = 0; i < k; ++i) {
-        LD<T>* ai = &q[std::size_t(i) * m];
+        LD<Scalar>* ai = &q[std::size_t(i) * m];
         for (int pass = 0; pass < 2 && i > 0; ++pass) {
             for (int c = 0; c < i; ++c) {
                 h[c] = 0;
                 for (int r = 0; r < m; ++r) {
-                    if constexpr (is_cplx<T>) h[c] += std::conj(q[std::size_t(c) * m + r]) * ai[r];
+                    if constexpr (is_cplx<Scalar>) h[c] += std::conj(q[std::size_t(c) * m + r]) * ai[r];
                     else h[c] += q[std::size_t(c) * m + r] * ai[r];
                 }
             }
@@ -321,9 +326,9 @@ template <class T> std::vector<LD<T>> ref_cgs2(const Host<T>& a, int b) {
 
 // One WorkGroup<128, 32> per item (Cfg::threads for the Level 3 forms; potrf Cta's 32-wide
 // sub-group), the global workspace NaN.
-template <OrthoAlgorithm AL, class Tier, class Cfg = void, class T> std::vector<int> device_ortho(Dev& dev, T* a, const Host<T>& s, int k) {
+template <OrthoAlgorithm AL, class Tier, class Cfg = void, class Scalar> std::vector<int> device_ortho(Dev& dev, Scalar* a, const Host<Scalar>& s, int k) {
     constexpr auto TR = Transpose::NoTrans;
-    const auto sz = batchlas::device::buffer_size<batchlas::device::routine::ortho<TR, Cfg, AL>, Tier, T>(k);
+    const auto sz = batchlas::device::buffer_size<batchlas::device::routine::ortho<TR, Cfg, AL>, Tier, Scalar>(k);
     std::byte* gws = nan_workspace(dev, sz.global_bytes);
     auto* info = dev.alloc<int>(kBatch, -99);
     const int m = s.m, ld = s.ld, stride = s.stride;
@@ -340,28 +345,28 @@ template <OrthoAlgorithm AL, class Tier, class Cfg = void, class T> std::vector<
     return dev.down(info, kBatch);
 }
 
-template <class T> double orth_error(const std::vector<T>& q, const Host<T>& s, int b) {
+template <class Scalar> double orth_error(const std::vector<Scalar>& q, const Host<Scalar>& s, int b) {
     double worst = 0;
     for (int c = 0; c < s.n; ++c)
         for (int d = 0; d < s.n; ++d) {
-            LD<T> g = 0;
+            LD<Scalar> g = 0;
             for (int r = 0; r < s.m; ++r) {
-                const LD<T> x = wide(q[std::size_t(b) * s.stride + std::size_t(c) * s.ld + r]);
-                const LD<T> y = wide(q[std::size_t(b) * s.stride + std::size_t(d) * s.ld + r]);
-                if constexpr (is_cplx<T>) g += std::conj(x) * y;
+                const LD<Scalar> x = wide(q[std::size_t(b) * s.stride + std::size_t(c) * s.ld + r]);
+                const LD<Scalar> y = wide(q[std::size_t(b) * s.stride + std::size_t(d) * s.ld + r]);
+                if constexpr (is_cplx<Scalar>) g += std::conj(x) * y;
                 else g += x * y;
             }
-            worst = std::max(worst, double(std::abs(g - LD<T>(c == d ? 1 : 0))));
+            worst = std::max(worst, double(std::abs(g - LD<Scalar>(c == d ? 1 : 0))));
         }
     return worst;
 }
-template <class T> int pads_changed(const std::vector<T>& q, const Host<T>& s) {
+template <class Scalar> int pads_changed(const std::vector<Scalar>& q, const Host<Scalar>& s) {
     int bad = 0;
     for (int b = 0; b < kBatch; ++b)
         for (std::size_t e = 0; e < std::size_t(s.stride); ++e) {
             const std::size_t j = e / s.ld, i = e % s.ld;
             if (j < std::size_t(s.n) && i < std::size_t(s.m)) continue;
-            bad += !same_bits(q[std::size_t(b) * s.stride + e], poison<T>());
+            bad += !same_bits(q[std::size_t(b) * s.stride + e], poison<Scalar>());
         }
     return bad;
 }
@@ -428,11 +433,11 @@ TYPED_TEST(DeviceApiUtil, OrthoCholeskyTiers) {
 
 // Columns c0 + dep r_j: one Gram-Schmidt pass loses orthogonality as eps * cond^2, and one
 // CholeskyQR pass as eps * cond(A)^2 too; CGS2, block CGS2, Chol2 and ShiftChol3 keep eps.
-template <class T> Host<T> near_dependent(int m, int k, std::uint64_t seed, double dep) {
-    auto a = make<T>(m, k, seed);
+template <class Scalar> Host<Scalar> near_dependent(int m, int k, std::uint64_t seed, double dep) {
+    auto a = make<Scalar>(m, k, seed);
     for (int b = 0; b < kBatch; ++b)
         for (int j = 1; j < a.n; ++j)
-            for (int i = 0; i < a.m; ++i) a.at(b, i, j) = a.at(b, i, 0) + T(real_of<T>(dep)) * a.at(b, i, j);
+            for (int i = 0; i < a.m; ++i) a.at(b, i, j) = a.at(b, i, 0) + Scalar(real_of<Scalar>(dep)) * a.at(b, i, j);
     return a;
 }
 template <OrthoAlgorithm AL, class Tier, class Cfg = void, class T> void check_orthogonal(Dev& dev, const Host<T>& a) {

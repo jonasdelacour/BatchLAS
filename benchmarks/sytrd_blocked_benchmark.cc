@@ -25,7 +25,7 @@ inline void SytrdBlockedBenchSizes(Benchmark* b) {
 }
 
 // Batched SYTRD-blocked benchmark
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_SYTRD_BLOCKED(minibench::State& state) {
 #if BATCHLAS_HAS_CUDA_BACKEND
     const size_t n = state.range(0);
@@ -37,19 +37,19 @@ void BM_SYTRD_BLOCKED(minibench::State& state) {
     // Rough flop model for blocked SYTRD is still O(n^3).
     const double total_flops = (4.0 / 3.0) * double(n) * double(n) * double(n) * double(batch);
 
-    auto A0 = Matrix<T>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/2026);
-    auto A = Matrix<T>::Zeros(n, n, batch);
-    auto d = Vector<T>::zeros(n, batch);
-    auto e = Vector<T>::zeros(n - 1, batch);
-    auto tau = Vector<T>::zeros(n - 1, batch);
+    auto A0 = Matrix<Scalar>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/2026);
+    auto A = Matrix<Scalar>::Zeros(n, n, batch);
+    auto d = Vector<Scalar>::zeros(n, batch);
+    auto e = Vector<Scalar>::zeros(n - 1, batch);
+    auto tau = Vector<Scalar>::zeros(n - 1, batch);
 
     auto q = std::make_shared<Queue>(Device("gpu"), B, /*in_order=*/true);
 
     const size_t ws_bytes = sytrd_blocked_buffer_size(*q,
                                                            A,
-                                                           VectorView<T>(d),
-                                                           VectorView<T>(e),
-                                                           VectorView<T>(tau),
+                                                           VectorView<Scalar>(d),
+                                                           VectorView<Scalar>(e),
+                                                           VectorView<Scalar>(tau),
                                                            uplo,
                                                            nb);
     UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});

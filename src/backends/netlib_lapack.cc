@@ -83,20 +83,20 @@ inline void check_host_blas_double_health() {
 }
 
 // Double precision only: a broken dgemm does not make single precision wrong.
-template <typename T>
+template <typename Scalar>
 inline void host_blas_double_guard() {
-    if constexpr (std::is_same_v<T, double> || std::is_same_v<T, std::complex<double>>) {
+    if constexpr (std::is_same_v<Scalar, double> || std::is_same_v<Scalar, std::complex<double>>) {
         check_host_blas_double_health();
     }
 }
 
-// T is the element type of the operation, used only for the double-precision
+// Scalar is the element type of the operation, used only for the double-precision
 // health check above; it defaults to void (check skipped) so untyped callers
 // keep compiling.
-template <typename T = void, typename F>
+template <typename Scalar = void, typename F>
 Event submit_host_task(Queue& ctx, const char* /*label*/, F&& f) {
-    if constexpr (!std::is_void_v<T>) {
-        host_blas_double_guard<T>();
+    if constexpr (!std::is_void_v<Scalar>) {
+        host_blas_double_guard<Scalar>();
     }
     ctx.wait();
     f();
@@ -114,17 +114,17 @@ Event submit_host_task(Queue& ctx, const char* /*label*/, F&& f) {
 
 namespace backend {
 
-template <Backend Back, typename T, MatrixFormat MFormat>
+template <Backend Back, typename Scalar, MatrixFormat MFormat>
 Event spmm_vendor(Queue& ctx,
-           const MatrixView<T, MFormat>& A,
-           const MatrixView<T, MatrixFormat::Dense>& B,
-           const MatrixView<T, MatrixFormat::Dense>& C,
-           T alpha,
-           T beta,
+           const MatrixView<Scalar, MFormat>& A,
+           const MatrixView<Scalar, MatrixFormat::Dense>& B,
+           const MatrixView<Scalar, MatrixFormat::Dense>& C,
+           Scalar alpha,
+           Scalar beta,
            Transpose transA,
            Transpose transB,
            Span<std::byte> workspace) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::spmm, "spmm_vendor", Back, A, B, C);
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::spmm, "spmm_vendor", Back, A, B, C);
     static_cast<void>(workspace); // no workspace needed for CPU implementation
     auto A_view = A;
     auto B_view = B;
@@ -144,7 +144,7 @@ Event spmm_vendor(Queue& ctx,
             // launch outright); this is the host arm agreeing. Note this is
             // a skip of the alpha TERM only: C is still written below, so
             // alpha == 0 && beta == 0 zeroes C rather than leaving it alone.
-            const bool alpha_zero = (alpha == T(0));
+            const bool alpha_zero = (alpha == Scalar(0));
             for (int b = 0; b < batch; ++b) {
                 auto A_b = A_view[b];
                 auto B_b = B_view[b];
@@ -168,7 +168,7 @@ Event spmm_vendor(Queue& ctx,
                         // memory -- NaN included -- into the result. The
                         // native bodies in src/ops/spmm/kernels/spmm_native.cc make the
                         // same guarantee; this is the host arm agreeing.
-                        T sum = (beta == T(0)) ? T(0)
+                        Scalar sum = (beta == Scalar(0)) ? Scalar(0)
                                                : beta * C_b.at(row, col);
                         if (!alpha_zero) {
                             for (int idx = A_b.row_offsets()[row]; idx < A_b.row_offsets()[row + 1]; ++idx) {
@@ -193,13 +193,13 @@ Event spmm_vendor(Queue& ctx,
 
 namespace backend {
 
-template <Backend Back, typename T, MatrixFormat MFormat>
+template <Backend Back, typename Scalar, MatrixFormat MFormat>
 size_t spmm_vendor_buffer_size(Queue& ctx,
-                        const MatrixView<T, MFormat>& A,
-                        const MatrixView<T, MatrixFormat::Dense>& B,
-                        const MatrixView<T, MatrixFormat::Dense>& C,
-                        T alpha,
-                        T beta,
+                        const MatrixView<Scalar, MFormat>& A,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                        Scalar alpha,
+                        Scalar beta,
                         Transpose transA,
                         Transpose transB) {
     static_cast<void>(ctx);
@@ -218,22 +218,22 @@ size_t spmm_vendor_buffer_size(Queue& ctx,
 // The netlib gemm IS the vendor implementation (the CBLAS call), hence gemm_vendor here.
 namespace backend {
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event gemm_vendor(Queue& ctx,
-               const MatrixView<T, MatrixFormat::Dense>& descrA,
-               const MatrixView<T, MatrixFormat::Dense>& descrB,
-               const MatrixView<T, MatrixFormat::Dense>& descrC,
-               T alpha,
-               T beta,
+               const MatrixView<Scalar, MatrixFormat::Dense>& descrA,
+               const MatrixView<Scalar, MatrixFormat::Dense>& descrB,
+               const MatrixView<Scalar, MatrixFormat::Dense>& descrC,
+               Scalar alpha,
+               Scalar beta,
                Transpose transA,
                Transpose transB,
                ComputePrecision precision) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::gemm, "gemm_vendor", B, descrA, descrB, descrC);
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::gemm, "gemm_vendor", B, descrA, descrB, descrC);
     static_cast<void>(precision);
     auto A_view = descrA;
     auto B_view = descrB;
     auto C_view = descrC;
-    return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.gemm", [=] {
+    return ::batchlas::detail::submit_host_task<Scalar>(ctx, "netlib.gemm", [=] {
         if (!backend::gemm_batch_dimensions_compatible(A_view, B_view, C_view, transA, transB)) {
             throw batchlas::invalid_argument("gemm: incompatible matrix dimensions");
         }
@@ -242,7 +242,7 @@ Event gemm_vendor(Queue& ctx,
             auto [m, k] = get_effective_dims(A_view, transA);
             auto [kB, n] = get_effective_dims(B_view, transB);
             static_cast<void>(kB);
-            call_backend_nh<T, BackendLibrary::CBLAS>(
+            call_backend_nh<Scalar, BackendLibrary::CBLAS>(
                 cblas_sgemm, cblas_dgemm, cblas_cgemm, cblas_zgemm,
                 Layout::ColMajor, transA, transB,
                 m, n, k,
@@ -265,12 +265,12 @@ Event gemm_vendor(Queue& ctx,
                 if (k == 0) {
                     for (int col = 0; col < n; ++col) {
                         for (int row = 0; row < m; ++row) {
-                            C_i.at(row, col) = beta == T(0) ? T(0) : C_i.at(row, col) * beta;
+                            C_i.at(row, col) = beta == Scalar(0) ? Scalar(0) : C_i.at(row, col) * beta;
                         }
                     }
                     continue;
                 }
-                call_backend_nh<T, BackendLibrary::CBLAS>(
+                call_backend_nh<Scalar, BackendLibrary::CBLAS>(
                     cblas_sgemm, cblas_dgemm, cblas_cgemm, cblas_zgemm,
                     Layout::ColMajor, transA, transB,
                     m, n, k,
@@ -288,26 +288,26 @@ Event gemm_vendor(Queue& ctx,
 
 namespace backend {
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event gemv_vendor(Queue& ctx,
-           const MatrixView<T, MatrixFormat::Dense>& A,
-           const VectorView<T>& X,
-           const VectorView<T>& Y,
-           T alpha,
-           T beta,
+           const MatrixView<Scalar, MatrixFormat::Dense>& A,
+           const VectorView<Scalar>& X,
+           const VectorView<Scalar>& Y,
+           Scalar alpha,
+           Scalar beta,
            Transpose transA) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::gemv, "gemv_vendor", B, A, X, Y);
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::gemv, "gemv_vendor", B, A, X, Y);
     auto A_view = A;
     auto X_view = X;
     auto Y_view = Y;
-    return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.gemv", [=] {
+    return ::batchlas::detail::submit_host_task<Scalar>(ctx, "netlib.gemv", [=] {
         const int m = A_view.rows();
         const int n = A_view.cols();
         if (A_view.batch_size() > 1) {
             for (int i = 0; i < A_view.batch_size(); ++i) {
                 auto Xi = X_view.batch_item(i);
                 auto Yi = Y_view.batch_item(i);
-                call_backend_nh<T, BackendLibrary::CBLAS>(
+                call_backend_nh<Scalar, BackendLibrary::CBLAS>(
                     cblas_sgemv, cblas_dgemv, cblas_cgemv, cblas_zgemv,
                     Layout::ColMajor,
                     transA,
@@ -323,7 +323,7 @@ Event gemv_vendor(Queue& ctx,
                     Yi.inc());
             }
         } else {
-            call_backend_nh<T, BackendLibrary::CBLAS>(
+            call_backend_nh<Scalar, BackendLibrary::CBLAS>(
                 cblas_sgemv, cblas_dgemv, cblas_cgemv, cblas_zgemv,
                 Layout::ColMajor,
                 transA,
@@ -345,16 +345,16 @@ Event gemv_vendor(Queue& ctx,
 
 namespace backend {
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event trsm_vendor(Queue& ctx,
-    const MatrixView<T, MatrixFormat::Dense>& descrA,
-    const MatrixView<T, MatrixFormat::Dense>& descrB,
+    const MatrixView<Scalar, MatrixFormat::Dense>& descrA,
+    const MatrixView<Scalar, MatrixFormat::Dense>& descrB,
     Side side,
     Uplo uplo,
     Transpose transA,
     Diag diag,
-    T alpha) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::trsm, "trsm_vendor", B, descrA, descrB);
+    Scalar alpha) {
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::trsm, "trsm_vendor", B, descrA, descrB);
     // Parameter order matches backend::trsm_vendor as cuBLAS defines it:
     // alpha LAST, unlike the public trsm, which takes it third. The two
     // orders coexisted for as long as each TU declared its own public trsm;
@@ -362,16 +362,16 @@ Event trsm_vendor(Queue& ctx,
 
     auto A_view = descrA;
     auto B_view = descrB;
-    return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.trsm", [=] {
+    return ::batchlas::detail::submit_host_task<Scalar>(ctx, "netlib.trsm", [=] {
         const int m = B_view.rows();
         const int n = B_view.cols();
-        constexpr bool is_complex = std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>;
+        constexpr bool is_complex = std::is_same_v<Scalar, std::complex<float>> || std::is_same_v<Scalar, std::complex<double>>;
         const bool do_conj = (transA == Transpose::ConjTrans) && is_complex;
         const bool do_trans = (transA != Transpose::NoTrans);
         const bool op_is_lower = (uplo == Uplo::Lower) ? !do_trans : do_trans;
         const bool unit_diag = (diag == Diag::Unit);
 
-        auto conj_if = [=](T v) {
+        auto conj_if = [=](Scalar v) {
             if constexpr (is_complex) {
                 if (!do_conj) return v;
                 using std::conj;
@@ -389,10 +389,10 @@ Event trsm_vendor(Queue& ctx,
             const int cols = Bb.cols();
 
             // BLAS: alpha == 0 sets B := 0 without reading A or B.
-            if (alpha == T(0)) {
+            if (alpha == Scalar(0)) {
                 for (int j = 0; j < cols; ++j) {
                     for (int i = 0; i < rows; ++i) {
-                        Bb.at(i, j, 0) = T(0);
+                        Bb.at(i, j, 0) = Scalar(0);
                     }
                 }
                 continue;
@@ -410,11 +410,11 @@ Event trsm_vendor(Queue& ctx,
                 for (int j = 0; j < cols; ++j) {
                     if (op_is_lower) {
                         for (int i = 0; i < dim; ++i) {
-                            T sum = T(0);
+                            Scalar sum = Scalar(0);
                             for (int k = 0; k < i; ++k) {
                                 sum += opA(i, k) * Bb.at(k, j, 0);
                             }
-                            T x = alpha * Bb.at(i, j, 0) - sum;
+                            Scalar x = alpha * Bb.at(i, j, 0) - sum;
                             if (!unit_diag) {
                                 x /= opA(i, i);
                             }
@@ -422,11 +422,11 @@ Event trsm_vendor(Queue& ctx,
                         }
                     } else {
                         for (int i = dim - 1; i >= 0; --i) {
-                            T sum = T(0);
+                            Scalar sum = Scalar(0);
                             for (int k = i + 1; k < dim; ++k) {
                                 sum += opA(i, k) * Bb.at(k, j, 0);
                             }
-                            T x = alpha * Bb.at(i, j, 0) - sum;
+                            Scalar x = alpha * Bb.at(i, j, 0) - sum;
                             if (!unit_diag) {
                                 x /= opA(i, i);
                             }
@@ -439,11 +439,11 @@ Event trsm_vendor(Queue& ctx,
                 for (int i = 0; i < rows; ++i) {
                     if (op_is_lower) {
                         for (int j = dim - 1; j >= 0; --j) {
-                            T sum = T(0);
+                            Scalar sum = Scalar(0);
                             for (int k = j + 1; k < dim; ++k) {
                                 sum += Bb.at(i, k, 0) * opA(k, j);
                             }
-                            T x = alpha * Bb.at(i, j, 0) - sum;
+                            Scalar x = alpha * Bb.at(i, j, 0) - sum;
                             if (!unit_diag) {
                                 x /= opA(j, j);
                             }
@@ -451,11 +451,11 @@ Event trsm_vendor(Queue& ctx,
                         }
                     } else {
                         for (int j = 0; j < dim; ++j) {
-                            T sum = T(0);
+                            Scalar sum = Scalar(0);
                             for (int k = 0; k < j; ++k) {
                                 sum += Bb.at(i, k, 0) * opA(k, j);
                             }
-                            T x = alpha * Bb.at(i, j, 0) - sum;
+                            Scalar x = alpha * Bb.at(i, j, 0) - sum;
                             if (!unit_diag) {
                                 x /= opA(j, j);
                             }
@@ -748,21 +748,21 @@ Event syr2k_vendor(Queue& ctx,
 
 namespace backend {
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event trmm_vendor(Queue& ctx,
-           const MatrixView<T, MatrixFormat::Dense>& A,
-           const MatrixView<T, MatrixFormat::Dense>& Bmat,
-           const MatrixView<T, MatrixFormat::Dense>& Cmat,
-           T alpha,
+           const MatrixView<Scalar, MatrixFormat::Dense>& A,
+           const MatrixView<Scalar, MatrixFormat::Dense>& Bmat,
+           const MatrixView<Scalar, MatrixFormat::Dense>& Cmat,
+           Scalar alpha,
            Side side,
            Uplo uplo,
            Transpose transA,
            Diag diag) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::trmm, "trmm_vendor", B, A, Bmat, Cmat);
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::trmm, "trmm_vendor", B, A, Bmat, Cmat);
     auto A_view = A;
     auto B_view = Bmat;
     auto C_view = Cmat;
-    return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.trmm", [=] {
+    return ::batchlas::detail::submit_host_task<Scalar>(ctx, "netlib.trmm", [=] {
         const auto [m, n, k] = backend::shape::validate_product<batchlas::internal_error>("trmm", A_view, B_view, C_view, side);
         static_cast<void>(k);  // cblas_?trmm takes A's order from side, not as an argument
 
@@ -770,16 +770,16 @@ Event trmm_vendor(Queue& ctx,
         // Going through cblas_?gemm instead would be a plain dense product
         // against A's whole storage, which reads the triangle TRMM is
         // forbidden to touch and ignores Diag::Unit outright.
-        auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
-                                 const MatrixView<T, MatrixFormat::Dense>& B_i,
-                                 const MatrixView<T, MatrixFormat::Dense>& C_i) {
+        auto launch_single = [&](const MatrixView<Scalar, MatrixFormat::Dense>& A_i,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& B_i,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& C_i) {
             for (int col = 0; col < n; ++col) {
                 std::copy_n(B_i.data_ptr() + static_cast<std::size_t>(col) * B_i.ld(),
                             m,
                             C_i.data_ptr() + static_cast<std::size_t>(col) * C_i.ld());
             }
 
-            call_backend_nh<T, BackendLibrary::CBLAS>(
+            call_backend_nh<Scalar, BackendLibrary::CBLAS>(
                 cblas_strmm, cblas_dtrmm, cblas_ctrmm, cblas_ztrmm,
                 Layout::ColMajor,
                 side,
@@ -809,19 +809,19 @@ namespace backend {
 // first half of the int64 span (lapack_int is int32 in this build; a mismatch fails to compile),
 // the format the native kernels read. A batch mask is read inside the host task (idiom I4): an
 // inactive item's A, ipiv and info are never touched. evidence: docs/perf/sytrf.md
-template <Backend B, typename T>
-Event sytrf_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, Span<int64_t> pivots,
+template <Backend B, typename Scalar>
+Event sytrf_vendor(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, Uplo uplo, Span<int64_t> pivots,
                    Span<std::byte> /*workspace*/, Span<int32_t> info_out) {
     const std::uint8_t* const mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("sytrf_vendor", A));
     auto A_view = A;
     auto piv = pivots.as_span<int>();
     auto info = info_out;
     const bool want_info = info.size() >= static_cast<size_t>(A.batch_size());
-    return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.sytrf", [=] {
+    return ::batchlas::detail::submit_host_task<Scalar>(ctx, "netlib.sytrf", [=] {
         const int n = A_view.rows();
         for (int i = 0; i < A_view.batch_size(); ++i) {
             if (mask != nullptr && mask[i] == 0) continue;
-            auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
+            auto st = call_backend_nh_r<Scalar, BackendLibrary::LAPACKE>(
                 LAPACKE_ssytrf, LAPACKE_dsytrf, LAPACKE_csytrf, LAPACKE_zsytrf, Layout::ColMajor, uplo, n,
                 A_view[i].data_ptr(), A_view.ld(), piv.data() + static_cast<size_t>(i) * n);
             if (want_info) info[i] = static_cast<int32_t>(st);
@@ -829,25 +829,25 @@ Event sytrf_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo
     });
 }
 
-template <Backend B, typename T>
-size_t sytrf_vendor_buffer_size(Queue& /*ctx*/, const MatrixView<T, MatrixFormat::Dense>& /*A*/, Uplo /*uplo*/) {
+template <Backend B, typename Scalar>
+size_t sytrf_vendor_buffer_size(Queue& /*ctx*/, const MatrixView<Scalar, MatrixFormat::Dense>& /*A*/, Uplo /*uplo*/) {
     return 0;
 }
 
-template <Backend B, typename T>
-Event sytrs_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                   const MatrixView<T, MatrixFormat::Dense>& Bm, Uplo uplo, Span<int64_t> pivots,
+template <Backend B, typename Scalar>
+Event sytrs_vendor(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                   const MatrixView<Scalar, MatrixFormat::Dense>& Bm, Uplo uplo, Span<int64_t> pivots,
                    const int32_t* skip_info) {
     const std::uint8_t* const mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("sytrs_vendor", A, Bm));
     auto A_view = A;
     auto B_view = Bm;
     auto piv = pivots.as_span<int>();
-    return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.sytrs", [=] {
+    return ::batchlas::detail::submit_host_task<Scalar>(ctx, "netlib.sytrs", [=] {
         const int n = A_view.rows();
         for (int i = 0; i < A_view.batch_size(); ++i) {
             if (mask != nullptr && mask[i] == 0) continue;
             if (skip_info != nullptr && skip_info[i] != 0) continue;
-            (void)call_backend_nh_r<T, BackendLibrary::LAPACKE>(
+            (void)call_backend_nh_r<Scalar, BackendLibrary::LAPACKE>(
                 LAPACKE_ssytrs, LAPACKE_dsytrs, LAPACKE_csytrs, LAPACKE_zsytrs, Layout::ColMajor, uplo, n,
                 B_view.cols(), A_view[i].data_ptr(), A_view.ld(), piv.data() + static_cast<size_t>(i) * n,
                 B_view[i].data_ptr(), B_view.ld());
@@ -864,27 +864,28 @@ BATCHLAS_FOR_EACH_SCALAR_TYPE_1(NETLIB_SYTRF_OPS, Backend::NETLIB)
 
 // LAPACKE ?sygst/?hegst and ?sygvd/?hegvd per item: sygst's and sygvd's vendor families on the host.
 // evidence: docs/perf/sygvd.md#sygvd-routes
-template <Backend B, typename T>
-Event sygst_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                   const MatrixView<T, MatrixFormat::Dense>& Bm, int itype, Uplo uplo,
+template <Backend B, typename Scalar>
+Event sygst_vendor(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                   const MatrixView<Scalar, MatrixFormat::Dense>& Bm, int itype, Uplo uplo,
                    Span<std::byte> /*workspace*/) {
     // I4: the mask is read inside the host task, after its producer on the in-order queue.
     const std::uint8_t* mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("sygst_vendor", A, Bm));
     auto a = A;
     auto b = Bm;
-    return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.sygst", [=] {
+    return ::batchlas::detail::submit_host_task<Scalar>(ctx, "netlib.sygst", [=] {
         for (int i = 0; i < a.batch_size(); ++i) {
             if (mask != nullptr && mask[i] == 0) continue;
-            (void)call_backend_nh_r<T, BackendLibrary::LAPACKE>(
+            (void)call_backend_nh_r<Scalar, BackendLibrary::LAPACKE>(
                 LAPACKE_ssygst, LAPACKE_dsygst, LAPACKE_chegst, LAPACKE_zhegst, Layout::ColMajor, itype, uplo,
                 a.rows(), a[i].data_ptr(), a.ld(), b[i].data_ptr(), b.ld());
         }
     });
 }
 
-template <Backend B, typename T>
-Event sygvd_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                   const MatrixView<T, MatrixFormat::Dense>& Bm, Span<typename base_type<T>::type> w, int itype,
+template <Backend B, typename Scalar>
+Event sygvd_vendor(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                   const MatrixView<Scalar, MatrixFormat::Dense>& Bm, Span<typename base_type<Scalar>::type> w,
+                   int itype,
                    JobType jobz, Uplo uplo, Span<std::byte> /*workspace*/, Span<int32_t> info_out) {
     const std::uint8_t* mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("sygvd_vendor", A, Bm));
     auto a = A;
@@ -892,11 +893,11 @@ Event sygvd_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
     auto eig = w;
     auto info = info_out;
     const bool want_info = info.size() >= static_cast<size_t>(A.batch_size());
-    return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.sygvd", [=] {
+    return ::batchlas::detail::submit_host_task<Scalar>(ctx, "netlib.sygvd", [=] {
         const int n = a.rows();
         for (int i = 0; i < a.batch_size(); ++i) {
             if (mask != nullptr && mask[i] == 0) continue;  // I4
-            auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
+            auto st = call_backend_nh_r<Scalar, BackendLibrary::LAPACKE>(
                 LAPACKE_ssygvd, LAPACKE_dsygvd, LAPACKE_chegvd, LAPACKE_zhegvd, Layout::ColMajor, itype, jobz,
                 uplo, n, a[i].data_ptr(), a.ld(), b[i].data_ptr(), b.ld(),
                 base_float_ptr_convert(eig.subspan(static_cast<size_t>(i) * n).data()));
@@ -905,10 +906,10 @@ Event sygvd_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
     });
 }
 
-template <Backend B, typename T>
-size_t sygvd_vendor_buffer_size(Queue& /*ctx*/, const MatrixView<T, MatrixFormat::Dense>& /*A*/,
-                                const MatrixView<T, MatrixFormat::Dense>& /*Bm*/,
-                                Span<typename base_type<T>::type> /*w*/, int /*itype*/, JobType /*jobz*/,
+template <Backend B, typename Scalar>
+size_t sygvd_vendor_buffer_size(Queue& /*ctx*/, const MatrixView<Scalar, MatrixFormat::Dense>& /*A*/,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& /*Bm*/,
+                                Span<typename base_type<Scalar>::type> /*w*/, int /*itype*/, JobType /*jobz*/,
                                 Uplo /*uplo*/) {
     return 0;
 }
@@ -924,13 +925,13 @@ BATCHLAS_FOR_EACH_SCALAR_TYPE_1(NETLIB_SYGVD_OPS, Backend::NETLIB)
 
 namespace backend {
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event potrf_vendor(Queue& ctx,
-                const MatrixView<T, MatrixFormat::Dense>& descrA,
+                const MatrixView<Scalar, MatrixFormat::Dense>& descrA,
                 Uplo uplo,
                 Span<std::byte> workspace,
                 Span<int32_t> info_out) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::potrf, "potrf_vendor", B, descrA);
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::potrf, "potrf_vendor", B, descrA);
     static_cast<void>(workspace);
     auto A_view = descrA;
     // LAPACKE reports failure only through its return value, and this loop
@@ -940,16 +941,16 @@ Event potrf_vendor(Queue& ctx,
     // its own -- so an empty span simply means "do not record".
     auto info = info_out;
     const bool want_info = info.size() >= static_cast<size_t>(descrA.batch_size());
-    return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.potrf", [=] {
+    return ::batchlas::detail::submit_host_task<Scalar>(ctx, "netlib.potrf", [=] {
         if (A_view.batch_size() == 1) {
-            auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
+            auto st = call_backend_nh_r<Scalar, BackendLibrary::LAPACKE>(
                 LAPACKE_spotrf, LAPACKE_dpotrf, LAPACKE_cpotrf, LAPACKE_zpotrf,
                 Layout::ColMajor, uplo,
                 A_view.rows(), A_view.data_ptr(), A_view.ld());
             if (want_info) info[0] = static_cast<int32_t>(st);
         } else {
             for (int i = 0; i < A_view.batch_size(); ++i) {
-                auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
+                auto st = call_backend_nh_r<Scalar, BackendLibrary::LAPACKE>(
                     LAPACKE_spotrf, LAPACKE_dpotrf, LAPACKE_cpotrf, LAPACKE_zpotrf,
                     Layout::ColMajor, uplo,
                     A_view[i].rows(), A_view[i].data_ptr(), A_view[i].ld());
@@ -963,10 +964,10 @@ Event potrf_vendor(Queue& ctx,
 
 namespace backend {
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event syev_vendor(Queue& ctx,
-                  const MatrixView<T, MatrixFormat::Dense>& descrA,
-                  Span<typename base_type<T>::type> eigenvalues,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& descrA,
+                  Span<typename base_type<Scalar>::type> eigenvalues,
                   JobType jobtype,
                   Uplo uplo,
                   Span<std::byte> /*workspace*/,
@@ -985,10 +986,10 @@ Event syev_vendor(Queue& ctx,
     // syev_vendor_buffer_size still returns 0 whether or not status is asked for.
     auto info = info_out;
     const bool want_info = info.size() >= static_cast<size_t>(descrA.batch_size());
-    return ::batchlas::detail::submit_host_task<T>(ctx, "lapacke.syev", [=] {
+    return ::batchlas::detail::submit_host_task<Scalar>(ctx, "lapacke.syev", [=] {
         if (A_view.batch_size() == 1) {
             if (mask != nullptr && mask[0] == 0) return;
-            auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
+            auto st = call_backend_nh_r<Scalar, BackendLibrary::LAPACKE>(
                 LAPACKE_ssyev, LAPACKE_dsyev, LAPACKE_cheev, LAPACKE_zheev,
                 Layout::ColMajor, jobtype, uplo,
                 A_view.rows(), A_view.data_ptr(), A_view.ld(),
@@ -997,7 +998,7 @@ Event syev_vendor(Queue& ctx,
         } else {
             for (int i = 0; i < A_view.batch_size(); ++i) {
                 if (mask != nullptr && mask[i] == 0) continue;
-                auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
+                auto st = call_backend_nh_r<Scalar, BackendLibrary::LAPACKE>(
                     LAPACKE_ssyev, LAPACKE_dsyev, LAPACKE_cheev, LAPACKE_zheev,
                     Layout::ColMajor, jobtype, uplo,
                     A_view[i].rows(),
@@ -1010,10 +1011,10 @@ Event syev_vendor(Queue& ctx,
     });
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t syev_vendor_buffer_size(Queue& /*ctx*/,
-                               const MatrixView<T, MatrixFormat::Dense>& /*descrA*/,
-                               Span<typename base_type<T>::type> /*eigenvalues*/,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& /*descrA*/,
+                               Span<typename base_type<Scalar>::type> /*eigenvalues*/,
                                JobType /*jobtype*/,
                                Uplo /*uplo*/) {
     // LAPACKE path uses no user-provided workspace.
@@ -1021,12 +1022,12 @@ size_t syev_vendor_buffer_size(Queue& /*ctx*/,
 }
 
 // Synchronous ctx.wait() is deliberate: LAPACKE ?gesvd needs A on the host; this is the reference path.
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event gesvd_vendor(Queue& ctx,
-                   const MatrixView<T, MatrixFormat::Dense>& A,
-                   Span<typename base_type<T>::type> singular_values,
-                   const MatrixView<T, MatrixFormat::Dense>& U,
-                   const MatrixView<T, MatrixFormat::Dense>& Vh,
+                   const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                   Span<typename base_type<Scalar>::type> singular_values,
+                   const MatrixView<Scalar, MatrixFormat::Dense>& U,
+                   const MatrixView<Scalar, MatrixFormat::Dense>& Vh,
                    SvdVectors jobu,
                    SvdVectors jobvh,
                    Span<std::byte> workspace,
@@ -1039,7 +1040,7 @@ Event gesvd_vendor(Queue& ctx,
     // This path calls LAPACKE directly rather than going through
     // submit_host_task, so it has to run the double-precision health check
     // itself; otherwise a broken host dgemm is silent here.
-    ::batchlas::detail::host_blas_double_guard<T>();
+    ::batchlas::detail::host_blas_double_guard<Scalar>();
 
     if (A.batch_size() < 1 || A.rows() < 1 || A.cols() < 1) {
         throw batchlas::invalid_argument("gesvd_vendor (NETLIB): invalid matrix shape or batch size");
@@ -1088,19 +1089,19 @@ Event gesvd_vendor(Queue& ctx,
 
     ctx.wait();
 
-    std::vector<typename base_type<T>::type> superb(static_cast<std::size_t>(std::max(0, k - 1)));
-    auto& A_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(A);
+    std::vector<typename base_type<Scalar>::type> superb(static_cast<std::size_t>(std::max(0, k - 1)));
+    auto& A_mut = const_cast<MatrixView<Scalar, MatrixFormat::Dense>&>(A);
     for (int b = 0; b < batch; ++b) {
         if (mask != nullptr && mask[b] == 0) continue;
         auto Ab = A_mut.batch_item(b);
         // A None side may be an empty view with batch size 1: never index it.
-        using DenseView = MatrixView<T, MatrixFormat::Dense>;
+        using DenseView = MatrixView<Scalar, MatrixFormat::Dense>;
         const DenseView Ub = jobu != SvdVectors::None ? U.batch_item(b) : DenseView();
         const DenseView Vhb = jobvh != SvdVectors::None ? Vh.batch_item(b) : DenseView();
-        typename base_type<T>::type* sb = singular_values.data() + static_cast<std::size_t>(b) * static_cast<std::size_t>(k);
+        typename base_type<Scalar>::type* sb = singular_values.data() + static_cast<std::size_t>(b) * static_cast<std::size_t>(k);
 
         lapack_int info = 0;
-        if constexpr (std::is_same_v<T, float>) {
+        if constexpr (std::is_same_v<Scalar, float>) {
             info = LAPACKE_sgesvd(LAPACK_COL_MAJOR, lapack_jobu, lapack_jobvt, m, n,
                                   Ab.data_ptr(), Ab.ld(), sb,
                                   (jobu != SvdVectors::None) ? Ub.data_ptr() : nullptr,
@@ -1108,7 +1109,7 @@ Event gesvd_vendor(Queue& ctx,
                                   (jobvh != SvdVectors::None) ? Vhb.data_ptr() : nullptr,
                                   (jobvh != SvdVectors::None) ? Vhb.ld() : 1,
                                   superb.data());
-        } else if constexpr (std::is_same_v<T, double>) {
+        } else if constexpr (std::is_same_v<Scalar, double>) {
             info = LAPACKE_dgesvd(LAPACK_COL_MAJOR, lapack_jobu, lapack_jobvt, m, n,
                                   Ab.data_ptr(), Ab.ld(), sb,
                                   (jobu != SvdVectors::None) ? Ub.data_ptr() : nullptr,
@@ -1116,7 +1117,7 @@ Event gesvd_vendor(Queue& ctx,
                                   (jobvh != SvdVectors::None) ? Vhb.data_ptr() : nullptr,
                                   (jobvh != SvdVectors::None) ? Vhb.ld() : 1,
                                   superb.data());
-        } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+        } else if constexpr (std::is_same_v<Scalar, std::complex<float>>) {
             info = LAPACKE_cgesvd(LAPACK_COL_MAJOR, lapack_jobu, lapack_jobvt, m, n,
                                   reinterpret_cast<lapack_complex_float*>(Ab.data_ptr()), Ab.ld(), sb,
                                   (jobu != SvdVectors::None) ? reinterpret_cast<lapack_complex_float*>(Ub.data_ptr()) : nullptr,
@@ -1124,7 +1125,7 @@ Event gesvd_vendor(Queue& ctx,
                                   (jobvh != SvdVectors::None) ? reinterpret_cast<lapack_complex_float*>(Vhb.data_ptr()) : nullptr,
                                   (jobvh != SvdVectors::None) ? Vhb.ld() : 1,
                                   superb.data());
-        } else if constexpr (std::is_same_v<T, std::complex<double>>) {
+        } else if constexpr (std::is_same_v<Scalar, std::complex<double>>) {
             info = LAPACKE_zgesvd(LAPACK_COL_MAJOR, lapack_jobu, lapack_jobvt, m, n,
                                   reinterpret_cast<lapack_complex_double*>(Ab.data_ptr()), Ab.ld(), sb,
                                   (jobu != SvdVectors::None) ? reinterpret_cast<lapack_complex_double*>(Ub.data_ptr()) : nullptr,
@@ -1151,12 +1152,12 @@ Event gesvd_vendor(Queue& ctx,
     return ctx.create_event_after_external_work();
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t gesvd_vendor_buffer_size(Queue& /*ctx*/,
-                                const MatrixView<T, MatrixFormat::Dense>& /*A*/,
-                                Span<typename base_type<T>::type> /*singular_values*/,
-                                const MatrixView<T, MatrixFormat::Dense>& /*U*/,
-                                const MatrixView<T, MatrixFormat::Dense>& /*Vh*/,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& /*A*/,
+                                Span<typename base_type<Scalar>::type> /*singular_values*/,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& /*U*/,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& /*Vh*/,
                                 SvdVectors /*jobu*/,
                                 SvdVectors /*jobvh*/) {
     // LAPACKE path uses no user-provided workspace.
@@ -1167,10 +1168,10 @@ size_t gesvd_vendor_buffer_size(Queue& /*ctx*/,
 
 namespace backend {
 
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 Event getrs_vendor(Queue& ctx,
-            const MatrixView<T, MatrixFormat::Dense>& A,
-            const MatrixView<T, MatrixFormat::Dense>& B,
+            const MatrixView<Scalar, MatrixFormat::Dense>& A,
+            const MatrixView<Scalar, MatrixFormat::Dense>& B,
             Transpose transA,
             Span<int64_t> pivots,
             Span<std::byte> workspace) {
@@ -1193,11 +1194,11 @@ Event getrs_vendor(Queue& ctx,
     });
     Event conv_event(std::move(conv_impl));
     ctx.enqueue(conv_event);
-    return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.getrs", [=] {
+    return ::batchlas::detail::submit_host_task<Scalar>(ctx, "netlib.getrs", [=] {
         int nrhs = B_view.cols();
         for (int i = 0; i < A_view.batch_size(); ++i) {
             if (mask != nullptr && mask[i] == 0) continue;
-            call_backend_nh<T, BackendLibrary::LAPACKE>(
+            call_backend_nh<Scalar, BackendLibrary::LAPACKE>(
                 LAPACKE_sgetrs, LAPACKE_dgetrs, LAPACKE_cgetrs, LAPACKE_zgetrs,
                 Layout::ColMajor,
                 transA,
@@ -1216,10 +1217,10 @@ Event getrs_vendor(Queue& ctx,
 
 namespace backend {
 
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 size_t getrs_vendor_buffer_size(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A,
-                         const MatrixView<T, MatrixFormat::Dense>& B,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& B,
                          Transpose transA) {
     static_cast<void>(ctx);
     static_cast<void>(A);
@@ -1232,9 +1233,9 @@ size_t getrs_vendor_buffer_size(Queue& ctx,
 
 namespace backend {
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event getrf_vendor(Queue& ctx,
-            const MatrixView<T, MatrixFormat::Dense>& A,
+            const MatrixView<Scalar, MatrixFormat::Dense>& A,
             Span<int64_t> pivots,
             Span<std::byte> workspace,
             Span<int32_t> info_out) {
@@ -1252,10 +1253,10 @@ Event getrf_vendor(Queue& ctx,
     auto info = info_out;
     const bool want_info = info.size() >= static_cast<size_t>(batch);
 
-    Event getrf_event = ::batchlas::detail::submit_host_task<T>(ctx, "netlib.getrf", [=] {
+    Event getrf_event = ::batchlas::detail::submit_host_task<Scalar>(ctx, "netlib.getrf", [=] {
         for (int i = 0; i < batch; ++i) {
             if (mask != nullptr && mask[i] == 0) continue;
-            auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
+            auto st = call_backend_nh_r<Scalar, BackendLibrary::LAPACKE>(
                 LAPACKE_sgetrf, LAPACKE_dgetrf, LAPACKE_cgetrf, LAPACKE_zgetrf,
                 Layout::ColMajor,
                 m,
@@ -1286,9 +1287,9 @@ Event getrf_vendor(Queue& ctx,
 
 namespace backend {
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t getrf_vendor_buffer_size(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A) {
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A) {
     static_cast<void>(ctx);
     static_cast<void>(A);
     return BumpAllocator::allocation_size<int>(ctx, std::min(A.rows(), A.cols()) * A.batch_size());
@@ -1298,10 +1299,10 @@ size_t getrf_vendor_buffer_size(Queue& ctx,
 
 namespace backend {
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event getri_vendor(Queue& ctx,
-            const MatrixView<T, MatrixFormat::Dense>& A,
-            const MatrixView<T, MatrixFormat::Dense>& C,
+            const MatrixView<Scalar, MatrixFormat::Dense>& A,
+            const MatrixView<Scalar, MatrixFormat::Dense>& C,
             Span<int64_t> pivots,
             Span<std::byte> workspace,
             Span<int32_t> info_out) {
@@ -1320,8 +1321,8 @@ Event getri_vendor(Queue& ctx,
     auto info = info_out;
     const bool want_info = info.size() >= static_cast<size_t>(batch);
     // ld- and stride-aware; submit_host_task waits for it before the LAPACKE calls.
-    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, C_view, A_view);
-    return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.getri", [=] {
+    (void)MatrixView<Scalar, MatrixFormat::Dense>::copy(ctx, C_view, A_view);
+    return ::batchlas::detail::submit_host_task<Scalar>(ctx, "netlib.getri", [=] {
         auto piv_in = piv.as_span<int64_t>();
         for (int b = 0; b < batch; ++b) {
             if (mask != nullptr && mask[b] == 0) continue;
@@ -1330,7 +1331,7 @@ Event getri_vendor(Queue& ctx,
                 piv_i32[b * n + i] = static_cast<int>(piv_in[b * n + i]);
             }
 
-            auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
+            auto st = call_backend_nh_r<Scalar, BackendLibrary::LAPACKE>(
                 LAPACKE_sgetri, LAPACKE_dgetri, LAPACKE_cgetri, LAPACKE_zgetri,
                 Layout::ColMajor,
                 n,
@@ -1346,9 +1347,9 @@ Event getri_vendor(Queue& ctx,
 
 namespace backend {
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t getri_vendor_buffer_size(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A) {
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A) {
     static_cast<void>(ctx);
     static_cast<void>(A);
     return BumpAllocator::allocation_size<int>(ctx, A.rows() * A.batch_size());
@@ -1358,10 +1359,10 @@ size_t getri_vendor_buffer_size(Queue& ctx,
 
 namespace backend {
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event geqrf_vendor(Queue& ctx,
-            const MatrixView<T, MatrixFormat::Dense>& A,
-            Span<T> tau,
+            const MatrixView<Scalar, MatrixFormat::Dense>& A,
+            Span<Scalar> tau,
             Span<std::byte> workspace) {
     // I4: the host loop reads the (possibly device-only, host-addressable here) mask itself;
     // an inactive item's A and tau are untouched.
@@ -1369,12 +1370,12 @@ Event geqrf_vendor(Queue& ctx,
     static_cast<void>(workspace);
     auto A_view = A;
     auto tau_view = tau;
-    return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.geqrf", [=] {
+    return ::batchlas::detail::submit_host_task<Scalar>(ctx, "netlib.geqrf", [=] {
         int m = A_view.rows();
         int n = A_view.cols();
         for (int i = 0; i < A_view.batch_size(); ++i) {
             if (mask != nullptr && mask[i] == 0) continue;
-            call_backend_nh<T, BackendLibrary::LAPACKE>(
+            call_backend_nh<Scalar, BackendLibrary::LAPACKE>(
                 LAPACKE_sgeqrf, LAPACKE_dgeqrf, LAPACKE_cgeqrf, LAPACKE_zgeqrf,
                 Layout::ColMajor,
                 m,
@@ -1390,10 +1391,10 @@ Event geqrf_vendor(Queue& ctx,
 
 namespace backend {
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t geqrf_vendor_buffer_size(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A,
-                         Span<T> tau) {
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         Span<Scalar> tau) {
     static_cast<void>(ctx);
     static_cast<void>(A);
     static_cast<void>(tau);
@@ -1404,23 +1405,23 @@ size_t geqrf_vendor_buffer_size(Queue& ctx,
 
 namespace backend {
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event orgqr_vendor(Queue& ctx,
-            const MatrixView<T, MatrixFormat::Dense>& A,
-            Span<T> tau,
+            const MatrixView<Scalar, MatrixFormat::Dense>& A,
+            Span<Scalar> tau,
             Span<std::byte> workspace) {
     // I4, as geqrf_vendor: an inactive item's A is untouched.
     const std::uint8_t* const mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("orgqr_vendor", A));
     static_cast<void>(workspace);
     auto A_view = A;
     auto tau_view = tau;
-    return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.orgqr", [=] {
+    return ::batchlas::detail::submit_host_task<Scalar>(ctx, "netlib.orgqr", [=] {
         int m = A_view.rows();
         int n = A_view.cols();
         int k = std::min(m, n);
         for (int i = 0; i < A_view.batch_size(); ++i) {
             if (mask != nullptr && mask[i] == 0) continue;
-            call_backend_nh<T, BackendLibrary::LAPACKE>(
+            call_backend_nh<Scalar, BackendLibrary::LAPACKE>(
                 LAPACKE_sorgqr, LAPACKE_dorgqr, LAPACKE_cungqr, LAPACKE_zungqr,
                 Layout::ColMajor,
                 m,
@@ -1437,10 +1438,10 @@ Event orgqr_vendor(Queue& ctx,
 
 namespace backend {
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t orgqr_vendor_buffer_size(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A,
-                         Span<T> tau) {
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         Span<Scalar> tau) {
     static_cast<void>(ctx);
     static_cast<void>(A);
     static_cast<void>(tau);
@@ -1451,27 +1452,27 @@ size_t orgqr_vendor_buffer_size(Queue& ctx,
 
 namespace backend {
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event ormqr_vendor(Queue& ctx,
-                  const MatrixView<T, MatrixFormat::Dense>& A,
-                  const MatrixView<T, MatrixFormat::Dense>& C,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& C,
                   Side side,
                   Transpose trans,
-                  Span<T> tau,
+                  Span<Scalar> tau,
                   Span<std::byte> workspace) {
     // I4, as geqrf_vendor: an inactive item's C is untouched.
     const std::uint8_t* const mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("ormqr_vendor", A, C));
     auto A_view = A;
     auto C_view = C;
     auto tau_view = tau;
-    return ::batchlas::detail::submit_host_task<T>(ctx, "lapacke.ormqr_vendor", [=] {
+    return ::batchlas::detail::submit_host_task<Scalar>(ctx, "lapacke.ormqr_vendor", [=] {
         static_cast<void>(workspace);
         int m = C_view.rows();
         int n = C_view.cols();
         int k = std::min(A_view.rows(), A_view.cols());
         for (int i = 0; i < A_view.batch_size(); ++i) {
             if (mask != nullptr && mask[i] == 0) continue;
-            call_backend_nh<T, BackendLibrary::LAPACKE>(
+            call_backend_nh<Scalar, BackendLibrary::LAPACKE>(
                 LAPACKE_sormqr, LAPACKE_dormqr, LAPACKE_cunmqr, LAPACKE_zunmqr,
                 Layout::ColMajor,
                 side,
@@ -1488,13 +1489,13 @@ Event ormqr_vendor(Queue& ctx,
     });
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t ormqr_vendor_buffer_size(Queue& ctx,
-                                const MatrixView<T, MatrixFormat::Dense>& A,
-                                const MatrixView<T, MatrixFormat::Dense>& C,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& C,
                                 Side side,
                                 Transpose trans,
-                                Span<T> tau) {
+                                Span<Scalar> tau) {
     static_cast<void>(ctx);
     static_cast<void>(A);
     static_cast<void>(C);
@@ -1508,9 +1509,9 @@ size_t ormqr_vendor_buffer_size(Queue& ctx,
 
 namespace backend {
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t potrf_vendor_buffer_size(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& descrA,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& descrA,
                          Uplo uplo) {
     static_cast<void>(ctx);
     static_cast<void>(descrA);

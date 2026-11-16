@@ -21,7 +21,7 @@ namespace batchlas {
 /// For each batch item \f$A_i\f$, `norms[i]` receives \f$\lVert A_i \rVert\f$ in the
 /// requested norm: Frobenius, One (max column sum), Inf (max row sum), Max
 /// (max absolute entry) or Spectral (largest \f$\lvert\lambda\rvert\f$).
-/// @tparam T      float, double, std::complex<float> or std::complex<double>
+/// @tparam Scalar      float, double, std::complex<float> or std::complex<double>
 /// @tparam MF     matrix format; only MatrixFormat::Dense is instantiated
 /// @param[in]  ctx       queue the kernels are enqueued on
 /// @param[in]  A         batch of \f$m \times n\f$ matrices; not modified
@@ -39,11 +39,11 @@ namespace batchlas {
 ///         library is not compiled in (the vendor `syev` is called directly;
 ///         Backend::SYCL calls the native `syev` instead)
 /// @throws batchlas::unsupported for double or complex<double> on a GPU without fp64
-template <typename T, MatrixFormat MF>
+template <typename Scalar, MatrixFormat MF>
 BATCHLAS_API Event norm(Queue& ctx,
-                       const MatrixView<T, MF>& A,
+                       const MatrixView<Scalar, MF>& A,
                        const NormType norm_type,
-                       const Span<float_t<T>> norms);
+                       const Span<float_t<Scalar>> norms);
 
 /// @brief Per-item matrix norm, returned in a new vector. Blocks until done.
 ///
@@ -53,9 +53,9 @@ BATCHLAS_API Event norm(Queue& ctx,
 /// @param[in] A         batch of \f$m \times n\f$ matrices; not modified
 /// @param[in] norm_type which norm (default Frobenius)
 /// @return one real norm \f$\lVert A_i \rVert\f$ per batch item
-template <typename T, MatrixFormat MF>
-BATCHLAS_API UnifiedVector<float_t<T>> norm(Queue& ctx,
-                                   const MatrixView<T, MF>& A,
+template <typename Scalar, MatrixFormat MF>
+BATCHLAS_API UnifiedVector<float_t<Scalar>> norm(Queue& ctx,
+                                   const MatrixView<Scalar, MF>& A,
                                    const NormType norm_type = NormType::Frobenius);
 
 /// @brief Per-item condition number, written into a caller-owned span.
@@ -67,7 +67,7 @@ BATCHLAS_API UnifiedVector<float_t<T>> norm(Queue& ctx,
 /// largest to the smallest eigenvalue magnitude of a symmetric/Hermitian \f$A_i\f$
 /// (lower triangle read; \f$\infty\f$ when an eigenvalue is exactly zero).
 /// @tparam B        backend; deduced from the Queue on the `cond(ctx, ...)` spelling
-/// @tparam T        float or double (real only)
+/// @tparam Real        float or double (real only)
 /// @tparam MF       MatrixFormat::Dense
 /// @param[in]  ctx       queue the kernels are enqueued on
 /// @param[in]  A         batch of \f$n \times n\f$ matrices; not modified
@@ -84,12 +84,12 @@ BATCHLAS_API UnifiedVector<float_t<T>> norm(Queue& ctx,
 ///       kernel selection, and throws batchlas::NoRouteError in a vendor-free
 ///       build; see @ref md_docs_2design_2known-defects (defect 2).
 ///       Backend::SYCL calls the native `syev` instead.
-template <Backend B, typename T, MatrixFormat MF>
-    requires RealScalar<T>
+template <Backend B, typename Real, MatrixFormat MF>
+    requires RealScalar<Real>
 BATCHLAS_API Event cond(Queue& ctx,
-                       const MatrixView<T, MF>& A,
+                       const MatrixView<Real, MF>& A,
                        const NormType norm_type,
-                       const Span<T> conds,
+                       const Span<Real> conds,
                        const Span<std::byte> workspace);
 
 /// @brief Workspace bytes needed by the span overload of cond().
@@ -114,11 +114,11 @@ BATCHLAS_API size_t cond_buffer_size(Queue& ctx,
 /// @param[in] A         batch of \f$n \times n\f$ matrices; not modified
 /// @param[in] norm_type which norm
 /// @return one condition number per batch item
-template <Backend B, typename T, MatrixFormat MF>
-    requires RealScalar<T>
-BATCHLAS_API UnifiedVector<T> cond(Queue& ctx,
-                                   const MatrixView<T, MF>& A,
-                                   const NormType norm_type);
+template <Backend B, typename Real, MatrixFormat MF>
+    requires RealScalar<Real>
+BATCHLAS_API UnifiedVector<Real> cond(Queue& ctx,
+                                      const MatrixView<Real, MF>& A,
+                                      const NormType norm_type);
 
 /// @brief Random dense matrices with a prescribed \f$\log_{10}\f$ condition number.
 ///
@@ -127,8 +127,8 @@ BATCHLAS_API UnifiedVector<T> cond(Queue& ctx,
 /// requested metric. Blocks until the result is written.
 /// @note On Backend::NETLIB the result is the diagonal \f$\Sigma\f$ itself, with
 ///       no random rotation.
-/// @tparam B  backend (not deducible; spell `f<Backend, T>(...)`)
-/// @tparam T  scalar type (not deducible)
+/// @tparam B  backend (not deducible; spell `f<Backend, Scalar>(...)`)
+/// @tparam Scalar  scalar type (not deducible)
 /// @param[in] ctx          queue the kernels are enqueued on
 /// @param[in] n            order \f$n > 0\f$ of each matrix
 /// @param[in] log10_kappa  target \f$\log_{10}\kappa \ge 0\f$
@@ -144,14 +144,14 @@ BATCHLAS_API UnifiedVector<T> cond(Queue& ctx,
 ///         `log10_kappa`, a metric other than Spectral/Frobenius, or, for
 ///         NormType::Frobenius, \f$\log_{10}\kappa < \log_{10} n\f$
 // evidence: docs/design/api-conventions.md#api-conventions-cond-generators-default-to-cgs2
-template <Backend B, typename T>
-BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_with_log10_cond_metric(Queue& ctx,
-                                                                           int n,
-                                                                           float_t<T> log10_kappa,
-                                                                           NormType metric,
-                                                                           int batch_size = 1,
-                                                                           unsigned seed = 42,
-                                                                           OrthoAlgorithm algo = OrthoAlgorithm::CGS2);
+template <Backend B, typename Scalar>
+BATCHLAS_API Matrix<Scalar, MatrixFormat::Dense> random_with_log10_cond_metric(Queue& ctx,
+                                                                               int n,
+                                                                               float_t<Scalar> log10_kappa,
+                                                                               NormType metric,
+                                                                               int batch_size = 1,
+                                                                               unsigned seed = 42,
+                                                                               OrthoAlgorithm algo = OrthoAlgorithm::CGS2);
 
 /// @brief Random symmetric/Hermitian matrices with a prescribed \f$\log_{10}\f$ condition number.
 ///
@@ -165,14 +165,14 @@ BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_with_log10_cond_metric(Queue&
 /// @param[in] seed         RNG seed; equal seeds give equal batches
 /// @param[in] algo         orthogonalisation used to build \f$Q\f$; keep the CGS2 default
 /// @return a new batch of `batch_size` symmetric/Hermitian \f$n \times n\f$ matrices
-template <Backend B, typename T>
-BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_hermitian_with_log10_cond_metric(Queue& ctx,
-                                                                                    int n,
-                                                                                    float_t<T> log10_kappa,
-                                                                                    NormType metric,
-                                                                                    int batch_size = 1,
-                                                                                    unsigned seed = 42,
-                                                                                    OrthoAlgorithm algo = OrthoAlgorithm::CGS2);
+template <Backend B, typename Scalar>
+BATCHLAS_API Matrix<Scalar, MatrixFormat::Dense> random_hermitian_with_log10_cond_metric(Queue& ctx,
+                                                                                         int n,
+                                                                                         float_t<Scalar> log10_kappa,
+                                                                                         NormType metric,
+                                                                                         int batch_size = 1,
+                                                                                         unsigned seed = 42,
+                                                                                         OrthoAlgorithm algo = OrthoAlgorithm::CGS2);
 
 /// @brief Random banded matrices with a prescribed \f$\log_{10}\f$ condition number.
 ///
@@ -190,14 +190,14 @@ BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_hermitian_with_log10_cond_met
 /// @param[in] seed         RNG seed; equal seeds give equal batches
 /// @return a new batch of `batch_size` \f$n \times n\f$ matrices, stored dense
 /// @throws batchlas::invalid_argument on a negative `kd`, and as random_with_log10_cond_metric()
-template <Backend B, typename T>
-BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_banded_with_log10_cond_metric(Queue& ctx,
-                                                                                  int n,
-                                                                                  int kd,
-                                                                                  float_t<T> log10_kappa,
-                                                                                  NormType metric,
-                                                                                  int batch_size = 1,
-                                                                                  unsigned seed = 42);
+template <Backend B, typename Scalar>
+BATCHLAS_API Matrix<Scalar, MatrixFormat::Dense> random_banded_with_log10_cond_metric(Queue& ctx,
+                                                                                      int n,
+                                                                                      int kd,
+                                                                                      float_t<Scalar> log10_kappa,
+                                                                                      NormType metric,
+                                                                                      int batch_size = 1,
+                                                                                      unsigned seed = 42);
 
 /// @brief Random symmetric/Hermitian banded matrices with a prescribed \f$\log_{10}\f$ condition number.
 /// @param[in] ctx          queue the kernels are enqueued on
@@ -212,14 +212,14 @@ BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_banded_with_log10_cond_metric
 /// @param[in] seed         RNG seed; equal seeds give equal batches
 /// @return a new batch of `batch_size` symmetric/Hermitian \f$n \times n\f$ matrices, stored dense
 /// @throws batchlas::invalid_argument on a negative `kd`, and as random_with_log10_cond_metric()
-template <Backend B, typename T>
-BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_hermitian_banded_with_log10_cond_metric(Queue& ctx,
-                                                                                           int n,
-                                                                                           int kd,
-                                                                                           float_t<T> log10_kappa,
-                                                                                           NormType metric,
-                                                                                           int batch_size = 1,
-                                                                                           unsigned seed = 42);
+template <Backend B, typename Scalar>
+BATCHLAS_API Matrix<Scalar, MatrixFormat::Dense> random_hermitian_banded_with_log10_cond_metric(Queue& ctx,
+                                                                                                int n,
+                                                                                                int kd,
+                                                                                                float_t<Scalar> log10_kappa,
+                                                                                                NormType metric,
+                                                                                                int batch_size = 1,
+                                                                                                unsigned seed = 42);
 
 /// @brief Random tridiagonal matrices with a prescribed \f$\log_{10}\f$ condition number.
 ///
@@ -234,13 +234,13 @@ BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_hermitian_banded_with_log10_c
 /// @param[in] seed         unused: the result is deterministic
 /// @return a new batch of `batch_size` \f$n \times n\f$ matrices, stored dense
 /// @throws batchlas::invalid_argument as random_with_log10_cond_metric()
-template <Backend B, typename T>
-BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_tridiagonal_with_log10_cond_metric(Queue& ctx,
-                                                                                      int n,
-                                                                                      float_t<T> log10_kappa,
-                                                                                      NormType metric,
-                                                                                      int batch_size = 1,
-                                                                                      unsigned seed = 42);
+template <Backend B, typename Scalar>
+BATCHLAS_API Matrix<Scalar, MatrixFormat::Dense> random_tridiagonal_with_log10_cond_metric(Queue& ctx,
+                                                                                           int n,
+                                                                                           float_t<Scalar> log10_kappa,
+                                                                                           NormType metric,
+                                                                                           int batch_size = 1,
+                                                                                           unsigned seed = 42);
 
 /// @brief Random Hermitian tridiagonal matrices with a prescribed \f$\log_{10}\f$ condition number.
 ///
@@ -256,34 +256,34 @@ BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_tridiagonal_with_log10_cond_m
 /// @param[in] seed         RNG seed; equal seeds give equal batches
 /// @return a new batch of `batch_size` Hermitian tridiagonal \f$n \times n\f$ matrices, stored dense
 /// @throws batchlas::invalid_argument as random_with_log10_cond_metric()
-template <Backend B, typename T>
-BATCHLAS_API Matrix<T, MatrixFormat::Dense> random_hermitian_tridiagonal_with_log10_cond_metric(Queue& ctx,
-                                                                                                int n,
-                                                                                                float_t<T> log10_kappa,
-                                                                                                NormType metric,
-                                                                                                int batch_size = 1,
-                                                                                                unsigned seed = 42);
+template <Backend B, typename Scalar>
+BATCHLAS_API Matrix<Scalar, MatrixFormat::Dense> random_hermitian_tridiagonal_with_log10_cond_metric(Queue& ctx,
+                                                                                                     int n,
+                                                                                                     float_t<Scalar> log10_kappa,
+                                                                                                     NormType metric,
+                                                                                                     int batch_size = 1,
+                                                                                                     unsigned seed = 42);
 
 /// @brief Batched plain transpose \f$B_i := A_i^T\f$ (no conjugation).
-/// @tparam T   float or double
+/// @tparam Real   float or double
 /// @param[in]  ctx  queue the kernel is enqueued on
 /// @param[in]  A    batch of \f$m \times n\f$ matrices; not modified
 /// @param[out] B    batch of \f$n \times m\f$ matrices, same batch size; must not alias `A`;
 ///                  receives \f$A_i^T\f$
 /// @return     event of the enqueued kernel
-template <typename T, MatrixFormat MF>
+template <typename Real, MatrixFormat MF>
 BATCHLAS_API Event transpose(Queue& ctx,
-                             const MatrixView<T, MF>& A,
-                             const MatrixView<T, MF>& B);
+                             const MatrixView<Real, MF>& A,
+                             const MatrixView<Real, MF>& B);
 
 /// @brief Batched plain transpose into a newly allocated matrix.
 /// @param[in] ctx  queue the kernel is enqueued on
 /// @param[in] A    batch of \f$m \times n\f$ matrices; not modified
 /// @return a new batch of \f$n \times m\f$ matrices holding \f$A_i^T\f$; valid after the
 ///         queue is waited on
-template <typename T, MatrixFormat MF>
-BATCHLAS_API Matrix<T, MF> transpose(Queue& ctx,
-                                     const MatrixView<T, MF>& A);
+template <typename Real, MatrixFormat MF>
+BATCHLAS_API Matrix<Real, MF> transpose(Queue& ctx,
+                                        const MatrixView<Real, MF>& A);
 
 /// @}
 

@@ -53,15 +53,15 @@ using C = ps::PotrsChoice;
 using Pin = select::ScopedPin<C>;
 using ts::Live;
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
 // A0 (the whole Hermitian A) and B0 packed, one item when the batch is identical; a and b in padded,
 // poisoned storage (A ld n + 3, stride + 5; B ld n + 2, stride + 7), a holding A0's uplo triangle.
-template <typename T>
+template <typename Scalar>
 struct Sys {
     Uplo uplo;
-    Matrix<T> A0, B0, a, b;
+    Matrix<Scalar> A0, B0, a, b;
 };
 
 // The outermost potrs trace line for whatever `run` calls, and the choice it names.

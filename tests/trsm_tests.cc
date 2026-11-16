@@ -32,9 +32,9 @@ using Wide = test_utils::native_gpu_scalar_t<double>;
 using WideC = test_utils::native_gpu_scalar_t<std::complex<double>>;
 }  // namespace
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct TestConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 
@@ -230,32 +230,32 @@ namespace {
 // Must stay non-real, non-symmetric and non-Hermitian: a real-valued complex
 // triangle hides a missing conjugation, a symmetric or Hermitian one hides a
 // Trans/ConjTrans confusion.
-template <typename T>
-inline T tri_fill(int r, int c, bool diagonal) {
-    using R = batchlas::float_t<T>;
+template <typename Scalar>
+inline Scalar tri_fill(int r, int c, bool diagonal) {
+    using R = batchlas::float_t<Scalar>;
     const R re = diagonal ? static_cast<R>(2 + (r % 3))
                           : static_cast<R>(0.02 * (1 + ((r * 7 + c * 3) % 5)));
-    if constexpr (batchlas::is_std_complex_v<T>) {
+    if constexpr (batchlas::is_std_complex_v<Scalar>) {
         const R im = diagonal ? static_cast<R>(0.5 + 0.25 * (r % 2))
                               : static_cast<R>(0.013 * (1 + ((r * 3 + c * 11) % 7)));
-        return T(re, im);
+        return Scalar(re, im);
     } else {
-        return T(re);
+        return Scalar(re);
     }
 }
 
-template <typename T>
-inline T rhs_fill(int r, int c) {
-    using R = batchlas::float_t<T>;
+template <typename Scalar>
+inline Scalar rhs_fill(int r, int c) {
+    using R = batchlas::float_t<Scalar>;
     const R re = static_cast<R>(0.25 * (1 + ((r * 5 + c * 11) % 9)));
-    if constexpr (batchlas::is_std_complex_v<T>) {
-        return T(re, static_cast<R>(0.17 * (1 + ((r * 2 + c * 7) % 6))));
+    if constexpr (batchlas::is_std_complex_v<Scalar>) {
+        return Scalar(re, static_cast<R>(0.17 * (1 + ((r * 2 + c * 7) % 6))));
     } else {
-        return T(re);
+        return Scalar(re);
     }
 }
 
-template <typename T>
+template <typename Scalar>
 struct TrsmNativeCase {
     int n;
     int q;
@@ -264,7 +264,7 @@ struct TrsmNativeCase {
     Uplo uplo;
     Transpose transA;
     Diag diag;
-    T alpha;
+    Scalar alpha;
 };
 
 template <typename T>
@@ -729,53 +729,53 @@ TEST(TrsmFloatLeftOrders, RightSideAlso) {
 // ===========================================================================
 namespace {
 
-template <typename T>
+template <typename Scalar>
 struct SgCase {
     int n, q, batch;
     Uplo uplo;
     Transpose transA;
     Diag diag;
-    T alpha;
+    Scalar alpha;
     int pad_a = 3;         // lda = n + pad_a
     int pad_b = 5;         // ldb = n + pad_b
     bool same_items = false;
 };
 
-template <typename T>
-std::vector<T> run_sg_left(const SgCase<T>& tc, bool check = true) {
+template <typename Scalar>
+std::vector<Scalar> run_sg_left(const SgCase<Scalar>& tc, bool check = true) {
     auto ctx = std::make_shared<Queue>(Device("gpu"), kGpu);
     const int n = tc.n, q = tc.q, bs = tc.batch;
     const int lda = n + tc.pad_a, ldb = n + tc.pad_b;
     const int sa = lda * n + 7, sb = ldb * q + 11;
-    const T poison = T(4096);
-    UnifiedVector<T> abuf(static_cast<size_t>(sa) * bs, poison);
-    UnifiedVector<T> bbuf(static_cast<size_t>(sb) * bs, poison);
-    std::vector<T> b_in(static_cast<size_t>(n) * q * bs);
+    const Scalar poison = Scalar(4096);
+    UnifiedVector<Scalar> abuf(static_cast<size_t>(sa) * bs, poison);
+    UnifiedVector<Scalar> bbuf(static_cast<size_t>(sb) * bs, poison);
+    std::vector<Scalar> b_in(static_cast<size_t>(n) * q * bs);
     for (int b = 0; b < bs; ++b) {
         const int item = tc.same_items ? 0 : b;
         for (int c = 0; c < n; ++c)
             for (int r = 0; r < n; ++r) {
                 const bool in_tri = (tc.uplo == Uplo::Lower) ? (r > c) : (r < c);
-                T v = poison;
-                if (r == c && tc.diag == Diag::NonUnit) v = tri_fill<T>(r + item % 3, c, true);
-                if (in_tri) v = tri_fill<T>(r + item % 5, c, false);
+                Scalar v = poison;
+                if (r == c && tc.diag == Diag::NonUnit) v = tri_fill<Scalar>(r + item % 3, c, true);
+                if (in_tri) v = tri_fill<Scalar>(r + item % 5, c, false);
                 abuf[static_cast<size_t>(b) * sa + c * lda + r] = v;
             }
         for (int c = 0; c < q; ++c)
             for (int r = 0; r < n; ++r) {
-                const T v = rhs_fill<T>(r + item % 4, c);
+                const Scalar v = rhs_fill<Scalar>(r + item % 4, c);
                 bbuf[static_cast<size_t>(b) * sb + c * ldb + r] = v;
                 b_in[(static_cast<size_t>(b) * q + c) * n + r] = v;
             }
     }
-    const std::vector<T> a_host(abuf.begin(), abuf.begin() + abuf.size());
-    MatrixView<T, MatrixFormat::Dense> Av(abuf.data(), n, n, lda, sa, bs);
-    MatrixView<T, MatrixFormat::Dense> Bv(bbuf.data(), n, q, ldb, sb, bs);
-    (void)batchlas::ops::trsm::trsm_native_sg_left_dispatch<T>(
+    const std::vector<Scalar> a_host(abuf.begin(), abuf.begin() + abuf.size());
+    MatrixView<Scalar, MatrixFormat::Dense> Av(abuf.data(), n, n, lda, sa, bs);
+    MatrixView<Scalar, MatrixFormat::Dense> Bv(bbuf.data(), n, q, ldb, sb, bs);
+    (void)batchlas::ops::trsm::trsm_native_sg_left_dispatch<Scalar>(
         *ctx, Av, Bv, tc.alpha, tc.uplo, tc.transA, tc.diag);
     ctx->wait();
 
-    std::vector<T> x(static_cast<size_t>(n) * q * bs);
+    std::vector<Scalar> x(static_cast<size_t>(n) * q * bs);
     for (int b = 0; b < bs; ++b) {
         for (int c = 0; c < q; ++c)
             for (int r = 0; r < n; ++r)
@@ -789,14 +789,14 @@ std::vector<T> run_sg_left(const SgCase<T>& tc, bool check = true) {
     }
     if (!check) return x;
 
-    const MatrixView<T, MatrixFormat::Dense> A0(const_cast<T*>(a_host.data()), n, n, lda, sa, bs);
-    const MatrixView<T, MatrixFormat::Dense> B0(b_in.data(), n, q, n, n * q, bs);
-    const double res = MatrixView<T, MatrixFormat::Dense>::trsm_residual(*ctx, A0, Side::Left, tc.uplo, tc.transA,
-                                                                         tc.diag, Bv, B0, MatrixView<T, MatrixFormat::Dense>::up(tc.alpha));
-    if (!batchlas::verify::pass<T>(batchlas::verify::Check::solve, n, res))
+    const MatrixView<Scalar, MatrixFormat::Dense> A0(const_cast<Scalar*>(a_host.data()), n, n, lda, sa, bs);
+    const MatrixView<Scalar, MatrixFormat::Dense> B0(b_in.data(), n, q, n, n * q, bs);
+    const double res = MatrixView<Scalar, MatrixFormat::Dense>::trsm_residual(*ctx, A0, Side::Left, tc.uplo, tc.transA,
+                                                                              tc.diag, Bv, B0, MatrixView<Scalar, MatrixFormat::Dense>::up(tc.alpha));
+    if (!batchlas::verify::pass<Scalar>(batchlas::verify::Check::solve, n, res))
         ADD_FAILURE() << "sg-left n=" << n << " q=" << q << " uplo=" << int(tc.uplo) << " transA=" << int(tc.transA)
                       << " diag=" << int(tc.diag) << " residual=" << res << " exceeds "
-                      << batchlas::verify::bound<T>(batchlas::verify::Check::solve, n);
+                      << batchlas::verify::bound<Scalar>(batchlas::verify::Check::solve, n);
     return x;
 }
 
@@ -992,11 +992,11 @@ TEST(TrsmVendor, ComplexSubstituteIndexesPast2To31Elements) {
 #if BATCHLAS_HAS_HOST_BACKEND && BATCHLAS_HAS_CBLAS
 // BLAS trsm at alpha == 0 sets B := 0 and reads neither A nor B, so NaN in either must not
 // reach the result. Unzeroed workspace B is the real case: 0 * NaN = NaN.
-template <typename T>
+template <typename Scalar>
 void netlib_trsm_alpha_zero_ignores_nan_b() {
     Queue q(Device("cpu"), Backend::NETLIB);
     const int n = 5, k = 3, bs = 3, lda = n + 2, ldbl = n + 3, ldbr = k + 4;
-    const T nan = T(std::numeric_limits<typename base_type<T>::type>::quiet_NaN());
+    const Scalar nan = Scalar(std::numeric_limits<typename base_type<Scalar>::type>::quiet_NaN());
     for (Side side : {Side::Left, Side::Right})
         for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
             for (Transpose tr : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans})
@@ -1004,17 +1004,17 @@ void netlib_trsm_alpha_zero_ignores_nan_b() {
                     const int rows = side == Side::Left ? n : k, cols = side == Side::Left ? k : n;
                     const int ldb = side == Side::Left ? ldbl : ldbr;
                     const int sa = lda * n + 1, sb = ldb * cols + 2;
-                    UnifiedVector<T> a(static_cast<size_t>(sa) * bs, nan), b(static_cast<size_t>(sb) * bs, nan);
-                    MatrixView<T, MatrixFormat::Dense> Av(a.data(), n, n, lda, sa, bs);
-                    MatrixView<T, MatrixFormat::Dense> Bv(b.data(), rows, cols, ldb, sb, bs);
-                    (void)backend::trsm_vendor<Backend::NETLIB, T>(q, Av, Bv, side, uplo, tr, diag, T(0));
+                    UnifiedVector<Scalar> a(static_cast<size_t>(sa) * bs, nan), b(static_cast<size_t>(sb) * bs, nan);
+                    MatrixView<Scalar, MatrixFormat::Dense> Av(a.data(), n, n, lda, sa, bs);
+                    MatrixView<Scalar, MatrixFormat::Dense> Bv(b.data(), rows, cols, ldb, sb, bs);
+                    (void)backend::trsm_vendor<Backend::NETLIB, Scalar>(q, Av, Bv, side, uplo, tr, diag, Scalar(0));
                     q.wait();
                     int bad = 0, padding = 0;
                     for (int it = 0; it < bs; ++it)
                         for (int c = 0; c < cols; ++c)
                             for (int r = 0; r < ldb; ++r) {
-                                const T v = b[static_cast<size_t>(it) * sb + c * ldb + r];
-                                if (r < rows) bad += !(v == T(0));
+                                const Scalar v = b[static_cast<size_t>(it) * sb + c * ldb + r];
+                                if (r < rows) bad += !(v == Scalar(0));
                                 else padding += !(v != v);
                             }
                     EXPECT_EQ(bad, 0) << "side=" << int(side) << " uplo=" << int(uplo) << " trans=" << int(tr)

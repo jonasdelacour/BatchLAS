@@ -36,16 +36,16 @@ namespace S = ops::syev;
 
 constexpr double kPoison = 1e6;
 
-template <typename T>
+template <typename Scalar>
 struct SyevProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
-    using R = typename base_type<T>::type;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+    using R = typename base_type<Scalar>::type;
     Queue& q;
     JobType jobz;
     int n, batch, ld;
     std::size_t stride;
-    UnifiedVector<T> A0, A;
-    UnifiedVector<T*> pA0, pA;
+    UnifiedVector<Scalar> A0, A;
+    UnifiedVector<Scalar*> pA0, pA;
     MV A0v, Av;
     UnifiedVector<R> w;
     UnifiedVector<std::int32_t> info;
@@ -62,7 +62,7 @@ struct SyevProblem {
         (void)MV::copy(q, MV(A.data(), ld, n, ld, int(stride), batch), MV(A0.data(), ld, n, ld, int(stride), batch));
         q.wait();  // the padding keeps its poison
     }
-    std::size_t workspace() { return syev_buffer_size<kBackend, T>(q, Av, w.to_span(), jobz, Uplo::Lower); }
+    std::size_t workspace() { return syev_buffer_size<kBackend, Scalar>(q, Av, w.to_span(), jobz, Uplo::Lower); }
     void reset() {
         (void)MV::copy(q, Av, A0v);
         q.wait();
@@ -72,7 +72,7 @@ struct SyevProblem {
         for (R& x : w) x = R(kPoison);
     }
     void run(Span<std::byte> ws) {
-        (void)syev<kBackend, T>(q, Av, w.to_span(), jobz, Uplo::Lower, ws, info.to_span());
+        (void)syev<kBackend, Scalar>(q, Av, w.to_span(), jobz, Uplo::Lower, ws, info.to_span());
         q.wait();
     }
     std::pair<double, int> verify() {
@@ -91,10 +91,10 @@ struct SyevProblem {
         for (int b : items)
             for (double x : ref[std::size_t(b)]) scale = std::max(scale, std::fabs(x));
         const VectorView<R> wv(w.data(), n, batch);
-        double worst = MV::values_error(wv, ref, scale) / verify::bound<T>(verify::Check::values, n);
+        double worst = MV::values_error(wv, ref, scale) / verify::bound<Scalar>(verify::Check::values, n);
         if (jobz != JobType::EigenVectors) return {worst, bad};
-        worst = verify::nanmax(worst, MV::eigen_residual(q, A0v, Av, wv) / verify::bound<T>(verify::Check::eigen_residual, n));
-        const double orth = MV::orthogonality(q, Av) / verify::bound<T>(verify::Check::orthogonality_rotations, n);
+        worst = verify::nanmax(worst, MV::eigen_residual(q, A0v, Av, wv) / verify::bound<Scalar>(verify::Check::eigen_residual, n));
+        const double orth = MV::orthogonality(q, Av) / verify::bound<Scalar>(verify::Check::orthogonality_rotations, n);
         return {verify::nanmax(worst, orth), bad};
     }
 };

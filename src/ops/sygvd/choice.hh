@@ -17,7 +17,7 @@ struct Vendor : select::NoFields<"vendor"> {};    ///< backend::sygvd_vendor: cu
 
 using SygvdChoice = std::variant<Compose, Vendor>;  ///< fieldless
 
-template <class T>  /// Tie-break order (§6.3): native first, vendor last.
+template <class Scalar>  /// Tie-break order (§6.3): native first, vendor last.
 constexpr auto candidates() { return select::all_of<SygvdChoice>(); }
 
 inline constexpr std::array<std::string_view, 2> kLastResort{"vendor", "compose"};

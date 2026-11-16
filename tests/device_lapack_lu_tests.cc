@@ -54,22 +54,22 @@ using batchlas::verify::Check;
 namespace {
 
 using Tier = batchlas::device::tier::Blocked<32>;
-template <class T> constexpr int kWG = batchlas::device::tier_info<batchlas::device::routine::getrf, Tier, T>::wg_size;
+template <class Scalar> constexpr int kWG = batchlas::device::tier_info<batchlas::device::routine::getrf, Tier, Scalar>::wg_size;
 static_assert(kWG<float> == 256 && kWG<std::complex<double>> == 256);
 constexpr int kPeriod = 3;
 constexpr int kSaturating = 1024;
 constexpr Transpose kNT = Transpose::NoTrans, kTr = Transpose::Trans, kCT = Transpose::ConjTrans;
 
-template <class T> T poison() { return T(real_of<T>(1234.5)); }
-template <class T> LD<T> cj(LD<T> v) {
-    if constexpr (is_cplx<T>) return std::conj(v);
+template <class Scalar> Scalar poison() { return Scalar(real_of<Scalar>(1234.5)); }
+template <class Scalar> LD<Scalar> cj(LD<Scalar> v) {
+    if constexpr (is_cplx<Scalar>) return std::conj(v);
     else return v;
 }
-template <class T> long double cabs1(LD<T> v) {
-    if constexpr (is_cplx<T>) return std::fabs(v.real()) + std::fabs(v.imag());
+template <class Scalar> long double cabs1(LD<Scalar> v) {
+    if constexpr (is_cplx<Scalar>) return std::fabs(v.real()) + std::fabs(v.imag());
     else return std::fabs(v);
 }
-template <class T> long double sq(LD<T> v) {
+template <class Scalar> long double sq(LD<Scalar> v) {
     const long double m = std::abs(v);
     return m * m;
 }
@@ -77,16 +77,16 @@ std::int32_t* i32(std::int64_t* p) { return reinterpret_cast<std::int32_t*>(p); 
 
 // items column-major rows x cols matrices, ld = rows + 3, stride = ld * cols + 5; every element
 // outside the matrices holds poison().
-template <class T> struct Batch {
+template <class Scalar> struct Batch {
     int rows, cols, ld, items;
     std::size_t stride;
-    std::vector<T> h;
+    std::vector<Scalar> h;
     Batch(int r, int c, int n_items)
-        : rows(r), cols(c), ld(r + 3), items(n_items), stride(std::size_t(r + 3) * c + 5), h(stride * n_items, poison<T>()) {}
+        : rows(r), cols(c), ld(r + 3), items(n_items), stride(std::size_t(r + 3) * c + 5), h(stride * n_items, poison<Scalar>()) {}
     std::size_t off(int q, int i, int j) const { return std::size_t(q) * stride + i + std::size_t(j) * ld; }
-    T& at(int q, int i, int j) { return h[off(q, i, j)]; }
-    const T& at(int q, int i, int j) const { return h[off(q, i, j)]; }
-    LD<T> w(int q, int i, int j) const { return LD<T>(at(q, i, j)); }
+    Scalar& at(int q, int i, int j) { return h[off(q, i, j)]; }
+    const Scalar& at(int q, int i, int j) const { return h[off(q, i, j)]; }
+    LD<Scalar> w(int q, int i, int j) const { return LD<Scalar>(at(q, i, j)); }
     bool inside(std::size_t e) const {
         const std::size_t r = e % stride;
         return r < std::size_t(ld) * cols && int(r % ld) < rows;
@@ -97,23 +97,23 @@ template <class T> struct Batch {
     }
 };
 
-template <class T> struct DevBatch {
-    T* p;
+template <class Scalar> struct DevBatch {
+    Scalar* p;
     int rows, cols, ld, items;
     std::size_t stride;
-    T* item(int q) const { return p + std::ptrdiff_t(q) * std::ptrdiff_t(stride); }
+    Scalar* item(int q) const { return p + std::ptrdiff_t(q) * std::ptrdiff_t(stride); }
     auto mat(int q) const { return batchlas::device::mat_wide(item(q), rows, cols, ld); }
-    batchlas::device::l3::Global<T> global(int q) const { return {item(q), ld, rows, cols}; }
-    batchlas::KernelMatrixView<T, batchlas::MatrixFormat::Dense> kview() const {
-        return batchlas::KernelMatrixView<T, batchlas::MatrixFormat::Dense>(p, rows, cols, ld, int(stride), items);
+    batchlas::device::l3::Global<Scalar> global(int q) const { return {item(q), ld, rows, cols}; }
+    batchlas::KernelMatrixView<Scalar, batchlas::MatrixFormat::Dense> kview() const {
+        return batchlas::KernelMatrixView<Scalar, batchlas::MatrixFormat::Dense>(p, rows, cols, ld, int(stride), items);
     }
-    batchlas::MatrixView<T, batchlas::MatrixFormat::Dense> view() const {
-        return batchlas::MatrixView<T, batchlas::MatrixFormat::Dense>(p, rows, cols, ld, int(stride), items);
+    batchlas::MatrixView<Scalar, batchlas::MatrixFormat::Dense> view() const {
+        return batchlas::MatrixView<Scalar, batchlas::MatrixFormat::Dense>(p, rows, cols, ld, int(stride), items);
     }
 };
-template <class T> DevBatch<T> to_dev(Dev& d, const Batch<T>& b) { return {d.up(b.h), b.rows, b.cols, b.ld, b.items, b.stride}; }
-template <class T> Batch<T> downloaded(Dev& d, const Batch<T>& like, const T* p) {
-    Batch<T> r = like;
+template <class Scalar> DevBatch<Scalar> to_dev(Dev& d, const Batch<Scalar>& b) { return {d.up(b.h), b.rows, b.cols, b.ld, b.items, b.stride}; }
+template <class Scalar> Batch<Scalar> downloaded(Dev& d, const Batch<Scalar>& like, const Scalar* p) {
+    Batch<Scalar> r = like;
     r.h = d.down(p, like.h.size());
     return r;
 }
@@ -123,65 +123,65 @@ template <class T> Batch<T> downloaded(Dev& d, const Batch<T>& like, const T* p)
 // unscaled, cond(U0) grows exponentially (complex n = 129: ~1e9) and float LU loses the pivots.
 // `singular` zeroes U0's last column: A's last column is then exactly zero, stays so through
 // every update, and info = n.
-template <class T> std::vector<T> lu_input(int n, std::uint64_t seed, bool singular) {
-    using R = real_of<T>;
-    std::vector<LD<T>> L(std::size_t(n) * n, LD<T>(0)), U(std::size_t(n) * n, LD<T>(0));
+template <class Scalar> std::vector<Scalar> lu_input(int n, std::uint64_t seed, bool singular) {
+    using R = real_of<Scalar>;
+    std::vector<LD<Scalar>> L(std::size_t(n) * n, LD<Scalar>(0)), U(std::size_t(n) * n, LD<Scalar>(0));
     const long double us = std::min(1.0L, 2.0L / std::sqrt(static_cast<long double>(n)));
     for (int i = 0; i < n; ++i)
         for (int j = 0; j <= i; ++j)
-            L[i + std::size_t(j) * n] = i == j ? LD<T>(1) : LD<T>(val<T>(seed + 7u * i + 1000u * j)) * (long double)0.17;
+            L[i + std::size_t(j) * n] = i == j ? LD<Scalar>(1) : LD<Scalar>(val<Scalar>(seed + 7u * i + 1000u * j)) * (long double)0.17;
     for (int j = 0; j < n; ++j)
         for (int c = j; c < n; ++c) {
-            LD<T> u = LD<T>(val<T>(seed + 99991u + 13u * j + 1777u * c));
-            if (c == j) u = LD<T>(T(R(1.5) + R(0.5) * uval<R>(seed + 31u * j))) + u * (long double)0.1;
+            LD<Scalar> u = LD<Scalar>(val<Scalar>(seed + 99991u + 13u * j + 1777u * c));
+            if (c == j) u = LD<Scalar>(Scalar(R(1.5) + R(0.5) * uval<R>(seed + 31u * j))) + u * (long double)0.1;
             else u *= us;
-            U[j + std::size_t(c) * n] = (singular && c == n - 1) ? LD<T>(0) : u;
+            U[j + std::size_t(c) * n] = (singular && c == n - 1) ? LD<Scalar>(0) : u;
         }
     std::vector<int> perm(n);
     std::iota(perm.begin(), perm.end(), 0);
     for (int i = n - 1; i > 0; --i) std::swap(perm[i], perm[mix(seed + 555u + i) % std::uint64_t(i + 1)]);
-    std::vector<T> a(std::size_t(n) * n);
+    std::vector<Scalar> a(std::size_t(n) * n);
     for (int i = 0; i < n; ++i)
         for (int c = 0; c < n; ++c) {
-            LD<T> s = 0;
+            LD<Scalar> s = 0;
             for (int j = 0; j < n; ++j) s += L[i + std::size_t(j) * n] * U[j + std::size_t(c) * n];
-            a[perm[i] + std::size_t(c) * n] = static_cast<T>(s);
+            a[perm[i] + std::size_t(c) * n] = static_cast<Scalar>(s);
         }
     return a;
 }
-template <class T> void fill_lu(Batch<T>& a, std::uint64_t seed, bool singular_rep) {
+template <class Scalar> void fill_lu(Batch<Scalar>& a, std::uint64_t seed, bool singular_rep) {
     for (int r = 0; r < kPeriod && r < a.items; ++r) {
-        const auto m = lu_input<T>(a.rows, seed + 104729u * r, singular_rep && r == 1);
+        const auto m = lu_input<Scalar>(a.rows, seed + 104729u * r, singular_rep && r == 1);
         for (int j = 0; j < a.cols; ++j)
             for (int i = 0; i < a.rows; ++i) a.at(r, i, j) = m[i + std::size_t(j) * a.rows];
     }
     a.replicate();
 }
-template <class T> void fill_vals(Batch<T>& b, std::uint64_t seed) {
+template <class Scalar> void fill_vals(Batch<Scalar>& b, std::uint64_t seed) {
     for (int r = 0; r < kPeriod && r < b.items; ++r)
         for (int j = 0; j < b.cols; ++j)
-            for (int i = 0; i < b.rows; ++i) b.at(r, i, j) = val<T>(seed * 1000003u + b.off(r, i, j));
+            for (int i = 0; i < b.rows; ++i) b.at(r, i, j) = val<Scalar>(seed * 1000003u + b.off(r, i, j));
     b.replicate();
 }
 
 // LAPACK ?GETF2 in long double, cabs1 metric: item q's 1-based pivots and info.
-template <class T> std::pair<std::vector<int>, int> oracle(const Batch<T>& A0, int q) {
+template <class Scalar> std::pair<std::vector<int>, int> oracle(const Batch<Scalar>& A0, int q) {
     const int n = A0.rows;
-    std::vector<LD<T>> a(std::size_t(n) * n);
+    std::vector<LD<Scalar>> a(std::size_t(n) * n);
     for (int j = 0; j < n; ++j)
         for (int i = 0; i < n; ++i) a[i + std::size_t(j) * n] = A0.w(q, i, j);
-    auto at = [&](int i, int j) -> LD<T>& { return a[i + std::size_t(j) * n]; };
+    auto at = [&](int i, int j) -> LD<Scalar>& { return a[i + std::size_t(j) * n]; };
     std::vector<int> ipiv(n, 0);
     int info = 0;
     for (int k = 0; k < n; ++k) {
         int p = k;
         long double best = -1;
         for (int i = k; i < n; ++i)
-            if (cabs1<T>(at(i, k)) > best) best = cabs1<T>(at(i, k)), p = i;
+            if (cabs1<Scalar>(at(i, k)) > best) best = cabs1<Scalar>(at(i, k)), p = i;
         ipiv[k] = p + 1;
         for (int c = 0; c < n; ++c) std::swap(at(k, c), at(p, c));
-        const LD<T> dk = at(k, k);
-        if (dk == LD<T>(0)) {
+        const LD<Scalar> dk = at(k, k);
+        if (dk == LD<Scalar>(0)) {
             if (info == 0) info = k + 1;
             continue;
         }
@@ -192,16 +192,17 @@ template <class T> std::pair<std::vector<int>, int> oracle(const Batch<T>& A0, i
     return {ipiv, info};
 }
 
-template <class T> long double fro2(const Batch<T>& a, int q) {
+template <class Scalar> long double fro2(const Batch<Scalar>& a, int q) {
     long double s = 0;
     for (int j = 0; j < a.cols; ++j)
-        for (int i = 0; i < a.rows; ++i) s += sq<T>(a.w(q, i, j));
+        for (int i = 0; i < a.rows; ++i) s += sq<Scalar>(a.w(q, i, j));
     return s;
 }
 // ||P A - L U||_F / ||A||_F of item q (F: getrf's factor, piv: its pivots).
-template <class T> double factor_residual(const Batch<T>& A0, const Batch<T>& F, int q, const std::int32_t* piv) {
+template <class Scalar> double factor_residual(const Batch<Scalar>& A0, const Batch<Scalar>& F, int q,
+                                               const std::int32_t* piv) {
     const int n = A0.rows;
-    std::vector<LD<T>> pa(std::size_t(n) * n);
+    std::vector<LD<Scalar>> pa(std::size_t(n) * n);
     for (int j = 0; j < n; ++j)
         for (int i = 0; i < n; ++i) pa[i + std::size_t(j) * n] = A0.w(q, i, j);
     for (int k = 0; k < n; ++k) {
@@ -212,53 +213,53 @@ template <class T> double factor_residual(const Batch<T>& A0, const Batch<T>& F,
     long double num = 0;
     for (int j = 0; j < n; ++j)
         for (int i = 0; i < n; ++i) {
-            LD<T> s = 0;
-            for (int k = 0; k <= std::min(i, j); ++k) s += (k == i ? LD<T>(1) : F.w(q, i, k)) * F.w(q, k, j);
-            num += sq<T>(pa[i + std::size_t(j) * n] - s);
+            LD<Scalar> s = 0;
+            for (int k = 0; k <= std::min(i, j); ++k) s += (k == i ? LD<Scalar>(1) : F.w(q, i, k)) * F.w(q, k, j);
+            num += sq<Scalar>(pa[i + std::size_t(j) * n] - s);
         }
     return static_cast<double>(std::sqrt(num / fro2(A0, q)));
 }
 // ||op(A) X - B||_F / (||A||_F ||X||_F) of item q.
-template <class T> double solve_residual(const Batch<T>& A0, const Batch<T>& X, const Batch<T>& B0, int q, Transpose tr) {
+template <class Scalar> double solve_residual(const Batch<Scalar>& A0, const Batch<Scalar>& X, const Batch<Scalar>& B0, int q, Transpose tr) {
     const int n = A0.rows;
     long double num = 0;
     for (int c = 0; c < B0.cols; ++c)
         for (int i = 0; i < n; ++i) {
-            LD<T> s = -B0.w(q, i, c);
+            LD<Scalar> s = -B0.w(q, i, c);
             for (int k = 0; k < n; ++k) {
-                const LD<T> a = tr == kNT ? A0.w(q, i, k) : tr == kTr ? A0.w(q, k, i) : cj<T>(A0.w(q, k, i));
+                const LD<Scalar> a = tr == kNT ? A0.w(q, i, k) : tr == kTr ? A0.w(q, k, i) : cj<Scalar>(A0.w(q, k, i));
                 s += a * X.w(q, k, c);
             }
-            num += sq<T>(s);
+            num += sq<Scalar>(s);
         }
     return static_cast<double>(std::sqrt(num / (fro2(A0, q) * fro2(X, q))));
 }
 // ||A C - I||_F / (||A||_F ||C||_F) of item q.
-template <class T> double inverse_residual(const Batch<T>& A0, const Batch<T>& C, int q) {
+template <class Scalar> double inverse_residual(const Batch<Scalar>& A0, const Batch<Scalar>& C, int q) {
     const int n = A0.rows;
     long double num = 0;
     for (int j = 0; j < n; ++j)
         for (int i = 0; i < n; ++i) {
-            LD<T> s = i == j ? LD<T>(-1) : LD<T>(0);
+            LD<Scalar> s = i == j ? LD<Scalar>(-1) : LD<Scalar>(0);
             for (int k = 0; k < n; ++k) s += A0.w(q, i, k) * C.w(q, k, j);
-            num += sq<T>(s);
+            num += sq<Scalar>(s);
         }
     return static_cast<double>(std::sqrt(num / (fro2(A0, q) * fro2(C, q))));
 }
 // ||Y - Z||_F / ||Z||_F of item q.
-template <class T> double rel_diff(const Batch<T>& Y, const Batch<T>& Z, int q) {
+template <class Scalar> double rel_diff(const Batch<Scalar>& Y, const Batch<Scalar>& Z, int q) {
     long double num = 0;
     for (int j = 0; j < Z.cols; ++j)
-        for (int i = 0; i < Z.rows; ++i) num += sq<T>(Y.w(q, i, j) - Z.w(q, i, j));
+        for (int i = 0; i < Z.rows; ++i) num += sq<Scalar>(Y.w(q, i, j) - Z.w(q, i, j));
     return static_cast<double>(std::sqrt(num / fro2(Z, q)));
 }
 
 // Items (not `skip`) whose bytes, pads included, differ from their representative's.
-template <class T> int differ_from_rep(const Batch<T>& b, int skip = -1) {
+template <class Scalar> int differ_from_rep(const Batch<Scalar>& b, int skip = -1) {
     int bad = 0;
     for (int q = kPeriod; q < b.items; ++q)
         if (q != skip)
-            bad += std::memcmp(b.h.data() + std::size_t(q) * b.stride, b.h.data() + std::size_t(q % kPeriod) * b.stride, sizeof(T) * b.stride) != 0;
+            bad += std::memcmp(b.h.data() + std::size_t(q) * b.stride, b.h.data() + std::size_t(q % kPeriod) * b.stride, sizeof(Scalar) * b.stride) != 0;
     return bad;
 }
 template <class V> int differ_from_rep(const std::vector<V>& v, int per, int skip = -1) {
@@ -270,7 +271,7 @@ template <class V> int differ_from_rep(const std::vector<V>& v, int per, int ski
     return bad;
 }
 // Elements outside the matrices that lost their poison.
-template <class T> int pads_changed(const Batch<T>& before, const Batch<T>& after) {
+template <class Scalar> int pads_changed(const Batch<Scalar>& before, const Batch<Scalar>& after) {
     int bad = 0;
     for (std::size_t e = 0; e < after.h.size(); ++e) bad += !before.inside(e) && !same_bits(before.h[e], after.h[e]);
     return bad;
@@ -280,8 +281,8 @@ bool host_gpu(Dev& d) { return d.ctx->device().type == DeviceType::GPU; }
 
 // The user's kernel for tier Tr of routine R: items work-groups of tier_info::wg_size items at
 // sub-group 32, the tier's local bytes, f(ex, b, workspace slice of b).
-template <class R, class Tr, class T, class F> void launch(Dev& d, int items, int n, std::byte* gws, F f) {
-    using I = batchlas::device::tier_info<R, Tr, T>;
+template <class R, class Tr, class Scalar, class F> void launch(Dev& d, int items, int n, std::byte* gws, F f) {
+    using I = batchlas::device::tier_info<R, Tr, Scalar>;
     constexpr int WG = I::wg_size;
     const batchlas::device::WorkspaceSize ws = I::buffer_size(n);
     d.q().submit([&](sycl::handler& h) {
@@ -297,45 +298,45 @@ template <class R, class Tr, class T, class F> void launch(Dev& d, int items, in
 }
 
 // getrf<Tr> in place on Mat operands; `dead` passes live = false and keeps its info slot.
-template <class Tr, class T> void device_getrf(Dev& d, const DevBatch<T>& a, std::int32_t* piv, std::int32_t* info, int dead = -1) {
+template <class Tr, class Scalar> void device_getrf(Dev& d, const DevBatch<Scalar>& a, std::int32_t* piv, std::int32_t* info, int dead = -1) {
     const int n = a.cols;
-    launch<batchlas::device::routine::getrf, Tr, T>(d, a.items, n, nullptr, [=](const auto& ex, int b, const batchlas::device::Workspace& w) {
+    launch<batchlas::device::routine::getrf, Tr, Scalar>(d, a.items, n, nullptr, [=](const auto& ex, int b, const batchlas::device::Workspace& w) {
         const int r = batchlas::device::getrf<Tr>(ex, a.mat(b), batchlas::device::vec(piv + std::ptrdiff_t(b) * n, n), w, b != dead);
         if (b != dead && ex.leader()) info[b] = r;
     });
 }
 // getrs<TR> on ItemMat operands.
-template <Transpose TR, class T> void device_getrs(Dev& d, const DevBatch<T>& a, const DevBatch<T>& b, const std::int32_t* piv) {
+template <Transpose TR, class Scalar> void device_getrs(Dev& d, const DevBatch<Scalar>& a, const DevBatch<Scalar>& b, const std::int32_t* piv) {
     const auto av = a.kview(), bv = b.kview();
     const int n = a.cols;
-    launch<batchlas::device::routine::getrs<TR>, Tier, T>(d, a.items, n, nullptr, [=](const auto& ex, int q, const batchlas::device::Workspace& w) {
+    launch<batchlas::device::routine::getrs<TR>, Tier, Scalar>(d, a.items, n, nullptr, [=](const auto& ex, int q, const batchlas::device::Workspace& w) {
         (void)batchlas::device::getrs<TR, Tier>(ex, batchlas::device::item(av, q), batchlas::device::vec(piv + std::ptrdiff_t(q) * n, n),
                                                 batchlas::device::item(bv, q), w);
     });
 }
-template <class T> void device_getrs(Dev& d, Transpose tr, const DevBatch<T>& a, const DevBatch<T>& b, const std::int32_t* piv) {
+template <class Scalar> void device_getrs(Dev& d, Transpose tr, const DevBatch<Scalar>& a, const DevBatch<Scalar>& b, const std::int32_t* piv) {
     if (tr == kNT) device_getrs<kNT>(d, a, b, piv);
     else if (tr == kTr) device_getrs<kTr>(d, a, b, piv);
     else device_getrs<kCT>(d, a, b, piv);
 }
 // gesv on Mat operands.
-template <class T> void device_gesv(Dev& d, const DevBatch<T>& a, const DevBatch<T>& b, std::int32_t* piv, std::int32_t* info) {
+template <class Scalar> void device_gesv(Dev& d, const DevBatch<Scalar>& a, const DevBatch<Scalar>& b, std::int32_t* piv, std::int32_t* info) {
     const int n = a.cols;
-    launch<batchlas::device::routine::gesv, Tier, T>(d, a.items, n, nullptr, [=](const auto& ex, int q, const batchlas::device::Workspace& w) {
+    launch<batchlas::device::routine::gesv, Tier, Scalar>(d, a.items, n, nullptr, [=](const auto& ex, int q, const batchlas::device::Workspace& w) {
         const int r = batchlas::device::gesv<Tier>(ex, a.mat(q), batchlas::device::vec(piv + std::ptrdiff_t(q) * n, n), b.mat(q), w);
         if (ex.leader()) info[q] = r;
     });
 }
 // getri on l3::Global operands.
-template <class T> void device_getri(Dev& d, const DevBatch<T>& a, const DevBatch<T>& c, const std::int32_t* piv, std::int32_t* info) {
+template <class Scalar> void device_getri(Dev& d, const DevBatch<Scalar>& a, const DevBatch<Scalar>& c, const std::int32_t* piv, std::int32_t* info) {
     const int n = a.cols;
-    launch<batchlas::device::routine::getri, Tier, T>(d, a.items, n, nullptr, [=](const auto& ex, int q, const batchlas::device::Workspace& w) {
+    launch<batchlas::device::routine::getri, Tier, Scalar>(d, a.items, n, nullptr, [=](const auto& ex, int q, const batchlas::device::Workspace& w) {
         const int r = batchlas::device::getri<Tier>(ex, a.global(q), batchlas::device::vec(piv + std::ptrdiff_t(q) * n, n), c.global(q), w);
         if (ex.leader()) info[q] = r;
     });
 }
-template <class T> void device_inv(Dev& d, const DevBatch<T>& a, const DevBatch<T>& c, std::byte* gws, std::int32_t* info) {
-    launch<batchlas::device::routine::inv, Tier, T>(d, a.items, a.cols, gws, [=](const auto& ex, int q, const batchlas::device::Workspace& w) {
+template <class Scalar> void device_inv(Dev& d, const DevBatch<Scalar>& a, const DevBatch<Scalar>& c, std::byte* gws, std::int32_t* info) {
+    launch<batchlas::device::routine::inv, Tier, Scalar>(d, a.items, a.cols, gws, [=](const auto& ex, int q, const batchlas::device::Workspace& w) {
         const int r = batchlas::device::inv<Tier>(ex, a.mat(q), c.mat(q), w);
         if (ex.leader()) info[q] = r;
     });
@@ -377,20 +378,20 @@ void check_factor(const Batch<T>& A0, const Batch<T>& F, const std::vector<std::
 
 // Items where the device and host factors disagree: pivots, info, or a factor difference past
 // the factorization bound.
-template <class T>
-std::vector<int> lu_mismatches(const Batch<T>& F, const std::vector<std::int32_t>& P, const std::vector<std::int32_t>& I, const Batch<T>& H,
+template <class Scalar>
+std::vector<int> lu_mismatches(const Batch<Scalar>& F, const std::vector<std::int32_t>& P, const std::vector<std::int32_t>& I, const Batch<Scalar>& H,
                                const std::vector<std::int32_t>& PH, const std::vector<std::int32_t>& IH) {
     const int n = F.cols;
     std::vector<int> bad;
     for (int q = 0; q < F.items; ++q) {
-        bool same = I[q] == IH[q] && batchlas::verify::within<T>(Check::factorization, n, rel_diff(F, H, q));
+        bool same = I[q] == IH[q] && batchlas::verify::within<Scalar>(Check::factorization, n, rel_diff(F, H, q));
         for (int k = 0; k < n; ++k) same = same && P[std::size_t(q) * n + k] == PH[std::size_t(q) * n + k];
         if (!same) bad.push_back(q);
     }
     return bad;
 }
 
-template <class T> class DeviceApiLuTest : public DeviceCoreTest<T> {};
+template <class Scalar> class DeviceApiLuTest : public DeviceCoreTest<Scalar> {};
 TYPED_TEST_SUITE(DeviceApiLuTest, AllTypes);
 
 // getrf Blocked<32> across the NB and Cta boundaries; on a GPU also the host blocked route.

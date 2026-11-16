@@ -27,65 +27,67 @@ namespace ops::syr2k {
 
 using select::overloaded;
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
 // op(A)'s inner extent: the k of C = alpha (op(A) op(B)^T + op(B) op(A)^T) + beta C.
-template <typename T>
-std::int64_t inner(const MV<T>& A, Transpose transA) {
+template <typename Scalar>
+std::int64_t inner(const MV<Scalar>& A, Transpose transA) {
     return transA == Transpose::NoTrans ? A.cols() : A.rows();
 }
 
-template <typename T>
-select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
-    return {{"n", C.rows()}, {"k", inner<T>(A, transA)}, {"batch", C.batch_size()}};
+template <typename Scalar>
+select::Key key_of(const MV<Scalar>& A, const MV<Scalar>& C, Transpose transA) {
+    return {{"n", C.rows()}, {"k", inner<Scalar>(A, transA)}, {"batch", C.batch_size()}};
 }
 
-// Correctness only (R3). The kernel is portable SYCL wired for CUDA and SYCL (design D6), any real T. One launch covers the batch with a single (n, k, ld, stride), so no
+// Correctness only (R3). The kernel is portable SYCL wired for CUDA and SYCL (design D6), any real Scalar. One launch covers the batch with a single (n, k, ld, stride), so no
 // heterogeneous operand. A real ConjTrans is Trans, folded by the launch, so it is no term. The
 // launch chunks the batch (grid z); the tile-count term is grid y's own limit. Every vendor loop (cuBLAS,
 // rocBLAS, netlib) runs each item at the top-level (n, k), a wrong answer for a heterogeneous
 // batch, so the vendor is refused one too.
-template <Backend B, typename T>
-bool can_run(const Syr2kChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& Bm, const MV<T>& C,
+template <Backend B, typename Scalar>
+bool can_run(const Syr2kChoice& c, const select::Device& d, const MV<Scalar>& A, const MV<Scalar>& Bm,
+             const MV<Scalar>& C,
              Transpose transA) {
     // Triangular honours a batch mask; the vendor's per-item loop cannot skip an item.
     const bool masked = batchlas::detail::any_batch_mask(A, Bm, C);
-    const std::int64_t n = C.rows(), k = inner<T>(A, transA), batch = C.batch_size();
+    const std::int64_t n = C.rows(), k = inner<Scalar>(A, transA), batch = C.batch_size();
     const std::int64_t side = (n + backend::detail::kTriangularTile - 1) / backend::detail::kTriangularTile;
     const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
     return std::visit(overloaded{
         [&](Triangular) {
             return select::native_gpu_backend<B> && d.is_gpu && d.max_wg >= 256 &&
-                   d.slm_budget >= triangular_slm_bytes<T>() &&
+                   d.slm_budget >= triangular_slm_bytes<Scalar>() &&
                    homogeneous && n >= 1 && k >= 1 && batch >= 1 &&
                    side * (side + 1) / 2 <= d.max_groups_yz;
         },
-        [&](Vendor) { return vendor_wired<B, T> && d.has_vendor && homogeneous && !masked; },
+        [&](Vendor) { return vendor_wired<B, Scalar> && d.has_vendor && homogeneous && !masked; },
     }, c);
 }
 
-template <Backend B, typename T>
-Event launch(Queue& q, const Syr2kChoice& c, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta,
+template <Backend B, typename Scalar>
+Event launch(Queue& q, const Syr2kChoice& c, const MV<Scalar>& A, const MV<Scalar>& Bm, const MV<Scalar>& C,
+             Scalar alpha, Scalar beta,
              Uplo uplo, Transpose transA) {
     return std::visit(overloaded{
         [&](Triangular) -> Event {
-            // Instantiated only where can_run can admit it, so no other (B, T) compiles the kernel.
-            if constexpr (select::native_gpu_backend<B> && !std::is_same_v<T, std::complex<double>>) {
-                const Transpose t = transA == Transpose::ConjTrans ? Transpose::Trans : transA;  // real T
+            // Instantiated only where can_run can admit it, so no other (B, Scalar) compiles the kernel.
+            if constexpr (select::native_gpu_backend<B> && !std::is_same_v<Scalar, std::complex<double>>) {
+                const Transpose t = transA == Transpose::ConjTrans ? Transpose::Trans : transA;  // real Scalar
                 return level3::for_each_chunk(q, C.batch_size(), level3::grid_chunk<B>(q), [&](int f, int n) {
-                    return backend::detail::syr2k_triangular_tiles<T>(q, level3::batch_range(A, f, n),
-                                                                          level3::batch_range(Bm, f, n),
-                                                                          level3::batch_range(C, f, n), alpha,
-                                                                          beta, uplo, t);
+                    return backend::detail::syr2k_triangular_tiles<Scalar>(q, level3::batch_range(A, f, n),
+                                                                               level3::batch_range(Bm, f, n),
+                                                                               level3::batch_range(C, f, n), alpha,
+                                                                               beta, uplo, t);
                 });
             } else
                 throw batchlas::internal_error("syr2k: triangular reached for a (backend, dtype) can_run refuses");
         },
         [&](Vendor) -> Event {
-            if constexpr (vendor_wired<B, T>)
-                return backend::syr2k_vendor<B, T>(q, A, Bm, C, alpha, beta, uplo, transA);
-            else select::no_vendor<B, T>(spec);
+            if constexpr (vendor_wired<B, Scalar>)
+                return backend::syr2k_vendor<B, Scalar>(q, A, Bm, C, alpha, beta, uplo, transA);
+            else select::no_vendor<B, Scalar>(spec);
         },
     }, c);
 }

@@ -10,9 +10,9 @@
 
 namespace batchlas {
 
-template <typename T>
+template <typename Scalar>
 struct InvWorkspace {
-    MatrixView<T, MatrixFormat::Dense> Acopy;
+    MatrixView<Scalar, MatrixFormat::Dense> Acopy;
     Span<int64_t> pivots;
     Span<std::byte> getri_ws;
     Span<std::byte> getrf_ws;
@@ -23,27 +23,27 @@ struct InvWorkspace {
 // not about Acopy: Acopy lives in the workspace and has no backing memory
 // while this runs. The two are shape-identical, which is what makes that
 // substitution sound.
-template <Backend B, typename T>
-InvWorkspace<T> inv_layout(Queue& ctx,
-                           BumpAllocator& pool,
-                           const MatrixView<T, MatrixFormat::Dense>& A) {
-    auto data = pool.allocate<T>(ctx, A.data().size());
-    auto ptrs = pool.allocate<T*>(ctx, A.batch_size());
+template <Backend B, typename Scalar>
+InvWorkspace<Scalar> inv_layout(Queue& ctx,
+                                BumpAllocator& pool,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& A) {
+    auto data = pool.allocate<Scalar>(ctx, A.data().size());
+    auto ptrs = pool.allocate<Scalar*>(ctx, A.batch_size());
     // A raw-pointer view starts unmasked: Acopy re-attaches A's mask for getrf and getri.
     return {
-        MatrixView<T, MatrixFormat::Dense>(data.data(),
-                                           A.rows(), A.cols(), A.ld(), A.stride(), A.batch_size(),
-                                           ptrs.data()).with_batch_mask(A.batch_mask()),
+        MatrixView<Scalar, MatrixFormat::Dense>(data.data(),
+                                                A.rows(), A.cols(), A.ld(), A.stride(), A.batch_size(),
+                                                ptrs.data()).with_batch_mask(A.batch_mask()),
         pool.allocate<int64_t>(ctx, A.rows() * A.batch_size()),
         pool.allocate<std::byte>(ctx, getri_buffer_size<B>(ctx, A)),
         pool.allocate<std::byte>(ctx, getrf_buffer_size<B>(ctx, A)),
     };
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event inv(Queue& ctx,
-          const MatrixView<T, MatrixFormat::Dense>& A_,
-          const MatrixView<T, MatrixFormat::Dense>& Ainv_,
+          const MatrixView<Scalar, MatrixFormat::Dense>& A_,
+          const MatrixView<Scalar, MatrixFormat::Dense>& Ainv_,
           Span<std::byte> workspace) {
     // Both operands carry the call's mask whichever brought it.
     const auto mask = detail::call_mask("inv", A_, Ainv_);
@@ -51,8 +51,8 @@ Event inv(Queue& ctx,
     const auto A = adopt ? A_.with_batch_mask(mask) : A_;
     const auto Ainv = adopt ? Ainv_.with_batch_mask(mask) : Ainv_;
     BumpAllocator pool(workspace);
-    auto ws = inv_layout<B, T>(ctx, pool, A);
-    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, ws.Acopy, A);
+    auto ws = inv_layout<B, Scalar>(ctx, pool, A);
+    (void)MatrixView<Scalar, MatrixFormat::Dense>::copy(ctx, ws.Acopy, A);
     // (void) on an Event: deliberate. This Queue is in-order, so the next submission
     // is already ordered after this one and the Event carries nothing the caller needs.
     (void)getrf<B>(ctx, ws.Acopy, ws.pivots, ws.getrf_ws);
@@ -60,18 +60,18 @@ Event inv(Queue& ctx,
     return ctx.get_event();
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t inv_buffer_size(Queue& ctx,
-                       const MatrixView<T, MatrixFormat::Dense>& A) {
+                       const MatrixView<Scalar, MatrixFormat::Dense>& A) {
     (void)detail::call_mask("inv_buffer_size", A);
-    return workspace_bytes([&](BumpAllocator& pool) { return inv_layout<B, T>(ctx, pool, A); });
+    return workspace_bytes([&](BumpAllocator& pool) { return inv_layout<B, Scalar>(ctx, pool, A); });
 }
 
-template <Backend B, typename T>
-Matrix<T, MatrixFormat::Dense> inv(Queue& ctx,
-                                   const MatrixView<T, MatrixFormat::Dense>& A) {
+template <Backend B, typename Scalar>
+Matrix<Scalar, MatrixFormat::Dense> inv(Queue& ctx,
+                                        const MatrixView<Scalar, MatrixFormat::Dense>& A) {
     (void)detail::call_mask("inv", A);
-    Matrix<T, MatrixFormat::Dense> Aout(A.rows(), A.cols(), A.batch_size());
+    Matrix<Scalar, MatrixFormat::Dense> Aout(A.rows(), A.cols(), A.batch_size());
     // Arena-backed rather than a local UnifiedVector: this overload returns
     // without waiting, so a local would sycl::free the workspace while the
     // kernels using it were still only enqueued. Arena memory is owned by the

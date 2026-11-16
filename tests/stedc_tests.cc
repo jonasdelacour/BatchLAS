@@ -140,9 +140,9 @@ TEST(StedcDeflationScan, PortableJointExclusiveScanInPlaceAcrossChunks) {
 #endif
 }
 
-template <typename T, Backend B>
+template <typename Real, Backend B>
 struct StedcConfig {
-    using ScalarType = T;
+    using ScalarType = Real;
     static constexpr Backend BackendVal = B;
 };
 

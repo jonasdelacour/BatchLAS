@@ -47,13 +47,13 @@ namespace {
 namespace ts = batchlas::ops::trsm;
 using C = ts::TrsmChoice;
 using Pin = select::ScopedPin<C>;
-template <typename T>
-using MVof = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MVof = MatrixView<Scalar, MatrixFormat::Dense>;
 
-template <typename T>
-using RealOf = typename batchlas::base_type<T>::type;
-template <typename T>
-constexpr bool kCx = test_utils::is_complex<T>::value;
+template <typename Scalar>
+using RealOf = typename batchlas::base_type<Scalar>::type;
+template <typename Scalar>
+constexpr bool kCx = test_utils::is_complex<Scalar>::value;
 
 template <typename T>
 bool same_bits(T a, T b) {
@@ -84,19 +84,19 @@ struct Spec {
 // A and B live in one buffer of a large finite poison, at padded lds and strides that are not
 // ld * cols. Everything a solve may not read or write -- A's other triangle, a Unit diagonal,
 // the ld pads, the gaps, a parent matrix around sub-views -- holds the poison.
-template <typename T>
+template <typename Scalar>
 struct Solve {
     Spec s;
-    T alpha{};
+    Scalar alpha{};
     Region a, b;
-    UnifiedVector<T> mem;
-    std::vector<T> mem0;
-    UnifiedVector<T*> aptr, bptr;
+    UnifiedVector<Scalar> mem;
+    std::vector<Scalar> mem0;
+    UnifiedVector<Scalar*> aptr, bptr;
 
-    MatrixView<T, MatrixFormat::Dense> A() {
+    MatrixView<Scalar, MatrixFormat::Dense> A() {
         return {mem.data() + a.off, s.n, s.n, a.ld, a.stride, s.batch, aptr.data()};
     }
-    MatrixView<T, MatrixFormat::Dense> B() {
+    MatrixView<Scalar, MatrixFormat::Dense> B() {
         return {mem.data() + b.off, b.rows, b.cols, b.ld, b.stride, s.batch, bptr.data()};
     }
     std::size_t ai(int it, int i, int j) const { return a.off + std::size_t(it) * a.stride + std::size_t(j) * a.ld + i; }
@@ -104,16 +104,16 @@ struct Solve {
     bool owned(int i, int j) const { return s.uplo == Uplo::Lower ? i > j : i < j; }
 };
 
-template <typename T>
-T poison() {
-    return MVof<T>::make(RealOf<T>(-999), RealOf<T>(777));
+template <typename Scalar>
+Scalar poison() {
+    return MVof<Scalar>::make(RealOf<Scalar>(-999), RealOf<Scalar>(777));
 }
 
 // Strictly diagonally dominant owned triangle, every entry with a nonzero imaginary part; a
 // Unit diagonal stores poison (a kernel that reads it divides by ~1e3).
-template <typename T>
-void fill(Solve<T>& p) {
-    using R = RealOf<T>;
+template <typename Scalar>
+void fill(Solve<Scalar>& p) {
+    using R = RealOf<Scalar>;
     const Spec& s = p.s;
     std::mt19937 gen(p.s.seed);
     std::uniform_real_distribution<R> d(R(0.1), R(1)), u(R(-1), R(1));
@@ -122,19 +122,19 @@ void fill(Solve<T>& p) {
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.n; ++i) {
                 if (i == j && s.diag == Diag::Unit) {
-                    p.mem[p.ai(it, i, j)] = MVof<T>::make(R(300), R(-200));
+                    p.mem[p.ai(it, i, j)] = MVof<Scalar>::make(R(300), R(-200));
                 } else if (i == j) {
                     const auto x = d(gen), y = d(gen);
-                    p.mem[p.ai(it, i, j)] = MVof<T>::make(R(2.5) + R(0.5) * x, R(0.3) * y);
+                    p.mem[p.ai(it, i, j)] = MVof<Scalar>::make(R(2.5) + R(0.5) * x, R(0.3) * y);
                 } else if (p.owned(i, j)) {
                     const auto x = gen() & 1 ? d(gen) : -d(gen);
-                    p.mem[p.ai(it, i, j)] = MVof<T>::make(x / R(s.n), d(gen) / R(s.n));
+                    p.mem[p.ai(it, i, j)] = MVof<Scalar>::make(x / R(s.n), d(gen) / R(s.n));
                 }
             }
         for (int j = 0; j < p.b.cols; ++j)
             for (int i = 0; i < p.b.rows; ++i) {
                 const auto re = u(gen), im = u(gen);
-                p.mem[p.bi(it, i, j)] = MVof<T>::make(re, im);
+                p.mem[p.bi(it, i, j)] = MVof<Scalar>::make(re, im);
             }
     }
     for (int it = reps; it < s.batch; ++it) {
@@ -148,24 +148,24 @@ void fill(Solve<T>& p) {
     p.mem0.assign(p.mem.begin(), p.mem.end());
 }
 
-template <typename T>
-T alpha_of() {
-    return MVof<T>::make(RealOf<T>(1.5), RealOf<T>(-0.5));
+template <typename Scalar>
+Scalar alpha_of() {
+    return MVof<Scalar>::make(RealOf<Scalar>(1.5), RealOf<Scalar>(-0.5));
 }
 
-template <typename T>
-void init(Solve<T>& p, std::size_t total) {
-    p.alpha = alpha_of<T>();
-    p.mem = UnifiedVector<T>(total, poison<T>());
-    p.aptr = UnifiedVector<T*>(p.s.batch, nullptr);
-    p.bptr = UnifiedVector<T*>(p.s.batch, nullptr);
+template <typename Scalar>
+void init(Solve<Scalar>& p, std::size_t total) {
+    p.alpha = alpha_of<Scalar>();
+    p.mem = UnifiedVector<Scalar>(total, poison<Scalar>());
+    p.aptr = UnifiedVector<Scalar*>(p.s.batch, nullptr);
+    p.bptr = UnifiedVector<Scalar*>(p.s.batch, nullptr);
     fill(p);
 }
 
 // Standalone A and B with non-natural ld and stride on both.
-template <typename T>
-Solve<T> make_solve(const Spec& s) {
-    Solve<T> p;
+template <typename Scalar>
+Solve<Scalar> make_solve(const Spec& s) {
+    Solve<Scalar> p;
     p.s = s;
     p.a = {0, s.n, s.n, s.n + 3, (s.n + 3) * s.n + 5};
     const int br = s.side == Side::Left ? s.n : s.q, bc = s.side == Side::Left ? s.q : s.n;
@@ -176,9 +176,9 @@ Solve<T> make_solve(const Spec& s) {
 
 // The potrf panel pattern (potrf_blocked.cc): A11 and the block below (Side::Right) or to its
 // right (Side::Left, getrf's L11 \ A12) are sub-views of one parent and carry its ld and stride.
-template <typename T>
-Solve<T> make_panel(const Spec& s, int parent, int j0) {
-    Solve<T> p;
+template <typename Scalar>
+Solve<Scalar> make_panel(const Spec& s, int parent, int j0) {
+    Solve<Scalar> p;
     p.s = s;
     const int ld = parent + 5, stride = ld * parent + 9;
     p.a = {std::size_t(j0) * ld + j0, s.n, s.n, ld, stride};
@@ -192,12 +192,12 @@ Solve<T> make_panel(const Spec& s, int parent, int j0) {
 
 // ||op(A) X - alpha B|| / (||A|| ||X|| + |alpha| ||B||) for one item through the library: A and B
 // from the pristine copy, X from the result buffer, A's other triangle and a Unit diagonal unread.
-template <typename T>
-double residual(Queue& ctx, const Solve<T>& p, std::span<const int> items) {
+template <typename Scalar>
+double residual(Queue& ctx, const Solve<Scalar>& p, std::span<const int> items) {
     const Spec& s = p.s;
-    using View = MatrixView<T, MatrixFormat::Dense>;
-    T* m0 = const_cast<T*>(p.mem0.data());
-    T* m = const_cast<T*>(p.mem.data());
+    using View = MatrixView<Scalar, MatrixFormat::Dense>;
+    Scalar* m0 = const_cast<Scalar*>(p.mem0.data());
+    Scalar* m = const_cast<Scalar*>(p.mem.data());
     const View A0(m0 + p.a.off, s.n, s.n, p.a.ld, p.a.stride, s.batch);
     const View B0(m0 + p.b.off, p.b.rows, p.b.cols, p.b.ld, p.b.stride, s.batch);
     const View X(m + p.b.off, p.b.rows, p.b.cols, p.b.ld, p.b.stride, s.batch);
@@ -274,9 +274,9 @@ struct TableGuard {
     ~TableGuard() { select::testing::use_embedded_tables(); }
 };
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;

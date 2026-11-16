@@ -40,7 +40,7 @@ namespace detail {
 
 namespace {
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 class Sb2stHhChaseKernel;
 
 // The chase is sequential per matrix; the only parallelism inside a work-group is the
@@ -60,18 +60,18 @@ static_assert(kTpr <= 32 && kRowsPar * kTpr == kWg);
 // Single description of sytrd_sb2st_hh's workspace; see workspace_bytes() in
 // util/mempool.hh. The expanded working band is wider than the input band
 // because transient bulge fill reaches kd rows below it.
-template <typename T>
-Span<T> sytrd_sb2st_hh_layout(Queue& ctx, BumpAllocator& pool, int32_t n, int32_t kdw, int32_t batch) {
-    return pool.allocate<T>(
+template <typename Scalar>
+Span<Scalar> sytrd_sb2st_hh_layout(Queue& ctx, BumpAllocator& pool, int32_t n, int32_t kdw, int32_t batch) {
+    return pool.allocate<Scalar>(
         ctx, static_cast<size_t>(kdw + 1) * static_cast<size_t>(n) * static_cast<size_t>(batch));
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t sytrd_sb2st_hh_buffer_size(Queue& ctx, int32_t n, int32_t kd, int32_t batch) {
     if (n <= 0 || batch <= 0) return 0;
     const int32_t kdw = sb2st_hh_work_bandwidth(n, kd);
     return workspace_bytes([&](BumpAllocator& pool) {
-        return sytrd_sb2st_hh_layout<T>(ctx, pool, n, kdw, batch);
+        return sytrd_sb2st_hh_layout<Scalar>(ctx, pool, n, kdw, batch);
     });
 }
 
@@ -81,18 +81,18 @@ size_t sytrd_sb2st_hh_buffer_size(Queue& ctx, int32_t n, int32_t kd, int32_t bat
 // d_out/e_out: real diagonal and |subdiagonal|
 // v_out      : kd x nrefl  reflector k in column k, v[0] = 1, zero-padded
 // tau_out    : nrefl
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event sytrd_sb2st_hh(Queue& ctx,
-                     const MatrixView<T, MatrixFormat::Dense>& ab_in,
-                     const MatrixView<T, MatrixFormat::Dense>& ab_tri_out,
-                     const VectorView<typename base_type<T>::type>& d_out,
-                     const VectorView<typename base_type<T>::type>& e_out,
-                     const MatrixView<T, MatrixFormat::Dense>& v_out,
-                     const VectorView<T>& tau_out,
+                     const MatrixView<Scalar, MatrixFormat::Dense>& ab_in,
+                     const MatrixView<Scalar, MatrixFormat::Dense>& ab_tri_out,
+                     const VectorView<typename base_type<Scalar>::type>& d_out,
+                     const VectorView<typename base_type<Scalar>::type>& e_out,
+                     const MatrixView<Scalar, MatrixFormat::Dense>& v_out,
+                     const VectorView<Scalar>& tau_out,
                      Uplo uplo,
                      int32_t kd,
                      const Span<std::byte>& ws) {
-    using Real = typename base_type<T>::type;
+    using Real = typename base_type<Scalar>::type;
 
     if (!ctx.in_order()) {
         throw batchlas::invalid_argument("sytrd_sb2st_hh: requires an in-order Queue");
@@ -112,7 +112,7 @@ Event sytrd_sb2st_hh(Queue& ctx,
 
     BumpAllocator pool(ws);
 
-    auto abw = sytrd_sb2st_hh_layout<T>(ctx, pool, n, kdw, batch);
+    auto abw = sytrd_sb2st_hh_layout<Scalar>(ctx, pool, n, kdw, batch);
 
     const int32_t ldw = kdw + 1;
 
@@ -121,17 +121,17 @@ Event sytrd_sb2st_hh(Queue& ctx,
     auto Vout = v_out.kernel_view();
     const int32_t nrefl = static_cast<int32_t>(v_out.cols());
     const int32_t ldv = static_cast<int32_t>(v_out.ld());
-    T* abw_ptr = abw.data();
+    Scalar* abw_ptr = abw.data();
 
     ctx->submit([&](sycl::handler& h) {
-        sycl::local_accessor<T, 1> vloc(sycl::range<1>(static_cast<size_t>(std::max(1, kd_i))), h);
-        sycl::local_accessor<T, 1> wloc(sycl::range<1>(static_cast<size_t>(std::max(1, kd_i))), h);
+        sycl::local_accessor<Scalar, 1> vloc(sycl::range<1>(static_cast<size_t>(std::max(1, kd_i))), h);
+        sycl::local_accessor<Scalar, 1> wloc(sycl::range<1>(static_cast<size_t>(std::max(1, kd_i))), h);
 
         auto Dv = d_out;
         auto Ev = e_out;
         auto TAUv = tau_out;
 
-        batchlas::impl::parallel_for<Sb2stHhChaseKernel<B, T>>(h,
+        batchlas::impl::parallel_for<Sb2stHhChaseKernel<B, Scalar>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * kWg),
                               sycl::range<1>(kWg)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
@@ -143,23 +143,23 @@ Event sytrd_sb2st_hh(Queue& ctx,
                 const device::WorkGroup<kWg> ex{it};
                 const device::Teams<kWg, kTpr, device::alg::BflyAsc> rows{it};
 
-                T* AB = abw_ptr + static_cast<size_t>(b) * static_cast<size_t>(ldw) *
+                Scalar* AB = abw_ptr + static_cast<size_t>(b) * static_cast<size_t>(ldw) *
                                       static_cast<size_t>(n);
                 auto ABs = ABsrc.batch_item(b);
                 auto ABt = ABtri.batch_item(b);
                 auto Vb = Vout.batch_item(b);
-                const device::detail::HermBandLower<T> A{AB, ldw, kdw};
+                const device::detail::HermBandLower<Scalar> A{AB, ldw, kdw};
 
                 // --- Load the input band into the expanded working band (rows past kd read 0).
                 device::for_each_owned(ex, ldw * n, [&](int32_t idx) BATCHLAS_DEVICE_BODY {
                     const int32_t col = idx / ldw;
                     const int32_t row = idx - col * ldw;
-                    AB[idx] = (row <= kd_i) ? ABs(row, col) : T(0);
+                    AB[idx] = (row <= kd_i) ? ABs(row, col) : Scalar(0);
                 });
                 device::sync(ex, device::Mem::Global);
 
                 // Hermitian input: force a real diagonal before we start.
-                if constexpr (detail::is_complex<T>::value) {
+                if constexpr (detail::is_complex<Scalar>::value) {
                     device::for_each_owned(ex, n, [&](int32_t j) BATCHLAS_DEVICE_BODY {
                         AB[j * ldw] = device::force_real(AB[j * ldw]);
                     });
@@ -174,20 +174,20 @@ Event sytrd_sb2st_hh(Queue& ctx,
 
                 // --- Extract the tridiagonal.
                 device::for_each_owned(ex, n, [&](int32_t j) BATCHLAS_DEVICE_BODY {
-                    const T diag = A.get(j, j);
+                    const Scalar diag = A.get(j, j);
                     ABt(0, j) = device::force_real(diag);
-                    if constexpr (detail::is_complex<T>::value) {
+                    if constexpr (detail::is_complex<Scalar>::value) {
                         Dv(j, b) = static_cast<Real>(diag.real());
                     } else {
                         Dv(j, b) = static_cast<Real>(diag);
                     }
                 });
                 device::for_each_owned(ex, n - 1, [&](int32_t j) BATCHLAS_DEVICE_BODY {
-                    const T sub = A.get(j + 1, j);
+                    const Scalar sub = A.get(j + 1, j);
                     ABt(1, j) = sub;  // signed: the phase pass consumes this
                     Ev(j, b) = detail::abs(sub);
                 });
-                if (ex.leader() && n > 0) ABt(1, n - 1) = T(0);
+                if (ex.leader() && n > 0) ABt(1, n - 1) = Scalar(0);
             });
     });
 
@@ -201,13 +201,13 @@ Event sytrd_sb2st_hh(Queue& ctx,
 // rows (contiguous in column-major Z) and the dot is a sub-group reduction.
 // evidence: docs/perf/sytrd.md#sytrd-the-q2-back-transform-design
 namespace {
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 class Sb2stHhBackKernel;
 
-template <Backend B, typename T, int C>
+template <Backend B, typename Scalar, int C>
 class Sb2stHhBackTiledKernel;
 
-template <Backend B, typename T, int C, int S>
+template <Backend B, typename Scalar, int C, int S>
 class Sb2stHhBackWaveKernel;
 
 constexpr int kBackCols = 8;  // columns of Z per work-group (global-memory path)
@@ -220,11 +220,11 @@ constexpr int kBackCols = 8;  // columns of Z per work-group (global-memory path
 // Those touch disjoint rows of the tile, so no synchronisation is needed within a
 // wave; one work-group barrier separates waves.
 // evidence: docs/perf/sytrd.md#sytrd-the-q2-back-transform-design
-template <Backend B, typename T, int C, int S>
+template <Backend B, typename Scalar, int C, int S>
 Event unmqr_hb2st_wave(Queue& ctx,
-                       const MatrixView<T, MatrixFormat::Dense>& v_in,
-                       const VectorView<T>& tau_in,
-                       const MatrixView<T, MatrixFormat::Dense>& z_io,
+                       const MatrixView<Scalar, MatrixFormat::Dense>& v_in,
+                       const VectorView<Scalar>& tau_in,
+                       const MatrixView<Scalar, MatrixFormat::Dense>& z_io,
                        int32_t n,
                        const int32_t* starts_p,
                        const int32_t* lens_p,
@@ -245,11 +245,11 @@ Event unmqr_hb2st_wave(Queue& ctx,
     auto Zv = z_io.kernel_view();
 
     ctx->submit([&](sycl::handler& h) {
-        sycl::local_accessor<T, 1> Zs(
+        sycl::local_accessor<Scalar, 1> Zs(
             sycl::range<1>(static_cast<size_t>(n) * static_cast<size_t>(C)), h);
         auto TAUv = tau_in;
 
-        batchlas::impl::parallel_for<Sb2stHhBackWaveKernel<B, T, C, S>>(h,
+        batchlas::impl::parallel_for<Sb2stHhBackWaveKernel<B, Scalar, C, S>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(num_wg) * kWg),
                               sycl::range<1>(kWg)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
@@ -267,12 +267,12 @@ Event unmqr_hb2st_wave(Queue& ctx,
                 auto Z = Zv.batch_item(b);
                 const auto V = Vv.batch_item(b);
 
-                T* Zl = Zs.template get_multi_ptr<sycl::access::decorated::no>().get();
+                Scalar* Zl = Zs.template get_multi_ptr<sycl::access::decorated::no>().get();
 
                 device::for_each_owned(ex, n * C, [&](int32_t idx) BATCHLAS_DEVICE_BODY {
                     const int32_t r = idx / C;
                     const int32_t c = idx - r * C;
-                    Zl[idx] = (c0 + c < ncols) ? Z(r, c0 + c) : T(0);
+                    Zl[idx] = (c0 + c < ncols) ? Z(r, c0 + c) : Scalar(0);
                 });
                 device::sync(ex, device::Mem::Global);
 
@@ -285,13 +285,13 @@ Event unmqr_hb2st_wave(Queue& ctx,
                     // k is sub-group uniform (larf's shuffles stay uniform); a wave's reflectors
                     // touch disjoint rows, so no barrier inside a wave.
                     for (int32_t k = lo + sgid; k < hi; k += S) {
-                        const T tau = TAUv(k, b);
-                        if (tau == T(0)) continue;
+                        const Scalar tau = TAUv(k, b);
+                        if (tau == Scalar(0)) continue;
                         const int32_t s = starts_p[k];
                         const int32_t L = lens_p[k];
                         device::larf<Side::Left, device::arith::Native, device::alg::ScaleV, device::alg::Lockstep>(
                             cols, tau, device::assume_published(device::mat(V).col(k).head(L)),
-                            device::detail::win_of(device::StridedMat<T, device::Ext<C>, device::Unit>{Zl, n, C}, s, 0, L, C));
+                            device::detail::win_of(device::StridedMat<Scalar, device::Ext<C>, device::Unit>{Zl, n, C}, s, 0, L, C));
                     }
                     device::sync(ex, device::Mem::Global);
                 }
@@ -314,11 +314,11 @@ Event unmqr_hb2st_wave(Queue& ctx,
 // evidence: docs/perf/sytrd.md#sytrd-the-q2-back-transform-design
 // Lane mapping: device::detail::StridedTeams<C> (xor masks C, 2C, ... < 32); Zs is
 // row-major with C columns, so consecutive lanes touch consecutive addresses.
-template <Backend B, typename T, int C>
+template <Backend B, typename Scalar, int C>
 Event unmqr_hb2st_tiled(Queue& ctx,
-                        const MatrixView<T, MatrixFormat::Dense>& v_in,
-                        const VectorView<T>& tau_in,
-                        const MatrixView<T, MatrixFormat::Dense>& z_io,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& v_in,
+                        const VectorView<Scalar>& tau_in,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& z_io,
                         int32_t n,
                         int32_t nrefl,
                         const int32_t* starts_p,
@@ -336,11 +336,11 @@ Event unmqr_hb2st_tiled(Queue& ctx,
     auto Zv = z_io.kernel_view();
 
     ctx->submit([&](sycl::handler& h) {
-        sycl::local_accessor<T, 1> Zs(
+        sycl::local_accessor<Scalar, 1> Zs(
             sycl::range<1>(static_cast<size_t>(n) * static_cast<size_t>(C)), h);
         auto TAUv = tau_in;
 
-        batchlas::impl::parallel_for<Sb2stHhBackTiledKernel<B, T, C>>(h,
+        batchlas::impl::parallel_for<Sb2stHhBackTiledKernel<B, Scalar, C>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(num_wg) * kSg),
                               sycl::range<1>(kSg)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
@@ -357,25 +357,25 @@ Event unmqr_hb2st_tiled(Queue& ctx,
                 auto Z = Zv.batch_item(b);
                 const auto V = Vv.batch_item(b);
 
-                T* Zl = Zs.template get_multi_ptr<sycl::access::decorated::no>().get();
+                Scalar* Zl = Zs.template get_multi_ptr<sycl::access::decorated::no>().get();
 
                 // Load the column tile once.
                 device::for_each_owned(ex, n * C, [&](int32_t idx) BATCHLAS_DEVICE_BODY {
                     const int32_t r = idx / C;
                     const int32_t c = idx - r * C;
-                    Zl[idx] = (c0 + c < ncols) ? Z(r, c0 + c) : T(0);
+                    Zl[idx] = (c0 + c < ncols) ? Z(r, c0 + c) : Scalar(0);
                 });
                 device::sync(cols);
 
                 // Q = H_1 ... H_m, so Z := Q Z applies them in reverse order.
                 for (int32_t k = nrefl - 1; k >= 0; --k) {
-                    const T tau = TAUv(k, b);
-                    if (tau == T(0)) continue;
+                    const Scalar tau = TAUv(k, b);
+                    if (tau == Scalar(0)) continue;
                     const int32_t s = starts_p[k];
                     const int32_t L = lens_p[k];
                     device::larf<Side::Left, device::arith::Native, device::alg::ScaleV, device::alg::Lockstep>(
                         cols, tau, device::assume_published(device::mat(V).col(k).head(L)),
-                        device::detail::win_of(device::StridedMat<T, device::Ext<C>, device::Unit>{Zl, n, C}, s, 0, L, C));
+                        device::detail::win_of(device::StridedMat<Scalar, device::Ext<C>, device::Unit>{Zl, n, C}, s, 0, L, C));
                     device::sync(cols);
                 }
 
@@ -400,20 +400,20 @@ namespace {
 // detail::is_complex rather than a base_type/is_same_v dance (the idiom public
 // headers use, where is_complex is not visible): here it is visible (math-helpers.hh).
 // evidence: docs/perf/sytrd.md#sytrd-sb2st-per-type-wave-geometry
-template <typename T>
+template <typename Scalar>
 constexpr int32_t sb2st_back_tile_for(int32_t n) {
-    if constexpr (detail::is_complex<T>::value) {
-        if constexpr (std::is_same_v<typename base_type<T>::type, float>) {
+    if constexpr (detail::is_complex<Scalar>::value) {
+        if constexpr (std::is_same_v<typename base_type<Scalar>::type, float>) {
             if (n == 512) return 2;
         }
     }
     return 0;
 }
 
-template <typename T>
+template <typename Scalar>
 constexpr int32_t sb2st_back_subs_for(int32_t n) {
-    if constexpr (detail::is_complex<T>::value) {
-        if constexpr (std::is_same_v<typename base_type<T>::type, float>) {
+    if constexpr (detail::is_complex<Scalar>::value) {
+        if constexpr (std::is_same_v<typename base_type<Scalar>::type, float>) {
             if (n == 512) return 4;
         }
     }

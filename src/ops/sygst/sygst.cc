@@ -32,8 +32,8 @@ using select::overloaded;
 template <Backend B>
 inline constexpr bool vendor_linked = B == Backend::NETLIB && select::kHasNetlib;
 
-template <class T>
-select::Key key_of(const MV<T>& A, int itype, Uplo uplo) {
+template <class Scalar>
+select::Key key_of(const MV<Scalar>& A, int itype, Uplo uplo) {
     return {{"itype", itype}, {"uplo", uplo == Uplo::Lower ? "L" : "U"}, {"n", A.rows()}, {"batch", A.batch_size()}};
 }
 
@@ -41,8 +41,8 @@ inline bool blocked_nb_compiled(int nb) { return nb == 32 || nb == 64 || nb == 1
 
 // Correctness only. The children refuse what they cannot run; a heterogeneous batch has no family.
 // Blocked's children are GPU level-3 natives, and its diagonal kernel must fit the device's SLM.
-template <Backend B, class T>
-bool can_run(const SygstChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& Bf) {
+template <Backend B, class Scalar>
+bool can_run(const SygstChoice& c, const select::Device& d, const MV<Scalar>& A, const MV<Scalar>& Bf) {
     const bool homogeneous = !A.is_heterogeneous() && !Bf.is_heterogeneous() && A.rows() >= 1;
     // Every family honours a batch mask: Blocked and TwoSided through their native children, the
     // vendor (NETLIB only) in its host loop.
@@ -50,7 +50,7 @@ bool can_run(const SygstChoice& c, const select::Device& d, const MV<T>& A, cons
         [&](const Blocked& b) {
             const int kb = std::min(ops::sygst::kDiagMaxOrder, A.rows());
             return homogeneous && d.is_gpu && blocked_nb_compiled(b.nb) && d.max_wg >= ops::sygst::kDiagWg &&
-                   static_cast<std::int64_t>(ops::sygst::diag_slm_bytes<T>(kb)) <= d.slm_budget;
+                   static_cast<std::int64_t>(ops::sygst::diag_slm_bytes<Scalar>(kb)) <= d.slm_budget;
         },
         [&](TwoSided) { return homogeneous; },
         [&](Vendor) { return vendor_linked<B> && d.has_vendor && homogeneous; },
@@ -59,64 +59,65 @@ bool can_run(const SygstChoice& c, const select::Device& d, const MV<T>& A, cons
 
 // ---- dispatch -------------------------------------------------------------------------------------
 
-template <Backend B, class T>
-std::size_t workspace(Queue& q, const SygstChoice& c, const MV<T>& A, int itype) {
+template <Backend B, class Scalar>
+std::size_t workspace(Queue& q, const SygstChoice& c, const MV<Scalar>& A, int itype) {
     return std::visit(overloaded{
-        [&](const Blocked& b) { return blocked_workspace<T>(q, A, b.nb, itype); },
-        [&](TwoSided) { return twosided_workspace<T>(q, A, itype); },
+        [&](const Blocked& b) { return blocked_workspace<Scalar>(q, A, b.nb, itype); },
+        [&](TwoSided) { return twosided_workspace<Scalar>(q, A, itype); },
         [&](Vendor) -> std::size_t { return 0; },
     }, c);
 }
 
-template <Backend B, class T>
-Event launch(Queue& q, const SygstChoice& c, const MV<T>& A, const MV<T>& Bf, int itype, Uplo uplo,
+template <Backend B, class Scalar>
+Event launch(Queue& q, const SygstChoice& c, const MV<Scalar>& A, const MV<Scalar>& Bf, int itype, Uplo uplo,
              Span<std::byte> ws) {
     return std::visit(overloaded{
-        [&](const Blocked& b) { return blocked<B, T>(q, A, Bf, b.nb, itype, uplo, ws); },
-        [&](TwoSided) { return twosided<B, T>(q, A, Bf, itype, uplo, ws); },
+        [&](const Blocked& b) { return blocked<B, Scalar>(q, A, Bf, b.nb, itype, uplo, ws); },
+        [&](TwoSided) { return twosided<B, Scalar>(q, A, Bf, itype, uplo, ws); },
         [&](Vendor) -> Event {
-            if constexpr (vendor_linked<B>) return backend::sygst_vendor<B, T>(q, A, Bf, itype, uplo, ws);
-            else select::no_vendor<B, T>(spec);
+            if constexpr (vendor_linked<B>) return backend::sygst_vendor<B, Scalar>(q, A, Bf, itype, uplo, ws);
+            else select::no_vendor<B, Scalar>(spec);
         },
     }, c);
 }
 
-template <Backend B, class T>
-SygstChoice pick(Queue& ctx, const MV<T>& A, const MV<T>& Bf, int itype, Uplo uplo) {
-    return select::pick<B, T>(spec, ctx, key_of<T>(A, itype, uplo), candidates<T>(),
-                              [&](const auto& k, const auto& d) { return can_run<B, T>(k, d, A, Bf); });
+template <Backend B, class Scalar>
+SygstChoice pick(Queue& ctx, const MV<Scalar>& A, const MV<Scalar>& Bf, int itype, Uplo uplo) {
+    return select::pick<B, Scalar>(spec, ctx, key_of<Scalar>(A, itype, uplo), candidates<Scalar>(),
+                                   [&](const auto& k, const auto& d) { return can_run<B, Scalar>(k, d, A, Bf); });
 }
 
 }  // namespace ops::sygst
 
-template <Backend Back, typename T>
-Event sygst(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
+template <Backend Back, typename Scalar>
+Event sygst(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, const MatrixView<Scalar,
+            MatrixFormat::Dense>& B,
             int itype, Uplo uplo, Span<std::byte> work_space) {
-    sygst_validate_params<T>("sygst", A, B, itype, uplo);
+    sygst_validate_params<Scalar>("sygst", A, B, itype, uplo);
     (void)batchlas::detail::call_mask("sygst", A, B);
     if (A.batch_size() == 0 || A.rows() == 0) return ctx.create_event_after_external_work();
     const coverage::Shape shape{.m = A.rows(), .n = A.rows(), .k = A.rows(), .batch = A.batch_size(), .uplo = uplo};
-    const select::Key key = ops::sygst::key_of<T>(A, itype, uplo);
-    return select::run<Back, T>(
-        ops::sygst::spec, ctx, key, ops::sygst::candidates<T>(),
-        [&](const auto& c, const auto& d) { return ops::sygst::can_run<Back, T>(c, d, A, B); }, shape, key,
+    const select::Key key = ops::sygst::key_of<Scalar>(A, itype, uplo);
+    return select::run<Back, Scalar>(
+        ops::sygst::spec, ctx, key, ops::sygst::candidates<Scalar>(),
+        [&](const auto& c, const auto& d) { return ops::sygst::can_run<Back, Scalar>(c, d, A, B); }, shape, key,
         [&](const auto& c) {
-            if (work_space.size() < ops::sygst::workspace<Back, T>(ctx, c, A, itype))
+            if (work_space.size() < ops::sygst::workspace<Back, Scalar>(ctx, c, A, itype))
                 throw batchlas::workspace_error("sygst: workspace is shorter than sygst_buffer_size()");
             // Every child reads the previous one's output, so they need an in-order queue.
             return select::on_in_order_queue(ctx, [&](Queue& q) {
-                return ops::sygst::launch<Back, T>(q, c, A, B, itype, uplo, work_space);
+                return ops::sygst::launch<Back, Scalar>(q, c, A, B, itype, uplo, work_space);
             });
         });
 }
 
-template <Backend Back, typename T>
-size_t sygst_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                         const MatrixView<T, MatrixFormat::Dense>& B, int itype, Uplo uplo) {
-    sygst_validate_params<T>("sygst_buffer_size", A, B, itype, uplo);
+template <Backend Back, typename Scalar>
+size_t sygst_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& B, int itype, Uplo uplo) {
+    sygst_validate_params<Scalar>("sygst_buffer_size", A, B, itype, uplo);
     (void)batchlas::detail::call_mask("sygst_buffer_size", A, B);
     if (A.batch_size() == 0 || A.rows() == 0) return 0;
-    return ops::sygst::workspace<Back, T>(ctx, ops::sygst::pick<Back, T>(ctx, A, B, itype, uplo), A, itype);
+    return ops::sygst::workspace<Back, Scalar>(ctx, ops::sygst::pick<Back, Scalar>(ctx, A, B, itype, uplo), A, itype);
 }
 
 #define SYGST_INSTANTIATE(B_, fp) BATCHLAS_INSTANTIATE_OP(B_, fp, sygst) BATCHLAS_INSTANTIATE_OP(B_, fp, sygst_buffer_size)

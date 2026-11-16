@@ -51,11 +51,11 @@ inline float lin_epi(float alpha, float beta, float acc, float prior) {
 inline double lin_epi(double alpha, double beta, double acc, double prior) {
     return alpha * acc + (beta == 0.0 ? -0.0 : beta) * prior;
 }
-template <typename R>
-inline Cx<R> lin_epi(Cx<R> alpha, Cx<R> beta, Cx<R> acc, Cx<R> prior) {
-    const bool bz = beta.re == R(0) && beta.im == R(0);
-    const R br = bz ? R(-0.0) : beta.re, bi_re = bz ? R(0) : beta.im, bi_im = bz ? R(-0.0) : beta.im;
-    Cx<R> o;
+template <typename Real>
+inline Cx<Real> lin_epi(Cx<Real> alpha, Cx<Real> beta, Cx<Real> acc, Cx<Real> prior) {
+    const bool bz = beta.re == Real(0) && beta.im == Real(0);
+    const Real br = bz ? Real(-0.0) : beta.re, bi_re = bz ? Real(0) : beta.im, bi_im = bz ? Real(-0.0) : beta.im;
+    Cx<Real> o;
     o.re = alpha.re * acc.re - alpha.im * acc.im + br * prior.re - bi_re * prior.im;
     o.im = alpha.re * acc.im + alpha.im * acc.re + br * prior.im + bi_im * prior.re;
     return o;
@@ -199,25 +199,25 @@ static_assert(Tile::K * Tile::N == Tile::PerThreadB * Tile::Threads, "B staging"
 
 // OA/OB/K: wide v2's transpose form and slab depth (K16 in the name is historical); the NN
 // kernel takes the defaults.
-template <typename T, bool AlignedFastPath, int OA = 0, int OB = 0, int K = 16>
+template <typename Scalar, bool AlignedFastPath, int OA = 0, int OB = 0, int K = 16>
 class GemmRegister64x64K16WideKernel;
 
 // VecLen counts elements; the granule the fast path enforces is 16 bytes.
-template <typename T>
-inline bool can_use_64x64_k16_wide_fast_path(const MatrixView<T, MatrixFormat::Dense>& A,
-                                             const MatrixView<T, MatrixFormat::Dense>& B,
-                                             const MatrixView<T, MatrixFormat::Dense>& C) {
+template <typename Scalar>
+inline bool can_use_64x64_k16_wide_fast_path(const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                             const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                                             const MatrixView<Scalar, MatrixFormat::Dense>& C) {
     constexpr int TileM = wide_scalar::Tile::M;
     constexpr int TileN = wide_scalar::Tile::N;
     constexpr int TileK = wide_scalar::Tile::K;
-    constexpr int VecLen = 16 / static_cast<int>(sizeof(T));
+    constexpr int VecLen = 16 / static_cast<int>(sizeof(Scalar));
     const auto m = A.rows();
     const auto k = A.cols();
     const auto n = B.cols();
     if ((m % TileM) != 0 || (n % TileN) != 0 || (k % TileK) != 0) {
         return false;
     }
-    auto aligned = [](const T* p, int64_t ld, int64_t stride) {
+    auto aligned = [](const Scalar* p, int64_t ld, int64_t stride) {
         return p != nullptr && (reinterpret_cast<std::uintptr_t>(p) % 16u) == 0 &&
             (ld % VecLen) == 0 && (stride % VecLen) == 0;
     };
@@ -228,13 +228,13 @@ inline bool can_use_64x64_k16_wide_fast_path(const MatrixView<T, MatrixFormat::D
 
 // NN only: A is read as m x k and B as k x n directly, so a transposed operand
 // has to fall back at the caller rather than be transposed here.
-template <typename T, bool AlignedFastPath = false>
+template <typename Scalar, bool AlignedFastPath = false>
 Event launch_register_64x64_k16_wide(Queue& ctx,
-                                     const MatrixView<T, MatrixFormat::Dense>& A,
-                                     const MatrixView<T, MatrixFormat::Dense>& B,
-                                     const MatrixView<T, MatrixFormat::Dense>& C,
-                                     T alpha,
-                                     T beta,
+                                     const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                     const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                                     const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                                     Scalar alpha,
+                                     Scalar beta,
                                      const char* (*kernel_trace_name)(KernelVariant)) {
     BATCHLAS_KERNEL_TRACE_SCOPE(
         kernel_trace_name(KernelVariant::Tiled64x64RegisterK16Wide));
@@ -243,8 +243,8 @@ Event launch_register_64x64_k16_wide(Queue& ctx,
 
     // std::complex is re-typed to the POD device type here, at the pointer
     // boundary, and never crosses into the kernel body -- alpha and beta too.
-    using D = typename DevMap<T>::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    using D = typename DevMap<Scalar>::type;
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     constexpr int TileM = Tile::M;
     constexpr int TileN = Tile::N;
@@ -305,7 +305,7 @@ Event launch_register_64x64_k16_wide(Queue& ctx,
         __builtin_memcpy(&alpha_d, &alpha, sizeof(D));
         __builtin_memcpy(&beta_d, &beta, sizeof(D));
 
-        batchlas::impl::parallel_for<GemmRegister64x64K16WideKernel<T, AlignedFastPath>>(h,
+        batchlas::impl::parallel_for<GemmRegister64x64K16WideKernel<Scalar, AlignedFastPath>>(h,
             sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
                 const int bid = static_cast<int>(item.get_group(0));
                 if (bid >= batch || item_off(mask, bid)) {
@@ -542,9 +542,9 @@ BATCHLAS_UNROLL_FULL
 #define BATCHLAS_WIDE_V2_REQD_WG
 #endif
 
-template <typename T>
-inline constexpr bool kWide64V2 = std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>> ||
-                                  std::is_same_v<T, std::complex<double>>;
+template <typename Scalar>
+inline constexpr bool kWide64V2 = std::is_same_v<Scalar, float> || std::is_same_v<Scalar, std::complex<float>> ||
+                                  std::is_same_v<Scalar, std::complex<double>>;
 
 namespace wide_v2 {
 
@@ -581,8 +581,8 @@ template <bool CA, bool CB>
 inline void fma_signed(float& acc, float a, float b) {
     acc = sycl::fma(a, b, acc);
 }
-template <bool CA, bool CB, typename R>
-inline void fma_signed(Cx<R>& acc, Cx<R> a, Cx<R> b) {
+template <bool CA, bool CB, typename Real>
+inline void fma_signed(Cx<Real>& acc, Cx<Real> a, Cx<Real> b) {
     acc.re = sycl::fma(a.re, b.re, acc.re);
     acc.re = sycl::fma(CA != CB ? a.im : -a.im, b.im, acc.re);
     acc.im = sycl::fma(CB ? -a.re : a.re, b.im, acc.im);
@@ -784,10 +784,10 @@ BATCHLAS_UNROLL_FULL
 // 128x128 (complex<float> only, WP-O; one group per CU): each operand is two 64-wide halves,
 // staged with the 64x64 lane map, KStep and swizzle, the second 64 down i; the thread tile is 8x8.
 // evidence: docs/perf/gemm.md#gemm-wp-o-a-128x128-complex-float-tile-on-wide-v2
-template <typename T, Transpose OpA, Transpose OpB, bool VecLoads, int TileK_, int TileM_ = 64, int TileN_ = 64,
+template <typename Scalar, Transpose OpA, Transpose OpB, bool VecLoads, int TileK_, int TileM_ = 64, int TileN_ = 64,
           int Stages_ = 2>
 struct GemmWide64Body {
-    using D = typename wide_scalar::DevMap<T>::type;
+    using D = typename wide_scalar::DevMap<Scalar>::type;
     static constexpr int TileM = TileM_, TileN = TileN_, TileK = TileK_, Threads = 256;
     // Stages > 2: that many local slabs filled by cp.async, Stages - 1 in flight, no register prefetch.
     static constexpr int Stages = Stages_;
@@ -817,7 +817,7 @@ struct GemmWide64Body {
     static constexpr int kMinGroupsPerCu = (CF == 4 || TileM * TileN > 4096) ? 1 : (CF == 1 ? 3 : 2);
     // Prior loads per thread in flight in the staged epilogue: its whole chunk.
     static constexpr int EpiBatch = 2 * TileK * (TileM + TileN) / Threads;
-    static_assert(kWide64V2<T> && ((TileM == 64 && TileN == 64) || (CF == 2 && TileM % 64 == 0 && TileN % 64 == 0)),
+    static_assert(kWide64V2<Scalar> && ((TileM == 64 && TileN == 64) || (CF == 2 && TileM % 64 == 0 && TileN % 64 == 0)),
                   "64x64 for every v2 scalar; larger tiles are whole 64-wide halves, complex<float> only");
     static_assert(TTM % VecN == 0 && TTN % VecN == 0 && EpiBatch * Threads == 2 * TileK * (TileM + TileN),
                   "whole fragment granules and a whole-chunk epilogue batch");
@@ -1044,30 +1044,31 @@ BATCHLAS_UNROLL_FULL
 
 // The leg predicate: may every A and B load be one 16-byte move? Bases 16-byte aligned, ld and
 // batch stride whole granules. Never a routing term; C's band store is decided per group.
-template <typename T>
-inline bool wide64_v2_vec_loads(const MatrixView<T, MatrixFormat::Dense>& A,
-                                const MatrixView<T, MatrixFormat::Dense>& B) {
-    constexpr int VecN = 16 / static_cast<int>(sizeof(T));
-    auto aligned = [](const T* p, int64_t ld, int64_t stride) {
+template <typename Scalar>
+inline bool wide64_v2_vec_loads(const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& B) {
+    constexpr int VecN = 16 / static_cast<int>(sizeof(Scalar));
+    auto aligned = [](const Scalar* p, int64_t ld, int64_t stride) {
         return p != nullptr && (reinterpret_cast<std::uintptr_t>(p) % 16u) == 0 && (ld % VecN) == 0 &&
             (stride % VecN) == 0;
     };
     return aligned(A.data_ptr(), A.ld(), A.stride()) && aligned(B.data_ptr(), B.ld(), B.stride());
 }
 
-template <typename T, bool VecLoads, int OA, int OB, int TileK, int TileM, int TileN, int Stages>
+template <typename Scalar, bool VecLoads, int OA, int OB, int TileK, int TileM, int TileN, int Stages>
 class GemmWideV2TileKernel;
 
-template <typename T, Transpose OpA, Transpose OpB, int TileK, bool VecLoads, int TileM = 64, int TileN = 64,
+template <typename Scalar, Transpose OpA, Transpose OpB, int TileK, bool VecLoads, int TileM = 64, int TileN = 64,
           int Stages = 2>
-Event launch_wide64_v2_leg(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                           const MatrixView<T, MatrixFormat::Dense>& B, const MatrixView<T, MatrixFormat::Dense>& C,
-                           T alpha, T beta, const char* trace) {
+Event launch_wide64_v2_leg(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                           const MatrixView<Scalar, MatrixFormat::Dense>& B, const MatrixView<Scalar,
+                           MatrixFormat::Dense>& C,
+                           Scalar alpha, Scalar beta, const char* trace) {
     BATCHLAS_KERNEL_TRACE_SCOPE(trace);
-    using Body = GemmWide64Body<T, OpA, OpB, VecLoads, TileK, TileM, TileN, Stages>;
+    using Body = GemmWide64Body<Scalar, OpA, OpB, VecLoads, TileK, TileM, TileN, Stages>;
     constexpr int oa = static_cast<int>(OpA), ob = static_cast<int>(OpB);
-    using Name = std::conditional_t<TileM == 64 && TileN == 64, GemmRegister64x64K16WideKernel<T, VecLoads, oa, ob, TileK>,
-                                    GemmWideV2TileKernel<T, VecLoads, oa, ob, TileK, TileM, TileN, Stages>>;
+    using Name = std::conditional_t<TileM == 64 && TileN == 64, GemmRegister64x64K16WideKernel<Scalar, VecLoads, oa, ob, TileK>,
+                                    GemmWideV2TileKernel<Scalar, VecLoads, oa, ob, TileK, TileM, TileN, Stages>>;
     using D = typename Body::D;
     const int m = static_cast<int>(Body::KA ? A.cols() : A.rows());
     const int k = static_cast<int>(Body::KA ? A.rows() : A.cols());
@@ -1091,10 +1092,11 @@ Event launch_wide64_v2_leg(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>&
 }
 
 // trace names the element-load leg, trace_vec the 16-byte one; the _s3 pair the 128x128 cp.async legs.
-template <typename T, Transpose OpA, Transpose OpB, int TileK, int TileM = 64, int TileN = 64>
-Event launch_wide64_v2(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                       const MatrixView<T, MatrixFormat::Dense>& B, const MatrixView<T, MatrixFormat::Dense>& C,
-                       T alpha, T beta, const char* trace, const char* trace_vec, const char* trace_s3 = nullptr,
+template <typename Scalar, Transpose OpA, Transpose OpB, int TileK, int TileM = 64, int TileN = 64>
+Event launch_wide64_v2(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                       const MatrixView<Scalar, MatrixFormat::Dense>& B, const MatrixView<Scalar,
+                       MatrixFormat::Dense>& C, Scalar alpha, Scalar beta, const char* trace, const char* trace_vec,
+                       const char* trace_s3 = nullptr,
                        const char* trace_vec_s3 = nullptr) {
     if constexpr (TileM == 128 && TileN == 128) {
         // The leg (WP-V): three cp.async stages where DPC++ emits cp.async, the device launches
@@ -1102,24 +1104,24 @@ Event launch_wide64_v2(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
         // it only under BATCHLAS_GEMM_WIDE_STAGES=3 (=2 forces the register prefetch everywhere).
         // Else the register prefetch (two slabs, can_run's wide_slm_bytes term).
         // evidence: docs/perf/gemm.md#gemm-wp-v-three-copy-async-stages-for-the-128x128-complex-float-tile
-        using Pipe = GemmWide64Body<T, OpA, OpB, true, TileK, TileM, TileN, 3>;
+        using Pipe = GemmWide64Body<Scalar, OpA, OpB, true, TileK, TileM, TileN, 3>;
         constexpr std::size_t pipe_bytes = Pipe::Stages * (Pipe::BufA + Pipe::BufB) * sizeof(float);
         const int forced = batchlas::settings().geometry.gemm_wide_stages;
-        auto at8 = [](const T* p) { return reinterpret_cast<std::uintptr_t>(p) % 8u == 0; };
+        auto at8 = [](const Scalar* p) { return reinterpret_cast<std::uintptr_t>(p) % 8u == 0; };
         if (!BATCHLAS_SYCL_IMPL_ACPP && forced != 2 &&
             ctx.device().cuda_compute_capability() >= (forced == 3 ? 80 : 120) && at8(A.data_ptr()) &&
             at8(B.data_ptr()) &&
             resident::device_slm_budget(impl::local_mem_bytes(ctx->get_device(), Pipe::Threads)) >= pipe_bytes) {
-            if (wide64_v2_vec_loads<T>(A, B))
-                return launch_wide64_v2_leg<T, OpA, OpB, TileK, true, TileM, TileN, 3>(ctx, A, B, C, alpha, beta,
-                                                                                      trace_vec_s3);
-            return launch_wide64_v2_leg<T, OpA, OpB, TileK, false, TileM, TileN, 3>(ctx, A, B, C, alpha, beta,
-                                                                                   trace_s3);
+            if (wide64_v2_vec_loads<Scalar>(A, B))
+                return launch_wide64_v2_leg<Scalar, OpA, OpB, TileK, true, TileM, TileN, 3>(ctx, A, B, C, alpha, beta,
+                                                                                            trace_vec_s3);
+            return launch_wide64_v2_leg<Scalar, OpA, OpB, TileK, false, TileM, TileN, 3>(ctx, A, B, C, alpha, beta,
+                                                                                         trace_s3);
         }
     }
-    if (wide64_v2_vec_loads<T>(A, B))
-        return launch_wide64_v2_leg<T, OpA, OpB, TileK, true, TileM, TileN>(ctx, A, B, C, alpha, beta, trace_vec);
-    return launch_wide64_v2_leg<T, OpA, OpB, TileK, false, TileM, TileN>(ctx, A, B, C, alpha, beta, trace);
+    if (wide64_v2_vec_loads<Scalar>(A, B))
+        return launch_wide64_v2_leg<Scalar, OpA, OpB, TileK, true, TileM, TileN>(ctx, A, B, C, alpha, beta, trace_vec);
+    return launch_wide64_v2_leg<Scalar, OpA, OpB, TileK, false, TileM, TileN>(ctx, A, B, C, alpha, beta, trace);
 }
 
 }  // namespace batchlas::ops::gemm

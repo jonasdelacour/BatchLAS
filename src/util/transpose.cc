@@ -7,14 +7,14 @@
 
 namespace batchlas {
 
-template <typename T, MatrixFormat MF>
+template <typename Real, MatrixFormat MF>
 struct TransposeKernel;
 
-template <typename T, MatrixFormat MF>
+template <typename Real, MatrixFormat MF>
 Event transpose_impl(Queue& ctx,
-                     const MatrixView<T, MF>& A,
-                     const MatrixView<T, MF>& B) {
-    detail::require_device_fp64<T>(ctx, "transpose");
+                     const MatrixView<Real, MF>& A,
+                     const MatrixView<Real, MF>& B) {
+    detail::require_device_fp64<Real>(ctx, "transpose");
     constexpr int TILE = 16;
     const std::uint8_t* mask = detail::mask_ptr(detail::call_mask("transpose", A, B));
     ctx->submit([&](sycl::handler& h) {
@@ -27,10 +27,10 @@ Event transpose_impl(Queue& ctx,
         auto stride_src = A.stride();
         auto stride_dst = B.stride();
         auto batch_size = A.batch_size();
-        sycl::local_accessor<T, 2> tile(sycl::range<2>(TILE, TILE + 1), h);
+        sycl::local_accessor<Real, 2> tile(sycl::range<2>(TILE, TILE + 1), h);
         size_t grid_x = (cols + TILE - 1) / TILE;
         size_t grid_y = (rows + TILE - 1) / TILE;
-        batchlas::impl::parallel_for<TransposeKernel<T, MF>>(h,
+        batchlas::impl::parallel_for<TransposeKernel<Real, MF>>(h,
             sycl::nd_range<3>(
                 sycl::range<3>(batch_size, grid_x * TILE, grid_y * TILE),
                 sycl::range<3>(1, TILE, TILE)),
@@ -51,17 +51,17 @@ Event transpose_impl(Queue& ctx,
     return ctx.get_event();
 }
 
-template <typename T, MatrixFormat MF>
+template <typename Real, MatrixFormat MF>
 Event transpose(Queue& ctx,
-                const MatrixView<T, MF>& A,
-                const MatrixView<T, MF>& B) {
+                const MatrixView<Real, MF>& A,
+                const MatrixView<Real, MF>& B) {
     return transpose_impl(ctx, A, B);
 }
 
-template <typename T, MatrixFormat MF>
-Matrix<T, MF> transpose(Queue& ctx,
-                        const MatrixView<T, MF>& A) {
-    Matrix<T, MF> result(A.cols(), A.rows(), A.batch_size());
+template <typename Real, MatrixFormat MF>
+Matrix<Real, MF> transpose(Queue& ctx,
+                           const MatrixView<Real, MF>& A) {
+    Matrix<Real, MF> result(A.cols(), A.rows(), A.batch_size());
     // The result keeps A's mask (copied on ctx, after its producer); its inactive items stay uninitialised.
     if (A.has_batch_mask()) ctx->memcpy(result.enable_batch_mask().data(), A.batch_mask().data(), A.batch_mask().size());
     // (void) on an Event: deliberate. This Queue is in-order, so the next submission

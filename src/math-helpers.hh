@@ -14,8 +14,8 @@
 #include <batchlas/device/detail/sscp_target.hh>
 
 namespace batchlas::detail {
-template <typename T>
-using base_float_t = typename base_type<T>::type;
+template <typename Scalar>
+using base_float_t = typename base_type<Scalar>::type;
 
 template <typename T>
 struct is_complex : std::false_type {};
@@ -26,18 +26,18 @@ struct is_complex<std::complex<float>> : std::true_type {};
 template <>
 struct is_complex<std::complex<double>> : std::true_type {};
 
-template <typename T>
-inline constexpr base_float_t<T> abs(const T& value) {
-    if constexpr (is_complex<T>::value) {
+template <typename Scalar>
+inline constexpr base_float_t<Scalar> abs(const Scalar& value) {
+    if constexpr (is_complex<Scalar>::value) {
         return sycl::hypot(value.real(), value.imag());
     } else {
         return sycl::fabs(value);
     }
 }
 
-template <typename T>
-inline constexpr base_float_t<T> norm_squared(const T& value) {
-    if constexpr (is_complex<T>::value) {
+template <typename Scalar>
+inline constexpr base_float_t<Scalar> norm_squared(const Scalar& value) {
+    if constexpr (is_complex<Scalar>::value) {
         return std::real(std::conj(value) * value); // For complex numbers, return the squared norm
     } else {
         return value * value;
@@ -45,10 +45,10 @@ inline constexpr base_float_t<T> norm_squared(const T& value) {
 }
 
 // re*re + im*im in explicit real arithmetic; not interchangeable with norm_squared bit for bit.
-template <typename T>
-inline base_float_t<T> abs2_if_complex(const T& x) {
-    using Real = base_float_t<T>;
-    if constexpr (is_complex<T>::value) {
+template <typename Scalar>
+inline base_float_t<Scalar> abs2_if_complex(const Scalar& x) {
+    using Real = base_float_t<Scalar>;
+    if constexpr (is_complex<Scalar>::value) {
         const Real re = x.real();
         const Real im = x.imag();
         return re * re + im * im;
@@ -63,15 +63,15 @@ inline Real sign_nonzero_real(Real x) {
 }
 
 // x/|x| (complex) or +-1 by sign bit (real); never 0, and 1 for a complex zero.
-template <typename T>
-inline T sign_nonzero(const T& x) {
-    using Real = base_float_t<T>;
-    if constexpr (is_complex<T>::value) {
+template <typename Scalar>
+inline Scalar sign_nonzero(const Scalar& x) {
+    using Real = base_float_t<Scalar>;
+    if constexpr (is_complex<Scalar>::value) {
         const Real a = sycl::hypot(x.real(), x.imag());
-        if (a == Real(0)) return T(1);
+        if (a == Real(0)) return Scalar(1);
         return x / a;
     } else {
-        return T(sign_nonzero_real(static_cast<Real>(x)));
+        return Scalar(sign_nonzero_real(static_cast<Real>(x)));
     }
 }
 

@@ -21,15 +21,15 @@ namespace batchlas::ops::gesv {
 inline constexpr int kGesvTinyMaxRhs = 4;
 
 // The ONE place the order ceiling is spelled; there is no vendor arm to absorb a fork.
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API int gesv_tiny_max_n();
 
 // NOT zero: a short or empty `info` span means "not requested" and draws pool scratch.
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API std::size_t gesv_tiny_buffer_size(
     Queue& ctx,
-    const MatrixView<T, MatrixFormat::Dense>& A,
-    const MatrixView<T, MatrixFormat::Dense>& B);
+    const MatrixView<Scalar, MatrixFormat::Dense>& A,
+    const MatrixView<Scalar, MatrixFormat::Dense>& B);
 
 template <typename T>
 BATCHLAS_INTERNAL_API Event gesv_tiny_dispatch(Queue& ctx,

@@ -239,26 +239,26 @@ inline constexpr int32_t latrd_lower_panel_wg_hint_default_for_n(int32_t n) {
 }
 
 /// @brief Compiled `LATRD_LOWER_PANEL_SLM_FLOOR_*` constant for scalar type \f$T\f$ (no override).
-/// @tparam T  float, double, std::complex<float> or std::complex<double>
+/// @tparam Scalar  float, double, std::complex<float> or std::complex<double>
 /// @return the SLM floor in bytes per work-item, 0 for none
 /// @ingroup api_config_lowlevel
-template <typename T>
+template <typename Scalar>
 inline constexpr int32_t latrd_lower_panel_slm_floor_default() {
-    if constexpr (std::is_same_v<T, float>) return LATRD_LOWER_PANEL_SLM_FLOOR_FLOAT;
-    else if constexpr (std::is_same_v<T, double>) return LATRD_LOWER_PANEL_SLM_FLOOR_DOUBLE;
-    else if constexpr (std::is_same_v<T, std::complex<float>>) return LATRD_LOWER_PANEL_SLM_FLOOR_CFLOAT;
+    if constexpr (std::is_same_v<Scalar, float>) return LATRD_LOWER_PANEL_SLM_FLOOR_FLOAT;
+    else if constexpr (std::is_same_v<Scalar, double>) return LATRD_LOWER_PANEL_SLM_FLOOR_DOUBLE;
+    else if constexpr (std::is_same_v<Scalar, std::complex<float>>) return LATRD_LOWER_PANEL_SLM_FLOOR_CFLOAT;
     else return LATRD_LOWER_PANEL_SLM_FLOOR_CDOUBLE;
 }
 
 /// @brief Compiled `LATRD_LOWER_PANEL_SLM_FLOOR_MIN_ROWS_*` constant for scalar type \f$T\f$.
-/// @tparam T  float, double, std::complex<float> or std::complex<double>
+/// @tparam Scalar  float, double, std::complex<float> or std::complex<double>
 /// @return the fewest panel rows the SLM floor applies to
 /// @ingroup api_config_lowlevel
-template <typename T>
+template <typename Scalar>
 inline constexpr int32_t latrd_lower_panel_slm_floor_min_rows() {
-    if constexpr (std::is_same_v<T, float>) return LATRD_LOWER_PANEL_SLM_FLOOR_MIN_ROWS_FLOAT;
-    else if constexpr (std::is_same_v<T, double>) return LATRD_LOWER_PANEL_SLM_FLOOR_MIN_ROWS_DOUBLE;
-    else if constexpr (std::is_same_v<T, std::complex<float>>) return LATRD_LOWER_PANEL_SLM_FLOOR_MIN_ROWS_CFLOAT;
+    if constexpr (std::is_same_v<Scalar, float>) return LATRD_LOWER_PANEL_SLM_FLOOR_MIN_ROWS_FLOAT;
+    else if constexpr (std::is_same_v<Scalar, double>) return LATRD_LOWER_PANEL_SLM_FLOOR_MIN_ROWS_DOUBLE;
+    else if constexpr (std::is_same_v<Scalar, std::complex<float>>) return LATRD_LOWER_PANEL_SLM_FLOOR_MIN_ROWS_CFLOAT;
     else return LATRD_LOWER_PANEL_SLM_FLOOR_MIN_ROWS_CDOUBLE;
 }
 
@@ -389,17 +389,17 @@ inline int32_t latrd_lower_panel_wg_hint() { return latrd_lower_panel_wg_hint_fo
 
 /// @brief latrd lower-panel SLM floor in bytes per work-item for scalar type \f$T\f$, 0 for none;
 /// override `BATCHLAS_TUNE_LATRD_SLM_FLOOR` (the row and batch gates still apply).
-/// @tparam T  float, double, std::complex<float> or std::complex<double>
+/// @tparam Scalar  float, double, std::complex<float> or std::complex<double>
 /// @param rows   panel rows (the trailing size latrd works on)
 /// @param batch  batch size of the launch
 /// @return 0 below the row or batch gate, else the override if it is a positive integer, else
 ///         latrd_lower_panel_slm_floor_default()
 /// @ingroup api_config_lowlevel
-template <typename T>
+template <typename Scalar>
 inline int32_t latrd_lower_panel_slm_floor(int32_t rows, int32_t batch) {
-    if (rows < latrd_lower_panel_slm_floor_min_rows<T>() || batch < LATRD_LOWER_PANEL_SLM_FLOOR_MIN_BATCH) return 0;
+    if (rows < latrd_lower_panel_slm_floor_min_rows<Scalar>() || batch < LATRD_LOWER_PANEL_SLM_FLOOR_MIN_BATCH) return 0;
     return detail::tuning_env_override(settings().geometry.tune.latrd_slm_floor,  // BATCHLAS_TUNE_LATRD_SLM_FLOOR
-                                       latrd_lower_panel_slm_floor_default<T>());
+                                       latrd_lower_panel_slm_floor_default<Scalar>());
 }
 
 /// @brief Whether sytrd fuses the panel update at order \f$n\f$. No `BATCHLAS_TUNE_*` override; see

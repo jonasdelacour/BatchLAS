@@ -48,10 +48,10 @@ namespace pc = batchlas::ops::potrf;
 using C = pc::PotrfChoice;
 using Pin = select::ScopedPin<C>;
 
-template <typename T>
-using RealOf = typename batchlas::base_type<T>::type;
-template <typename T>
-constexpr bool kCx = test_utils::is_complex<T>::value;
+template <typename Scalar>
+using RealOf = typename batchlas::base_type<Scalar>::type;
+template <typename Scalar>
+constexpr bool kCx = test_utils::is_complex<Scalar>::value;
 
 template <typename T>
 bool same_bits(T a, T b) {
@@ -61,19 +61,20 @@ bool same_bits(T a, T b) {
 // Hermitian and strictly diagonally dominant, so PD with condition number below 8. Every
 // off-diagonal entry has a nonzero imaginary part. O(n^2), so the wide tiers' ceilings stay
 // affordable on the host.
-template <typename T>
-std::vector<T> make_hpd(int n, unsigned seed) {
-    using R = RealOf<T>;
+template <typename Scalar>
+std::vector<Scalar> make_hpd(int n, unsigned seed) {
+    using R = RealOf<Scalar>;
     std::mt19937 gen(seed);
     std::uniform_real_distribution<R> d(R(0.1), R(1));
-    std::vector<T> A(static_cast<size_t>(n) * n);
+    std::vector<Scalar> A(static_cast<size_t>(n) * n);
     for (int j = 0; j < n; ++j) {
-        A[j + static_cast<size_t>(j) * n] = MatrixView<T, MatrixFormat::Dense>::make(R(2.5) + R(0.5) * d(gen), R(0));
+        A[j + static_cast<size_t>(j) * n] = MatrixView<Scalar, MatrixFormat::Dense>::make(R(2.5) + R(0.5) * d(gen),
+                                                                                          R(0));
         for (int i = j + 1; i < n; ++i) {
             const auto x = gen() & 1 ? d(gen) : -d(gen);
-            const T v = MatrixView<T, MatrixFormat::Dense>::make(x / R(n), d(gen) / R(n));
+            const Scalar v = MatrixView<Scalar, MatrixFormat::Dense>::make(x / R(n), d(gen) / R(n));
             A[i + static_cast<size_t>(j) * n] = v;
-            A[j + static_cast<size_t>(i) * n] = MatrixView<T, MatrixFormat::Dense>::make(double(std::real(v)), -double(std::imag(v)));
+            A[j + static_cast<size_t>(i) * n] = MatrixView<Scalar, MatrixFormat::Dense>::make(double(std::real(v)), -double(std::imag(v)));
         }
     }
     return A;
@@ -82,17 +83,17 @@ std::vector<T> make_hpd(int n, unsigned seed) {
 // One batch at a padded ld and a stride that is not ld*n. Everything outside the factored
 // triangle -- the other triangle, the ld padding and the inter-item gap -- holds a large
 // finite value a kernel would happily consume if it read it.
-template <typename T>
+template <typename Scalar>
 struct Prob {
     int n = 0, batch = 0, ld = 0, stride = 0;
     Uplo uplo = Uplo::Lower;
-    UnifiedVector<T> buf;
-    UnifiedVector<T*> ptrs;  // the vendor's batched call needs a pointer array
-    std::vector<T> before;
-    std::vector<std::vector<T>> ref;
+    UnifiedVector<Scalar> buf;
+    UnifiedVector<Scalar*> ptrs;  // the vendor's batched call needs a pointer array
+    std::vector<Scalar> before;
+    std::vector<std::vector<Scalar>> ref;
 
-    MatrixView<T, MatrixFormat::Dense> view() {
-        return MatrixView<T, MatrixFormat::Dense>(buf.data(), n, n, ld, stride, batch, ptrs.data());
+    MatrixView<Scalar, MatrixFormat::Dense> view() {
+        return MatrixView<Scalar, MatrixFormat::Dense>(buf.data(), n, n, ld, stride, batch, ptrs.data());
     }
     size_t at(int i, int j, int b) const {
         return static_cast<size_t>(b) * stride + i + static_cast<size_t>(j) * ld;
@@ -100,20 +101,20 @@ struct Prob {
     bool in_tri(int i, int j) const { return uplo == Uplo::Lower ? i >= j : i <= j; }
 };
 
-template <typename T>
-Prob<T> make_prob(int n, int batch, Uplo uplo, unsigned seed, bool identical = false) {
-    using R = RealOf<T>;
-    Prob<T> p;
+template <typename Scalar>
+Prob<Scalar> make_prob(int n, int batch, Uplo uplo, unsigned seed, bool identical = false) {
+    using R = RealOf<Scalar>;
+    Prob<Scalar> p;
     p.n = n;
     p.batch = batch;
     p.uplo = uplo;
     p.ld = n + 3;
     p.stride = p.ld * n + 5;
-    p.buf = UnifiedVector<T>(static_cast<size_t>(p.stride) * batch, MatrixView<T, MatrixFormat::Dense>::make(R(-999), R(777)));
-    p.ptrs = UnifiedVector<T*>(batch, nullptr);
+    p.buf = UnifiedVector<Scalar>(static_cast<size_t>(p.stride) * batch, MatrixView<Scalar, MatrixFormat::Dense>::make(R(-999), R(777)));
+    p.ptrs = UnifiedVector<Scalar*>(batch, nullptr);
     p.ref.resize(batch);
     for (int b = 0; b < batch; ++b) {
-        p.ref[b] = (identical && b > 0) ? p.ref[0] : make_hpd<T>(n, seed + 7919u * b);
+        p.ref[b] = (identical && b > 0) ? p.ref[0] : make_hpd<Scalar>(n, seed + 7919u * b);
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i)
                 if (p.in_tri(i, j)) p.buf[p.at(i, j, b)] = p.ref[b][i + static_cast<size_t>(j) * n];
@@ -124,14 +125,15 @@ Prob<T> make_prob(int n, int batch, Uplo uplo, unsigned seed, bool identical = f
 
 // ||A - L L^H||_F / ||A||_F (Lower) or ||A - U^H U||_F / ||A||_F (Upper) over the factored triangle,
 // worst over the first and last item (packed in that order).
-template <typename T>
-double residual(Queue& ctx, const Prob<T>& p) {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+double residual(Queue& ctx, const Prob<Scalar>& p) {
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     const std::vector<int> items{0, p.batch - 1};
-    Matrix<T> a(p.n, p.n, 2);
+    Matrix<Scalar> a(p.n, p.n, 2);
     for (int g = 0; g < 2; ++g)
         std::copy(p.ref[items[g]].begin(), p.ref[items[g]].end(), a.data().data() + static_cast<size_t>(g) * p.n * p.n);
-    const auto f = MV(const_cast<T*>(p.buf.data()), p.n, p.n, p.ld, p.stride, p.batch).template astype<T>(items);
+    const auto f = MV(const_cast<Scalar*>(p.buf.data()), p.n, p.n, p.ld, p.stride,
+                      p.batch).template astype<Scalar>(items);
     return MV::potrf_residual(ctx, a, f, p.uplo, a.all_items());
 }
 
@@ -182,9 +184,9 @@ std::string traced_choice(F&& run, std::string* all = nullptr) {
     return "<no potrf trace line in: " + err + ">";
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;

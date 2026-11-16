@@ -30,14 +30,14 @@
 namespace batchlas::tune {
 namespace {
 
-template <typename T>
+template <typename Scalar>
 struct OrgqrProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     int m, n, batch, ld;
     std::size_t stride;
-    UnifiedVector<T> M, A0, A, tau;
-    UnifiedVector<T*> pM, pA0, pA;
+    UnifiedVector<Scalar> M, A0, A, tau;
+    UnifiedVector<Scalar*> pM, pA0, pA;
     MV Mv, A0v, Av;
 
     OrgqrProblem(Queue& q_, int m_, int n_, int batch_, int ld_pad)
@@ -48,23 +48,26 @@ struct OrgqrProblem {
           A0v(A0.data(), m, n, ld, int(stride), batch, pA0.data()), Av(A.data(), m, n, ld, int(stride), batch, pA.data()) {
         (void)Mv.fill_random(q, false, 5151);
         (void)MV::copy(q, A0v, Mv);
-        UnifiedVector<std::byte> ws(std::max<std::size_t>(1, geqrf_buffer_size<kBackend, T>(q, A0v, tau.to_span())));
-        (void)geqrf<kBackend, T>(q, A0v, tau.to_span(), ws.to_span());
+        UnifiedVector<std::byte> ws(std::max<std::size_t>(1, geqrf_buffer_size<kBackend,
+                                                          Scalar>(q, A0v, tau.to_span())));
+        (void)geqrf<kBackend, Scalar>(q, A0v, tau.to_span(), ws.to_span());
         q.wait();
     }
-    std::size_t workspace() { return orgqr_buffer_size<kBackend, T>(q, Av, tau.to_span()); }
+    std::size_t workspace() { return orgqr_buffer_size<kBackend, Scalar>(q, Av, tau.to_span()); }
     void reset() {
         (void)MV::copy(q, Av, A0v);
         q.wait();
     }
     void clear_info() {}
     void run(Span<std::byte> ws) {
-        (void)orgqr<kBackend, T>(q, Av, tau.to_span(), ws);
+        (void)orgqr<kBackend, Scalar>(q, Av, tau.to_span(), ws);
         q.wait();
     }
     std::pair<double, int> verify() {
-        const double rec = MV::qr_reconstruction(q, Mv, Av, A0v) / verify::bound<T>(verify::Check::factorization, m);
-        return {verify::nanmax(rec, MV::orthogonality(q, Av) / verify::bound<T>(verify::Check::orthogonality, m)), 0};
+        const double rec = MV::qr_reconstruction(q, Mv, Av, A0v) / verify::bound<Scalar>(verify::Check::factorization,
+                                                                                         m);
+        return {verify::nanmax(rec,
+                               MV::orthogonality(q, Av) / verify::bound<Scalar>(verify::Check::orthogonality, m)), 0};
     }
 };
 

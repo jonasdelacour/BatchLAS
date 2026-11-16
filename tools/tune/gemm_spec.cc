@@ -43,16 +43,16 @@ Transpose trans_of(const std::string& w, bool complex) {
     return Transpose::Trans;  // a real scalar's C is its T (the key folds it)
 }
 
-template <typename T>
+template <typename Scalar>
 struct GemmProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     Transpose ta, tb;
     int m, n, k, batch;
     int ar, ac, br, bc, lda, ldb, ldc;
     std::size_t sa, sb, sc;
-    T alpha, beta;
-    UnifiedVector<T> A, B, C0, C;
+    Scalar alpha, beta;
+    UnifiedVector<Scalar> A, B, C0, C;
     MV Av, Bv, C0v, Cv;
 
     GemmProblem(Queue& q_, Transpose ta_, Transpose tb_, int m_, int n_, int k_, int batch_, int pad)
@@ -83,19 +83,19 @@ struct GemmProblem {
     }
     void clear_info() {}
     void run(Span<std::byte>) {
-        (void)gemm<kBackend, T>(q, Av, Bv, Cv, alpha, beta, ta, tb);
+        (void)gemm<kBackend, Scalar>(q, Av, Bv, Cv, alpha, beta, ta, tb);
         q.wait();
     }
     // The sampled columns of op(B), C0 and C are gathered into packed host copies, so A is read
     // once per item. op(B)'s column j is B's row j when B is transposed: gather rows then.
     std::pair<double, int> verify() {
-        using V = MatrixView<T, MatrixFormat::Dense>;
+        using V = MatrixView<Scalar, MatrixFormat::Dense>;
         std::vector<int> cols;
         for (int i = 0; i < std::min(n, kMaxCheckedCols); ++i)
             cols.push_back(n <= kMaxCheckedCols ? i : int(std::int64_t(i) * (n - 1) / (kMaxCheckedCols - 1)));
         const int nc = int(cols.size());
         const bool bt = tb != Transpose::NoTrans;
-        UnifiedVector<T> bs(std::size_t(k) * std::size_t(nc)), c0s(std::size_t(m) * std::size_t(nc)), cs(c0s.size());
+        UnifiedVector<Scalar> bs(std::size_t(k) * std::size_t(nc)), c0s(std::size_t(m) * std::size_t(nc)), cs(c0s.size());
         double worst = 0;
         for (int b : Cv.default_items()) {
             const std::size_t ob = std::size_t(b) * sb, oc = std::size_t(b) * sc;

@@ -52,10 +52,10 @@ using C = ps::PosvChoice;
 using Pin = select::ScopedPin<C>;
 using PotrfPin = select::ScopedPin<ops::potrf::PotrfChoice>;
 
-template <typename T>
-using RealOf = typename batchlas::base_type<T>::type;
-template <typename T>
-constexpr bool kCx = test_utils::is_complex<T>::value;
+template <typename Scalar>
+using RealOf = typename batchlas::base_type<Scalar>::type;
+template <typename Scalar>
+constexpr bool kCx = test_utils::is_complex<Scalar>::value;
 
 template <typename T>
 bool same_bits(T a, T b) {
@@ -64,18 +64,19 @@ bool same_bits(T a, T b) {
 
 // Hermitian, strictly diagonally dominant (condition number below 8); every off-diagonal
 // entry has a nonzero imaginary part.
-template <typename T>
-std::vector<T> make_hpd(int n, std::mt19937& gen) {
-    using R = RealOf<T>;
+template <typename Scalar>
+std::vector<Scalar> make_hpd(int n, std::mt19937& gen) {
+    using R = RealOf<Scalar>;
     std::uniform_real_distribution<R> d(R(0.1), R(1));
-    std::vector<T> A(static_cast<size_t>(n) * n);
+    std::vector<Scalar> A(static_cast<size_t>(n) * n);
     for (int j = 0; j < n; ++j) {
-        A[j + static_cast<size_t>(j) * n] = MatrixView<T, MatrixFormat::Dense>::make(R(2.5) + R(0.5) * d(gen), R(0));
+        A[j + static_cast<size_t>(j) * n] = MatrixView<Scalar, MatrixFormat::Dense>::make(R(2.5) + R(0.5) * d(gen),
+                                                                                          R(0));
         for (int i = j + 1; i < n; ++i) {
             const auto x = gen() & 1 ? d(gen) : -d(gen);
-            const T v = MatrixView<T, MatrixFormat::Dense>::make(x / R(n), d(gen) / R(n));
+            const Scalar v = MatrixView<Scalar, MatrixFormat::Dense>::make(x / R(n), d(gen) / R(n));
             A[i + static_cast<size_t>(j) * n] = v;
-            A[j + static_cast<size_t>(i) * n] = MatrixView<T, MatrixFormat::Dense>::make(double(std::real(v)), -double(std::imag(v)));
+            A[j + static_cast<size_t>(i) * n] = MatrixView<Scalar, MatrixFormat::Dense>::make(double(std::real(v)), -double(std::imag(v)));
         }
     }
     return A;
@@ -84,41 +85,41 @@ std::vector<T> make_hpd(int n, std::mt19937& gen) {
 // A and B at padded lds and strides that are not ld*cols. Everything outside the owned
 // triangle of A and the n x nrhs block of B -- the other triangle, the ld pads and the
 // inter-item gaps -- holds a large finite value a kernel would happily consume.
-template <typename T>
+template <typename Scalar>
 struct Sys {
     int n = 0, nrhs = 0, batch = 0, lda = 0, stra = 0, ldb = 0, strb = 0;
     Uplo uplo = Uplo::Lower;
-    UnifiedVector<T> a, b;
-    UnifiedVector<T*> aptr, bptr;
-    std::vector<T> a0, b0;
-    std::vector<std::vector<T>> full;  // the whole Hermitian A per item
+    UnifiedVector<Scalar> a, b;
+    UnifiedVector<Scalar*> aptr, bptr;
+    std::vector<Scalar> a0, b0;
+    std::vector<std::vector<Scalar>> full;  // the whole Hermitian A per item
 
-    MatrixView<T, MatrixFormat::Dense> A() { return {a.data(), n, n, lda, stra, batch, aptr.data()}; }
-    MatrixView<T, MatrixFormat::Dense> B() { return {b.data(), n, nrhs, ldb, strb, batch, bptr.data()}; }
+    MatrixView<Scalar, MatrixFormat::Dense> A() { return {a.data(), n, n, lda, stra, batch, aptr.data()}; }
+    MatrixView<Scalar, MatrixFormat::Dense> B() { return {b.data(), n, nrhs, ldb, strb, batch, bptr.data()}; }
     bool in_tri(int i, int j) const { return uplo == Uplo::Lower ? i >= j : i <= j; }
 };
 
-template <typename T>
-Sys<T> make_sys(int n, int nrhs, int batch, Uplo uplo, unsigned seed, bool identical = false) {
-    using R = RealOf<T>;
-    Sys<T> p;
+template <typename Scalar>
+Sys<Scalar> make_sys(int n, int nrhs, int batch, Uplo uplo, unsigned seed, bool identical = false) {
+    using R = RealOf<Scalar>;
+    Sys<Scalar> p;
     p.n = n, p.nrhs = nrhs, p.batch = batch, p.uplo = uplo;
     p.lda = n + 3, p.stra = p.lda * n + 5, p.ldb = n + 2, p.strb = p.ldb * nrhs + 7;
-    const T poison = MatrixView<T, MatrixFormat::Dense>::make(R(-999), R(777));
-    p.a = UnifiedVector<T>(static_cast<size_t>(p.stra) * batch, poison);
-    p.b = UnifiedVector<T>(static_cast<size_t>(p.strb) * batch, poison);
-    p.aptr = UnifiedVector<T*>(batch, nullptr);
-    p.bptr = UnifiedVector<T*>(batch, nullptr);
+    const Scalar poison = MatrixView<Scalar, MatrixFormat::Dense>::make(R(-999), R(777));
+    p.a = UnifiedVector<Scalar>(static_cast<size_t>(p.stra) * batch, poison);
+    p.b = UnifiedVector<Scalar>(static_cast<size_t>(p.strb) * batch, poison);
+    p.aptr = UnifiedVector<Scalar*>(batch, nullptr);
+    p.bptr = UnifiedVector<Scalar*>(batch, nullptr);
     p.full.resize(batch);
     std::mt19937 gen(seed);
     std::uniform_real_distribution<R> d(R(-1), R(1));
-    std::vector<T> rhs(static_cast<size_t>(n) * nrhs);
+    std::vector<Scalar> rhs(static_cast<size_t>(n) * nrhs);
     for (int it = 0; it < batch; ++it) {
-        p.full[it] = (identical && it > 0) ? p.full[0] : make_hpd<T>(n, gen);
+        p.full[it] = (identical && it > 0) ? p.full[0] : make_hpd<Scalar>(n, gen);
         if (!identical || it == 0)
             for (auto& v : rhs) {
                 const auto re = d(gen), im = d(gen);
-                v = MatrixView<T, MatrixFormat::Dense>::make(re, im);
+                v = MatrixView<Scalar, MatrixFormat::Dense>::make(re, im);
             }
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i)
@@ -133,15 +134,15 @@ Sys<T> make_sys(int n, int nrhs, int batch, Uplo uplo, unsigned seed, bool ident
 }
 
 // ||A X - B||_F / (||A||_F ||X||_F) in double over the first and last item, A the whole Hermitian matrix.
-template <typename T>
-double residual(Queue& ctx, const Sys<T>& p) {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
-    Matrix<T> af(p.n, p.n, p.batch);
+template <typename Scalar>
+double residual(Queue& ctx, const Sys<Scalar>& p) {
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+    Matrix<Scalar> af(p.n, p.n, p.batch);
     for (int it = 0; it < p.batch; ++it)
         std::copy(p.full[it].begin(), p.full[it].end(), af.data().data() + size_t(it) * p.n * p.n);
     const int items[] = {0, p.batch - 1};
-    return MV::solve_residual(ctx, af, MV(const_cast<T*>(p.b.data()), p.n, p.nrhs, p.ldb, p.strb, p.batch),
-                              MV(const_cast<T*>(p.b0.data()), p.n, p.nrhs, p.ldb, p.strb, p.batch), items);
+    return MV::solve_residual(ctx, af, MV(const_cast<Scalar*>(p.b.data()), p.n, p.nrhs, p.ldb, p.strb, p.batch),
+                              MV(const_cast<Scalar*>(p.b0.data()), p.n, p.nrhs, p.ldb, p.strb, p.batch), items);
 }
 
 // info, the residual of the first and last item, and every element the solve must not touch,
@@ -194,9 +195,9 @@ struct TableGuard {
     ~TableGuard() { select::testing::use_embedded_tables(); }
 };
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;

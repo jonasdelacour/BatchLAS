@@ -32,7 +32,7 @@ namespace batchlas {
 
 // Kernel name tag: outside the anonymous namespace so it does not depend on
 // internal-linkage entities.
-template <typename T, size_t P, size_t C, bool ComputeV>
+template <typename Scalar, size_t P, size_t C, bool ComputeV>
 class GesvdjCTAKernel;
 
 // One-sided (Hestenes) Jacobi SVD. One SubGroupPartition<P> owns one problem;
@@ -44,21 +44,21 @@ class GesvdjCTAKernel;
 
 namespace {
 
-template <typename T, size_t P, size_t C, bool ComputeV>
+template <typename Scalar, size_t P, size_t C, bool ComputeV>
 inline void gesvdj_cta_impl(Queue& ctx,
-                            const MatrixView<T, MatrixFormat::Dense>& a_in,
-                            typename base_type<T>::type* s_ptr,
-                            const MatrixView<T, MatrixFormat::Dense>& u_in,
-                            const MatrixView<T, MatrixFormat::Dense>& vh_in,
+                            const MatrixView<Scalar, MatrixFormat::Dense>& a_in,
+                            typename base_type<Scalar>::type* s_ptr,
+                            const MatrixView<Scalar, MatrixFormat::Dense>& u_in,
+                            const MatrixView<Scalar, MatrixFormat::Dense>& vh_in,
                             bool want_left,
                             bool transposed,
                             int32_t rows,     // R = max(m,n), rows of the solved matrix
                             int32_t cols,     // C = min(m,n), cols of the solved matrix
                             int32_t left_cols,// columns of the left factor to emit: R (All) or C (Thin)
-                            GesvdjParams<T> params,
+                            GesvdjParams<Scalar> params,
                             int32_t* info,
                             const std::uint8_t* mask) {
-    using Real = typename base_type<T>::type;
+    using Real = typename base_type<Scalar>::type;
 
     const auto batch_size = a_in.batch_size();
 
@@ -87,7 +87,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
         constexpr size_t kGramChunk = (kRotSlots < P / 2) ? kRotSlots : (P / 2 > 0 ? P / 2 : 1);
         constexpr size_t kChunks = kRotSlots / kGramChunk;
         static_assert(kChunks * kGramChunk == kRotSlots, "round must split evenly into Gram chunks");
-        constexpr bool kNeedPhase = detail::is_complex<T>::value;
+        constexpr bool kNeedPhase = detail::is_complex<Scalar>::value;
 
         // Clamp probs_per_wg DIRECTLY, not a multiplier: a clamp in problems
         // under-counts it by 32/P, a launch failure with two tiles.
@@ -95,10 +95,10 @@ inline void gesvdj_cta_impl(Queue& ctx,
         const int32_t probs_per_warp = sg_size / static_cast<int32_t>(P);
         constexpr size_t kPairTabBytes = kPairSlots * sizeof(int16_t);
         const size_t bytes_per_prob =
-            (1 + (ComputeV ? 1 : 0)) * kTileElems * sizeof(T)
+            (1 + (ComputeV ? 1 : 0)) * kTileElems * sizeof(Scalar)
             + C * sizeof(Real)
             + 2 * kRotSlots * sizeof(Real)
-            + (kNeedPhase ? kRotSlots * sizeof(T) : 0)
+            + (kNeedPhase ? kRotSlots * sizeof(Scalar) : 0)
             + C * sizeof(int16_t);
 
         const size_t local_mem_bytes = impl::local_mem_bytes(dev);
@@ -129,15 +129,15 @@ inline void gesvdj_cta_impl(Queue& ctx,
         const int32_t wg_sz = wg_size;
 
         // Conditionally unused accessors are sized 1, never 0, base forced to 0.
-        auto A_local = sycl::local_accessor<T, 1>(
+        auto A_local = sycl::local_accessor<Scalar, 1>(
             sycl::range<1>(static_cast<size_t>(probs_per_wg) * kTileElems), cgh);
-        auto V_local = sycl::local_accessor<T, 1>(
+        auto V_local = sycl::local_accessor<Scalar, 1>(
             sycl::range<1>(ComputeV ? static_cast<size_t>(probs_per_wg) * kTileElems : 1), cgh);
         auto Nrm_local = sycl::local_accessor<Real, 1>(
             sycl::range<1>(static_cast<size_t>(probs_per_wg) * C), cgh);
         auto Rcs_local = sycl::local_accessor<sycl::vec<Real, 2>, 1>(
             sycl::range<1>(static_cast<size_t>(probs_per_wg) * kRotSlots), cgh);
-        auto Rd_local = sycl::local_accessor<T, 1>(
+        auto Rd_local = sycl::local_accessor<Scalar, 1>(
             sycl::range<1>(kNeedPhase ? static_cast<size_t>(probs_per_wg) * kRotSlots : 1), cgh);
         auto Inv_local = sycl::local_accessor<int16_t, 1>(
             sycl::range<1>(static_cast<size_t>(probs_per_wg) * C), cgh);
@@ -169,13 +169,13 @@ inline void gesvdj_cta_impl(Queue& ctx,
         // reqd_sub_group_size(32) is load-bearing: the 5- and (4+1)-step
         // butterflies, probs_per_warp and part_id are silently wrong otherwise.
         // BATCHLAS_DEVICE_BODY: direct view/lambda calls would leave the body outlined (SemaSYCL).
-        batchlas::impl::parallel_for<GesvdjCTAKernel<T, P, C, ComputeV>>(cgh,
+        batchlas::impl::parallel_for<GesvdjCTAKernel<Scalar, P, C, ComputeV>>(cgh,
             sycl::nd_range<1>(global_size, wg_size),
             [=](sycl::nd_item<1> it) BATCHLAS_DEVICE_BODY BATCHLAS_REQD_SG_SIZE(32) {
                 constexpr int kP = static_cast<int>(P);
                 constexpr int kC = static_cast<int>(C);
                 constexpr int K = static_cast<int>(kGramChunk);
-                using Rows = device::Frag<T, static_cast<int>(kRPL)>;  // one column on this lane's rows
+                using Rows = device::Frag<Scalar, static_cast<int>(kRPL)>;  // one column on this lane's rows
                 const auto wg = it.get_group();
                 const int32_t wg_id = static_cast<int32_t>(wg.get_group_linear_id());
                 const int32_t local_id = static_cast<int32_t>(it.get_local_linear_id());
@@ -210,8 +210,8 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 auto U_prob = U_view.batch_item(pid);
                 auto Vh_prob = Vh_view.batch_item(pid);
 
-                using Tile = device::Mat<T, device::Ext<kC>, device::Ext<kC>, device::Ext<LD>, device::Mem::Local, device::Cyclic,
-                                     sycl::local_accessor<T, 1>>;
+                using Tile = device::Mat<Scalar, device::Ext<kC>, device::Ext<kC>, device::Ext<LD>, device::Mem::Local, device::Cyclic,
+                                     sycl::local_accessor<Scalar, 1>>;
                 const int32_t tile_off = part_id * static_cast<int32_t>(kTileElems);
                 const Tile A{A_local, {}, {}, {}, tile_off};
                 // Without V, V_local is never named, so the kernel does not capture it (an extra
@@ -228,14 +228,14 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
                     const int32_t row = lane + rr * kP;
                     for (int32_t c = 0; c < kC; ++c) {
-                        T v = T(0);
+                        Scalar v = Scalar(0);
                         if (live && row < RR && c < CC) {
                             // Solve A^H, not A^T: A^T is wrong for complex only.
                             // evidence: docs/design/gesvd.md#gesvdj_cta-rank-deficiency-thin-and-m--n
                             v = transposed_f ? device::conj(A_prob(c, row)) : A_prob(row, c);
                         }
                         A(row, c) = v;
-                        if constexpr (ComputeV) V(row, c) = (row == c && row < CC) ? T(1) : T(0);
+                        if constexpr (ComputeV) V(row, c) = (row == c && row < CC) ? Scalar(1) : Scalar(0);
                     }
                 }
                 // The partition's barrier, not device::sync (one per sub-group): see syev_jacobi_cta.
@@ -275,7 +275,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 if (beta != Real(1)) {
                     for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
                         const int32_t row = lane + rr * kP;
-                        for (int32_t c = 0; c < kC; ++c) A(row, c) = A(row, c) * T(beta);
+                        for (int32_t c = 0; c < kC; ++c) A(row, c) = A(row, c) * Scalar(beta);
                     }
                     group_barrier(ex.part);
                     exact_norms();
@@ -300,38 +300,40 @@ inline void gesvdj_cta_impl(Queue& ctx,
                     for (int32_t t = 0; t < rounds; ++t) {
                         // Chunks of K pairs (two at C=64). Safe because a round is a
                         // perfect matching: chunks touch disjoint columns. Also caps
-                        // live registers (80 T, not 160).
+                        // live registers (80 Scalar, not 160).
                         for (int32_t ch = 0; ch < static_cast<int32_t>(kChunks); ++ch) {
-                        // Real T never names Rd_local, so the kernel does not capture it.
+                        // Real Scalar never names Rd_local, so the kernel does not capture it.
                         std::conditional_t<kNeedPhase, decltype(device::vec(Rd_local, 0)), device::None> rd{};
                         if constexpr (kNeedPhase) rd = device::vec(Rd_local, K, base_r + ch * K);
-                        const auto rnd = device::detail::rot_round<T>(device::vec(Rcs_local, K, base_r + ch * K), rd,
+                        const auto rnd = device::detail::rot_round<Scalar>(device::vec(Rcs_local, K, base_r + ch * K),
+                                                                           rd,
                                                           device::vec(Pair_local, K, t * static_cast<int32_t>(kRotSlots) + ch * K));
 
                         // Gram entries a_{p q} = A_p^H A_q of the chunk's pairs over this lane's
                         // rows. Every index into pk/qk/ap/aq/g must be compile-time or they spill.
                         // Plain arrays and one fused load+dot loop: a PivotPair array with split
-                        // load_owned / dotc_owned loops gave complex T +8..17 BRA.
+                        // load_owned / dotc_owned loops gave complex Scalar +8..17 BRA.
                         int32_t pk[K];
                         int32_t qk[K];
-                        T ap[K][kRPL];
-                        T aq[K][kRPL];
-                        device::Frag<T, K> g;
+                        Scalar ap[K][kRPL];
+                        Scalar aq[K][kRPL];
+                        device::Frag<Scalar, K> g;
 BATCHLAS_UNROLL_FULL
                         for (int32_t k = 0; k < K; ++k) {
                             const device::detail::PivotPair pqk = rnd.pair(k);
                             pk[k] = pqk.p;
                             qk[k] = pqk.q;
                             const bool ok = (pk[k] < CC) && (qk[k] < CC);
-                            const T acc = device::load_dotc_owned<static_cast<int>(kRPL)>(ex, A.col(ok ? pk[k] : 0),
+                            const Scalar acc = device::load_dotc_owned<static_cast<int>(kRPL)>(ex,
+                                                                                               A.col(ok ? pk[k] : 0),
                                                                                      A.col(ok ? qk[k] : 0), ap[k], aq[k]);
-                            g[k] = ok ? acc : T(0);
+                            g[k] = ok ? acc : Scalar(0);
                         }
 
                         // Reduce-scatter is 4 scatter + 1 all-reduce step at P=32: lane l ends
                         // with a_{p q} of pair l >> 1. Five halving steps silently sum over half the rows.
                         // evidence: docs/design/gesvd.md#gesvdj_cta-the-reduce-scatter-g3-trap
-                        const T apq = device::reduce_scatter<K>(ex, g);
+                        const Scalar apq = device::reduce_scatter<K>(ex, g);
 
                         const int32_t k_of_lane = lane >> 1;
                         const int32_t slot = ch * K + k_of_lane;
@@ -341,12 +343,12 @@ BATCHLAS_UNROLL_FULL
                         bool active = (slot < pairs_per_round) && (kpq.p < CC) && (kpq.q < CC);
                         Real app = Real(0);
                         Real aqq = Real(0);
-                        device::detail::JacobiRotation<T> jr = device::detail::identity_rotation<T>();
+                        device::detail::JacobiRotation<Scalar> jr = device::detail::identity_rotation<Scalar>();
                         if (active) {
                             app = nrm(kpq.p);
                             aqq = nrm(kpq.q);
                             // An identity rotation must not count, or every problem burns all max_sweeps.
-                            jr = device::detail::sym_schur2<T>(app, aqq, apq, thr);
+                            jr = device::detail::sym_schur2<Scalar>(app, aqq, apq, thr);
                         }
                         active = jr.active;
 
@@ -373,9 +375,10 @@ BATCHLAS_UNROLL_FULL
                             const sycl::vec<Real, 2> cs = rnd.coef(k);
                             // Warp-uniform skip: converged pairs are free.
                             if (cs[1] == Real(0)) continue;
-                            const device::detail::Rot2<T> u = rnd.template rot<false>(k, cs[0], cs[1]);
+                            const device::detail::Rot2<Scalar> u = rnd.template rot<false>(k, cs[0], cs[1]);
                             device::for_each_owned_frag<kC>(ex, [&](int rr, int row) {
-                                const device::detail::Pair2<T> r = device::detail::rot_right(u, ap[k][rr], aq[k][rr]);
+                                const device::detail::Pair2<Scalar> r = device::detail::rot_right(u, ap[k][rr],
+                                                                                                  aq[k][rr]);
                                 A(row, pk[k]) = r.x;
                                 A(row, qk[k]) = r.y;
                                 if constexpr (ComputeV) device::detail::rot_right_inplace(u, V(row, pk[k]), V(row, qk[k]));
@@ -463,7 +466,7 @@ BATCHLAS_UNROLL_FULL
                         const Real s_c = inv_beta * sycl::sqrt(n2_c);
                         if (s_c > tol_zero && n2_c > Real(0)) {
                             const Real inv_s = Real(1) / sycl::sqrt(n2_c);
-                            for (int32_t r = 0; r < kC; ++r) A(r, col) = A(r, col) * T(inv_s);
+                            for (int32_t r = 0; r < kC; ++r) A(r, col) = A(r, col) * Scalar(inv_s);
                         }
                     }
                     group_barrier(ex.part);
@@ -506,7 +509,7 @@ BATCHLAS_UNROLL_FULL
                                     for (int32_t d2 = 0; d2 < dst; ++d2) {
                                         Rows qv;
                                         device::load_owned_masked(ex, A.col(static_cast<int32_t>(inv(d2))), RR, qv);
-                                        const T dot = device::allreduce(ex, device::dotc_owned(qv, v));
+                                        const Scalar dot = device::allreduce(ex, device::dotc_owned(qv, v));
                                         device::sub_mul(v, qv, dot);
                                     }
                                 }
@@ -514,7 +517,7 @@ BATCHLAS_UNROLL_FULL
                                 if (nrm2 > accept_tol) {
                                     const Real inv_nr = ::batchlas::device::inv_sqrt(nrm2);
                                     device::for_each_owned_frag<kC>(ex, [&](int rr, int row) {
-                                        A(row, cdst) = v[rr] * T(inv_nr);
+                                        A(row, cdst) = v[rr] * Scalar(inv_nr);
                                     });
                                     filled = true;
                                 }
@@ -573,21 +576,21 @@ BATCHLAS_UNROLL_FULL
 // sets it, and it is job-dependent (values-only drops the V tile). gesvd_native.hh holds the
 // formula so gesvd's can_run states the same ceiling.
 // evidence: docs/design/gesvd.md#gesvdj_cta-local-memory-budget-formula
-template <typename T>
+template <typename Scalar>
 int32_t gesvdj_cta_max_dim(Queue& ctx, bool want_vectors) {
     const std::size_t budget = resident::device_slm_budget(impl::local_mem_bytes(ctx->get_device()));
-    return static_cast<int32_t>(ops::gesvd::gesvd_jacobi_max_dim<T>(want_vectors, budget));
+    return static_cast<int32_t>(ops::gesvd::gesvd_jacobi_max_dim<Scalar>(want_vectors, budget));
 }
 
 inline bool want_vectors_for_cap(SvdVectors jobu, SvdVectors jobvh) {
     return jobu != SvdVectors::None || jobvh != SvdVectors::None;
 }
 
-template <typename T>
-void validate_gesvdj_dims(const MatrixView<T, MatrixFormat::Dense>& a,
-                          Span<typename base_type<T>::type> singular_values,
-                          const MatrixView<T, MatrixFormat::Dense>& u,
-                          const MatrixView<T, MatrixFormat::Dense>& vh,
+template <typename Scalar>
+void validate_gesvdj_dims(const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                          Span<typename base_type<Scalar>::type> singular_values,
+                          const MatrixView<Scalar, MatrixFormat::Dense>& u,
+                          const MatrixView<Scalar, MatrixFormat::Dense>& vh,
                           SvdVectors jobu,
                           SvdVectors jobvh,
                           const char* where) {
@@ -624,16 +627,16 @@ void validate_gesvdj_dims(const MatrixView<T, MatrixFormat::Dense>& a,
 
 }  // namespace
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event gesvdj_cta(Queue& ctx,
-                 const MatrixView<T, MatrixFormat::Dense>& a_in,
-                 Span<typename base_type<T>::type> singular_values,
-                 const MatrixView<T, MatrixFormat::Dense>& u_out,
-                 const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                 const MatrixView<Scalar, MatrixFormat::Dense>& a_in,
+                 Span<typename base_type<Scalar>::type> singular_values,
+                 const MatrixView<Scalar, MatrixFormat::Dense>& u_out,
+                 const MatrixView<Scalar, MatrixFormat::Dense>& vh_out,
                  SvdVectors jobu,
                  SvdVectors jobvh,
                  const Span<std::byte>& ws,
-                 GesvdjParams<T> params,
+                 GesvdjParams<Scalar> params,
                  Span<int32_t> info) {
     // The packed kernel folds the mask into `live` (I2): an inactive item's outputs are untouched.
     const std::uint8_t* const mask =
@@ -649,7 +652,7 @@ Event gesvdj_cta(Queue& ctx,
         jobu = canonical_jobu(jobu, m, k);
         jobvh = canonical_jobvh(jobvh, n, k);
     }
-    if (std::max(m, n) > gesvdj_cta_max_dim<T>(ctx, want_vectors_for_cap(jobu, jobvh))) {
+    if (std::max(m, n) > gesvdj_cta_max_dim<Scalar>(ctx, want_vectors_for_cap(jobu, jobvh))) {
         throw batchlas::invalid_argument(
             "gesvdj_cta: max(m, n) exceeds the supported cap for this scalar type "
             "(see gesvdj_cta_max_dim)");
@@ -685,9 +688,9 @@ Event gesvdj_cta(Queue& ctx,
         constexpr size_t Pv = decltype(P_tag)::value;
         constexpr size_t Cv = decltype(C_tag)::value;
         if (want_right) {
-            gesvdj_cta_impl<T, Pv, Cv, true>(ctx, a_in, s_ptr, u_out, vh_out, want_left, transposed, RR, CC, left_cols, params, info_ptr, mask);
+            gesvdj_cta_impl<Scalar, Pv, Cv, true>(ctx, a_in, s_ptr, u_out, vh_out, want_left, transposed, RR, CC, left_cols, params, info_ptr, mask);
         } else {
-            gesvdj_cta_impl<T, Pv, Cv, false>(ctx, a_in, s_ptr, u_out, vh_out, want_left, transposed, RR, CC, left_cols, params, info_ptr, mask);
+            gesvdj_cta_impl<Scalar, Pv, Cv, false>(ctx, a_in, s_ptr, u_out, vh_out, want_left, transposed, RR, CC, left_cols, params, info_ptr, mask);
         }
     };
 
@@ -714,18 +717,18 @@ Event gesvdj_cta(Queue& ctx,
     return ctx.get_event();
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t gesvdj_cta_buffer_size(Queue& ctx,
-                              const MatrixView<T, MatrixFormat::Dense>& a,
-                              Span<typename base_type<T>::type> singular_values,
-                              const MatrixView<T, MatrixFormat::Dense>& u_out,
-                              const MatrixView<T, MatrixFormat::Dense>& vh_out,
+                              const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                              Span<typename base_type<Scalar>::type> singular_values,
+                              const MatrixView<Scalar, MatrixFormat::Dense>& u_out,
+                              const MatrixView<Scalar, MatrixFormat::Dense>& vh_out,
                               SvdVectors jobu,
                               SvdVectors jobvh,
-                              GesvdjParams<T> params) {
+                              GesvdjParams<Scalar> params) {
     (void)params;
     validate_gesvdj_dims(a, singular_values, u_out, vh_out, jobu, jobvh, "gesvdj_cta_buffer_size");
-    if (std::max(a.rows(), a.cols()) > gesvdj_cta_max_dim<T>(ctx, want_vectors_for_cap(jobu, jobvh))) {
+    if (std::max(a.rows(), a.cols()) > gesvdj_cta_max_dim<Scalar>(ctx, want_vectors_for_cap(jobu, jobvh))) {
         throw batchlas::invalid_argument(
             "gesvdj_cta_buffer_size: max(m, n) exceeds the supported cap for this scalar type");
     }

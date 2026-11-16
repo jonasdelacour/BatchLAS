@@ -23,7 +23,7 @@ inline void SytrdCtaBenchSizes(Benchmark* b) {
 }
 
 // Batched SYTRD-CTA benchmark
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_SYTRD_CTA(minibench::State& state) {
 #if BATCHLAS_HAS_CUDA_BACKEND
     const size_t n = state.range(0);
@@ -37,10 +37,10 @@ void BM_SYTRD_CTA(minibench::State& state) {
     const double total_flops = (4.0 / 3.0) * double(n) * double(n) * double(n) * double(batch);
 
     auto q = std::make_shared<Queue>(Device("gpu"), B);
-    auto A = Matrix<T>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/2025);
-    auto d = Vector<T>::zeros(n, batch);
-    auto e = Vector<T>::zeros(n - 1, batch);
-    auto tau = Vector<T>::zeros(n - 1, batch);
+    auto A = Matrix<Scalar>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/2025);
+    auto d = Vector<Scalar>::zeros(n, batch);
+    auto e = Vector<Scalar>::zeros(n - 1, batch);
+    auto tau = Vector<Scalar>::zeros(n - 1, batch);
     UnifiedVector<std::byte> ws_dummy(1, std::byte{0});
 
     state.SetKernel(

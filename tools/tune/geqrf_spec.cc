@@ -41,14 +41,14 @@ std::optional<int> rows_of(const std::string& form, int n, int aspect) {
     return int(m);
 }
 
-template <typename T>
+template <typename Scalar>
 struct GeqrfProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     int m, n, k, batch, ld;
     std::size_t stride;
-    UnifiedVector<T> A0, A, tau;
-    UnifiedVector<T*> pA0, pA;
+    UnifiedVector<Scalar> A0, A, tau;
+    UnifiedVector<Scalar*> pA0, pA;
     MV A0v, Av;
 
     GeqrfProblem(Queue& q_, int m_, int n_, int batch_, int ld_pad)
@@ -60,7 +60,7 @@ struct GeqrfProblem {
         (void)A0v.fill_random(q, false, 4242);
         q.wait();
     }
-    std::size_t workspace() { return geqrf_buffer_size<kBackend, T>(q, Av, tau.to_span()); }
+    std::size_t workspace() { return geqrf_buffer_size<kBackend, Scalar>(q, Av, tau.to_span()); }
     void reset() {
         (void)MV::copy(q, Av, A0v);
         q.wait();
@@ -69,15 +69,16 @@ struct GeqrfProblem {
         for (std::size_t i = 0; i < tau.size(); ++i) tau[i] = MV::make(7.0, -3.0);
     }
     void run(Span<std::byte> ws) {
-        (void)geqrf<kBackend, T>(q, Av, tau.to_span(), ws);
+        (void)geqrf<kBackend, Scalar>(q, Av, tau.to_span(), ws);
         q.wait();
     }
     std::pair<double, int> verify() {
         using PV = MatrixView<typename MV::promoted_type, MatrixFormat::Dense>;
-        const VectorView<T> tv(tau.data(), k, batch, 1, k);
-        const double res = MV::qr_residual(q, A0v, Av, tv) / verify::bound<T>(verify::Check::factorization, m);
+        const VectorView<Scalar> tv(tau.data(), k, batch, 1, k);
+        const double res = MV::qr_residual(q, A0v, Av, tv) / verify::bound<Scalar>(verify::Check::factorization, m);
         auto Q = MV::form_q(q, Av, tv, Av.default_items(), k);
-        const double orth = PV::orthogonality(q, Q, Q.all_items()) / verify::bound<T>(verify::Check::orthogonality, m);
+        const double orth = PV::orthogonality(q, Q, Q.all_items()) / verify::bound<Scalar>(verify::Check::orthogonality,
+                                                                                           m);
         return {verify::nanmax(res, orth), 0};
     }
 };

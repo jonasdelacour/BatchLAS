@@ -19,14 +19,14 @@ namespace batchlas::device::l3 {
 
 // \f$\beta = 0\f$ is \f$\alpha \cdot \mathrm{accum}\f$ alone and never reads C: \f$0 \cdot \mathrm{NaN}\f$ is NaN, and \f$-0 + 0 \cdot 0 = +0\f$.
 // evidence: docs/design/known-defects.md#defect-11-native-gemm-reads-c-at-beta-zero
-template <class T>
+template <class Scalar>
 struct LinearEpilogue {
-    static T apply(T alpha, T beta, T accum, T prior) {
-        return beta == T(0) ? alpha * accum : alpha * accum + beta * prior;
+    static Scalar apply(Scalar alpha, Scalar beta, Scalar accum, Scalar prior) {
+        return beta == Scalar(0) ? alpha * accum : alpha * accum + beta * prior;
     }
 
-    static void store(T* dst, T alpha, T beta, T accum) {
-        *dst = beta == T(0) ? alpha * accum : apply(alpha, beta, accum, *dst);
+    static void store(Scalar* dst, Scalar alpha, Scalar beta, Scalar accum) {
+        *dst = beta == Scalar(0) ? alpha * accum : apply(alpha, beta, accum, *dst);
     }
 };
 
@@ -36,8 +36,8 @@ struct LinearEpilogue {
 struct NoMask {};
 template <Uplo UL, bool HermDiag = false> struct TriMask {
     BATCHLAS_DEVICE_INLINE bool keep(int row, int col) const { return UL == Uplo::Lower ? row >= col : row <= col; }
-    template <class T> BATCHLAS_DEVICE_INLINE T fix(int row, int col, T v) const {
-        using A = Arith<T>;
+    template <class Scalar> BATCHLAS_DEVICE_INLINE Scalar fix(int row, int col, Scalar v) const {
+        using A = Arith<Scalar>;
         if constexpr (HermDiag && A::is_complex) {
             if (row == col) return A::make(A::re(v), typename A::real_t(0));
         }
@@ -52,10 +52,10 @@ template <Uplo UL, bool HermDiag = false> struct TriMask {
 // last read of lo and hi ended before a barrier. beta == 0 never reads C. Ops = arith::Native is
 // the tuned expression (LinearEpilogue); another Ops forms alpha v + beta prior through Arith
 // (no std::complex operator*). mask drops the elements it does not keep (design B.2 Mask).
-template <int TileM, int TileN, int Threads, int LoElems, int HiElems, int Batch = 2, class Ops = arith::Native, class Ex, class T,
+template <int TileM, int TileN, int Threads, int LoElems, int HiElems, int Batch = 2, class Ops = arith::Native, class Ex, class Scalar,
           int TR, int TC, class Mask = NoMask, class LP>
-BATCHLAS_DEVICE_INLINE void store_tile_staged(const Ex& ex, int lid, int local_row, int local_col, const Tile<T, TR, TC>& acc,
-                                           LP lo, LP hi, T* c_item, int ldc, int m0, int n0, int m, int n, T alpha, T beta,
+BATCHLAS_DEVICE_INLINE void store_tile_staged(const Ex& ex, int lid, int local_row, int local_col, const Tile<Scalar, TR, TC>& acc,
+                                           LP lo, LP hi, Scalar* c_item, int ldc, int m0, int n0, int m, int n, Scalar alpha, Scalar beta,
                                            [[maybe_unused]] Mask mask = {}) {
     constexpr int CS = TileM + 1;
     constexpr int LoCols = LoElems / CS;
@@ -64,7 +64,7 @@ BATCHLAS_DEVICE_INLINE void store_tile_staged(const Ex& ex, int lid, int local_r
     constexpr int Passes = (TileN + CW - 1) / CW;
     static_assert(CW >= 1, "store_tile_staged: the stage must hold one C column");
     auto slot = [&](int c, int r) -> LP { return c < LoCols ? lo + c * CS + r : hi + (c - LoCols) * CS + r; };
-    const bool beta_zero = beta == T(0);
+    const bool beta_zero = beta == Scalar(0);
 #pragma unroll 1
     for (int pass = 0; pass < Passes; ++pass) {
         const int c0 = pass * CW;
@@ -85,12 +85,12 @@ BATCHLAS_DEVICE_INLINE void store_tile_staged(const Ex& ex, int lid, int local_r
         };
 #pragma unroll 1
         for (int e0 = lid; e0 < count; e0 += Batch * Threads) {
-            T prior[Batch];
+            Scalar prior[Batch];
 #pragma unroll
             for (int b = 0; b < Batch; ++b) {
                 bool ok;
                 const std::ptrdiff_t off = at(e0 + b * Threads, ok);
-                prior[b] = (ok && !beta_zero) ? c_item[off] : T(0);
+                prior[b] = (ok && !beta_zero) ? c_item[off] : Scalar(0);
             }
 #pragma unroll
             for (int b = 0; b < Batch; ++b) {
@@ -98,12 +98,12 @@ BATCHLAS_DEVICE_INLINE void store_tile_staged(const Ex& ex, int lid, int local_r
                 bool ok;
                 const std::ptrdiff_t off = at(e, ok);
                 if (!ok) continue;
-                const T v = *slot(e / TileM, e % TileM);
-                T out;
+                const Scalar v = *slot(e / TileM, e % TileM);
+                Scalar out;
                 if constexpr (std::is_same_v<Ops, arith::Native>) {
-                    out = beta_zero ? alpha * v : LinearEpilogue<T>::apply(alpha, beta, v, prior[b]);
+                    out = beta_zero ? alpha * v : LinearEpilogue<Scalar>::apply(alpha, beta, v, prior[b]);
                 } else {
-                    using Ar = arith_t<Ops, T>;
+                    using Ar = arith_t<Ops, Scalar>;
                     out = beta_zero ? Ar::mul(alpha, v) : Ar::add(Ar::mul(alpha, v), Ar::mul(beta, prior[b]));
                 }
                 if constexpr (std::is_same_v<Mask, NoMask>) {

@@ -22,17 +22,17 @@
 
 namespace batchlas {
 
-template <typename T, size_t P, bool Upper, bool Masked>
+template <typename Scalar, size_t P, bool Upper, bool Masked>
 class Sytd2CTAKernel;
 
 // Masked: the batch mask folds into `live`, a template so the unmasked instance is the kernel
 // as it was (the runtime fold measured 1.1% on float n = 16 at batch 4096).
-template <typename T, size_t P, bool Upper, bool Masked>
+template <typename Scalar, size_t P, bool Upper, bool Masked>
 inline void sytd2_cta_impl_m(Queue& ctx,
-                             MatrixView<T, MatrixFormat::Dense>& a,
-                             VectorView<T>& d,
-                             VectorView<T>& e,
-                             VectorView<T>& tau,
+                             MatrixView<Scalar, MatrixFormat::Dense>& a,
+                             VectorView<Scalar>& d,
+                             VectorView<Scalar>& e,
+                             VectorView<Scalar>& tau,
                              int32_t n,
                              size_t cta_wg_size_multiplier,
                              const std::uint8_t* mask) {
@@ -78,7 +78,7 @@ inline void sytd2_cta_impl_m(Queue& ctx,
             const std::size_t local_mem_bytes = impl::local_mem_bytes(dev);
             const std::size_t elems_per_prob = static_cast<std::size_t>(P) * static_cast<std::size_t>(P)
                                              + static_cast<std::size_t>(2) * static_cast<std::size_t>(P);
-            const std::size_t bytes_per_prob = elems_per_prob * sizeof(T);
+            const std::size_t bytes_per_prob = elems_per_prob * sizeof(Scalar);
             wg_size_multiplier = impl::cta_wg_multiplier("sytrd_cta", wg_size_multiplier,
                                                          base_wg_size / static_cast<int32_t>(P), bytes_per_prob,
                                                          local_mem_bytes);
@@ -92,11 +92,11 @@ inline void sytd2_cta_impl_m(Queue& ctx,
         // Local storage per problem:
         // - Full P x P tile for A (column-major)
         // - Two length-P vectors (v and w)
-        auto A_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P * P), cgh);
-        auto V_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
-        auto W_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
+        auto A_local = sycl::local_accessor<Scalar, 1>(sycl::range<1>(probs_per_wg * P * P), cgh);
+        auto V_local = sycl::local_accessor<Scalar, 1>(sycl::range<1>(probs_per_wg * P), cgh);
+        auto W_local = sycl::local_accessor<Scalar, 1>(sycl::range<1>(probs_per_wg * P), cgh);
 
-        batchlas::impl::parallel_for<Sytd2CTAKernel<T, P, Upper, Masked>>(cgh,
+        batchlas::impl::parallel_for<Sytd2CTAKernel<Scalar, P, Upper, Masked>>(cgh,
             sycl::nd_range<1>(global_size, wg_size),
             [=](sycl::nd_item<1> it) {
                 const auto wg = it.get_group();
@@ -134,27 +134,29 @@ inline void sytd2_cta_impl_m(Queue& ctx,
 
                 // Thin launcher: the body of device::sytrd<UL, tier::Cta<P>> on the accessors (the
                 // named triangle only, defect 14; an inactive item reduces a zero tile, stores nothing).
-                device::detail::sytrd_cta_run<Upper ? Uplo::Upper : Uplo::Lower, T>(
+                device::detail::sytrd_cta_run<Upper ? Uplo::Upper : Uplo::Lower, Scalar>(
                     part, A_tile, base_a, V_local, base_v, W_local, base_w, A, D_prob, E_prob, TAU_prob, n, live);
             });
     });
 }
 
-template <typename T, size_t P, bool Upper>
-inline void sytd2_cta_impl(Queue& ctx, MatrixView<T, MatrixFormat::Dense>& a, VectorView<T>& d, VectorView<T>& e,
-                           VectorView<T>& tau, int32_t n, size_t cta_wg_size_multiplier, const std::uint8_t* mask) {
-    if (mask != nullptr) return sytd2_cta_impl_m<T, P, Upper, true>(ctx, a, d, e, tau, n, cta_wg_size_multiplier, mask);
-    sytd2_cta_impl_m<T, P, Upper, false>(ctx, a, d, e, tau, n, cta_wg_size_multiplier, mask);
+template <typename Scalar, size_t P, bool Upper>
+inline void sytd2_cta_impl(Queue& ctx, MatrixView<Scalar, MatrixFormat::Dense>& a, VectorView<Scalar>& d,
+                           VectorView<Scalar>& e, VectorView<Scalar>& tau, int32_t n, size_t cta_wg_size_multiplier,
+                           const std::uint8_t* mask) {
+    if (mask != nullptr) return sytd2_cta_impl_m<Scalar, P, Upper, true>(ctx, a, d, e, tau, n, cta_wg_size_multiplier,
+                                                                         mask);
+    sytd2_cta_impl_m<Scalar, P, Upper, false>(ctx, a, d, e, tau, n, cta_wg_size_multiplier, mask);
 }
 
 // Public wrapper: pick a compile-time P in {4,8,16,32} and choose triangle at runtime.
 // This is unblocked (SYTD2-style), so it is meant for very small n.
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event sytrd_cta(Queue& ctx,
-                const MatrixView<T, MatrixFormat::Dense>& a_in,
-                const VectorView<T>& d_out,
-                const VectorView<T>& e_out,
-                const VectorView<T>& tau_out,
+                const MatrixView<Scalar, MatrixFormat::Dense>& a_in,
+                const VectorView<Scalar>& d_out,
+                const VectorView<Scalar>& e_out,
+                const VectorView<Scalar>& tau_out,
                 Uplo uplo,
                 const Span<std::byte>& ws,
                 size_t cta_wg_size_multiplier) {
@@ -177,10 +179,10 @@ Event sytrd_cta(Queue& ctx,
     }
 
     // Make mutable views (A is overwritten, D/E/TAU are outputs).
-    auto& a = const_cast<MatrixView<T, MatrixFormat::Dense>&>(a_in);
-    auto& d = const_cast<VectorView<T>&>(d_out);
-    auto& e = const_cast<VectorView<T>&>(e_out);
-    auto& tau = const_cast<VectorView<T>&>(tau_out);
+    auto& a = const_cast<MatrixView<Scalar, MatrixFormat::Dense>&>(a_in);
+    auto& d = const_cast<VectorView<Scalar>&>(d_out);
+    auto& e = const_cast<VectorView<Scalar>&>(e_out);
+    auto& tau = const_cast<VectorView<Scalar>&>(tau_out);
 
     // CTA backend: requires subgroup size 32 on NVIDIA-like devices.
     if (!ctx.device().supports_sub_group_size(32)) {
@@ -190,9 +192,9 @@ Event sytrd_cta(Queue& ctx,
     auto launch = [&](auto P_tag, bool upper) {
         constexpr int32_t P = decltype(P_tag)::value;
         if (upper) {
-            sytd2_cta_impl<T, P, true>(ctx, a, d, e, tau, n, cta_wg_size_multiplier, mask);
+            sytd2_cta_impl<Scalar, P, true>(ctx, a, d, e, tau, n, cta_wg_size_multiplier, mask);
         } else {
-            sytd2_cta_impl<T, P, false>(ctx, a, d, e, tau, n, cta_wg_size_multiplier, mask);
+            sytd2_cta_impl<Scalar, P, false>(ctx, a, d, e, tau, n, cta_wg_size_multiplier, mask);
         }
     };
 

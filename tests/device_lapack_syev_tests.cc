@@ -52,51 +52,51 @@ constexpr JobType kN = JobType::NoEigenVectors;
 
 template <JobType J, Uplo UL> using Rt = batchlas::device::routine::syev<J, UL>;
 
-template <class T> T nan_v() { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }
-template <class T> T conj_of(T x) {
-    if constexpr (is_cplx<T>) return std::conj(x);
+template <class Scalar> Scalar nan_v() { return Scalar(std::numeric_limits<real_of<Scalar>>::quiet_NaN()); }
+template <class Scalar> Scalar conj_of(Scalar x) {
+    if constexpr (is_cplx<Scalar>) return std::conj(x);
     else return x;
 }
 
 // Item b repeats representative b % kPeriod. UL's triangle holds data (complex Im(diag) != 0),
 // the other triangle and the pad rows hold NaN.
-template <class T> std::vector<T> input(int n, int ld, Uplo ul, int batch) {
-    std::vector<T> a(std::size_t(ld) * n * batch, nan_v<T>());
+template <class Scalar> std::vector<Scalar> input(int n, int ld, Uplo ul, int batch) {
+    std::vector<Scalar> a(std::size_t(ld) * n * batch, nan_v<Scalar>());
     for (int b = 0; b < batch; ++b)
         for (int c = 0; c < n; ++c)
             for (int r = 0; r < n; ++r)
                 if (ul == Uplo::Upper ? r <= c : r >= c)
-                    a[std::size_t(b) * ld * n + r + std::size_t(c) * ld] = val<T>(std::uint64_t(b % kPeriod) * 1000003u + r + 97u * c);
+                    a[std::size_t(b) * ld * n + r + std::size_t(c) * ld] = val<Scalar>(std::uint64_t(b % kPeriod) * 1000003u + r + 97u * c);
     return a;
 }
 
 // The Hermitian matrix item b stores (its UL triangle; Im(diag) dropped), in long double.
-template <class T> std::vector<LD<T>> herm_of(const std::vector<T>& a, int n, int ld, Uplo ul, int b) {
-    std::vector<LD<T>> h(std::size_t(n) * n);
-    const T* p = a.data() + std::size_t(b) * ld * n;
+template <class Scalar> std::vector<LD<Scalar>> herm_of(const std::vector<Scalar>& a, int n, int ld, Uplo ul, int b) {
+    std::vector<LD<Scalar>> h(std::size_t(n) * n);
+    const Scalar* p = a.data() + std::size_t(b) * ld * n;
     for (int c = 0; c < n; ++c)
         for (int r = 0; r < n; ++r) {
             const bool stored = ul == Uplo::Upper ? r <= c : r >= c;
-            LD<T> v = stored ? wide(p[r + std::size_t(c) * ld]) : wide(conj_of(p[c + std::size_t(r) * ld]));
-            if (r == c) v = LD<T>(std::real(v));
+            LD<Scalar> v = stored ? wide(p[r + std::size_t(c) * ld]) : wide(conj_of(p[c + std::size_t(r) * ld]));
+            if (r == c) v = LD<Scalar>(std::real(v));
             h[r + std::size_t(c) * n] = v;
         }
     return h;
 }
 
 // ||A V - V diag(w)||_F / ||A||_F and ||V^H V - I||_F of item b's output (V over A, ld).
-template <class T>
-std::pair<double, double> residual(const std::vector<LD<T>>& h, const std::vector<T>& v, const std::vector<real_of<T>>& w, int n, int ld, int b) {
-    const T* V = v.data() + std::size_t(b) * ld * n;
-    const real_of<T>* W = w.data() + std::size_t(b) * n;
+template <class Scalar>
+std::pair<double, double> residual(const std::vector<LD<Scalar>>& h, const std::vector<Scalar>& v, const std::vector<real_of<Scalar>>& w, int n, int ld, int b) {
+    const Scalar* V = v.data() + std::size_t(b) * ld * n;
+    const real_of<Scalar>* W = w.data() + std::size_t(b) * n;
     long double fro = 0, res = 0, orth = 0;
     for (const auto& x : h) fro += std::norm(x);
     for (int j = 0; j < n; ++j)
         for (int i = 0; i < n; ++i) {
-            LD<T> s = -wide(V[i + std::size_t(j) * ld]) * static_cast<long double>(W[j]);
+            LD<Scalar> s = -wide(V[i + std::size_t(j) * ld]) * static_cast<long double>(W[j]);
             for (int k = 0; k < n; ++k) s += h[i + std::size_t(k) * n] * wide(V[k + std::size_t(j) * ld]);
             res += std::norm(s);
-            LD<T> g = i == j ? LD<T>(-1) : LD<T>(0);
+            LD<Scalar> g = i == j ? LD<Scalar>(-1) : LD<Scalar>(0);
             for (int k = 0; k < n; ++k) g += conj_of(wide(V[k + std::size_t(i) * ld])) * wide(V[k + std::size_t(j) * ld]);
             orth += std::norm(g);
         }
@@ -125,24 +125,24 @@ template <class T> int pad_diff(const std::vector<T>& g, const std::vector<T>& a
     return k;
 }
 
-template <class T> struct Out {
-    std::vector<T> a;
-    std::vector<real_of<T>> w;
+template <class Scalar> struct Out {
+    std::vector<Scalar> a;
+    std::vector<real_of<Scalar>> w;
     std::vector<int> info;
 };
 
-template <JobType J, Uplo UL, class Tier, class T> class ApiSyevCtaKernel;
+template <JobType J, Uplo UL, class Tier, class Scalar> class ApiSyevCtaKernel;
 
 // The user's kernel: one problem per partition of N lanes, the tiles in the work-group's local
 // memory at this partition's slice, the tier fixed at compile time. Slots b >= live run dead.
-template <JobType J, Uplo UL, class Tier, class T>
-void launch_cta(Dev& dev, T* A, int n, int ld, real_of<T>* w, int* info, int live = kBatch) {
+template <JobType J, Uplo UL, class Tier, class Scalar>
+void launch_cta(Dev& dev, Scalar* A, int n, int ld, real_of<Scalar>* w, int* info, int live = kBatch) {
     constexpr int N = Tier::n_max;
     constexpr int ppw = 32 / N;
-    constexpr std::size_t lbytes = batchlas::device::buffer_size<batchlas::device::routine::syev<J, UL>, Tier, T>(N).local_bytes;
+    constexpr std::size_t lbytes = batchlas::device::buffer_size<batchlas::device::routine::syev<J, UL>, Tier, Scalar>(N).local_bytes;
     dev.q().submit([&](sycl::handler& h) {
            sycl::local_accessor<sycl::uint4, 1> slm(sycl::range<1>((lbytes * ppw + 15) / 16), h);
-           h.parallel_for<ApiSyevCtaKernel<J, UL, Tier, T>>(
+           h.parallel_for<ApiSyevCtaKernel<J, UL, Tier, Scalar>>(
                sycl::nd_range<1>(std::size_t(kBatch / ppw) * 32, 32), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                    const auto part = make_partition<N>(it.get_sub_group());
                    const auto ex = batchlas::device::wrap(part);
@@ -154,42 +154,45 @@ void launch_cta(Dev& dev, T* A, int n, int ld, real_of<T>* w, int* info, int liv
                                           nullptr};
                    const bool on = b < live;
                    const int r = batchlas::device::syev<J, UL, Tier>(ex, batchlas::device::mat(A + std::size_t(b) * ld * n, n, n, ld), batchlas::device::vec(w + std::size_t(b) * n, n), ws,
-                                                                    batchlas::device::SyevOptions<real_of<T>>{}, on);
+                                                                    batchlas::device::SyevOptions<real_of<Scalar>>{},
+                                                                     on);
                    if (on && ex.leader()) info[b] = r;
                });
        }).wait_and_throw();
 }
 
-template <class T> class DeviceApiSyevCtaTest : public DeviceCoreTest<T> {
+template <class Scalar> class DeviceApiSyevCtaTest : public DeviceCoreTest<Scalar> {
 protected:
     void SetUp() override {
-        DeviceCoreTest<T>::SetUp();
+        DeviceCoreTest<Scalar>::SetUp();
         if (this->IsSkipped()) return;
         // The CTA routes build without CPU targets (NO_CPU_TARGETS): only a GPU reaches them.
         if (!this->dev.q().get_device().has(sycl::aspect::gpu)) GTEST_SKIP() << "syev_cta_fused runs on GPUs only";
     }
 
 public:
-    Out<T> host(int n, JobType J, Uplo ul, const std::vector<T>& a0, int ld) {
+    Out<Scalar> host(int n, JobType J, Uplo ul, const std::vector<Scalar>& a0, int ld) {
         Dev& dev = this->dev;
-        T* A = dev.up(a0);
-        real_of<T>* w = dev.alloc<real_of<T>>(std::size_t(n) * kBatch, std::numeric_limits<real_of<T>>::quiet_NaN());
+        Scalar* A = dev.up(a0);
+        real_of<Scalar>* w = dev.alloc<real_of<Scalar>>(std::size_t(n) * kBatch,
+                                                        std::numeric_limits<real_of<Scalar>>::quiet_NaN());
         int* info = dev.alloc<int>(kBatch, 7);
-        MatrixView<T, MatrixFormat::Dense> Av(A, n, n, ld, ld * n, kBatch);
-        (void)syev_cta_fused<kB, T>(*dev.ctx, Av, Span<real_of<T>>(w, std::size_t(n) * kBatch), J, ul, Span<std::byte>(), SteqrParams<T>{}, 0,
-                                    Span<int32_t>(info, kBatch));
+        MatrixView<Scalar, MatrixFormat::Dense> Av(A, n, n, ld, ld * n, kBatch);
+        (void)syev_cta_fused<kB, Scalar>(*dev.ctx, Av, Span<real_of<Scalar>>(w, std::size_t(n) * kBatch), J, ul, Span<std::byte>(), SteqrParams<Scalar>{}, 0,
+                                         Span<int32_t>(info, kBatch));
         dev.ctx->wait();
         return {dev.down(A, a0.size()), dev.down(w, std::size_t(n) * kBatch), dev.down(info, kBatch)};
     }
 
-    template <JobType J, Uplo UL> Out<T> device(int n, const std::vector<T>& a0, int ld) {
+    template <JobType J, Uplo UL> Out<Scalar> device(int n, const std::vector<Scalar>& a0, int ld) {
         Dev& dev = this->dev;
-        T* A = dev.up(a0);
-        real_of<T>* w = dev.alloc<real_of<T>>(std::size_t(n) * kBatch, std::numeric_limits<real_of<T>>::quiet_NaN());
+        Scalar* A = dev.up(a0);
+        real_of<Scalar>* w = dev.alloc<real_of<Scalar>>(std::size_t(n) * kBatch,
+                                                        std::numeric_limits<real_of<Scalar>>::quiet_NaN());
         int* info = dev.alloc<int>(kBatch, 7);
         // Every listed tier is instantiated; n <= 32 must reach a Cta one (Blocked is tested below).
-        batchlas::device::with_tier<Rt<J, UL>, T>(dev.q().get_device(), n, [&]<class Tier>(Tier) {
-            if constexpr (Tier::n_max > 0) launch_cta<J, UL, Tier, T>(dev, A, n, ld, w, info);
+        batchlas::device::with_tier<Rt<J, UL>, Scalar>(dev.q().get_device(), n, [&]<class Tier>(Tier) {
+            if constexpr (Tier::n_max > 0) launch_cta<J, UL, Tier, Scalar>(dev, A, n, ld, w, info);
             else ADD_FAILURE() << "with_tier picked tier::Blocked for n = " << n;
         });
         return {dev.down(A, a0.size()), dev.down(w, std::size_t(n) * kBatch), dev.down(info, kBatch)};
@@ -305,12 +308,12 @@ TEST(DeviceApiSyevTier, WithTierPicksTheSmallestCtaThenBlocked) {
 }
 
 // The Cta workspace: the fused kernel's per-problem tiles (independent count).
-template <JobType J, int N, class T> void expect_cta_size() {
-    const bool fused = J == kV && !is_cplx<T>;
+template <JobType J, int N, class Scalar> void expect_cta_size() {
+    const bool fused = J == kV && !is_cplx<Scalar>;
     const std::size_t lda = fused ? N + 1 : N;
-    std::size_t bytes = (lda * N + 2 * N) * sizeof(T);
-    if (J == kV && is_cplx<T>) bytes = (bytes + 15) / 16 * 16 + std::size_t(N + 1) * N * sizeof(real_of<T>);
-    const auto s = batchlas::device::buffer_size<batchlas::device::routine::syev<J, Uplo::Lower>, batchlas::device::tier::Cta<N>, T>(N);
+    std::size_t bytes = (lda * N + 2 * N) * sizeof(Scalar);
+    if (J == kV && is_cplx<Scalar>) bytes = (bytes + 15) / 16 * 16 + std::size_t(N + 1) * N * sizeof(real_of<Scalar>);
+    const auto s = batchlas::device::buffer_size<batchlas::device::routine::syev<J, Uplo::Lower>, batchlas::device::tier::Cta<N>, Scalar>(N);
     EXPECT_EQ(s.local_bytes, (bytes + 15) / 16 * 16) << "N=" << N;
     EXPECT_EQ(s.global_bytes, 0u);
 }
@@ -327,13 +330,14 @@ constexpr int kNB = 32;
 using BlockedTier = batchlas::device::tier::Blocked<kNB>;
 constexpr int kBlockedBatch = 6;
 
-template <JobType J, Uplo UL, class T> Out<T> blocked_device(Dev& dev, int n, int ld, int batch, const std::vector<T>& a0) {
+template <JobType J, Uplo UL, class Scalar> Out<Scalar> blocked_device(Dev& dev, int n, int ld, int batch, const std::vector<Scalar>& a0) {
     using R = Rt<J, UL>;
-    constexpr int WG = batchlas::device::tier_info<R, BlockedTier, T>::wg_size;
-    T* A = dev.up(a0);
-    real_of<T>* w = dev.alloc<real_of<T>>(std::size_t(n) * batch, std::numeric_limits<real_of<T>>::quiet_NaN());
+    constexpr int WG = batchlas::device::tier_info<R, BlockedTier, Scalar>::wg_size;
+    Scalar* A = dev.up(a0);
+    real_of<Scalar>* w = dev.alloc<real_of<Scalar>>(std::size_t(n) * batch,
+                                                    std::numeric_limits<real_of<Scalar>>::quiet_NaN());
     int* info = dev.alloc<int>(batch, 7);
-    const batchlas::device::WorkspaceSize sz = batchlas::device::buffer_size<batchlas::device::routine::syev<J, UL>, BlockedTier, T>(n);
+    const batchlas::device::WorkspaceSize sz = batchlas::device::buffer_size<batchlas::device::routine::syev<J, UL>, BlockedTier, Scalar>(n);
     std::byte* g = dev.alloc<std::byte>(sz.global_bytes * std::size_t(batch) + sz.align, std::byte{0});
     dev.run<WG>(batch, sz.local_bytes, [=](sycl::nd_item<1> it, unsigned char* lm) {
         const batchlas::device::WorkGroup<WG> ex{it};
@@ -350,35 +354,36 @@ template <JobType J, Uplo UL, class T> Out<T> blocked_device(Dev& dev, int n, in
 // A = H D H^H with H = I - 2 u u^H / (u^H u) and D(i) = 10^(-3 i / (n - 1)) (sign alternating):
 // a graded spectrum known exactly; item b uses u from representative b % kPeriod. UL's triangle
 // holds data, the rest NaN.
-template <class T> std::vector<T> graded(int n, int ld, Uplo ul, int batch, std::vector<long double>& spectrum) {
+template <class Scalar> std::vector<Scalar> graded(int n, int ld, Uplo ul, int batch,
+                                                   std::vector<long double>& spectrum) {
     spectrum.assign(n, 0);
     for (int i = 0; i < n; ++i) spectrum[i] = (i % 2 ? -1.0L : 1.0L) * std::pow(10.0L, n > 1 ? -3.0L * i / (n - 1) : 0.0L);
-    std::vector<T> a(std::size_t(ld) * n * batch, nan_v<T>());
+    std::vector<Scalar> a(std::size_t(ld) * n * batch, nan_v<Scalar>());
     for (int q = 0; q < kPeriod; ++q) {
-        std::vector<LD<T>> u(n);
+        std::vector<LD<Scalar>> u(n);
         long double uu = 0;
         for (int i = 0; i < n; ++i) {
-            u[i] = wide(val<T>(std::uint64_t(q) * 7919u + i));
+            u[i] = wide(val<Scalar>(std::uint64_t(q) * 7919u + i));
             uu += std::norm(u[i]);
         }
         for (int c = 0; c < n; ++c)
             for (int r = 0; r < n; ++r) {
                 if (ul == Uplo::Upper ? r > c : r < c) continue;
-                LD<T> s = 0;
+                LD<Scalar> s = 0;
                 for (int k = 0; k < n; ++k) {
-                    const LD<T> hr = (r == k ? LD<T>(1) : LD<T>(0)) - 2.0L * u[r] * conj_of(u[k]) / uu;
-                    const LD<T> hc = (c == k ? LD<T>(1) : LD<T>(0)) - 2.0L * u[c] * conj_of(u[k]) / uu;
+                    const LD<Scalar> hr = (r == k ? LD<Scalar>(1) : LD<Scalar>(0)) - 2.0L * u[r] * conj_of(u[k]) / uu;
+                    const LD<Scalar> hc = (c == k ? LD<Scalar>(1) : LD<Scalar>(0)) - 2.0L * u[c] * conj_of(u[k]) / uu;
                     s += hr * spectrum[k] * conj_of(hc);
                 }
-                if (r == c) s = LD<T>(std::real(s));
-                for (int b = q; b < batch; b += kPeriod) a[std::size_t(b) * ld * n + r + std::size_t(c) * ld] = static_cast<T>(s);
+                if (r == c) s = LD<Scalar>(std::real(s));
+                for (int b = q; b < batch; b += kPeriod) a[std::size_t(b) * ld * n + r + std::size_t(c) * ld] = static_cast<Scalar>(s);
             }
     }
     std::sort(spectrum.begin(), spectrum.end());
     return a;
 }
 
-template <class T> class DeviceApiSyevBlockedTest : public DeviceCoreTest<T> {};
+template <class Scalar> class DeviceApiSyevBlockedTest : public DeviceCoreTest<Scalar> {};
 TYPED_TEST_SUITE(DeviceApiSyevBlockedTest, AllTypes);
 
 template <class T, Uplo UL> void blocked_graded(Dev& dev) {

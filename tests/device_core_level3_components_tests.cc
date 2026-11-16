@@ -35,9 +35,9 @@ using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename device::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
-template <class T> using DevT = typename sycl_device::DevMap<T>::type;
+template <class Scalar> using real_of = typename device::Arith<Scalar>::real_t;
+template <class Scalar> constexpr bool is_cplx = device::Arith<Scalar>::is_complex;
+template <class Scalar> using DevT = typename sycl_device::DevMap<Scalar>::type;
 
 constexpr int kBatch = 1024;
 constexpr int kPeriod = 3;
@@ -48,22 +48,22 @@ std::uint64_t mix(std::uint64_t x) {
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
     return x ^ (x >> 31);
 }
-template <class R> R uval(std::uint64_t i) { return static_cast<R>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
-template <class T> T val(std::uint64_t i) {
-    if constexpr (is_cplx<T>) return T(uval<real_of<T>>(2 * i), uval<real_of<T>>(2 * i + 1));
-    else return uval<T>(i);
+template <class Real> Real uval(std::uint64_t i) { return static_cast<Real>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
+template <class Scalar> Scalar val(std::uint64_t i) {
+    if constexpr (is_cplx<Scalar>) return Scalar(uval<real_of<Scalar>>(2 * i), uval<real_of<Scalar>>(2 * i + 1));
+    else return uval<Scalar>(i);
 }
 // kBatch items of per_item values; item b repeats item b % kPeriod.
-template <class T> std::vector<T> batched(int per_item, std::uint64_t seed) {
-    std::vector<T> h(std::size_t(kBatch) * per_item);
+template <class Scalar> std::vector<Scalar> batched(int per_item, std::uint64_t seed) {
+    std::vector<Scalar> h(std::size_t(kBatch) * per_item);
     for (int b = 0; b < kPeriod; ++b)
-        for (int i = 0; i < per_item; ++i) h[std::size_t(b) * per_item + i] = val<T>(seed + std::uint64_t(b) * 1000003u + i);
+        for (int i = 0; i < per_item; ++i) h[std::size_t(b) * per_item + i] = val<Scalar>(seed + std::uint64_t(b) * 1000003u + i);
     for (int b = kPeriod; b < kBatch; ++b)
         std::copy_n(h.data() + std::size_t(b % kPeriod) * per_item, per_item, h.data() + std::size_t(b) * per_item);
     return h;
 }
 template <class T> bool same_bits(const T& a, const T& b) { return std::memcmp(&a, &b, sizeof(T)) == 0; }
-template <class T> T nan_of() { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }
+template <class Scalar> Scalar nan_of() { return Scalar(std::numeric_limits<real_of<Scalar>>::quiet_NaN()); }
 
 // The test's queue and device buffers; no queue when no SYCL device is visible (the fixture skips).
 struct Dev {
@@ -96,12 +96,12 @@ struct Dev {
     std::vector<void*> ptrs;
 };
 
-template <class T> class DeviceCoreLevel3ComponentsTest : public ::testing::Test {
+template <class Scalar> class DeviceCoreLevel3ComponentsTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx) GTEST_SKIP() << "no SYCL device visible";
         if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "device tests launch sub-group size 32";
-        if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
+        if (test_utils::lacks_fp64<Scalar>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
 };
@@ -109,21 +109,21 @@ protected:
 using Types = ::testing::Types<float, double, std::complex<float>, std::complex<double>>;
 TYPED_TEST_SUITE(DeviceCoreLevel3ComponentsTest, Types);
 
-template <class T> using LD = std::conditional_t<is_cplx<T>, std::complex<long double>, long double>;
-template <class T> T conj_h(T v) {
-    if constexpr (is_cplx<T>) return std::conj(v);
+template <class Scalar> using LD = std::conditional_t<is_cplx<Scalar>, std::complex<long double>, long double>;
+template <class Scalar> Scalar conj_h(Scalar v) {
+    if constexpr (is_cplx<Scalar>) return std::conj(v);
     else return v;
 }
 // op(X)(i, j) of a column-major X on the host.
-template <class T> T op_h(const T* x, int ld, Transpose op, int i, int j) {
+template <class Scalar> Scalar op_h(const Scalar* x, int ld, Transpose op, int i, int j) {
     if (op == Transpose::NoTrans) return x[i + std::size_t(j) * ld];
-    const T v = x[j + std::size_t(i) * ld];
+    const Scalar v = x[j + std::size_t(i) * ld];
     return op == Transpose::ConjTrans ? conj_h(v) : v;
 }
-template <class T> double rel(T got, LD<T> ref, long double scale) {
-    const long double d = std::abs(LD<T>(got) - ref);
+template <class Scalar> double rel(Scalar got, LD<Scalar> ref, long double scale) {
+    const long double d = std::abs(LD<Scalar>(got) - ref);
     if (std::isnan(d)) return std::numeric_limits<double>::infinity();
-    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<T>>::min()));
+    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<Scalar>>::min()));
 }
 
 struct Shape {
@@ -173,37 +173,37 @@ constexpr int SA = (TM + 1) * TK, SB = (TK + 1) * TN;  // one stage; the epilogu
 
 enum class Stager { Scalar, Packet, PacketAligned };
 
-template <Transpose OpA, Transpose OpB, int Stages, bool Exact, Stager St, class T>
-void run_register_tiled(Dev& dev, const Shape& s, T alpha, T beta, const char* where) {
+template <Transpose OpA, Transpose OpB, int Stages, bool Exact, Stager St, class Scalar>
+void run_register_tiled(Dev& dev, const Shape& s, Scalar alpha, Scalar beta, const char* where) {
     const int gm = (s.m + TM - 1) / TM, gn = (s.n + TN - 1) / TN;
     const int ac = OpA == Transpose::NoTrans ? s.k : s.m, bc = OpB == Transpose::NoTrans ? s.n : s.k;
     const std::size_t sa = std::size_t(s.lda) * ac, sb = std::size_t(s.ldb) * bc, sc = std::size_t(s.ldc) * s.n;
-    const auto hA = batched<T>(int(sa), 11), hB = batched<T>(int(sb), 12);
-    auto hC = batched<T>(int(sc), 13);
-    if (beta == T(0)) std::fill(hC.begin(), hC.end(), nan_of<T>());
-    const T* A = dev.up(hA);
-    const T* B = dev.up(hB);
-    T* C = dev.up(hC);
+    const auto hA = batched<Scalar>(int(sa), 11), hB = batched<Scalar>(int(sb), 12);
+    auto hC = batched<Scalar>(int(sc), 13);
+    if (beta == Scalar(0)) std::fill(hC.begin(), hC.end(), nan_of<Scalar>());
+    const Scalar* A = dev.up(hA);
+    const Scalar* B = dev.up(hB);
+    Scalar* C = dev.up(hC);
     const int m = s.m, n = s.n, k = s.k, lda = s.lda, ldb = s.ldb, ldc = s.ldc;
-    dev.template run<THR>(kBatch * gm * gn, sizeof(T) * Stages * (SA + SB), [=](sycl::nd_item<1> it, unsigned char* lm) {
+    dev.template run<THR>(kBatch * gm * gn, sizeof(Scalar) * Stages * (SA + SB), [=](sycl::nd_item<1> it, unsigned char* lm) {
         const int g = static_cast<int>(it.get_group_linear_id());
         const int b = g / (gm * gn), rem = g % (gm * gn);
         const int group_row = rem % gm, group_col = rem / gm;
         const int lid = static_cast<int>(it.get_local_linear_id());
         const int local_row = lid / LCOLS, local_col = lid % LCOLS;
-        T* const sa_ = reinterpret_cast<T*>(lm);
-        T* const sb_ = sa_ + Stages * SA;
-        const T* a = A + std::ptrdiff_t(b) * sa;
-        const T* bm = B + std::ptrdiff_t(b) * sb;
-        T* c = C + std::ptrdiff_t(b) * sc;
+        Scalar* const sa_ = reinterpret_cast<Scalar*>(lm);
+        Scalar* const sb_ = sa_ + Stages * SA;
+        const Scalar* a = A + std::ptrdiff_t(b) * sa;
+        const Scalar* bm = B + std::ptrdiff_t(b) * sb;
+        Scalar* c = C + std::ptrdiff_t(b) * sc;
         const device::WorkGroup<THR> ex{it};
-        device::Tile<T, TR, TC> acc;
-        device::fill(acc, T(0));
+        device::Tile<Scalar, TR, TC> acc;
+        device::fill(acc, Scalar(0));
         auto load = [&](int kk0, int stage) {
-            T* ta = sa_ + stage * SA;
-            T* tb = sb_ + stage * SB;
-            auto dst_a = [&](int r, int cc) -> T& { return ta[cc * (TM + 1) + r]; };
-            auto dst_b = [&](int r, int cc) -> T& { return tb[cc * (TK + 1) + r]; };
+            Scalar* ta = sa_ + stage * SA;
+            Scalar* tb = sb_ + stage * SB;
+            auto dst_a = [&](int r, int cc) -> Scalar& { return ta[cc * (TM + 1) + r]; };
+            auto dst_b = [&](int r, int cc) -> Scalar& { return tb[cc * (TK + 1) + r]; };
             const int m0 = group_row * TM, n0 = group_col * TN;
             if constexpr (St == Stager::PacketAligned) {
                 device::l3::stage_block_packet_aligned<TM, TK, 4, THR>(lid, a, lda, m0, kk0, dst_a);
@@ -217,8 +217,8 @@ void run_register_tiled(Dev& dev, const Shape& s, T alpha, T beta, const char* w
             }
         };
         auto compute = [&](int stage, int kk0) {
-            const T* ta = sa_ + stage * SA;
-            const T* tb = sb_ + stage * SB;
+            const Scalar* ta = sa_ + stage * SA;
+            const Scalar* tb = sb_ + stage * SB;
             device::l3::mma_slab<TK, 2, Exact>(
                 acc, kk0, k, [&](int t, int i) { return ta[t * (TM + 1) + local_row * TR + i]; },
                 [&](int t, int j) { return tb[(local_col * TC + j) * (TK + 1) + t]; });
@@ -255,23 +255,23 @@ TYPED_TEST(DeviceCoreLevel3ComponentsTest, RegisterTiledGemmFromComponents) {
 
 // ---- stage_storage + gemv_t_frag + store_epi<epi::MulMac> on the POD scalar: the small batched gemm -
 
-template <int NB, int Chunk, class T>
-void run_small(Dev& dev, const Shape& s, Transpose ta_, Transpose tb_, T alpha, T beta, const char* where) {
-    using D = DevT<T>;
+template <int NB, int Chunk, class Scalar>
+void run_small(Dev& dev, const Shape& s, Transpose ta_, Transpose tb_, Scalar alpha, Scalar beta, const char* where) {
+    using D = DevT<Scalar>;
     // The kernel's layout: kG matrices of kTpm lanes per 128-item work-group, one sB slot each.
     constexpr int kWg = 128, kTpm = 2 * NB, kCpt = NB / 2, kLdb = NB + 1, kG = kWg / kTpm;
     static_assert(kBatch % kG == 0, "whole work-groups");
     const bool ta = ta_ != Transpose::NoTrans, tb = tb_ != Transpose::NoTrans;
-    const bool ca = is_cplx<T> && ta_ == Transpose::ConjTrans, cb = is_cplx<T> && tb_ == Transpose::ConjTrans;
+    const bool ca = is_cplx<Scalar> && ta_ == Transpose::ConjTrans, cb = is_cplx<Scalar> && tb_ == Transpose::ConjTrans;
     const std::size_t sa = std::size_t(s.lda) * (ta ? s.m : s.k), sb = std::size_t(s.ldb) * (tb ? s.k : s.n);
     const std::size_t sc = std::size_t(s.ldc) * s.n;
-    const auto hA = batched<T>(int(sa), 21), hB = batched<T>(int(sb), 22);
-    auto hC = batched<T>(int(sc), 23);
-    const bool beta_zero = beta == T(0);
-    if (beta_zero) std::fill(hC.begin(), hC.end(), nan_of<T>());
+    const auto hA = batched<Scalar>(int(sa), 21), hB = batched<Scalar>(int(sb), 22);
+    auto hC = batched<Scalar>(int(sc), 23);
+    const bool beta_zero = beta == Scalar(0);
+    if (beta_zero) std::fill(hC.begin(), hC.end(), nan_of<Scalar>());
     const D* A = reinterpret_cast<const D*>(dev.up(hA));
     const D* B = reinterpret_cast<const D*>(dev.up(hB));
-    T* Ct = dev.up(hC);
+    Scalar* Ct = dev.up(hC);
     D* C = reinterpret_cast<D*>(Ct);
     D alpha_d, beta_d;
     std::memcpy(&alpha_d, &alpha, sizeof(D));
@@ -338,43 +338,43 @@ TYPED_TEST(DeviceCoreLevel3ComponentsTest, SmallBatchedGemmFromComponents) {
 
 // ---- dot_slab in the tiled_general shape (Native: the operators, Annex G for std::complex) ---------
 
-template <Transpose OpA, Transpose OpB, class T>
-void run_tiled_general(Dev& dev, const Shape& s, T alpha, T beta, const char* where) {
+template <Transpose OpA, Transpose OpB, class Scalar>
+void run_tiled_general(Dev& dev, const Shape& s, Scalar alpha, Scalar beta, const char* where) {
     constexpr int Tile = 8;
     const int gm = (s.m + Tile - 1) / Tile, gn = (s.n + Tile - 1) / Tile;
     const std::size_t sa = std::size_t(s.lda) * (OpA == Transpose::NoTrans ? s.k : s.m);
     const std::size_t sb = std::size_t(s.ldb) * (OpB == Transpose::NoTrans ? s.n : s.k), sc = std::size_t(s.ldc) * s.n;
-    const auto hA = batched<T>(int(sa), 41), hB = batched<T>(int(sb), 42);
-    auto hC = batched<T>(int(sc), 43);
-    if (beta == T(0)) std::fill(hC.begin(), hC.end(), nan_of<T>());
-    const T* A = dev.up(hA);
-    const T* B = dev.up(hB);
-    T* C = dev.up(hC);
+    const auto hA = batched<Scalar>(int(sa), 41), hB = batched<Scalar>(int(sb), 42);
+    auto hC = batched<Scalar>(int(sc), 43);
+    if (beta == Scalar(0)) std::fill(hC.begin(), hC.end(), nan_of<Scalar>());
+    const Scalar* A = dev.up(hA);
+    const Scalar* B = dev.up(hB);
+    Scalar* C = dev.up(hC);
     const int m = s.m, n = s.n, k = s.k, lda = s.lda, ldb = s.ldb, ldc = s.ldc;
-    dev.template run<Tile * Tile>(kBatch * gm * gn, sizeof(T) * 2 * Tile * Tile, [=](sycl::nd_item<1> it, unsigned char* lm) {
+    dev.template run<Tile * Tile>(kBatch * gm * gn, sizeof(Scalar) * 2 * Tile * Tile, [=](sycl::nd_item<1> it, unsigned char* lm) {
         const int g = static_cast<int>(it.get_group_linear_id());
         const int b = g / (gm * gn), rem = g % (gm * gn);
         const int lid = static_cast<int>(it.get_local_linear_id());
         const int local_row = lid / Tile, local_col = lid % Tile;
         const int row = (rem % gm) * Tile + local_row, col = (rem / gm) * Tile + local_col;
-        T* const ta = reinterpret_cast<T*>(lm);
-        T* const tb = ta + Tile * Tile;
-        const T* a = A + std::ptrdiff_t(b) * sa;
-        const T* bm = B + std::ptrdiff_t(b) * sb;
+        Scalar* const ta = reinterpret_cast<Scalar*>(lm);
+        Scalar* const tb = ta + Tile * Tile;
+        const Scalar* a = A + std::ptrdiff_t(b) * sa;
+        const Scalar* bm = B + std::ptrdiff_t(b) * sb;
         const device::WorkGroup<Tile * Tile> ex{it};
-        auto a_row = [&](int t) -> const T& { return ta[local_row * Tile + t]; };
-        auto b_col = [&](int t) -> const T& { return tb[t * Tile + local_col]; };
-        T sum = T(0);
+        auto a_row = [&](int t) -> const Scalar& { return ta[local_row * Tile + t]; };
+        auto b_col = [&](int t) -> const Scalar& { return tb[t * Tile + local_col]; };
+        Scalar sum = Scalar(0);
         for (int kk0 = 0; kk0 < k; kk0 += Tile) {
             ta[local_row * Tile + local_col] =
-                (row < m && kk0 + local_col < k) ? device::l3::OperandAccessor<T, OpA>::load(a, lda, 0, row, kk0 + local_col) : T(0);
+                (row < m && kk0 + local_col < k) ? device::l3::OperandAccessor<Scalar, OpA>::load(a, lda, 0, row, kk0 + local_col) : Scalar(0);
             tb[local_row * Tile + local_col] =
-                (col < n && kk0 + local_row < k) ? device::l3::OperandAccessor<T, OpB>::load(bm, ldb, 0, kk0 + local_row, col) : T(0);
+                (col < n && kk0 + local_row < k) ? device::l3::OperandAccessor<Scalar, OpB>::load(bm, ldb, 0, kk0 + local_row, col) : Scalar(0);
             ex.barrier();
             device::dot_slab<Tile>(sum, a_row, b_col, kk0, k);
             ex.barrier();
         }
-        if (row < m && col < n) device::l3::LinearEpilogue<T>::store(C + std::ptrdiff_t(b) * sc + col * ldc + row, alpha, beta, sum);
+        if (row < m && col < n) device::l3::LinearEpilogue<Scalar>::store(C + std::ptrdiff_t(b) * sc + col * ldc + row, alpha, beta, sum);
     });
     check_gemm(s, OpA, OpB, alpha, beta, hA, hB, hC, dev.down(C, hC.size()), sa, sb, sc, where);
 }
@@ -393,22 +393,22 @@ TYPED_TEST(DeviceCoreLevel3ComponentsTest, TiledGeneralGemmFromComponents) {
 // Lane l sums X(l + 1 mod 32, 0 : 4 * slabs) slab by slab (zero past K), reading its neighbour's
 // staged values, so a missing barrier, a skipped or doubled slab or a wrong buffer shows. Exact:
 // the host adds the same values in the same order.
-template <bool Async, class T> void run_pipeline(Dev& dev, int slabs, const char* where) {
+template <bool Async, class Scalar> void run_pipeline(Dev& dev, int slabs, const char* where) {
     constexpr int WG = 32, KT = 4, S = 4, ldx = WG + 5;
     const int K = KT * slabs - 1;
-    const auto hX = batched<T>(ldx * K, 61 + slabs);
-    const T* X = dev.up(hX);
-    std::vector<T> hout(std::size_t(kBatch) * WG, nan_of<T>());
-    T* out = dev.up(hout);
+    const auto hX = batched<Scalar>(ldx * K, 61 + slabs);
+    const Scalar* X = dev.up(hX);
+    std::vector<Scalar> hout(std::size_t(kBatch) * WG, nan_of<Scalar>());
+    Scalar* out = dev.up(hout);
     const std::size_t sx = std::size_t(ldx) * K;
-    dev.template run<WG>(kBatch, sizeof(T) * S * WG * KT, [=](sycl::nd_item<1> it, unsigned char* lm) {
-        using A = device::Arith<T>;
+    dev.template run<WG>(kBatch, sizeof(Scalar) * S * WG * KT, [=](sycl::nd_item<1> it, unsigned char* lm) {
+        using A = device::Arith<Scalar>;
         const int b = static_cast<int>(it.get_group_linear_id());
         const int lane = static_cast<int>(it.get_local_linear_id());
-        const T* x = X + std::ptrdiff_t(b) * sx;
-        T* const sm = reinterpret_cast<T*>(lm);
+        const Scalar* x = X + std::ptrdiff_t(b) * sx;
+        Scalar* const sm = reinterpret_cast<Scalar*>(lm);
         const device::WorkGroup<WG> ex{it};
-        T s = A::zero();
+        Scalar s = A::zero();
         auto compute = [&](int buf) {
             for (int j = 0; j < KT; ++j) s = A::add(s, sm[buf * WG * KT + ((lane + 1) % WG) * KT + j]);
         };
@@ -419,7 +419,7 @@ template <bool Async, class T> void run_pipeline(Dev& dev, int slabs, const char
             };
             device::l3::kloop_async<S, KT>(ex, slabs, issue, [] {}, [] {}, [] {}, compute);
         } else {
-            T reg[KT];
+            Scalar reg[KT];
             auto gload = [&](int k0) {
                 for (int j = 0; j < KT; ++j) reg[j] = fetch(k0, j);
             };
@@ -435,9 +435,9 @@ template <bool Async, class T> void run_pipeline(Dev& dev, int slabs, const char
     for (int b = 0; b < kBatch; ++b)
         for (int lane = 0; lane < WG; ++lane) {
             const int src = (lane + 1) % WG;
-            T ref = T(0);
+            Scalar ref = Scalar(0);
             for (int kk = 0; kk < KT * slabs; ++kk)
-                ref = ref + (kk < K ? hX[(b % kPeriod) * sx + src + std::size_t(kk) * ldx] : T(0));
+                ref = ref + (kk < K ? hX[(b % kPeriod) * sx + src + std::size_t(kk) * ldx] : Scalar(0));
             bad += !same_bits(got[std::size_t(b) * WG + lane], ref);
         }
     EXPECT_EQ(bad, 0) << where << " slabs " << slabs;

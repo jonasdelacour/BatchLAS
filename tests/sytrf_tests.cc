@@ -50,8 +50,8 @@ namespace ts = test_support;
 using ts::Live;
 using verify::Check;
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
 // random: uniform [-1, 1], every pivot kind occurs; dominant: |diagonal| = n + 2 with alternating
 // signs, so every pivot is 1 x 1 with no interchange; kkt: [[H, A^T], [A, 0]] with a small H, which
@@ -60,11 +60,11 @@ enum class Gen { random, dominant, kkt };
 
 // full: the whole symmetric matrix per item, packed; a: its uplo triangle in padded storage (ld n + 3,
 // stride + 7), b: B padded (ld n + 2, stride + 5), b0 a snapshot of b; piv and info hold sentinels.
-template <typename T>
+template <typename Scalar>
 struct Sys {
     int n = 0, nrhs = 0;
     Uplo uplo = Uplo::Lower;
-    Matrix<T> full, a, b, b0;
+    Matrix<Scalar> full, a, b, b0;
     UnifiedVector<int64_t> piv;
     UnifiedVector<int32_t> info;
 
@@ -74,66 +74,66 @@ struct Sys {
     bool stored(int i, int j) const { return Live::triangle(uplo).contains(i, j, n, n); }
 };
 
-template <typename T>
-T draw(std::mt19937& g, double scale) {
+template <typename Scalar>
+Scalar draw(std::mt19937& g, double scale) {
     std::uniform_real_distribution<double> u(-1.0, 1.0);
     const double re = u(g), im = u(g);
-    return MV<T>::make(scale * re, scale * im);
+    return MV<Scalar>::make(scale * re, scale * im);
 }
 
 // Complex symmetric (not Hermitian) item `item` of m: no library generator draws one, nor a KKT matrix.
-template <typename T>
-void symmetric(Matrix<T>& m, int item, Gen gen, std::mt19937& g) {
+template <typename Scalar>
+void symmetric(Matrix<Scalar>& m, int item, Gen gen, std::mt19937& g) {
     const int n = m.rows();
     const int nh = n - (gen == Gen::kkt ? n / 3 : 0);  // n - nh constraint rows: the zero block
     for (int j = 0; j < n; ++j)
         for (int i = j; i < n; ++i) {
-            T v = draw<T>(g, 1.0);
+            Scalar v = draw<Scalar>(g, 1.0);
             if (gen == Gen::kkt) {
-                if (i < nh) v = draw<T>(g, 1e-2);  // H
-                else if (j >= nh) v = T{};         // the zero block
+                if (i < nh) v = draw<Scalar>(g, 1e-2);  // H
+                else if (j >= nh) v = Scalar{};         // the zero block
             }
-            if (gen == Gen::dominant && i == j) v = MV<T>::make((j % 2 ? -1.0 : 1.0) * (n + 2), 0.5);
+            if (gen == Gen::dominant && i == j) v = MV<Scalar>::make((j % 2 ? -1.0 : 1.0) * (n + 2), 0.5);
             m(i, j, item) = m(j, i, item) = v;
         }
 }
 
-template <typename T>
-Sys<T> make_sys(int n, int nrhs, int batch, Uplo uplo, Gen gen, unsigned seed, bool identical = false) {
-    Matrix<T> full(n, n, batch), b(n, nrhs, batch);
+template <typename Scalar>
+Sys<Scalar> make_sys(int n, int nrhs, int batch, Uplo uplo, Gen gen, unsigned seed, bool identical = false) {
+    Matrix<Scalar> full(n, n, batch), b(n, nrhs, batch);
     std::mt19937 g(seed);
     for (int bi = 0; bi < batch; ++bi) {
         if (identical && bi > 0) g.seed(seed);
         symmetric(full, bi, gen, g);
         for (int c = 0; c < nrhs; ++c)
-            for (int i = 0; i < n; ++i) b(i, c, bi) = draw<T>(g, 1.0);
+            for (int i = 0; i < n; ++i) b(i, c, bi) = draw<Scalar>(g, 1.0);
     }
-    Sys<T> p{n, nrhs, uplo, std::move(full), ts::padded<T>(n, n, batch, 3, 7), ts::padded<T>(n, nrhs, batch, 2, 5),
-             Matrix<T>(n, nrhs, batch), UnifiedVector<int64_t>(size_t(n) * batch, int64_t(0x0BADBEEF0BADBEEFLL)),
+    Sys<Scalar> p{n, nrhs, uplo, std::move(full), ts::padded<Scalar>(n, n, batch, 3, 7), ts::padded<Scalar>(n, nrhs, batch, 2, 5),
+             Matrix<Scalar>(n, nrhs, batch), UnifiedVector<int64_t>(size_t(n) * batch, int64_t(0x0BADBEEF0BADBEEFLL)),
              UnifiedVector<int32_t>(size_t(batch), int32_t(-12345))};
-    ts::store<T>(p.a, p.full, Live::triangle(uplo));
-    ts::store<T>(p.b, b);
+    ts::store<Scalar>(p.a, p.full, Live::triangle(uplo));
+    ts::store<Scalar>(p.b, b);
     p.b0 = p.b.clone();
     return p;
 }
 
 // The unreferenced triangle and both pads still hold the poison.
-template <typename T>
-::testing::AssertionResult untouched(const Sys<T>& p) {
-    if (auto r = ts::unwritten_outside<T>(p.a, Live::triangle(p.uplo)); !r) return r << " in A";
-    return ts::unwritten_outside<T>(p.b, Live::block()) << " in B";
+template <typename Scalar>
+::testing::AssertionResult untouched(const Sys<Scalar>& p) {
+    if (auto r = ts::unwritten_outside<Scalar>(p.a, Live::triangle(p.uplo)); !r) return r << " in A";
+    return ts::unwritten_outside<Scalar>(p.b, Live::block()) << " in B";
 }
 
 // Zeroes item s's stored triangle (a singular item; full keeps the regular matrix).
-template <typename T>
-void zero_item(Sys<T>& p, int s) {
-    ts::store<T>(p.a.batch_item(s), Matrix<T>::Zeros(p.n, p.n, 1), Live::triangle(p.uplo));
+template <typename Scalar>
+void zero_item(Sys<Scalar>& p, int s) {
+    ts::store<Scalar>(p.a.batch_item(s), Matrix<Scalar>::Zeros(p.n, p.n, 1), Live::triangle(p.uplo));
 }
 
 // LAPACK's encoding, checked: |ipiv| in [1, n], a 2 x 2 block is two equal negative entries.
 // Returns {1 x 1 interchanges, 2 x 2 blocks}, or {-1, -1} for a malformed list.
-template <typename T>
-std::pair<int, int> pivot_kinds(const Sys<T>& p, int item) {
+template <typename Scalar>
+std::pair<int, int> pivot_kinds(const Sys<Scalar>& p, int item) {
     const int* ip = p.ipiv(item);
     int swaps = 0, blocks = 0;
     for (int k = 0; k < p.n;) {
@@ -149,8 +149,8 @@ std::pair<int, int> pivot_kinds(const Sys<T>& p, int item) {
 
 // Whether item `item` has a 2 x 2 block whose first LOGICAL column is k (logical i is physical
 // n-1-i for Upper): k = nb - 1 is a block across the first blocked-panel boundary.
-template <typename T>
-bool block_at(const Sys<T>& p, int item, int k) {
+template <typename Scalar>
+bool block_at(const Sys<Scalar>& p, int item, int k) {
     const int* ip = p.ipiv(item);
     auto lp = [&](int i) { return ip[p.uplo == Uplo::Upper ? p.n - 1 - i : i]; };
     for (int j = 0; j < p.n;) {
@@ -162,8 +162,8 @@ bool block_at(const Sys<T>& p, int item, int k) {
 }
 
 // Item b's ipiv in x equals item b's in y (item y_item's when >= 0), for each of `items` (empty: all).
-template <typename T>
-::testing::AssertionResult same_pivots(const Sys<T>& x, const Sys<T>& y, const std::vector<int>& items = {}, int y_item = -1) {
+template <typename Scalar>
+::testing::AssertionResult same_pivots(const Sys<Scalar>& x, const Sys<Scalar>& y, const std::vector<int>& items = {}, int y_item = -1) {
     for (int b : items.empty() ? x.a.all_items() : items)
         for (int k = 0; k < x.n; ++k)
             if (x.ipiv(b)[k] != y.ipiv(y_item < 0 ? b : y_item)[k])
@@ -178,8 +178,8 @@ template <typename T>
 
 // The logical partner row the 2 x 2 block at logical k of item `item` interchanged with logical
 // k + 1 (k + 1 itself when none), or -1 when no block starts at k.
-template <typename T>
-int block_partner(const Sys<T>& p, int item, int k) {
+template <typename Scalar>
+int block_partner(const Sys<Scalar>& p, int item, int k) {
     if (!block_at(p, item, k)) return -1;
     auto phys = [&](int i) { return p.uplo == Uplo::Upper ? p.n - 1 - i : i; };
     return phys(-p.ipiv(item)[phys(k)] - 1);
@@ -188,23 +188,23 @@ int block_partner(const Sys<T>& p, int item, int k) {
 // A 2 x 2 block forced at logical step k of item s of a dominant system: diagonals k and r (default
 // k + 1) zero and a coupling (r, k) that dominates both columns, so ?sytf2 takes kstep 2 at k and
 // interchanges rows k + 1 and r (none when r = k + 1).
-template <typename T>
-void force_block(Sys<T>& p, int s, int k, int r = -1) {
+template <typename Scalar>
+void force_block(Sys<Scalar>& p, int s, int k, int r = -1) {
     if (r < 0) r = k + 1;
     auto phys = [&](int i) { return p.uplo == Uplo::Upper ? p.n - 1 - i : i; };
-    auto put = [&](int li, int lj, T v) {
+    auto put = [&](int li, int lj, Scalar v) {
         const int i = phys(li), j = phys(lj);
         p.full(i, j, s) = p.full(j, i, s) = v;
         (p.stored(i, j) ? p.a(i, j, s) : p.a(j, i, s)) = v;
     };
-    put(k, k, T{});
-    put(r, r, T{});
-    put(r, k, MV<T>::make(2.0 * (p.n + 2), 0.25));
+    put(k, k, Scalar{});
+    put(r, r, Scalar{});
+    put(r, k, MV<Scalar>::make(2.0 * (p.n + 2), 0.25));
 }
 
 // Sets the stored (referenced) entries of physical row and column j of item s to v.
-template <typename T>
-void set_index(Sys<T>& p, int s, int j, T v) {
+template <typename Scalar>
+void set_index(Sys<Scalar>& p, int s, int j, Scalar v) {
     for (int i = 0; i < p.n; ++i) {
         if (p.stored(i, j)) p.a(i, j, s) = v;
         if (p.stored(j, i)) p.a(j, i, s) = v;

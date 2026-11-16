@@ -70,9 +70,9 @@ void apply_sy2sb_reflectors_to_trailing(Queue& ctx,
     }
 }
 
-template <typename T, Backend B>
+template <typename Real, Backend B>
 struct SytrdSy2sbConfig {
-    using ScalarType = T;
+    using ScalarType = Real;
     static constexpr Backend BackendVal = B;
 };
 

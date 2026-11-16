@@ -10,11 +10,12 @@ namespace test_utils {
 
 // Worst componentwise |C - op(Q) C0| / (|op(Q)||C0|) (Side::Right: C0 op(Q)) over the batch, with Q
 // formed by MatrixView::form_q from the stored reflectors, independently of any ormqr.
-template <typename T>
-double ormqr_apply_error(batchlas::Queue& ctx, const batchlas::MatrixView<T, batchlas::MatrixFormat::Dense>& A_fact,
-                         const batchlas::VectorView<T>& tau, const batchlas::MatrixView<T, batchlas::MatrixFormat::Dense>& C0,
-                         const batchlas::MatrixView<T, batchlas::MatrixFormat::Dense>& C, batchlas::Side side, batchlas::Transpose trans) {
-    using MV = batchlas::MatrixView<T, batchlas::MatrixFormat::Dense>;
+template <typename Scalar>
+double ormqr_apply_error(batchlas::Queue& ctx, const batchlas::MatrixView<Scalar,
+                         batchlas::MatrixFormat::Dense>& A_fact,
+                         const batchlas::VectorView<Scalar>& tau, const batchlas::MatrixView<Scalar, batchlas::MatrixFormat::Dense>& C0,
+                         const batchlas::MatrixView<Scalar, batchlas::MatrixFormat::Dense>& C, batchlas::Side side, batchlas::Transpose trans) {
+    using MV = batchlas::MatrixView<Scalar, batchlas::MatrixFormat::Dense>;
     using D = typename MV::promoted_type;
     using DV = batchlas::MatrixView<D, batchlas::MatrixFormat::Dense>;
     const int n = A_fact.rows();
@@ -34,13 +35,13 @@ double ormqr_apply_error(batchlas::Queue& ctx, const batchlas::MatrixView<T, bat
 // ormqr applied to the identity returns op(Q) (either side). Worst ||A0 - Q triu(R)||_F / ||A0||_F over
 // the batch with that Q (conjugate-transposed back for a transposed op) and R from the geqrf factor F.
 // Not componentwise: Q's near-zero entries make an elementwise relative error meaningless.
-template <typename T>
-double ormqr_q_error(batchlas::Queue& ctx, const batchlas::Matrix<T, batchlas::MatrixFormat::Dense>& A0,
-                     const batchlas::Matrix<T, batchlas::MatrixFormat::Dense>& F,
-                     const batchlas::Matrix<T, batchlas::MatrixFormat::Dense>& C, batchlas::Transpose trans) {
-    using MV = batchlas::MatrixView<T, batchlas::MatrixFormat::Dense>;
+template <typename Scalar>
+double ormqr_q_error(batchlas::Queue& ctx, const batchlas::Matrix<Scalar, batchlas::MatrixFormat::Dense>& A0,
+                     const batchlas::Matrix<Scalar, batchlas::MatrixFormat::Dense>& F,
+                     const batchlas::Matrix<Scalar, batchlas::MatrixFormat::Dense>& C, batchlas::Transpose trans) {
+    using MV = batchlas::MatrixView<Scalar, batchlas::MatrixFormat::Dense>;
     const int n = A0.rows();
-    batchlas::Matrix<T, batchlas::MatrixFormat::Dense> qh(n, n, 1);
+    batchlas::Matrix<Scalar, batchlas::MatrixFormat::Dense> qh(n, n, 1);
     double worst = 0;
     for (int b = 0; b < C.batch_size(); ++b) {
         MV Q = C.batch_item(b);

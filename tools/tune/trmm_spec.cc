@@ -27,15 +27,15 @@ namespace {
 
 namespace M = ops::trmm;
 
-template <typename T>
+template <typename Scalar>
 struct TrmmProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     Side side;
     int order, nrhs, batch, rows, cols, lda, ldb;
     std::size_t sa, sb;
-    T alpha;
-    UnifiedVector<T> A, B, Cp, C;
+    Scalar alpha;
+    UnifiedVector<Scalar> A, B, Cp, C;
 
     TrmmProblem(Queue& q_, Side s, int order_, int q_rhs, int batch_, int pad)
         : q(q_), side(s), order(order_), nrhs(q_rhs), batch(batch_), rows(s == Side::Left ? order_ : q_rhs),
@@ -51,7 +51,8 @@ struct TrmmProblem {
                 for (int r = 0; r < c; ++r)
                     A[std::size_t(b) * sa + std::size_t(c) * std::size_t(lda) + std::size_t(r)] = MV::make(1e6, 0.0);
     }
-    MV view(UnifiedVector<T>& v, int r, int c, int ld, std::size_t s) { return MV(v.data(), r, c, ld, int(s), batch); }
+    MV view(UnifiedVector<Scalar>& v, int r, int c, int ld,
+            std::size_t s) { return MV(v.data(), r, c, ld, int(s), batch); }
     void reset() {
         (void)MV::copy(q, view(C, rows, cols, ldb, sb), view(Cp, rows, cols, ldb, sb));
         q.wait();
@@ -64,21 +65,21 @@ struct TrmmProblem {
     }
     void clear_info() {}
     void run(Span<std::byte>) {
-        (void)trmm<kBackend, T>(q, view(A, order, order, lda, sa), view(B, rows, cols, ldb, sb),
-                                view(C, rows, cols, ldb, sb), alpha, side, Uplo::Lower, Transpose::NoTrans,
-                                Diag::NonUnit);
+        (void)trmm<kBackend, Scalar>(q, view(A, order, order, lda, sa), view(B, rows, cols, ldb, sb),
+                                     view(C, rows, cols, ldb, sb), alpha, side, Uplo::Lower, Transpose::NoTrans,
+                                     Diag::NonUnit);
         q.wait();
     }
     std::pair<double, int> verify() {
         const MV av = view(A, order, order, lda, sa);
         const auto items = av.default_items();
-        auto a = av.template astype<T>(items);
-        auto b = view(B, rows, cols, ldb, sb).template astype<T>(items), c = view(C, rows, cols, ldb, sb).template astype<T>(items);
+        auto a = av.template astype<Scalar>(items);
+        auto b = view(B, rows, cols, ldb, sb).template astype<Scalar>(items), c = view(C, rows, cols, ldb, sb).template astype<Scalar>(items);
         (void)a.triangularize(q, Uplo::Lower, Diag::NonUnit);
         q.wait();
         const auto all = a.all_items();
         const Transpose nt = Transpose::NoTrans;
-        const auto al = MV::up(alpha), zero = MV::up(T(0));
+        const auto al = MV::up(alpha), zero = MV::up(Scalar(0));
         return {side == Side::Left ? MV::gemm_backward_error(q, a, nt, b, nt, b, c, al, zero, all)
                                    : MV::gemm_backward_error(q, b, nt, a, nt, b, c, al, zero, all),
                 0};

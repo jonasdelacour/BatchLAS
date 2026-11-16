@@ -22,18 +22,18 @@ namespace batchlas::device {
 namespace detail {
 // The one workspace plan of the Blocked form (buffer_size and the carve): the Level 3 stages
 // (local) and A V(:, blk), n x min(k, NB) at ld n (global).
-template <class T> struct RitzValuesBlockedPlan {
-    WsSlot<T> smem;
-    WsSlot<T> av;
+template <class Scalar> struct RitzValuesBlockedPlan {
+    WsSlot<Scalar> smem;
+    WsSlot<Scalar> av;
     WorkspaceSize size;
     template <class Tier, class Cfg> static constexpr RitzValuesBlockedPlan make(int n, int k) {
         static_assert(Tier::n_max < 0, "ritz_values: the workspace form takes tier::Blocked<NB> (the tier-free form needs no workspace)");
         static_assert(l3::Config<Cfg>, "ritz_values: tier::Blocked runs on the in-group gemm, Cfg is an l3::cfg preset");
-        if constexpr (l3::Config<Cfg>) static_assert(std::is_same_v<typename Cfg::value_type, T>, "ritz_values: Cfg::value_type is A's T");
+        if constexpr (l3::Config<Cfg>) static_assert(std::is_same_v<typename Cfg::value_type, Scalar>, "ritz_values: Cfg::value_type is A's T");
         ::batchlas::device::Plan p;
-        const auto s = p.take<T>(WsSpace::Local, static_cast<std::size_t>(l3::smem_elems<Cfg>()));
+        const auto s = p.take<Scalar>(WsSpace::Local, static_cast<std::size_t>(l3::smem_elems<Cfg>()));
         const int nb = k < Tier::nb ? k : Tier::nb;
-        const auto av = p.take<T>(WsSpace::Global, static_cast<std::size_t>(n) * static_cast<std::size_t>(nb));
+        const auto av = p.take<Scalar>(WsSpace::Global, static_cast<std::size_t>(n) * static_cast<std::size_t>(nb));
         return {s, av, p.size()};
     }
 };
@@ -79,14 +79,14 @@ template <class Cfg> struct ritz_values {
 }  // namespace routine
 
 /// The tier::Blocked ritz_values(): a WorkGroup<Cfg::threads, 32>; buffer_size(n, k) is ONE
-/// matrix's local bytes (the gemm's stages) and global bytes (n x min(k, NB) values of T).
-template <class Cfg, int NB, class A, class T> struct tier_info<routine::ritz_values<Cfg>, tier::Blocked<NB, A>, T> {
+/// matrix's local bytes (the gemm's stages) and global bytes (n x min(k, NB) values of Scalar).
+template <class Cfg, int NB, class A, class Scalar> struct tier_info<routine::ritz_values<Cfg>, tier::Blocked<NB, A>, Scalar> {
     static constexpr int wg_size = Cfg::threads, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int n, int k) {
-        return detail::RitzValuesBlockedPlan<T>::template make<tier::Blocked<NB, A>, Cfg>(n, k).size;
+        return detail::RitzValuesBlockedPlan<Scalar>::template make<tier::Blocked<NB, A>, Cfg>(n, k).size;
     }
 };
 

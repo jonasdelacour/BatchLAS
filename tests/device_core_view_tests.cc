@@ -17,11 +17,11 @@ using namespace device_core_test;
 
 namespace {
 
-template <class T> class DeviceCoreViewTest : public DeviceCoreTest<T> {};
+template <class Scalar> class DeviceCoreViewTest : public DeviceCoreTest<Scalar> {};
 TYPED_TEST_SUITE(DeviceCoreViewTest, AllTypes);
 
-template <class T> T cj(T v) {
-    if constexpr (is_cplx<T>) return std::conj(v);
+template <class Scalar> Scalar cj(Scalar v) {
+    if constexpr (is_cplx<Scalar>) return std::conj(v);
     else return v;
 }
 

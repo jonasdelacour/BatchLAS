@@ -101,15 +101,15 @@ constexpr const char* library_name(Lib l) {
 // coverage's float native rows: a native GPU backend and (float, or CUDA with cuBLAS). Narrower than where those
 // kernels now run vendor-free; widening it changes ortho's and ormqr's choices, which are unmeasured.
 // evidence: docs/design/vendor-independence.md#the-vendor-gate-why-the-tile-route-predicate-is-per-backend-and-scalar
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 inline constexpr bool level3_tile_substitution_enabled =
-    native_gpu_backend<B> && (std::is_same_v<T, float> || (B == Backend::CUDA && bool(BATCHLAS_HAS_CUBLAS)));
+    native_gpu_backend<B> && (std::is_same_v<Scalar, float> || (B == Backend::CUDA && bool(BATCHLAS_HAS_CUBLAS)));
 
 /// The single funnel for "nothing can serve this call": records the miss, then throws NoRouteError.
-template <typename T>
+template <typename Scalar>
 [[noreturn]] inline void throw_no_vendor_route(Op op, Backend backend, const char* library) {
-    coverage::record_miss(op, scalar_kind_of<T>, backend, library);
-    throw batchlas::NoRouteError(op, backend, scalar_kind_of<T>, std::string("built without ") + library);
+    coverage::record_miss(op, scalar_kind_of<Scalar>, backend, library);
+    throw batchlas::NoRouteError(op, backend, scalar_kind_of<Scalar>, std::string("built without ") + library);
 }
 
 /// @}

@@ -240,14 +240,14 @@ struct BATCHLAS_API Device{
         }
     }
 
-    /// @brief default_device(), except the first CPU device for a double or complex<double> @p T
-    /// when that default is a GPU without fp64 (an Apple GPU), which cannot run @p T kernels.
-    /// @tparam T  the scalar type the caller will run
+    /// @brief default_device(), except the first CPU device for a double or complex<double> @p Scalar
+    /// when that default is a GPU without fp64 (an Apple GPU), which cannot run @p Scalar kernels.
+    /// @tparam Scalar  the scalar type the caller will run
     /// @return the chosen device
-    template <typename T>
+    template <typename Scalar>
     static Device default_device_for() {
         Device dev = default_device();
-        if constexpr (std::is_same_v<T, double> || std::is_same_v<T, std::complex<double>>) {
+        if constexpr (std::is_same_v<Scalar, double> || std::is_same_v<Scalar, std::complex<double>>) {
             if (dev.type == DeviceType::GPU && !dev.supports_fp64() && !get_devices(DeviceType::CPU).empty())
                 dev = get_devices(DeviceType::CPU).front();
         }

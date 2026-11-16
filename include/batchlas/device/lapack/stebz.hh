@@ -27,30 +27,30 @@ namespace batchlas::device {
 /// else RANGE = 'I' (or 'A' with il = 0, iu = n - 1), indices il..iu, 0-based (the defaults select
 /// index 0 alone). descending: ORDER = descending output. abstol <= 0: eps * max(||T||, 1).
 /// max_iter: the bisection cap per eigenvalue (>= 1; StebzParams::max_iterations).
-template <class R> struct StebzOptions {
+template <class Real> struct StebzOptions {
     bool value_range = false;
     std::int64_t il = 0, iu = 0;
-    R vl = R(0), vu = R(0), abstol = R(0);
+    Real vl = Real(0), vu = Real(0), abstol = Real(0);
     bool descending = false;
     std::int32_t max_iter = 128;
 };
 
 namespace detail {
-template <class R> struct Interval {
-    R lo, hi;
-    R e2max;  // max_i e_i^2 (dstebz's pivmin scale)
+template <class Real> struct Interval {
+    Real lo, hi;
+    Real e2max;  // max_i e_i^2 (dstebz's pivmin scale)
 };
 
 // The workspace plan (design C.5): the leader's interval (lo, hi, pivmin) and the selection's
 // (count, first index), both in local memory; nothing global.
-template <class R> struct StebzLayout {
-    WsSlot<R> bounds;
+template <class Real> struct StebzLayout {
+    WsSlot<Real> bounds;
     WsSlot<std::int32_t> found;
     WorkspaceSize size;
 };
-template <class R> constexpr StebzLayout<R> stebz_layout() {
+template <class Real> constexpr StebzLayout<Real> stebz_layout() {
     Plan p;
-    const auto bounds = p.take<R>(WsSpace::Local, 3);
+    const auto bounds = p.take<Real>(WsSpace::Local, 3);
     const auto found = p.take<std::int32_t>(WsSpace::Local, 2);
     return {bounds, found, p.size()};
 }
@@ -78,34 +78,34 @@ BATCHLAS_DEVICE_INLINE auto stebz_gershgorin(const Ex& ex, const D& d, const E& 
 
 // Sign count of q_i = d_i - x - e_{i-1}^2 / q_{i-1}; |q| < pivmin is clamped to -pivmin
 // (dlaebz), which keeps the count monotone in x.
-template <class D, class E, class R> BATCHLAS_DEVICE_INLINE int laebz_count(const Thread&, const D& d, const E& e, R x, R pivmin) {
+template <class D, class E, class Real> BATCHLAS_DEVICE_INLINE int laebz_count(const Thread&, const D& d, const E& e, Real x, Real pivmin) {
     const int n = d.size();
     int count = 0;
-    R q = d(0) - x;
+    Real q = d(0) - x;
     if (sycl::fabs(q) < pivmin) q = -pivmin;
-    if (q <= R(0)) ++count;
+    if (q <= Real(0)) ++count;
     for (int i = 1; i < n; ++i) {
-        const R ei = e(i - 1);
+        const Real ei = e(i - 1);
         q = d(i) - x - (ei * ei) / q;
         if (sycl::fabs(q) < pivmin) q = -pivmin;
-        if (q <= R(0)) ++count;
+        if (q <= Real(0)) ++count;
     }
     return count;
 }
 
 // Eigenvalue j (0-based, ascending) in (lo, hi] with count(lo) <= j < count(hi): halves until
 // width <= tol, a midpoint that no longer moves, or max_iter; returns the final midpoint.
-template <class D, class E, class R>
-BATCHLAS_DEVICE_INLINE R laebz_bisect(const Thread& th, const D& d, const E& e, int j, R lo, R hi, R tol, R pivmin, int max_iter) {
-    R left = lo, right = hi;
+template <class D, class E, class Real>
+BATCHLAS_DEVICE_INLINE Real laebz_bisect(const Thread& th, const D& d, const E& e, int j, Real lo, Real hi, Real tol, Real pivmin, int max_iter) {
+    Real left = lo, right = hi;
     for (int iter = 0; iter < max_iter; ++iter) {
         if ((right - left) <= tol) break;
-        const R mid = left + (right - left) * R(0.5);
+        const Real mid = left + (right - left) * Real(0.5);
         if (mid <= left || mid >= right) break;
         if (laebz_count(th, d, e, mid, pivmin) >= j + 1) right = mid;
         else left = mid;
     }
-    return left + (right - left) * R(0.5);
+    return left + (right - left) * Real(0.5);
 }
 
 namespace routine {
@@ -114,18 +114,18 @@ struct stebz {
 };
 }  // namespace routine
 
-template <class T> struct tiers<routine::stebz, T> {
+template <class Real> struct tiers<routine::stebz, Real> {
     using type = tier::list<tier::Blocked<1>>;
 };
 // wg_size is the work-group with_tier checks and the host route's ceiling; the op itself runs
-// on any executor width (items past the wanted count idle). Real T only (xSTEBZ).
-template <class T> struct tier_info<routine::stebz, tier::Blocked<1>, T> {
-    static_assert(std::is_floating_point_v<T>, "stebz: a real T");
+// on any executor width (items past the wanted count idle). Real types only (xSTEBZ).
+template <class Real> struct tier_info<routine::stebz, tier::Blocked<1>, Real> {
+    static_assert(std::is_floating_point_v<Real>, "stebz: a real T");
     static constexpr int wg_size = 256, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 1; }
-    static constexpr WorkspaceSize buffer_size(int) { return detail::stebz_layout<T>().size; }
+    static constexpr WorkspaceSize buffer_size(int) { return detail::stebz_layout<Real>().size; }
 };
 
 /// Selected eigenvalues of one tridiagonal (d, e) by bisection, host order (d, e, w, m, ws,
@@ -134,11 +134,11 @@ template <class T> struct tier_info<routine::stebz, tier::Blocked<1>, T> {
 /// (xSTEBZ's info: the bisection is capped, never fails). Exit: outputs visible on return.
 /// Workspace: buffer_size<routine::stebz, Tier, T>(n) (local only). The interval and the
 /// selection are published through local memory by the leader, as the host route does.
-template <class Tier, class Ex, class D, class E, class W, class R>
+template <class Tier, class Ex, class D, class E, class W, class Real>
 BATCHLAS_DEVICE_INLINE int stebz(const Ex& ex, const D& d, const E& e, const W& w, int& m, const Workspace& ws,
-                                 const StebzOptions<R>& p) {
+                                 const StebzOptions<Real>& p) {
     using T = elem_t<D>;
-    static_assert(std::is_same_v<T, R>, "stebz: options of the matrix's real type");
+    static_assert(std::is_same_v<T, Real>, "stebz: options of the matrix's real type");
     static_assert(std::is_same_v<resolve_tier_t<routine::stebz, T, Tier>, tier::Blocked<1>>, "stebz: tier::Blocked<1>");
     constexpr auto L = detail::stebz_layout<T>();
     const auto bounds = carve_local(ws, L.bounds);

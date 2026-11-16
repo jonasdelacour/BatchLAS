@@ -13,19 +13,19 @@
 
 namespace batchlas {
 
-template <Backend B, typename T> class StedcFusedMerge;
+template <Backend B, typename Real> class StedcFusedMerge;
 
 // Fused merge kernel that preserves baseline math exactly while collapsing
 // the secular solve + rescale + matrix update into one launch.
-template <Backend B, typename T>
+template <Backend B, typename Real>
 void stedc_merge_fused(Queue& ctx,
-                       const VectorView<T>& eigenvalues,
-                       const VectorView<T>& v,
-                       const Span<T>& rho,
+                       const VectorView<Real>& eigenvalues,
+                       const VectorView<Real>& v,
+                       const Span<Real>& rho,
                        const Span<int32_t>& n_reduced,
-                       const MatrixView<T, MatrixFormat::Dense>& Qprime,
-                       const VectorView<T>& temp_lambdas,
-                       const StedcParams<T>& params,
+                       const MatrixView<Real, MatrixFormat::Dense>& Qprime,
+                       const VectorView<Real>& temp_lambdas,
+                       const StedcParams<Real>& params,
                        int32_t* info,
                        int64_t info_nodes_per_item) {
     const auto batch_size = eigenvalues.batch_size();
@@ -40,7 +40,7 @@ void stedc_merge_fused(Queue& ctx,
     ctx->submit([&](sycl::handler& h) {
         auto Qview = Qprime.kernel_view();
 
-        batchlas::impl::parallel_for<StedcFusedMerge<B, T>>(h,
+        batchlas::impl::parallel_for<StedcFusedMerge<B, Real>>(h,
             sycl::nd_range<1>(batch_size * wg_size, wg_size),
             [=](sycl::nd_item<1> item) {
                 const auto bid = item.get_group_linear_id();
@@ -58,9 +58,9 @@ void stedc_merge_fused(Queue& ctx,
                 // Several items may report one batch item: info_report is an atomic fetch_max.
                 const auto poles = device::vec(eigenvalues.batch_item(bid)).head(dd);
                 const auto zb = vb.head(dd);
-                const T abs_2rho = sycl::fabs(T(2) * rho[bid]);
+                const Real abs_2rho = sycl::fabs(Real(2) * rho[bid]);
                 device::for_each_owned(ex, dd, [&](int k) {
-                    T origin, tau;
+                    Real origin, tau;
                     const int info = device::laed4(device::Thread{}, poles, zb, dd, k, abs_2rho, origin, tau, max_iter, Q.col(k));
                     temp_lambdas(k, bid) = origin + tau;
                     if (info != 0) {
@@ -70,37 +70,37 @@ void stedc_merge_fused(Queue& ctx,
                 });
                 device::sync<device::Scope::Group>(ex, device::Mem::Global);
 
-                device::detail::rescale<T>(do_rescale, ex, 0, 1, dd, Q_bid, eigenvalues.batch_item(bid), v, bid);
+                device::detail::rescale<Real>(do_rescale, ex, 0, 1, dd, Q_bid, eigenvalues.batch_item(bid), v, bid);
                 device::sync<device::Scope::Group>(ex, device::Mem::Global);
 
                 // Eigenvector j of the merge: Q(:, j) = z ./ (D - lambda_j), normalised.
                 for (int eig = 0; eig < dd; ++eig) {
                     const auto q = Q.col(eig);
-                    device::map(ex, q, [](T zi, T den) { return zi / den; }, vb, q);
-                    const T nrm = device::nrm2<device::alg::Blue>(ex, q);
-                    device::map(ex, q, [=](T qi) { return qi / nrm; }, q);
+                    device::map(ex, q, [](Real zi, Real den) { return zi / den; }, vb, q);
+                    const Real nrm = device::nrm2<device::alg::Blue>(ex, q);
+                    device::map(ex, q, [=](Real qi) { return qi / nrm; }, q);
                 }
             });
     });
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Real>
 void stedc_merge_dispatch(Queue& ctx,
-                          const VectorView<T>& eigenvalues,
-                          const VectorView<T>& v,
-                          const Span<T>& rho,
+                          const VectorView<Real>& eigenvalues,
+                          const VectorView<Real>& v,
+                          const Span<Real>& rho,
                           const Span<int32_t>& n_reduced,
-                          const MatrixView<T, MatrixFormat::Dense>& Qprime,
-                          const VectorView<T>& temp_lambdas,
-                          const StedcParams<T>& params,
+                          const MatrixView<Real, MatrixFormat::Dense>& Qprime,
+                          const VectorView<Real>& temp_lambdas,
+                          const StedcParams<Real>& params,
                           int32_t* info,
                           int64_t info_nodes_per_item) {
     switch (params.merge_variant) {
         case StedcMergeVariant::Fused:
-            stedc_merge_fused<B, T>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params, info, info_nodes_per_item);
+            stedc_merge_fused<B, Real>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params, info, info_nodes_per_item);
             break;
         case StedcMergeVariant::FusedCta:
-            stedc_merge_fused_cta<B, T>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params, info, info_nodes_per_item);
+            stedc_merge_fused_cta<B, Real>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params, info, info_nodes_per_item);
             break;
         default:
             // Baseline path is handled by the caller in stedc.cc.

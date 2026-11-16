@@ -23,13 +23,13 @@
 namespace batchlas {
 
 namespace sig {
-template <typename T>
-using sysv = Event(Queue&, const MatrixView<T, MatrixFormat::Dense>&, const MatrixView<T, MatrixFormat::Dense>&,
-                   Uplo, Span<int64_t>, Span<std::byte>, Span<int32_t>);
+template <typename Scalar>
+using sysv = Event(Queue&, const MatrixView<Scalar, MatrixFormat::Dense>&, const MatrixView<Scalar,
+                   MatrixFormat::Dense>&, Uplo, Span<int64_t>, Span<std::byte>, Span<int32_t>);
 
-template <typename T>
-using sysv_buffer_size = size_t(Queue&, const MatrixView<T, MatrixFormat::Dense>&,
-                                const MatrixView<T, MatrixFormat::Dense>&, Uplo);
+template <typename Scalar>
+using sysv_buffer_size = size_t(Queue&, const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                const MatrixView<Scalar, MatrixFormat::Dense>&, Uplo);
 }  // namespace sig
 
 /// @brief Batched solve of \f$ A X = B \f$ for symmetric indefinite \f$A\f$, LAPACK ?sysv semantics.
@@ -42,7 +42,7 @@ using sysv_buffer_size = size_t(Queue&, const MatrixView<T, MatrixFormat::Dense>
 ///
 /// Asynchronous: \f$A\f$, \f$B\f$, @p pivots and @p info are readable after the returned event is waited on.
 /// @tparam Back  backend; the backend-deducing overload takes it from `ctx.backend()`
-/// @tparam T     scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @tparam Scalar     scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in]     ctx         queue the kernels are enqueued on
 /// @param[in,out] A           batch of \f$n \times n\f$ symmetric matrices; only the @p uplo triangle is
 ///                            read, and it is overwritten with \f$D\f$ and \f$L\f$ (or \f$U\f$)
@@ -61,16 +61,16 @@ using sysv_buffer_size = size_t(Queue&, const MatrixView<T, MatrixFormat::Dense>
 ///         @p B carry different batch masks (or a broadcast operand is masked)
 /// @throws batchlas::internal_error for a heterogeneous batch
 /// @ingroup api_factorizations
-template <Backend Back, typename T>
-BATCHLAS_API Event sysv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                        const MatrixView<T, MatrixFormat::Dense>& B, Uplo uplo, Span<int64_t> pivots,
+template <Backend Back, typename Scalar>
+BATCHLAS_API Event sysv(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& B, Uplo uplo, Span<int64_t> pivots,
                         Span<std::byte> work_space, Span<int32_t> info);
 
 /// @brief Workspace, in bytes, that sysv() needs for these operands on this queue.
 ///
 /// Takes the same operands as the call, so both resolve the same route.
 /// @tparam Back  backend; the backend-deducing overload takes it from `ctx.backend()`
-/// @tparam T     scalar type
+/// @tparam Scalar     scalar type
 /// @param[in] ctx   queue the call will run on
 /// @param[in] A     batch of \f$n \times n\f$ matrices sysv() will factor; only its shape and batch mask are used
 /// @param[in] B     batch of \f$n \times n_{\mathrm{rhs}}\f$ right-hand sides sysv() will solve; only its shape and
@@ -80,13 +80,13 @@ BATCHLAS_API Event sysv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
 /// @throws batchlas::invalid_argument if sytrs_validate_params() rejects the operands or their batch masks differ
 /// @throws batchlas::internal_error for a heterogeneous batch
 /// @ingroup api_factorizations_lowlevel
-template <Backend Back, typename T>
-BATCHLAS_API size_t sysv_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                                     const MatrixView<T, MatrixFormat::Dense>& B, Uplo uplo);
+template <Backend Back, typename Scalar>
+BATCHLAS_API size_t sysv_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                     const MatrixView<Scalar, MatrixFormat::Dense>& B, Uplo uplo);
 
 /// @brief sysv() without per-item status (`info` not requested).
 /// @tparam Back  backend; the backend-deducing overload takes it from `ctx.backend()`
-/// @tparam T     scalar type
+/// @tparam Scalar     scalar type
 /// @param[in]     ctx         queue the kernels are enqueued on
 /// @param[in,out] A           batch of \f$n \times n\f$ symmetric matrices; the @p uplo triangle is
 ///                            overwritten with \f$D\f$ and \f$L\f$ (or \f$U\f$)
@@ -99,11 +99,11 @@ BATCHLAS_API size_t sysv_buffer_size(Queue& ctx, const MatrixView<T, MatrixForma
 ///                            undefined on return
 /// @return event of the last enqueued kernel
 /// @ingroup api_factorizations
-template <Backend Back, typename T>
-inline Event sysv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                  const MatrixView<T, MatrixFormat::Dense>& B, Uplo uplo, Span<int64_t> pivots,
+template <Backend Back, typename Scalar>
+inline Event sysv(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& B, Uplo uplo, Span<int64_t> pivots,
                   Span<std::byte> work_space) {
-    return sysv<Back, T>(ctx, A, B, uplo, pivots, work_space, Span<int32_t>{});
+    return sysv<Back, Scalar>(ctx, A, B, uplo, pivots, work_space, Span<int32_t>{});
 }
 
 BATCHLAS_DISPATCH_ON_QUEUE(sysv)

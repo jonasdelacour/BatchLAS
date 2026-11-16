@@ -140,12 +140,12 @@ BATCHLAS_DEVICE_INLINE void solve_blocked(const Ex& ex, const MA& a_in, const PV
 
 /// getrs's Blocked<NB>: any n and nrhs; getrf's Blocked executor and local plan (no global
 /// workspace). buffer_size(n[, nrhs]): nrhs does not enter it.
-template <Transpose TR, int NB, class Alg, class T>
-struct tier_info<routine::getrs<TR>, tier::Blocked<NB, Alg>, T> : tier_info<routine::getrf, tier::Blocked<NB, Alg>, T> {
-    using tier_info<routine::getrf, tier::Blocked<NB, Alg>, T>::buffer_size;
+template <Transpose TR, int NB, class Alg, class Scalar>
+struct tier_info<routine::getrs<TR>, tier::Blocked<NB, Alg>, Scalar> : tier_info<routine::getrf, tier::Blocked<NB, Alg>, Scalar> {
+    using tier_info<routine::getrf, tier::Blocked<NB, Alg>, Scalar>::buffer_size;
     static constexpr WorkspaceSize buffer_size(int n, int) { return buffer_size(n); }
 };
-template <Transpose TR, class T> struct tiers<routine::getrs<TR>, T> {
+template <Transpose TR, class Scalar> struct tiers<routine::getrs<TR>, Scalar> {
     using type = tier::list<tier::Blocked<32>>;
 };
 

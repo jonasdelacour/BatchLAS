@@ -22,39 +22,39 @@ namespace batchlas::ops::geqrf {
 // fails if it moves. evidence: docs/perf/qr.md#settling-the-target-on-the-tall-panels
 inline constexpr int kGeqrfMinBlocksPerSm = 2;
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API int64_t geqrf_cta_max_elems_for_slm(
     std::size_t slm_budget_bytes, int min_blocks_per_sm = kGeqrfMinBlocksPerSm);
 
 // TINY tier (square \f$m = n \le 32\f$): the ONE predicate for its ceiling -- the shape builder, the
 // entry point and the tests all call it. evidence: docs/perf/qr.md#the-tiny-ceiling-predicate
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API int geqrf_tiny_max_n_for_slm(std::size_t slm_budget_bytes);
 
 // Zero and constant (monotone, as band_reduction.cc's sizing replay needs); never reads A.
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API std::size_t geqrf_tiny_buffer_size(
-    Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A);
+    Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A);
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API unsigned geqrf_tiny_debug_launch(Queue& ctx, int n);  // G | N<<16
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API Event geqrf_tiny_dispatch(Queue& ctx,
-                                                const MatrixView<T, MatrixFormat::Dense>& A,
-                                                Span<T> tau,
+                                                const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                                Span<Scalar> tau,
                                                 Span<std::byte> workspace);
 
 // A BumpAllocator::measuring() replay, monotone in (rows, cols, batch); deref neither A nor tau.
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API std::size_t geqrf_cta_buffer_size(Queue& ctx,
-                                                        const MatrixView<T, MatrixFormat::Dense>& A);
+                                                        const MatrixView<Scalar, MatrixFormat::Dense>& A);
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API std::size_t geqrf_blocked_buffer_size(Queue& ctx,
-                                                            const MatrixView<T, MatrixFormat::Dense>& A);
+                                                            const MatrixView<Scalar, MatrixFormat::Dense>& A);
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API unsigned geqrf_blocked_debug_params(
     Queue& ctx, int m, int n);  // nb | leaf<<16; high half 1 = resident, 2 = global, 0 = absent
 
@@ -62,68 +62,68 @@ BATCHLAS_INTERNAL_API unsigned geqrf_blocked_debug_params(
 // meaning LOCAL-memory residency. evidence: docs/perf/qr.md#the-panel-height-window
 enum class GeqrfPanelLeaf : int { Auto = 0, Resident = 1, Global = 2, Register = 3 };
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API int geqrf_panel_reg_cols();   // 0 = absent for this scalar
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API int geqrf_panel_reg_max_m();
 
-template <typename T>   // THE ONE fit predicate: launcher, driver and tests all share it
+template <typename Scalar>   // THE ONE fit predicate: launcher, driver and tests all share it
 BATCHLAS_INTERNAL_API bool geqrf_panel_reg_fits(int m, int n, int device_max_wg = 1024);
 
 // SHOULD, not CAN: a window strictly inside `fits`. evidence: docs/perf/qr.md#the-panel-height-window
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API bool geqrf_panel_reg_preferred(int m, int n, int device_max_wg = 1024);
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API unsigned geqrf_panel_reg_debug_launch(
     Queue& ctx, int m, int n);  // wg | leaf<<16; 0 = no fit
 
 // REQUIRED (empty throws): pass the public gemm, which makes its own table-driven choice.
-template <typename T>
+template <typename Scalar>
 using GeqrfTrailingGemm = std::function<Event(
     Queue&,
-    const MatrixView<T, MatrixFormat::Dense>&,
-    const MatrixView<T, MatrixFormat::Dense>&,
-    const MatrixView<T, MatrixFormat::Dense>&,
-    T, T, Transpose, Transpose, ComputePrecision)>;
+    const MatrixView<Scalar, MatrixFormat::Dense>&,
+    const MatrixView<Scalar, MatrixFormat::Dense>&,
+    const MatrixView<Scalar, MatrixFormat::Dense>&,
+    Scalar, Scalar, Transpose, Transpose, ComputePrecision)>;
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API Event geqrf_cta_dispatch(Queue& ctx,
-                                               const MatrixView<T, MatrixFormat::Dense>& A,
-                                               Span<T> tau,
+                                               const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                               Span<Scalar> tau,
                                                Span<std::byte> workspace);
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API Event geqrf_blocked_dispatch(Queue& ctx,
-                                                   const MatrixView<T, MatrixFormat::Dense>& A,
-                                                   Span<T> tau,
+                                                   const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                                   Span<Scalar> tau,
                                                    Span<std::byte> workspace,
-                                                   GeqrfTrailingGemm<T> trailing_gemm,
+                                                   GeqrfTrailingGemm<Scalar> trailing_gemm,
                                                    GeqrfPanelLeaf panel_leaf =
                                                        GeqrfPanelLeaf::Auto);
 
 // Raw pointers, not a MatrixView: a slice carries the PARENT pointer array. tau is indexed
 // tau_ptr[b * tau_batch_stride + tau_offset + j] with k = min(rows, cols) of the WHOLE matrix;
 // a panel-derived stride scatters tau silently, and only for batch > 1. `mask`: these items' batch mask.
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API Event geqrf_panel_factorize(Queue& ctx,
-                                                  T* a_ptr, int ld, int stride,
+                                                  Scalar* a_ptr, int ld, int stride,
                                                   int m, int n, int batch,
-                                                  T* tau_ptr, int tau_batch_stride, int tau_offset,
+                                                  Scalar* tau_ptr, int tau_batch_stride, int tau_offset,
                                                   bool* used_resident_out = nullptr,
                                                   GeqrfPanelLeaf leaf = GeqrfPanelLeaf::Auto,
                                                   GeqrfPanelLeaf* leaf_used_out = nullptr,
                                                   const std::uint8_t* mask = nullptr);
 
 // The CTA TIER's predicate, occupancy-scaled: capacity, this gate and the launcher's are ONE.
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API bool geqrf_cta_fits(
     int m, int n, std::size_t slm_budget_bytes,
     int min_blocks_per_sm = kGeqrfMinBlocksPerSm);
 
 // The RESIDENCY predicate, at the whole budget: what chooses the resident leaf, not the tier.
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API bool geqrf_leaf_fits(int m, int n, std::size_t slm_budget_bytes);
 
 }  // namespace batchlas::ops::geqrf

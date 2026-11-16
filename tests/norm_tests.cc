@@ -21,9 +21,9 @@ using namespace batchlas;
 /// and works with batched matrices in both Dense and CSR formats.
 /// Uses matrix factory methods to generate test matrices.
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct TestConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 

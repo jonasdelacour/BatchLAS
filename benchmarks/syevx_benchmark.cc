@@ -17,17 +17,17 @@ using namespace batchlas;
 
 namespace {
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_SYEVX(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const size_t neigs = state.range(2);
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    auto A = Matrix<T>::Random(n, n, true, batch);
-    UnifiedVector<typename base_type<T>::type> W(neigs * batch);
+    auto A = Matrix<Scalar>::Random(n, n, true, batch);
+    UnifiedVector<typename base_type<Scalar>::type> W(neigs * batch);
 
-    SyevxParams<T> params;
+    SyevxParams<Scalar> params;
     params.algorithm = OrthoAlgorithm::Chol2;
     params.iterations = 10;
     params.extra_directions = 0;
@@ -37,7 +37,7 @@ void BM_SYEVX(minibench::State& state) {
 
     size_t ws_size = syevx_buffer_size(*q, A, W.to_span(), neigs,
                                           JobType::NoEigenVectors,
-                                          MatrixView<T, MatrixFormat::Dense>(), params);
+                                          MatrixView<Scalar, MatrixFormat::Dense>(), params);
     UnifiedVector<std::byte> workspace(ws_size);
 
     state.SetKernel(q,
@@ -46,7 +46,7 @@ void BM_SYEVX(minibench::State& state) {
                     neigs,
                     std::move(workspace),
                     JobType::NoEigenVectors,
-                    MatrixView<T, MatrixFormat::Dense>(),
+                    MatrixView<Scalar, MatrixFormat::Dense>(),
                     params,
                     [](Queue& q, auto&&... xs) {
                         (void)syevx(q, std::forward<decltype(xs)>(xs)...);
@@ -62,7 +62,7 @@ void BM_SYEVX(minibench::State& state) {
 // state.range(3) is a batchlas::SyevxAlgorithm value (see SyevxCrossoverSizes).
 // This is the sweep that replaced the flop-count thresholds with measured ones.
 // evidence: docs/perf/syevx.md#syevx-the-first-gpu-crossover-measurement-superseded-baseline
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_SYEVX_Crossover(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
@@ -70,10 +70,10 @@ void BM_SYEVX_Crossover(minibench::State& state) {
     const auto method = static_cast<SyevxAlgorithm>(state.range(3));
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    auto A = Matrix<T>::Random(n, n, true, batch);
-    UnifiedVector<typename base_type<T>::type> W(neigs * batch);
+    auto A = Matrix<Scalar>::Random(n, n, true, batch);
+    UnifiedVector<typename base_type<Scalar>::type> W(neigs * batch);
 
-    SyevxParams<T> params;
+    SyevxParams<Scalar> params;
     params.method = method;
     params.algorithm = OrthoAlgorithm::Chol2;
     params.iterations = 200;
@@ -86,7 +86,7 @@ void BM_SYEVX_Crossover(minibench::State& state) {
 
     size_t ws_size = syevx_buffer_size(*q, A, W.to_span(), neigs,
                                           JobType::NoEigenVectors,
-                                          MatrixView<T, MatrixFormat::Dense>(), params);
+                                          MatrixView<Scalar, MatrixFormat::Dense>(), params);
     UnifiedVector<std::byte> workspace(ws_size);
 
     state.SetKernel(q,
@@ -95,7 +95,7 @@ void BM_SYEVX_Crossover(minibench::State& state) {
                     neigs,
                     std::move(workspace),
                     JobType::NoEigenVectors,
-                    MatrixView<T, MatrixFormat::Dense>(),
+                    MatrixView<Scalar, MatrixFormat::Dense>(),
                     params,
                     [](Queue& q, auto&&... xs) {
                         (void)syevx(q, std::forward<decltype(xs)>(xs)...);
@@ -111,7 +111,7 @@ void BM_SYEVX_Crossover(minibench::State& state) {
 // in syevx.cc that mentions `jobz` was made from an eigenvector-mode sweep, and
 // until now that sweep lived outside the repo. Keeping it here is what makes the
 // thresholds reproducible.
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_SYEVX_CrossoverVectors(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
@@ -119,11 +119,11 @@ void BM_SYEVX_CrossoverVectors(minibench::State& state) {
     const auto method = static_cast<SyevxAlgorithm>(state.range(3));
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    auto A = Matrix<T>::Random(n, n, true, batch);
-    UnifiedVector<typename base_type<T>::type> W(neigs * batch);
-    auto V = Matrix<T>(n, neigs, batch);
+    auto A = Matrix<Scalar>::Random(n, n, true, batch);
+    UnifiedVector<typename base_type<Scalar>::type> W(neigs * batch);
+    auto V = Matrix<Scalar>(n, neigs, batch);
 
-    SyevxParams<T> params;
+    SyevxParams<Scalar> params;
     params.method = method;
     params.algorithm = OrthoAlgorithm::Chol2;
     params.iterations = 200;
@@ -212,9 +212,9 @@ inline float sparse_density(int n) {
     return static_cast<float>(kSparseNnzPerRow) / static_cast<float>(n);
 }
 
-template <typename T>
-SyevxParams<T> sparse_params(int config, size_t neigs) {
-    SyevxParams<T> params;
+template <typename Scalar>
+SyevxParams<Scalar> sparse_params(int config, size_t neigs) {
+    SyevxParams<Scalar> params;
     params.algorithm = OrthoAlgorithm::Chol2;
     params.iterations = 200;
     // Same guard-block convention as the dense crossover. It measured 34-50%
@@ -223,8 +223,8 @@ SyevxParams<T> sparse_params(int config, size_t neigs) {
     // sweep exists to test.
     // evidence: docs/perf/syevx.md#lobpcg-guard-vectors-by-default
     params.extra_directions = std::max<size_t>(1, neigs / 4);
-    params.absolute_tolerance = T(1e-6);
-    params.relative_tolerance = T(1e-6);
+    params.absolute_tolerance = Scalar(1e-6);
+    params.relative_tolerance = Scalar(1e-6);
 
     switch (config) {
         case kFilteredLargest:
@@ -277,22 +277,22 @@ SyevxParams<T> sparse_params(int config, size_t neigs) {
 //
 // Memoized on (n, neigs, config, boost): it is independent of batch size and
 // would otherwise be repeated once per batch point for no new information.
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 double sparse_eig_error(Queue& q, int n, size_t neigs, int config, float boost) {
-    using Real = typename base_type<T>::type;
+    using Real = typename base_type<Scalar>::type;
     static std::map<std::tuple<int, size_t, int, int>, double> cache;
     const auto key = std::make_tuple(n, neigs, config, static_cast<int>(boost * 10.0f));
     if (auto it = cache.find(key); it != cache.end()) return it->second;
 
-    const auto params = sparse_params<T>(config, neigs);
+    const auto params = sparse_params<Scalar>(config, neigs);
     double err = std::numeric_limits<double>::quiet_NaN();
 
     try {
-        auto A = Matrix<T, MatrixFormat::CSR>::RandomSparseHermitian(
+        auto A = Matrix<Scalar, MatrixFormat::CSR>::RandomSparseHermitian(
             n, sparse_density(n), 1, /*seed=*/1234u, static_cast<Real>(boost));
 
         UnifiedVector<Real> W(neigs);
-        auto V = Matrix<T>(n, static_cast<int>(neigs), 1);
+        auto V = Matrix<Scalar>(n, static_cast<int>(neigs), 1);
 
         UnifiedVector<std::byte> ws(syevx_buffer_size(
             q, A, W.to_span(), neigs, JobType::EigenVectors, V, params));
@@ -329,7 +329,7 @@ double sparse_eig_error(Queue& q, int n, size_t neigs, int config, float boost) 
     return err;
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_SYEVX_SparseImpl(minibench::State& state) {
     const int n = state.range(0);
     const size_t batch = static_cast<size_t>(state.range(1));
@@ -338,19 +338,19 @@ void BM_SYEVX_SparseImpl(minibench::State& state) {
     const float boost = static_cast<float>(state.range(4)) / 10.0f;
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    auto A = Matrix<T, MatrixFormat::CSR>::RandomSparseHermitian(
+    auto A = Matrix<Scalar, MatrixFormat::CSR>::RandomSparseHermitian(
         n, sparse_density(n), static_cast<int>(batch), /*seed=*/42u,
-        static_cast<typename base_type<T>::type>(boost));
+        static_cast<typename base_type<Scalar>::type>(boost));
 
-    UnifiedVector<typename base_type<T>::type> W(neigs * batch);
-    auto V = Matrix<T>(n, static_cast<int>(neigs), static_cast<int>(batch));
+    UnifiedVector<typename base_type<Scalar>::type> W(neigs * batch);
+    auto V = Matrix<Scalar>(n, static_cast<int>(neigs), static_cast<int>(batch));
 
-    const auto params = sparse_params<T>(config, neigs);
+    const auto params = sparse_params<Scalar>(config, neigs);
 
     // Reported before the kernel is registered, so that a configuration which
     // throws during sizing still leaves its accuracy column behind.
     state.SetMetric("Max rel. eig error",
-                    sparse_eig_error<T, B>(*q, n, neigs, config, boost));
+                    sparse_eig_error<Scalar, B>(*q, n, neigs, config, boost));
 
     // Eigenvector mode. Not a variant chosen for completeness: both algorithms
     // here are subspace methods that carry the vectors along whether or not the
@@ -385,9 +385,9 @@ void BM_SYEVX_SparseImpl(minibench::State& state) {
 // and with batch? Diagonal boost is pinned at 10 -- the value
 // benchmarks/syevx_acc.cc already uses for sparse eigensolver accuracy work --
 // so this sweep varies shape alone.
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_SYEVX_SparseShape(minibench::State& state) {
-    BM_SYEVX_SparseImpl<T, B>(state);
+    BM_SYEVX_SparseImpl<Scalar, B>(state);
 }
 
 // Hardness sweep: one shape, spectral separation varied. This is the half that
@@ -395,9 +395,9 @@ void BM_SYEVX_SparseShape(minibench::State& state) {
 // has a floor, closing the gap is what should expose it, and it shows up in the
 // accuracy column rather than the timing one.
 // evidence: docs/perf/syevx.md#syevx-the-diagonal-boost-gap-sweep-and-lobpcg-stagnation
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_SYEVX_SparseGap(minibench::State& state) {
-    BM_SYEVX_SparseImpl<T, B>(state);
+    BM_SYEVX_SparseImpl<Scalar, B>(state);
 }
 
 // Does WHERE in the spectrum the wanted block sits change what it costs?
@@ -424,7 +424,7 @@ void BM_SYEVX_SparseGap(minibench::State& state) {
 // Eigenvector mode only. Eigenvalues-only routes to Direct at every shape, so
 // there would be nothing to compare -- and the back-transform is the term whose
 // position-independence is the non-obvious half of the claim.
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_SYEVX_RangePosition(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
@@ -433,15 +433,15 @@ void BM_SYEVX_RangePosition(minibench::State& state) {
     const auto method = static_cast<SyevxAlgorithm>(state.range(4));
 
     auto q = std::make_shared<Queue>(B == Backend::NETLIB ? "cpu" : "gpu");
-    auto A = Matrix<T>::Random(n, n, true, batch);
-    UnifiedVector<typename base_type<T>::type> W(neigs * batch);
-    auto V = Matrix<T>(n, neigs, batch);
+    auto A = Matrix<Scalar>::Random(n, n, true, batch);
+    UnifiedVector<typename base_type<Scalar>::type> W(neigs * batch);
+    auto V = Matrix<Scalar>(n, neigs, batch);
 
     const int64_t il = position == 0 ? int64_t(0)
                      : position == 1 ? int64_t((n - neigs) / 2)
                                      : int64_t(n - neigs);
 
-    SyevxParams<T> params;
+    SyevxParams<Scalar> params;
     params.method = method;
     // An explicit index block. find_largest is ignored under Index -- the order
     // comes from params.order -- so it is left alone deliberately.

@@ -54,7 +54,7 @@ enum class DTypeCode {
     Complex128,
 };
 
-template <typename T>
+template <typename Scalar>
 struct dtype_code_of;
 
 template <>
@@ -114,11 +114,11 @@ inline DTypeCode dtype_from_format(const std::string& format) {
     throw py::value_error("unsupported dtype; expected float32, float64, complex64, or complex128");
 }
 
-template <typename T>
-using DenseMatrixT = Matrix<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using DenseMatrixT = Matrix<Scalar, MatrixFormat::Dense>;
 
-template <typename T>
-using SparseMatrixT = Matrix<T, MatrixFormat::CSR>;
+template <typename Scalar>
+using SparseMatrixT = Matrix<Scalar, MatrixFormat::CSR>;
 
 template <typename T>
 using GivensMatrixT = Matrix<std::array<T, 2>, MatrixFormat::Dense>;
@@ -150,19 +150,19 @@ using ILUKVariant = std::variant<
 template <typename T>
 struct wrapped_scalar;
 
-template <typename T, MatrixFormat MF>
-struct wrapped_scalar<Matrix<T, MF>> {
-    using type = T;
+template <typename Scalar, MatrixFormat MF>
+struct wrapped_scalar<Matrix<Scalar, MF>> {
+    using type = Scalar;
 };
 
-template <typename T>
-struct wrapped_scalar<Vector<T>> {
-    using type = T;
+template <typename Scalar>
+struct wrapped_scalar<Vector<Scalar>> {
+    using type = Scalar;
 };
 
-template <typename T>
-struct wrapped_scalar<ILUKPreconditioner<T>> {
-    using type = T;
+template <typename Scalar>
+struct wrapped_scalar<ILUKPreconditioner<Scalar>> {
+    using type = Scalar;
 };
 
 struct DenseMatrix {
@@ -253,23 +253,23 @@ struct ILUKHandle {
     }
 };
 
-template <typename T>
-inline DenseMatrix wrap_dense(DenseMatrixT<T>&& matrix) {
+template <typename Scalar>
+inline DenseMatrix wrap_dense(DenseMatrixT<Scalar>&& matrix) {
     return DenseMatrix{DenseMatrixVariant(std::move(matrix))};
 }
 
-template <typename T>
-inline DenseVector wrap_vector(Vector<T>&& vector) {
+template <typename Scalar>
+inline DenseVector wrap_vector(Vector<Scalar>&& vector) {
     return DenseVector{DenseVectorVariant(std::move(vector))};
 }
 
-template <typename T>
-inline SparseMatrix wrap_sparse(SparseMatrixT<T>&& matrix) {
+template <typename Scalar>
+inline SparseMatrix wrap_sparse(SparseMatrixT<Scalar>&& matrix) {
     return SparseMatrix{SparseMatrixVariant(std::move(matrix))};
 }
 
-template <typename T>
-inline ILUKHandle wrap_iluk(ILUKPreconditioner<T>&& preconditioner) {
+template <typename Scalar>
+inline ILUKHandle wrap_iluk(ILUKPreconditioner<Scalar>&& preconditioner) {
     return ILUKHandle{ILUKVariant(std::move(preconditioner))};
 }
 
@@ -363,12 +363,12 @@ decltype(auto) visit_iluk(const ILUKHandle& handle, F&& fn) {
 // here would also swallow genuine runtime errors raised from inside `fn` and
 // report them as "backend unavailable", which is far worse than the raw error.
 //
-// T is the call's element type: in a build without device fp64 the SYCL branch is
+// Scalar is the call's element type: in a build without device fp64 the SYCL branch is
 // never instantiated for double/complex<double> (the library has no such symbols)
 // and throws batchlas::unsupported at run time instead.
-template <typename T, typename F>
+template <typename Scalar, typename F>
 decltype(auto) visit_backend(Queue& queue, F&& fn) {
-    return batchlas::with_backend_for<T>(queue, nullptr, std::forward<F>(fn));
+    return batchlas::with_backend_for<Scalar>(queue, nullptr, std::forward<F>(fn));
 }
 
 // Size a workspace and run the call with it.
@@ -381,9 +381,9 @@ decltype(auto) visit_backend(Queue& queue, F&& fn) {
 // behind this call.
 //
 // The backend is resolved once, for both the size and the invoke call.
-template <typename T, typename SizeFn, typename InvokeFn>
+template <typename Scalar, typename SizeFn, typename InvokeFn>
 void run_backend_with_workspace(Queue& queue, SizeFn&& size_fn, InvokeFn&& invoke_fn) {
-    visit_backend<T>(queue, [&](auto backend_tag) {
+    visit_backend<Scalar>(queue, [&](auto backend_tag) {
         auto lease = queue.workspace(static_cast<std::size_t>(size_fn(backend_tag)));
         invoke_fn(backend_tag, lease.span());
     });
@@ -739,8 +739,8 @@ inline Queue& acquire_queue(const std::optional<std::string>& device_name, Backe
     return *it->second;
 }
 
-template <typename T>
-DenseMatrixT<T> dense_matrix_from_array_t(const py::array_t<T, py::array::forcecast>& array) {
+template <typename Scalar>
+DenseMatrixT<Scalar> dense_matrix_from_array_t(const py::array_t<Scalar, py::array::forcecast>& array) {
     const py::buffer_info info = array.request();
     if (info.ndim != 2 && info.ndim != 3) {
         throw py::value_error("dense arrays must have shape (m, n) or (batch, m, n)");
@@ -749,7 +749,7 @@ DenseMatrixT<T> dense_matrix_from_array_t(const py::array_t<T, py::array::forcec
     const int batch_size = info.ndim == 2 ? 1 : static_cast<int>(info.shape[0]);
     const int rows = static_cast<int>(info.shape[info.ndim - 2]);
     const int cols = static_cast<int>(info.shape[info.ndim - 1]);
-    DenseMatrixT<T> matrix(rows, cols, batch_size);
+    DenseMatrixT<Scalar> matrix(rows, cols, batch_size);
 
     if (info.ndim == 2) {
         auto view = array.template unchecked<2>();
@@ -772,8 +772,8 @@ DenseMatrixT<T> dense_matrix_from_array_t(const py::array_t<T, py::array::forcec
     return matrix;
 }
 
-template <typename T>
-Vector<T> dense_vector_from_array_t(const py::array_t<T, py::array::forcecast>& array) {
+template <typename Scalar>
+Vector<Scalar> dense_vector_from_array_t(const py::array_t<Scalar, py::array::forcecast>& array) {
     const py::buffer_info info = array.request();
     if (info.ndim != 1 && info.ndim != 2) {
         throw py::value_error("vector arrays must have shape (n) or (batch, n)");
@@ -781,7 +781,7 @@ Vector<T> dense_vector_from_array_t(const py::array_t<T, py::array::forcecast>& 
 
     const int batch_size = info.ndim == 1 ? 1 : static_cast<int>(info.shape[0]);
     const int size = static_cast<int>(info.shape[info.ndim - 1]);
-    Vector<T> vector(size, batch_size);
+    Vector<Scalar> vector(size, batch_size);
 
     if (info.ndim == 1) {
         auto view = array.template unchecked<1>();
@@ -800,8 +800,8 @@ Vector<T> dense_vector_from_array_t(const py::array_t<T, py::array::forcecast>& 
     return vector;
 }
 
-template <typename T>
-DenseMatrixT<T> heterogeneous_dense_matrix_from_sequence_t(const py::sequence& items) {
+template <typename Scalar>
+DenseMatrixT<Scalar> heterogeneous_dense_matrix_from_sequence_t(const py::sequence& items) {
     const py::ssize_t batch_size = py::len(items);
     if (batch_size <= 0) {
         throw py::value_error("heterogeneous batches must not be empty");
@@ -809,13 +809,13 @@ DenseMatrixT<T> heterogeneous_dense_matrix_from_sequence_t(const py::sequence& i
 
     int max_rows = 0;
     int max_cols = 0;
-    std::vector<py::array_t<T, py::array::forcecast>> arrays;
+    std::vector<py::array_t<Scalar, py::array::forcecast>> arrays;
     arrays.reserve(static_cast<std::size_t>(batch_size));
     std::vector<int> active_rows(static_cast<std::size_t>(batch_size));
     std::vector<int> active_cols(static_cast<std::size_t>(batch_size));
 
     for (py::ssize_t batch = 0; batch < batch_size; ++batch) {
-        py::array_t<T, py::array::forcecast> array(items[batch]);
+        py::array_t<Scalar, py::array::forcecast> array(items[batch]);
         const py::buffer_info info = array.request();
         if (info.ndim != 2) {
             throw py::value_error("heterogeneous dense batches require 2D arrays");
@@ -830,8 +830,8 @@ DenseMatrixT<T> heterogeneous_dense_matrix_from_sequence_t(const py::sequence& i
         arrays.push_back(std::move(array));
     }
 
-    DenseMatrixT<T> matrix(max_rows, max_cols, static_cast<int>(batch_size));
-    matrix.fill(T(0));
+    DenseMatrixT<Scalar> matrix(max_rows, max_cols, static_cast<int>(batch_size));
+    matrix.fill(Scalar(0));
 
     for (py::ssize_t batch = 0; batch < batch_size; ++batch) {
         auto view = arrays[static_cast<std::size_t>(batch)].template unchecked<2>();
@@ -854,8 +854,8 @@ DenseMatrixT<T> heterogeneous_dense_matrix_from_sequence_t(const py::sequence& i
     return matrix;
 }
 
-template <typename T>
-SparseMatrixT<T> sparse_matrix_from_csr_objects_t(const std::vector<py::object>& items) {
+template <typename Scalar>
+SparseMatrixT<Scalar> sparse_matrix_from_csr_objects_t(const std::vector<py::object>& items) {
     if (items.empty()) {
         throw py::value_error("sparse batches must not be empty");
     }
@@ -864,7 +864,7 @@ SparseMatrixT<T> sparse_matrix_from_csr_objects_t(const std::vector<py::object>&
     int cols = -1;
     int max_nnz = 0;
     struct csr_payload {
-        py::array_t<T, py::array::forcecast> data;
+        py::array_t<Scalar, py::array::forcecast> data;
         py::array_t<int, py::array::forcecast> indices;
         py::array_t<int, py::array::forcecast> indptr;
     };
@@ -883,7 +883,7 @@ SparseMatrixT<T> sparse_matrix_from_csr_objects_t(const std::vector<py::object>&
         }
 
         csr_payload payload{
-            py::array_t<T, py::array::forcecast>(item.attr("data")),
+            py::array_t<Scalar, py::array::forcecast>(item.attr("data")),
             py::array_t<int, py::array::forcecast>(item.attr("indices")),
             py::array_t<int, py::array::forcecast>(item.attr("indptr")),
         };
@@ -891,8 +891,8 @@ SparseMatrixT<T> sparse_matrix_from_csr_objects_t(const std::vector<py::object>&
         payloads.push_back(std::move(payload));
     }
 
-    SparseMatrixT<T> matrix(rows, cols, NonZeros{max_nnz}, static_cast<int>(items.size()));
-    std::fill(matrix.data().begin(), matrix.data().end(), T(0));
+    SparseMatrixT<Scalar> matrix(rows, cols, NonZeros{max_nnz}, static_cast<int>(items.size()));
+    std::fill(matrix.data().begin(), matrix.data().end(), Scalar(0));
     std::fill(matrix.col_indices().begin(), matrix.col_indices().end(), 0);
     std::fill(matrix.row_offsets().begin(), matrix.row_offsets().end(), 0);
 
@@ -985,10 +985,10 @@ inline SparseMatrix sparse_matrix_batch_from_sequence(const py::sequence& items)
     });
 }
 
-template <typename T>
-py::array_t<T> dense_matrix_to_numpy_t(const DenseMatrixT<T>& matrix) {
+template <typename Scalar>
+py::array_t<Scalar> dense_matrix_to_numpy_t(const DenseMatrixT<Scalar>& matrix) {
     if (matrix.batch_size() == 1) {
-        py::array_t<T> out({matrix.rows(), matrix.cols()});
+        py::array_t<Scalar> out({matrix.rows(), matrix.cols()});
         auto view = out.template mutable_unchecked<2>();
         for (int row = 0; row < matrix.rows(); ++row) {
             for (int col = 0; col < matrix.cols(); ++col) {
@@ -998,7 +998,7 @@ py::array_t<T> dense_matrix_to_numpy_t(const DenseMatrixT<T>& matrix) {
         return out;
     }
 
-    py::array_t<T> out({matrix.batch_size(), matrix.rows(), matrix.cols()});
+    py::array_t<Scalar> out({matrix.batch_size(), matrix.rows(), matrix.cols()});
     auto view = out.template mutable_unchecked<3>();
     for (int batch = 0; batch < matrix.batch_size(); ++batch) {
         for (int row = 0; row < matrix.rows(); ++row) {
@@ -1010,15 +1010,15 @@ py::array_t<T> dense_matrix_to_numpy_t(const DenseMatrixT<T>& matrix) {
     return out;
 }
 
-template <typename T>
-py::object heterogeneous_dense_matrix_to_python_t(const DenseMatrixT<T>& matrix) {
+template <typename Scalar>
+py::object heterogeneous_dense_matrix_to_python_t(const DenseMatrixT<Scalar>& matrix) {
     if (!matrix.is_heterogeneous()) {
         return dense_matrix_to_numpy_t(matrix);
     }
 
     py::list result;
     for (int batch = 0; batch < matrix.batch_size(); ++batch) {
-        py::array_t<T> item({matrix.rows(batch), matrix.cols(batch)});
+        py::array_t<Scalar> item({matrix.rows(batch), matrix.cols(batch)});
         auto view = item.template mutable_unchecked<2>();
         for (int row = 0; row < matrix.rows(batch); ++row) {
             for (int col = 0; col < matrix.cols(batch); ++col) {
@@ -1036,14 +1036,14 @@ inline py::object dense_matrix_to_python(const DenseMatrix& matrix) {
     });
 }
 
-// TRAP: every array is built from a shape container, never `array_t<T>(n)` or `out({n})`. The
+// TRAP: every array is built from a shape container, never `array_t<Scalar>(n)` or `out({n})`. The
 // count constructor takes its strides from dtype.itemsize(), which pybind11 < 2.12 misreads under
 // NumPy 2 (0), so every 1-D result had stride 0 and showed its last element n times.
-template <typename T>
-py::array_t<T> dense_vector_to_numpy_t(const Vector<T>& vector) {
+template <typename Scalar>
+py::array_t<Scalar> dense_vector_to_numpy_t(const Vector<Scalar>& vector) {
     const auto data = vector.data();
     if (vector.batch_size() == 1) {
-        py::array_t<T> out(std::vector<py::ssize_t>{vector.size()});
+        py::array_t<Scalar> out(std::vector<py::ssize_t>{vector.size()});
         auto view = out.template mutable_unchecked<1>();
         for (int index = 0; index < vector.size(); ++index) {
             view(index) = data[static_cast<std::size_t>(index * vector.inc())];
@@ -1051,7 +1051,7 @@ py::array_t<T> dense_vector_to_numpy_t(const Vector<T>& vector) {
         return out;
     }
 
-    py::array_t<T> out({vector.batch_size(), vector.size()});
+    py::array_t<Scalar> out({vector.batch_size(), vector.size()});
     auto view = out.template mutable_unchecked<2>();
     for (int batch = 0; batch < vector.batch_size(); ++batch) {
         for (int index = 0; index < vector.size(); ++index) {
@@ -1076,15 +1076,15 @@ inline py::array_t<std::int32_t> int32_array(int size) {
                                      std::vector<py::ssize_t>{static_cast<py::ssize_t>(sizeof(std::int32_t))});
 }
 
-template <typename T>
-py::object sparse_matrix_to_python_t(const SparseMatrixT<T>& matrix) {
+template <typename Scalar>
+py::object sparse_matrix_to_python_t(const SparseMatrixT<Scalar>& matrix) {
     py::module_ scipy_sparse = py::module_::import("scipy.sparse");
     auto make_one = [&](int batch) -> py::object {
         // Not matrix.nnz(): that is the per-item capacity, sized by the batch maximum,
         // and this batch is heterogeneous by construction. nnz(batch) is the same row
         // offset read this line used to spell by hand.
         const int nnz = matrix.nnz(batch);
-        py::array_t<T> data(std::vector<py::ssize_t>{nnz});
+        py::array_t<Scalar> data(std::vector<py::ssize_t>{nnz});
         py::array_t<int> indices = int32_array(nnz);
         py::array_t<int> indptr = int32_array(matrix.rows() + 1);
         auto data_view = data.template mutable_unchecked<1>();
@@ -1120,13 +1120,13 @@ inline py::object sparse_matrix_to_python(const SparseMatrix& matrix) {
     });
 }
 
-template <typename T>
-py::dict iluk_metadata_t(const ILUKPreconditioner<T>& preconditioner) {
+template <typename Scalar>
+py::dict iluk_metadata_t(const ILUKPreconditioner<Scalar>& preconditioner) {
     py::dict result;
     result["n"] = preconditioner.n;
     result["batch_size"] = preconditioner.batch_size;
     result["levels_of_fill"] = preconditioner.levels_of_fill;
-    result["dtype"] = dtype_name(dtype_code_of<T>::value);
+    result["dtype"] = dtype_name(dtype_code_of<Scalar>::value);
     return result;
 }
 
@@ -1208,9 +1208,9 @@ T cast_scalar(const py::object& value) {
     return value.cast<T>();
 }
 
-template <typename T>
-T scalar_from_object(const py::object& value) {
-    return value.cast<T>();
+template <typename Scalar>
+Scalar scalar_from_object(const py::object& value) {
+    return value.cast<Scalar>();
 }
 
 template <typename T>
@@ -1254,15 +1254,15 @@ inline void ensure_vector_dtype(const DenseVector& vector, DTypeCode dtype, std:
     }
 }
 
-template <typename T>
+template <typename Scalar>
 inline DenseVector make_real_vector(int size, int batch_size) {
-    using real_type = typename base_type<T>::type;
+    using real_type = typename base_type<Scalar>::type;
     return wrap_vector(Vector<real_type>(size, batch_size));
 }
 
-template <typename T>
+template <typename Scalar>
 inline DenseVector make_vector(int size, int batch_size) {
-    return wrap_vector(Vector<T>(size, batch_size));
+    return wrap_vector(Vector<Scalar>(size, batch_size));
 }
 
 // Per-item status (`info`) as a NumPy int32 array.
@@ -1317,20 +1317,20 @@ inline py::array_t<int64_t> pivots_to_numpy(const UnifiedVector<int64_t>& pivots
     return out;
 }
 
-template <typename T>
-inline DenseVector wrap_vector_copy(const UnifiedVector<T>& values, int size, int batch_size) {
-    Vector<T> vector(size, batch_size);
+template <typename Scalar>
+inline DenseVector wrap_vector_copy(const UnifiedVector<Scalar>& values, int size, int batch_size) {
+    Vector<Scalar> vector(size, batch_size);
     for (std::size_t index = 0; index < values.size(); ++index) {
         vector[index] = values[index];
     }
     return wrap_vector(std::move(vector));
 }
 
-template <typename T>
-SyevxParams<T> parse_syevx_params(const py::dict& options,
-                                  const ILUKPreconditioner<T>* preconditioner = nullptr,
-                                  SyevxInstrumentation<T>* instrumentation = nullptr) {
-    SyevxParams<T> params;
+template <typename Scalar>
+SyevxParams<Scalar> parse_syevx_params(const py::dict& options,
+                                       const ILUKPreconditioner<Scalar>* preconditioner = nullptr,
+                                       SyevxInstrumentation<Scalar>* instrumentation = nullptr) {
+    SyevxParams<Scalar> params;
     if (options.contains("method")) {
         params.method = parse_syevx_method(py::cast<std::string>(options["method"]));
     }
@@ -1348,8 +1348,8 @@ SyevxParams<T> parse_syevx_params(const py::dict& options,
     params.iterations = py_scalar_or_default<std::size_t>(options, "iterations", params.iterations);
     params.extra_directions = py_scalar_or_default<std::size_t>(options, "extra_directions", params.extra_directions);
     params.find_largest = py_scalar_or_default<bool>(options, "find_largest", params.find_largest);
-    params.absolute_tolerance = py_scalar_or_default<T>(options, "absolute_tolerance", params.absolute_tolerance);
-    params.relative_tolerance = py_scalar_or_default<T>(options, "relative_tolerance", params.relative_tolerance);
+    params.absolute_tolerance = py_scalar_or_default<Scalar>(options, "absolute_tolerance", params.absolute_tolerance);
+    params.relative_tolerance = py_scalar_or_default<Scalar>(options, "relative_tolerance", params.relative_tolerance);
     params.preconditioner = preconditioner;
     // Opt-in in-solver ILU(k): syevx forms the factor from its own workspace, so
     // an end-to-end timing from Python covers formation as well as application.
@@ -1357,11 +1357,11 @@ SyevxParams<T> parse_syevx_params(const py::dict& options,
         py_scalar_or_default<bool>(options, "build_preconditioner", params.build_preconditioner);
     params.iluk_params.levels_of_fill =
         py_scalar_or_default<int>(options, "iluk_levels_of_fill", params.iluk_params.levels_of_fill);
-    params.iluk_params.drop_tolerance = py_scalar_or_default<typename base_type<T>::type>(
+    params.iluk_params.drop_tolerance = py_scalar_or_default<typename base_type<Scalar>::type>(
         options, "iluk_drop_tolerance", params.iluk_params.drop_tolerance);
-    params.iluk_params.fill_factor = py_scalar_or_default<typename base_type<T>::type>(
+    params.iluk_params.fill_factor = py_scalar_or_default<typename base_type<Scalar>::type>(
         options, "iluk_fill_factor", params.iluk_params.fill_factor);
-    // Range selection. vl/vu/abstol are base_type<T>, not T: the eigenvalues of a
+    // Range selection. vl/vu/abstol are base_type<Scalar>, not Scalar: the eigenvalues of a
     // Hermitian matrix are real, so a complex caller must not have to spell
     // complex(vl) for a real quantity. See SyevxParams's comment on the same point.
     if (options.contains(py::str("select"))) {
@@ -1369,9 +1369,9 @@ SyevxParams<T> parse_syevx_params(const py::dict& options,
     }
     params.il = py_scalar_or_default<std::int64_t>(options, "il", params.il);
     params.iu = py_scalar_or_default<std::int64_t>(options, "iu", params.iu);
-    params.vl = py_scalar_or_default<typename base_type<T>::type>(options, "vl", params.vl);
-    params.vu = py_scalar_or_default<typename base_type<T>::type>(options, "vu", params.vu);
-    params.abstol = py_scalar_or_default<typename base_type<T>::type>(options, "abstol", params.abstol);
+    params.vl = py_scalar_or_default<typename base_type<Scalar>::type>(options, "vl", params.vl);
+    params.vu = py_scalar_or_default<typename base_type<Scalar>::type>(options, "vu", params.vu);
+    params.abstol = py_scalar_or_default<typename base_type<Scalar>::type>(options, "abstol", params.abstol);
     if (options.contains(py::str("order"))) {
         params.order = parse_sort_order(py::cast<std::string>(options["order"]));
     }
@@ -1379,9 +1379,9 @@ SyevxParams<T> parse_syevx_params(const py::dict& options,
     return params;
 }
 
-template <typename T>
-LanczosParams<T> parse_lanczos_params(const py::dict& options) {
-    LanczosParams<T> params;
+template <typename Scalar>
+LanczosParams<Scalar> parse_lanczos_params(const py::dict& options) {
+    LanczosParams<Scalar> params;
     if (options.contains("ortho_algorithm")) {
         params.ortho_algorithm = parse_ortho_algorithm(py::cast<std::string>(options["ortho_algorithm"]));
     }
@@ -1395,9 +1395,9 @@ LanczosParams<T> parse_lanczos_params(const py::dict& options) {
     return params;
 }
 
-template <typename T>
-SteqrParams<T> parse_steqr_params(const py::dict& options) {
-    SteqrParams<T> params;
+template <typename Scalar>
+SteqrParams<Scalar> parse_steqr_params(const py::dict& options) {
+    SteqrParams<Scalar> params;
     params.block_size = py_scalar_or_default<std::size_t>(options, "block_size", params.block_size);
     params.max_sweeps = py_scalar_or_default<std::size_t>(options, "max_sweeps", params.max_sweeps);
     params.back_transform = py_scalar_or_default<bool>(options, "back_transform", params.back_transform);
@@ -1417,9 +1417,9 @@ SteqrParams<T> parse_steqr_params(const py::dict& options) {
     return params;
 }
 
-template <typename T>
-StedcParams<T> parse_stedc_params(const py::dict& options) {
-    StedcParams<T> params;
+template <typename Real>
+StedcParams<Real> parse_stedc_params(const py::dict& options) {
+    StedcParams<Real> params;
     params.recursion_threshold =
         py_scalar_or_default<std::int64_t>(options, "recursion_threshold", params.recursion_threshold);
     params.merge_threads = py_scalar_or_default<int>(options, "merge_threads", params.merge_threads);
@@ -1436,21 +1436,21 @@ StedcParams<T> parse_stedc_params(const py::dict& options) {
         params.merge_variant = parse_stedc_merge_variant(py::cast<std::string>(options["merge_variant"]));
     }
     if (options.contains("leaf_steqr_params")) {
-        params.leaf_steqr_params = parse_steqr_params<T>(options["leaf_steqr_params"].cast<py::dict>());
+        params.leaf_steqr_params = parse_steqr_params<Real>(options["leaf_steqr_params"].cast<py::dict>());
     }
     return params;
 }
 
-template <typename T>
-ILUKParams<T> parse_iluk_params(const py::dict& options) {
-    ILUKParams<T> params;
+template <typename Scalar>
+ILUKParams<Scalar> parse_iluk_params(const py::dict& options) {
+    ILUKParams<Scalar> params;
     params.levels_of_fill = py_scalar_or_default<int>(options, "levels_of_fill", params.levels_of_fill);
-    params.diagonal_shift = py_scalar_or_default<T>(options, "diagonal_shift", params.diagonal_shift);
-    params.drop_tolerance = py_scalar_or_default<typename base_type<T>::type>(
+    params.diagonal_shift = py_scalar_or_default<Scalar>(options, "diagonal_shift", params.diagonal_shift);
+    params.drop_tolerance = py_scalar_or_default<typename base_type<Scalar>::type>(
         options, "drop_tolerance", params.drop_tolerance);
-    params.fill_factor = py_scalar_or_default<typename base_type<T>::type>(
+    params.fill_factor = py_scalar_or_default<typename base_type<Scalar>::type>(
         options, "fill_factor", params.fill_factor);
-    params.diag_pivot_threshold = py_scalar_or_default<typename base_type<T>::type>(
+    params.diag_pivot_threshold = py_scalar_or_default<typename base_type<Scalar>::type>(
         options, "diag_pivot_threshold", params.diag_pivot_threshold);
     params.modified_ilu = py_scalar_or_default<bool>(options, "modified_ilu", params.modified_ilu);
     params.validate_batch_sparsity =
@@ -1472,10 +1472,10 @@ inline SytrdBandReductionParams parse_sytrd_band_reduction_params(const py::dict
     return params;
 }
 
-template <typename T>
-JacobiParams<T> parse_jacobi_params(const py::dict& options) {
-    using real_type = typename base_type<T>::type;
-    JacobiParams<T> params;
+template <typename Scalar>
+JacobiParams<Scalar> parse_jacobi_params(const py::dict& options) {
+    using real_type = typename base_type<Scalar>::type;
+    JacobiParams<Scalar> params;
     params.tol_multiplier = py_scalar_or_default<real_type>(options, "tol_multiplier", params.tol_multiplier);
     params.max_sweeps = py_scalar_or_default<std::size_t>(options, "max_sweeps", params.max_sweeps);
     params.sort = py_scalar_or_default<bool>(options, "sort", params.sort);

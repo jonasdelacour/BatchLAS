@@ -304,20 +304,20 @@ BATCHLAS_DEVICE_INLINE void neighbor_exchange(const Ex& ex, const Frag<T, R, L>&
 // (r, c0 + j) in P and j < live; outside P, TS = ConjTrans reads conj(A(c0 + j, r)) (the stored
 // mirror of a Hermitian matrix, Im(diag) dropped), TS = NoTrans zero. store_row writes only
 // (r, c0 + j) in P, j < live.
-template <Part P, Transpose TS = Transpose::NoTrans, class T, int N, class MA>
-BATCHLAS_DEVICE_INLINE void load_row(Frag<T, N, RowFrag>& f, const MA& a, int r, int c0, int live = N) {
+template <Part P, Transpose TS = Transpose::NoTrans, class Scalar, int N, class MA>
+BATCHLAS_DEVICE_INLINE void load_row(Frag<Scalar, N, RowFrag>& f, const MA& a, int r, int c0, int live = N) {
     static_assert(TS != Transpose::Trans, "load_row: TS is NoTrans (zero outside P) or ConjTrans (the Hermitian mirror)");
     constexpr bool herm = TS == Transpose::ConjTrans;
-    using A = Arith<T>;
+    using A = Arith<Scalar>;
 #pragma unroll
     for (int j = 0; j < N; ++j) {
         const int c = c0 + j;
-        T v = A::zero();
+        Scalar v = A::zero();
         if (j < live) {
-            if (detail::in_part<P>(r, c)) v = static_cast<T>(a(r, c));
-            else if constexpr (herm) v = A::conj(static_cast<T>(a(c, r)));
+            if (detail::in_part<P>(r, c)) v = static_cast<Scalar>(a(r, c));
+            else if constexpr (herm) v = A::conj(static_cast<Scalar>(a(c, r)));
             if constexpr (herm && A::is_complex)
-                if (r == c) v = A::make(A::re(v), real_t<T>(0));
+                if (r == c) v = A::make(A::re(v), real_t<Scalar>(0));
         }
         f[j] = v;
     }

@@ -15,9 +15,9 @@ using namespace batchlas;
 std::string get_test_name(Transpose trans, OrthoAlgorithm algo);
 std::string get_against_m_test_name(Transpose transA, Transpose transM, OrthoAlgorithm algo);
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct OrthoConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 

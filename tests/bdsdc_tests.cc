@@ -52,9 +52,9 @@ using namespace batchlas;
 
 namespace {
 
-template <typename T, Backend B>
+template <typename Real, Backend B>
 struct BdsdcConfig {
-    using ScalarType = T;
+    using ScalarType = Real;
     static constexpr Backend BackendVal = B;
 };
 

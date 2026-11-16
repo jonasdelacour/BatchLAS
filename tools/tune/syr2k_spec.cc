@@ -26,18 +26,18 @@ namespace {
 
 namespace R2 = ops::syr2k;
 
-template <typename T>
+template <typename Scalar>
 struct Syr2kProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     int n, k, batch, lda, ldc;
     std::size_t sa, sc;
-    T alpha, beta;
-    UnifiedVector<T> A, B, C0, C;
+    Scalar alpha, beta;
+    UnifiedVector<Scalar> A, B, C0, C;
 
     Syr2kProblem(Queue& q_, int n_, int k_, int batch_, int pad)
         : q(q_), n(n_), k(k_), batch(batch_), lda(n_ + pad), ldc(n_ + pad), sa(std::size_t(lda) * std::size_t(k_)),
-          sc(std::size_t(ldc) * std::size_t(n_)), alpha(T(1.25)), beta(T(0.75)), A(sa * std::size_t(batch_)),
+          sc(std::size_t(ldc) * std::size_t(n_)), alpha(Scalar(1.25)), beta(Scalar(0.75)), A(sa * std::size_t(batch_)),
           B(sa * std::size_t(batch_)), C0(sc * std::size_t(batch_)), C(sc * std::size_t(batch_)) {
         (void)view(A, n, k, lda, sa).fill_random(q, false, 8282);
         (void)view(B, n, k, lda, sa).fill_random(q, false, 8283);
@@ -45,9 +45,10 @@ struct Syr2kProblem {
         q.wait();
         for (int b = 0; b < batch; ++b)
             for (int c = 1; c < n; ++c)
-                for (int r = 0; r < c; ++r) C0[std::size_t(b) * sc + std::size_t(c) * std::size_t(ldc) + std::size_t(r)] = T(1e6);
+                for (int r = 0; r < c; ++r) C0[std::size_t(b) * sc + std::size_t(c) * std::size_t(ldc) + std::size_t(r)] = Scalar(1e6);
     }
-    MV view(UnifiedVector<T>& v, int r, int c, int ld, std::size_t s) { return MV(v.data(), r, c, ld, int(s), batch); }
+    MV view(UnifiedVector<Scalar>& v, int r, int c, int ld,
+            std::size_t s) { return MV(v.data(), r, c, ld, int(s), batch); }
     void reset() {  // beta != 0 accumulates into C
         (void)MV::copy(q, view(C, n, n, ldc, sc), view(C0, n, n, ldc, sc));
         q.wait();
@@ -60,8 +61,8 @@ struct Syr2kProblem {
     }
     void clear_info() {}
     void run(Span<std::byte>) {
-        (void)syr2k<kBackend, T>(q, view(A, n, k, lda, sa), view(B, n, k, lda, sa), view(C, n, n, ldc, sc), alpha, beta,
-                                 Uplo::Lower, Transpose::NoTrans);
+        (void)syr2k<kBackend, Scalar>(q, view(A, n, k, lda, sa), view(B, n, k, lda, sa), view(C, n, n, ldc, sc), alpha,
+                                      beta, Uplo::Lower, Transpose::NoTrans);
         q.wait();
     }
     std::pair<double, int> verify() {

@@ -248,14 +248,15 @@ template <class X> BATCHLAS_DEVICE_INLINE Shifted<X> shifted(const X& x, int k, 
 
 // N scalar references as a vector (element i is *p[i], writable): loose registers or fields as
 // an operand of the Thread ops.
-template <class T, int N> struct Refs {
-    using value_type = std::remove_cv_t<T>;
-    T* p[N];
-    BATCHLAS_DEVICE_INLINE T& operator()(int i) const { return *p[i]; }
+template <class Scalar, int N> struct Refs {
+    using value_type = std::remove_cv_t<Scalar>;
+    Scalar* p[N];
+    BATCHLAS_DEVICE_INLINE Scalar& operator()(int i) const { return *p[i]; }
     BATCHLAS_DEVICE_INLINE constexpr int size() const { return N; }
 };
-template <class T, class... U> BATCHLAS_DEVICE_INLINE Refs<T, 1 + int(sizeof...(U))> refs(T& a, U&... b) {
-    static_assert((std::is_same_v<T, U> && ...), "refs: every element has one type");
+template <class Scalar, class... U> BATCHLAS_DEVICE_INLINE Refs<Scalar, 1 + int(sizeof...(U))> refs(Scalar& a,
+                                                                                                    U&... b) {
+    static_assert((std::is_same_v<Scalar, U> && ...), "refs: every element has one type");
     return {{&a, &b...}};
 }
 
@@ -264,9 +265,9 @@ template <class T, class... U> BATCHLAS_DEVICE_INLINE Refs<T, 1 + int(sizeof...(
 // Element (s, t) of the canonical lower factor Lc of a stored triangle: rho(s) = fwd ? s :
 // n-1-s maps canonical to stored indices, Left keeps (row, col) and Right swaps them, trans
 // reads A(c, r), conj conjugates (the diagonal too). Offsets are 64-bit; Ld is the ld's type.
-template <class T, bool Left, class Ld = int> struct CanonTri {
-    using value_type = std::remove_cv_t<T>;
-    T* a;
+template <class Scalar, bool Left, class Ld = int> struct CanonTri {
+    using value_type = std::remove_cv_t<Scalar>;
+    Scalar* a;
     Ld ld;
     int n;
     bool fwd, trans, conj;
@@ -291,15 +292,15 @@ template <class T, bool Left, class Ld = int> struct CanonTri {
 
 // Right-hand side u in canonical order: element s is p[b0 + s*ds + u*du]. Left: column u of
 // B, rows flipped when !fwd; Right: row u of B, columns flipped.
-template <class T, bool Left> struct CanonRhs {
-    T* p;
+template <class Scalar, bool Left> struct CanonRhs {
+    Scalar* p;
     std::ptrdiff_t b0, ds, du;
     struct Col {
-        T* p;
+        Scalar* p;
         std::ptrdiff_t b0, ds, udu;
-        BATCHLAS_DEVICE_INLINE T& operator()(int s) const { return p[b0 + static_cast<std::ptrdiff_t>(s) * ds + udu]; }
+        BATCHLAS_DEVICE_INLINE Scalar& operator()(int s) const { return p[b0 + static_cast<std::ptrdiff_t>(s) * ds + udu]; }
     };
-    BATCHLAS_DEVICE_INLINE CanonRhs(T* p_, int n, int ld, bool fwd) : p(p_) {
+    BATCHLAS_DEVICE_INLINE CanonRhs(Scalar* p_, int n, int ld, bool fwd) : p(p_) {
         const std::ptrdiff_t unit_s = Left ? 1 : static_cast<std::ptrdiff_t>(ld);
         du = Left ? static_cast<std::ptrdiff_t>(ld) : 1;
         b0 = fwd ? 0 : static_cast<std::ptrdiff_t>(n - 1) * unit_s;
@@ -310,14 +311,14 @@ template <class T, bool Left> struct CanonRhs {
 
 // An m x q column-major matrix with its rows read in canonical order: (s, c) is
 // p[rho(s) + c*ld], rho(s) = fwd ? s : m-1-s.
-template <class T, class Ld = int> struct FlipRows {
-    T* p;
+template <class Scalar, class Ld = int> struct FlipRows {
+    Scalar* p;
     Ld ld;
     int m, q;
     bool fwd;
     BATCHLAS_DEVICE_INLINE int rows() const { return m; }
     BATCHLAS_DEVICE_INLINE int cols() const { return q; }
-    BATCHLAS_DEVICE_INLINE T& operator()(int s, int c) const {
+    BATCHLAS_DEVICE_INLINE Scalar& operator()(int s, int c) const {
         const int row = fwd ? s : (m - 1 - s);
         return p[static_cast<std::ptrdiff_t>(row) + static_cast<std::ptrdiff_t>(c) * ld];
     }
@@ -398,35 +399,35 @@ template <Uplo UL, PackOrder OR = PackOrder::ByCols, class P> BATCHLAS_DEVICE_IN
 
 // v / L(s, s) for a packed L: v * rd(s), or a true division once any reciprocal was
 // non-finite (divide is group-uniform); unit leaves v.
-template <class T> struct TpDiag {
-    const T* ap;
-    const T* rd;
+template <class Scalar> struct TpDiag {
+    const Scalar* ap;
+    const Scalar* rd;
     bool unit, divide;
-    template <class Ar> BATCHLAS_DEVICE_INLINE T apply(int s, T v) const {
+    template <class Ar> BATCHLAS_DEVICE_INLINE Scalar apply(int s, Scalar v) const {
         if (!unit) v = divide ? Ar::div(v, ap[PackedTri<Uplo::Lower, PackOrder::ByRows>::index(s, s, 0)]) : Ar::mul(v, rd[s]);
         return v;
     }
 };
 
 // ---- Packet: one vector-width unit as a plain struct ---------------------------------------
-// Bytes / sizeof(T) elements loaded or stored through a pointer the caller guarantees is
+// Bytes / sizeof(Scalar) elements loaded or stored through a pointer the caller guarantees is
 // Bytes-aligned (the compiler is told so; one 8/16-byte access where the target has it). A
 // struct, not sycl::vec: Metal has no vector types in this position (design C7).
-template <class T, int Bytes> struct Packet {
-    static_assert(Bytes % sizeof(T) == 0 && (Bytes & (Bytes - 1)) == 0, "Packet: Bytes is a power of two multiple of sizeof(T)");
-    static constexpr int n = Bytes / static_cast<int>(sizeof(T));
-    T v[n];
-    BATCHLAS_DEVICE_INLINE T& operator[](int k) { return v[k]; }
-    BATCHLAS_DEVICE_INLINE const T& operator[](int k) const { return v[k]; }
-    BATCHLAS_DEVICE_INLINE static Packet load(const T* p) {
-        const T* a = static_cast<const T*>(__builtin_assume_aligned(p, Bytes));
+template <class Scalar, int Bytes> struct Packet {
+    static_assert(Bytes % sizeof(Scalar) == 0 && (Bytes & (Bytes - 1)) == 0, "Packet: Bytes is a power of two multiple of sizeof(T)");
+    static constexpr int n = Bytes / static_cast<int>(sizeof(Scalar));
+    Scalar v[n];
+    BATCHLAS_DEVICE_INLINE Scalar& operator[](int k) { return v[k]; }
+    BATCHLAS_DEVICE_INLINE const Scalar& operator[](int k) const { return v[k]; }
+    BATCHLAS_DEVICE_INLINE static Packet load(const Scalar* p) {
+        const Scalar* a = static_cast<const Scalar*>(__builtin_assume_aligned(p, Bytes));
         Packet r;
 #pragma unroll
         for (int k = 0; k < n; ++k) r.v[k] = a[k];
         return r;
     }
-    BATCHLAS_DEVICE_INLINE void store(T* p) const {
-        T* a = static_cast<T*>(__builtin_assume_aligned(p, Bytes));
+    BATCHLAS_DEVICE_INLINE void store(Scalar* p) const {
+        Scalar* a = static_cast<Scalar*>(__builtin_assume_aligned(p, Bytes));
 #pragma unroll
         for (int k = 0; k < n; ++k) a[k] = v[k];
     }

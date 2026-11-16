@@ -14,17 +14,17 @@ namespace batchlas {
 
 namespace backend {
 
-template <Backend Back, typename T, MatrixFormat MFormat>
+template <Backend Back, typename Scalar, MatrixFormat MFormat>
 Event spmm_vendor(Queue& ctx,
-           const MatrixView<T, MFormat>& A,
-           const MatrixView<T, MatrixFormat::Dense>& B,
-           const MatrixView<T, MatrixFormat::Dense>& C,
-           T alpha,
-           T beta,
+           const MatrixView<Scalar, MFormat>& A,
+           const MatrixView<Scalar, MatrixFormat::Dense>& B,
+           const MatrixView<Scalar, MatrixFormat::Dense>& C,
+           Scalar alpha,
+           Scalar beta,
            Transpose transA,
            Transpose transB,
            Span<std::byte> workspace) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::spmm, "spmm_vendor", Back, A, B, C);
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::spmm, "spmm_vendor", Back, A, B, C);
     static LinalgHandle<Back> handle;
     BumpAllocator pool(workspace);
     auto buffer_size = backend::spmm_vendor_buffer_size<Back>(ctx, A, B, C, alpha, beta, transA, transB);
@@ -44,7 +44,7 @@ Event spmm_vendor(Queue& ctx,
                        *B,
                        &beta_h,
                        *C,
-                       BackendScalar<T, BackendLibrary::ROCSPARSE>::type,
+                       BackendScalar<Scalar, BackendLibrary::ROCSPARSE>::type,
                        rocsparse_spmm_alg_default,
                        rocsparse_spmm_stage_compute,
                        &buffer_size,
@@ -57,13 +57,13 @@ Event spmm_vendor(Queue& ctx,
 
 namespace backend {
 
-template <Backend Back, typename T, MatrixFormat MFormat>
+template <Backend Back, typename Scalar, MatrixFormat MFormat>
 size_t spmm_vendor_buffer_size(Queue& ctx,
-                      const MatrixView<T, MFormat>& A,
-                      const MatrixView<T, MatrixFormat::Dense>& B,
-                      const MatrixView<T, MatrixFormat::Dense>& C,
-                      T alpha,
-                      T beta,
+                      const MatrixView<Scalar, MFormat>& A,
+                      const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                      const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                      Scalar alpha,
+                      Scalar beta,
                       Transpose transA,
                       Transpose transB) {
     static LinalgHandle<Back> handle;
@@ -77,7 +77,7 @@ size_t spmm_vendor_buffer_size(Queue& ctx,
                              *B,
                              &beta,
                              *C,
-                   BackendScalar<T, BackendLibrary::ROCSPARSE>::type,
+                   BackendScalar<Scalar, BackendLibrary::ROCSPARSE>::type,
                    rocsparse_spmm_alg_default,
                    rocsparse_spmm_stage_buffer_size,
                    &size,

@@ -35,16 +35,16 @@ Transpose trans_of(const std::string& w) {
     return w == "N" ? Transpose::NoTrans : (w == "T" ? Transpose::Trans : Transpose::ConjTrans);
 }
 
-template <typename T>
+template <typename Scalar>
 struct OrmqrProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     Side side;
     Transpose trans;
     int m, k, nq, batch, lda, crows, ccols, ldc;
     std::size_t sa, sc;
-    UnifiedVector<T> A0, A, tau, C0, C;
-    UnifiedVector<T*> pA0, pA, pC0, pC;
+    UnifiedVector<Scalar> A0, A, tau, C0, C;
+    UnifiedVector<Scalar*> pA0, pA, pC0, pC;
     MV A0v, Av, C0v, Cv;
 
     OrmqrProblem(Queue& q_, Side s, Transpose t, int m_, int k_, int q_rhs, int batch_, int ld_pad)
@@ -59,11 +59,12 @@ struct OrmqrProblem {
           Cv(C.data(), crows, ccols, ldc, int(sc), batch, pC.data()) {
         (void)A0v.fill_random(q, false, 6161);
         (void)C0v.fill_random(q, false, 777);
-        UnifiedVector<std::byte> ws(std::max<std::size_t>(1, geqrf_buffer_size<kBackend, T>(q, A0v, tau.to_span())));
-        (void)geqrf<kBackend, T>(q, A0v, tau.to_span(), ws.to_span());
+        UnifiedVector<std::byte> ws(std::max<std::size_t>(1, geqrf_buffer_size<kBackend,
+                                                          Scalar>(q, A0v, tau.to_span())));
+        (void)geqrf<kBackend, Scalar>(q, A0v, tau.to_span(), ws.to_span());
         q.wait();
     }
-    std::size_t workspace() { return ormqr_buffer_size<kBackend, T>(q, Av, Cv, side, trans, tau.to_span()); }
+    std::size_t workspace() { return ormqr_buffer_size<kBackend, Scalar>(q, Av, Cv, side, trans, tau.to_span()); }
     void reset() {  // A too: a family that edits its reflectors in place must not hand the next arm its edit
         (void)MV::copy(q, Av, A0v);
         (void)MV::copy(q, Cv, C0v);
@@ -71,14 +72,14 @@ struct OrmqrProblem {
     }
     void clear_info() {}
     void run(Span<std::byte> ws) {
-        (void)ormqr<kBackend, T>(q, Av, Cv, side, trans, tau.to_span(), ws);
+        (void)ormqr<kBackend, Scalar>(q, Av, Cv, side, trans, tau.to_span(), ws);
         q.wait();
     }
     std::pair<double, int> verify() {
         using P = typename MV::promoted_type;
         using PV = MatrixView<P, MatrixFormat::Dense>;
         const auto items = Cv.default_items();
-        auto Q = MV::form_q(q, A0v, VectorView<T>(tau.data(), k, batch, 1, k), items, m);
+        auto Q = MV::form_q(q, A0v, VectorView<Scalar>(tau.data(), k, batch, 1, k), items, m);
         auto c0 = C0v.template astype<P>(items), c = Cv.template astype<P>(items);
         const Transpose nt = Transpose::NoTrans;
         const auto all = Q.all_items();

@@ -26,16 +26,16 @@ namespace {
 
 namespace H = ops::herk;
 
-template <typename T>
+template <typename Scalar>
 struct HerkProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
-    using R = float_t<T>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+    using R = float_t<Scalar>;
     Queue& q;
     Transpose trans;
     int n, k, batch, ar, ac, lda, ldc;
     std::size_t sa, sc;
     R alpha, beta;
-    UnifiedVector<T> A, C0, C;
+    UnifiedVector<Scalar> A, C0, C;
 
     HerkProblem(Queue& q_, Transpose t, int n_, int k_, int batch_, int pad)
         : q(q_), trans(t), n(n_), k(k_), batch(batch_), ar(t == Transpose::NoTrans ? n_ : k_),
@@ -47,12 +47,13 @@ struct HerkProblem {
         q.wait();
         for (int b = 0; b < batch; ++b)
             for (int c = 0; c < n; ++c) {
-                T* col = C0.data() + std::size_t(b) * sc + std::size_t(c) * std::size_t(ldc);
-                col[c] = T(col[c].real(), R(0));
-                for (int r = 0; r < c; ++r) col[r] = T(1e6, -1e6);
+                Scalar* col = C0.data() + std::size_t(b) * sc + std::size_t(c) * std::size_t(ldc);
+                col[c] = Scalar(col[c].real(), R(0));
+                for (int r = 0; r < c; ++r) col[r] = Scalar(1e6, -1e6);
             }
     }
-    MV view(UnifiedVector<T>& v, int r, int c, int ld, std::size_t s) { return MV(v.data(), r, c, ld, int(s), batch); }
+    MV view(UnifiedVector<Scalar>& v, int r, int c, int ld,
+            std::size_t s) { return MV(v.data(), r, c, ld, int(s), batch); }
     void reset() {  // beta != 0 accumulates into C
         (void)MV::copy(q, view(C, n, n, ldc, sc), view(C0, n, n, ldc, sc));
         q.wait();
@@ -64,7 +65,8 @@ struct HerkProblem {
     }
     void clear_info() {}
     void run(Span<std::byte>) {
-        (void)herk<kBackend, T>(q, view(A, ar, ac, lda, sa), view(C, n, n, ldc, sc), alpha, beta, Uplo::Lower, trans);
+        (void)herk<kBackend, Scalar>(q, view(A, ar, ac, lda, sa), view(C, n, n, ldc, sc), alpha, beta, Uplo::Lower,
+                                     trans);
         q.wait();
     }
     std::pair<double, int> verify() {
@@ -78,7 +80,7 @@ struct HerkProblem {
         const Transpose other = trans == Transpose::NoTrans ? Transpose::ConjTrans : Transpose::NoTrans;
         const MV a = view(A, ar, ac, lda, sa);
         return {MV::gemm_backward_error(q, a, trans, a, other, view(C0, n, n, ldc, sc), view(C, n, n, ldc, sc),
-                                        MV::up(T(alpha)), MV::up(T(beta)), a.default_items(), Uplo::Lower),
+                                        MV::up(Scalar(alpha)), MV::up(Scalar(beta)), a.default_items(), Uplo::Lower),
                 touched};
     }
 };

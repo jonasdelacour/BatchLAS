@@ -20,11 +20,11 @@ using namespace device_core_test;
 
 namespace {
 
-template <class T> T conj_t(const T& v) {
-    if constexpr (is_cplx<T>) return std::conj(v);
+template <class Scalar> Scalar conj_t(const Scalar& v) {
+    if constexpr (is_cplx<Scalar>) return std::conj(v);
     else return v;
 }
-template <class T> class DeviceCoreOperandTest : public DeviceCoreTest<T> {};
+template <class Scalar> class DeviceCoreOperandTest : public DeviceCoreTest<Scalar> {};
 TYPED_TEST_SUITE(DeviceCoreOperandTest, AllTypes);
 
 TYPED_TEST(DeviceCoreOperandTest, UnitHeadFormsNeverReadTheHead) {
@@ -47,19 +47,19 @@ TYPED_TEST(DeviceCoreOperandTest, UnitHeadFormsNeverReadTheHead) {
     }
 }
 
-// Lane-cyclic Frag<T, 3> on a Partition<8> and a SubGroup<32>: element e = lane + P r.
-template <class T, int P, class MakeEx> void check_frag_moves(Dev& d, MakeEx make) {
+// Lane-cyclic Frag<Scalar, 3> on a Partition<8> and a SubGroup<32>: element e = lane + P r.
+template <class Scalar, int P, class MakeEx> void check_frag_moves(Dev& d, MakeEx make) {
     constexpr int R = 3, len = P * R;
-    const auto x_h = vals<T>(32 * R, 2 + P);
-    T* x = d.up(x_h);
-    T* bc = d.template alloc<T>(32 * len, T(0));
-    T* up = d.template alloc<T>(32 * R, T(0));
-    T* dn = d.template alloc<T>(32 * R, T(0));
+    const auto x_h = vals<Scalar>(32 * R, 2 + P);
+    Scalar* x = d.up(x_h);
+    Scalar* bc = d.template alloc<Scalar>(32 * len, Scalar(0));
+    Scalar* up = d.template alloc<Scalar>(32 * R, Scalar(0));
+    Scalar* dn = d.template alloc<Scalar>(32 * R, Scalar(0));
     d.template run<32>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const auto ex = make(it);
         const int g = static_cast<int>(it.get_local_linear_id());
         const int blk = g - g % P, lane = g % P;
-        batchlas::device::Frag<T, R> f, u, w;
+        batchlas::device::Frag<Scalar, R> f, u, w;
         for (int r = 0; r < R; ++r) f[r] = x[(blk + lane) * R + r];  // block-local element lane + P r
         for (int k = 0; k < len; ++k) bc[g * len + k] = batchlas::device::frag_bcast(ex, f, k);
         batchlas::device::neighbor_exchange(ex, f, u, w);

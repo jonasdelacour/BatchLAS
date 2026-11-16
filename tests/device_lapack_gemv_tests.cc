@@ -35,90 +35,91 @@ constexpr int kPeriod = 3;
 constexpr int kM = 37, kN = 23;
 constexpr Transpose N = Transpose::NoTrans, Tr = Transpose::Trans, Cj = Transpose::ConjTrans;
 
-template <class T> T poison_v() { return T(real_of<T>(1e3)); }
-template <class T> T nan_v() { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }
-template <class T> T cval(double re, double im) {
-    if constexpr (is_cplx<T>) return T(real_of<T>(re), real_of<T>(im));
-    else return T(real_of<T>(re));
+template <class Scalar> Scalar poison_v() { return Scalar(real_of<Scalar>(1e3)); }
+template <class Scalar> Scalar nan_v() { return Scalar(std::numeric_limits<real_of<Scalar>>::quiet_NaN()); }
+template <class Scalar> Scalar cval(double re, double im) {
+    if constexpr (is_cplx<Scalar>) return Scalar(real_of<Scalar>(re), real_of<Scalar>(im));
+    else return Scalar(real_of<Scalar>(re));
 }
 
 // Stored A kM x kN; op(A) out x red; x of length red at inc 2, y of length out at inc 3.
-template <class T> struct Gemv {
+template <class Scalar> struct Gemv {
     Transpose tr = N;
     int out = 0, red = 0, lda = kM + 3, sa = (kM + 3) * kN + 5, incx = 2, sx = 0, incy = 3, sy = 0;
-    std::vector<T> a, x, y0;
+    std::vector<Scalar> a, x, y0;
 };
 
-template <class T> Gemv<T> make_gemv(Transpose tr, bool nan_y) {
-    Gemv<T> d;
+template <class Scalar> Gemv<Scalar> make_gemv(Transpose tr, bool nan_y) {
+    Gemv<Scalar> d;
     d.tr = tr;
     d.out = tr == N ? kM : kN;
     d.red = tr == N ? kN : kM;
     d.sx = d.red * d.incx + 3;
     d.sy = d.out * d.incy + 4;
-    d.a.assign(std::size_t(d.sa) * kBatch, poison_v<T>());
-    d.x.assign(std::size_t(d.sx) * kBatch, poison_v<T>());
-    d.y0.assign(std::size_t(d.sy) * kBatch, poison_v<T>());
+    d.a.assign(std::size_t(d.sa) * kBatch, poison_v<Scalar>());
+    d.x.assign(std::size_t(d.sx) * kBatch, poison_v<Scalar>());
+    d.y0.assign(std::size_t(d.sy) * kBatch, poison_v<Scalar>());
     for (int b = 0; b < kBatch; ++b) {
         const std::uint64_t q = b % kPeriod;
         for (int j = 0; j < kN; ++j)
-            for (int i = 0; i < kM; ++i) d.a[std::size_t(b) * d.sa + std::size_t(j) * d.lda + i] = val<T>(100003u * (q + 1) + 59u * j + i);
-        for (int i = 0; i < d.red; ++i) d.x[std::size_t(b) * d.sx + std::size_t(i) * d.incx] = val<T>(200003u * (q + 1) + i);
-        for (int i = 0; i < d.out; ++i) d.y0[std::size_t(b) * d.sy + std::size_t(i) * d.incy] = nan_y ? nan_v<T>() : val<T>(300007u * (q + 1) + i);
+            for (int i = 0; i < kM; ++i) d.a[std::size_t(b) * d.sa + std::size_t(j) * d.lda + i] = val<Scalar>(100003u * (q + 1) + 59u * j + i);
+        for (int i = 0; i < d.red; ++i) d.x[std::size_t(b) * d.sx + std::size_t(i) * d.incx] = val<Scalar>(200003u * (q + 1) + i);
+        for (int i = 0; i < d.out; ++i) d.y0[std::size_t(b) * d.sy + std::size_t(i) * d.incy] = nan_y ? nan_v<Scalar>() : val<Scalar>(300007u * (q + 1) + i);
     }
     return d;
 }
 
-template <class T> double rel(T got, LD<T> ref, long double scale) {
+template <class Scalar> double rel(Scalar got, LD<Scalar> ref, long double scale) {
     const long double e = std::abs(wide(got) - ref);
     if (std::isnan(e)) return std::numeric_limits<double>::infinity();
-    return static_cast<double>(e / std::max<long double>(scale, std::numeric_limits<real_of<T>>::min()));
+    return static_cast<double>(e / std::max<long double>(scale, std::numeric_limits<real_of<Scalar>>::min()));
 }
 
 // Worst relative error over the representatives; pads (and the elements between y's strides)
 // that are no longer poison are counted.
-template <class T> double gemv_worst(const Gemv<T>& d, const std::vector<T>& got, T alpha, T beta, int* pads_moved) {
-    const bool bz = batchlas::device::Arith<T>::is_zero(beta);
+template <class Scalar> double gemv_worst(const Gemv<Scalar>& d, const std::vector<Scalar>& got, Scalar alpha,
+                                          Scalar beta, int* pads_moved) {
+    const bool bz = batchlas::device::Arith<Scalar>::is_zero(beta);
     double worst = 0;
     for (int q = 0; q < kPeriod; ++q)
         for (int o = 0; o < d.out; ++o) {
-            LD<T> acc = 0;
+            LD<Scalar> acc = 0;
             long double s = 0;
             for (int r = 0; r < d.red; ++r) {
                 const int i = d.tr == N ? o : r, j = d.tr == N ? r : o;
-                LD<T> a = wide(d.a[std::size_t(q) * d.sa + std::size_t(j) * d.lda + i]);
-                if constexpr (is_cplx<T>)
+                LD<Scalar> a = wide(d.a[std::size_t(q) * d.sa + std::size_t(j) * d.lda + i]);
+                if constexpr (is_cplx<Scalar>)
                     if (d.tr == Cj) a = std::conj(a);
-                const LD<T> xv = wide(d.x[std::size_t(q) * d.sx + std::size_t(r) * d.incx]);
+                const LD<Scalar> xv = wide(d.x[std::size_t(q) * d.sx + std::size_t(r) * d.incx]);
                 acc += a * xv;
                 s += std::abs(a) * std::abs(xv);
             }
             const std::size_t at = std::size_t(q) * d.sy + std::size_t(o) * d.incy;
-            const LD<T> cold = bz ? LD<T>(0) : wide(d.y0[at]);
+            const LD<Scalar> cold = bz ? LD<Scalar>(0) : wide(d.y0[at]);
             worst = std::max(worst, rel(got[at], wide(alpha) * acc + wide(beta) * cold,
                                         std::abs(wide(alpha)) * s + std::abs(wide(beta)) * std::abs(cold)));
         }
     int moved = 0;
     for (int b = 0; b < kBatch; ++b)
         for (int e = 0; e < d.sy; ++e)
-            if (e % d.incy != 0 || e / d.incy >= d.out) moved += !same_bits(got[std::size_t(b) * d.sy + e], poison_v<T>());
+            if (e % d.incy != 0 || e / d.incy >= d.out) moved += !same_bits(got[std::size_t(b) * d.sy + e], poison_v<Scalar>());
     *pads_moved = moved;
     return worst;
 }
 
-template <Transpose TR, int WG, class T> void device_gemv(sycl::queue& q, const Gemv<T>& d, const T* ap, const T* xp, T* yp, T alpha, T beta) {
+template <Transpose TR, int WG, class Scalar> void device_gemv(sycl::queue& q, const Gemv<Scalar>& d, const Scalar* ap, const Scalar* xp, Scalar* yp, Scalar alpha, Scalar beta) {
     using Alg = std::conditional_t<TR == N, batchlas::device::alg::RowOwner, batchlas::device::alg::ColDot<1>>;
     const int lda = d.lda, sa = d.sa, incx = d.incx, sx = d.sx, incy = d.incy, sy = d.sy, out = d.out, red = d.red;
-    const bool az = batchlas::device::Arith<T>::is_zero(alpha), bz = batchlas::device::Arith<T>::is_zero(beta);
+    const bool az = batchlas::device::Arith<Scalar>::is_zero(alpha), bz = batchlas::device::Arith<Scalar>::is_zero(beta);
     q.submit([&](sycl::handler& h) {
          h.parallel_for(sycl::nd_range<1>(std::size_t(kBatch) * WG, WG), [=](sycl::nd_item<1> it) {
              const int b = static_cast<int>(it.get_group(0));
              const batchlas::device::WorkGroup<WG> ex{it};
-             const batchlas::device::ItemMat<const T> A{ap, b, sa, lda, kM, kN};
-             const batchlas::device::ItemVec<const T> x{xp, b, sx, incx, red};
-             const batchlas::device::ItemVec<T> y{yp, b, sy, incy, out};
-             batchlas::device::gemv<TR, Alg, batchlas::device::arith::Fma, batchlas::device::epi::MacChain>(ex, batchlas::device::MaybeZero<T>{alpha, az}, A, batchlas::device::assume_published(x),
-                                                                   batchlas::device::MaybeZero<T>{beta, bz}, y);
+             const batchlas::device::ItemMat<const Scalar> A{ap, b, sa, lda, kM, kN};
+             const batchlas::device::ItemVec<const Scalar> x{xp, b, sx, incx, red};
+             const batchlas::device::ItemVec<Scalar> y{yp, b, sy, incy, out};
+             batchlas::device::gemv<TR, Alg, batchlas::device::arith::Fma, batchlas::device::epi::MacChain>(ex, batchlas::device::MaybeZero<Scalar>{alpha, az}, A, batchlas::device::assume_published(x),
+                                                                   batchlas::device::MaybeZero<Scalar>{beta, bz}, y);
          });
      }).wait_and_throw();
 }

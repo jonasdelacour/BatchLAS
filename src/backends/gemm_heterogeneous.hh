@@ -17,18 +17,18 @@
 
 namespace batchlas::backend {
 
-template <typename T>
-inline bool gemm_has_heterogeneous_batch(const MatrixView<T, MatrixFormat::Dense>& A,
-                                         const MatrixView<T, MatrixFormat::Dense>& B,
-                                         const MatrixView<T, MatrixFormat::Dense>& C) {
+template <typename Scalar>
+inline bool gemm_has_heterogeneous_batch(const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                         const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                                         const MatrixView<Scalar, MatrixFormat::Dense>& C) {
     return A.is_heterogeneous() || B.is_heterogeneous() || C.is_heterogeneous();
 }
 
 // Every batch member's (m, n, k) agrees across A, B and C.
-template <typename T>
-inline bool gemm_batch_dimensions_compatible(const MatrixView<T, MatrixFormat::Dense>& A,
-                                             const MatrixView<T, MatrixFormat::Dense>& B,
-                                             const MatrixView<T, MatrixFormat::Dense>& C,
+template <typename Scalar>
+inline bool gemm_batch_dimensions_compatible(const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                             const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                                             const MatrixView<Scalar, MatrixFormat::Dense>& C,
                                              Transpose transA,
                                              Transpose transB) {
     if (A.batch_size() != B.batch_size() || A.batch_size() != C.batch_size()) {
@@ -57,12 +57,12 @@ inline bool gemm_batch_dimensions_compatible(const MatrixView<T, MatrixFormat::D
 namespace batchlas::backend::detail {
 
 // launch_item(A.batch_item(i), B.batch_item(i), C.batch_item(i)) -> Event.
-template <typename T, typename LaunchItem>
+template <typename Scalar, typename LaunchItem>
 Event gemm_heterogeneous_loop(Queue& ctx,
-                              const MatrixView<T, MatrixFormat::Dense>& A,
-                              const MatrixView<T, MatrixFormat::Dense>& B,
-                              const MatrixView<T, MatrixFormat::Dense>& C,
-                              T beta,
+                              const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                              const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                              const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                              Scalar beta,
                               Transpose transA,
                               Transpose transB,
                               LaunchItem&& launch_item) {
@@ -81,7 +81,7 @@ Event gemm_heterogeneous_loop(Queue& ctx,
         }
         if (k == 0) {
             // k == 0 is not a GEMM: the defined result is C := beta*C, and beta == 0 never reads C.
-            last_event = beta == T(0) ? C.batch_item(batch_index).fill(ctx, T(0))
+            last_event = beta == Scalar(0) ? C.batch_item(batch_index).fill(ctx, Scalar(0))
                                       : scale(ctx, beta, C.batch_item(batch_index));
             launched = true;
             continue;

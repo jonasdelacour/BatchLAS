@@ -28,7 +28,7 @@ namespace batchlas::device {
 /// syev's options: steqr's knobs (the host SteqrParams fields of the same meaning) at the host
 /// syev_cta / syev_cta_fused defaults (their bump over SteqrParams{}). The Blocked tier reads
 /// max_sweeps only (the work-group steqr's shift).
-template <class R> struct SyevOptions {
+template <class Real> struct SyevOptions {
     int max_sweeps = 400;
     SteqrShiftStrategy shift = SteqrShiftStrategy::Wilkinson;
 };
@@ -80,33 +80,33 @@ BATCHLAS_DEVICE_INLINE void phase_similarity(const Thread&, int n, const Dv& d, 
 // The same phase chain replayed per lane on a Partition (no scratch): lane l returns S(l) of
 // the superdiagonal form, S(i+1) = S(i) * conj(e_i) / |e_i|, from e_lane / abs_lane held by
 // lane i. 2 (n - 1) broadcasts; the lane-local product order is the serial one.
-template <class Ops = arith::Native, class Ex, class T, class R> BATCHLAS_DEVICE_INLINE T phase_replay(const Ex& ex, T e_lane, R abs_lane, int n) {
-    using AR = arith_t<Ops, T>;
+template <class Ops = arith::Native, class Ex, class Scalar, class Real> BATCHLAS_DEVICE_INLINE Scalar phase_replay(const Ex& ex, Scalar e_lane, Real abs_lane, int n) {
+    using AR = arith_t<Ops, Scalar>;
     const int lane = ex.lid();
-    T phase = AR::one();
+    Scalar phase = AR::one();
     for (int i = 0; i < n - 1; ++i) {
-        const T e_i = ex.bcast(e_lane, static_cast<std::uint32_t>(i));
-        const R abs_i = ex.bcast(abs_lane, static_cast<std::uint32_t>(i));
-        if (lane > i && abs_i != R(0)) phase = AR::mul(phase, AR::div_real(AR::conj(e_i), abs_i));
+        const Scalar e_i = ex.bcast(e_lane, static_cast<std::uint32_t>(i));
+        const Real abs_i = ex.bcast(abs_lane, static_cast<std::uint32_t>(i));
+        if (lane > i && abs_i != Real(0)) phase = AR::mul(phase, AR::div_real(AR::conj(e_i), abs_i));
     }
     return phase;
 }
 
 // ---- column-owner Householder (lane l holds column l in a ColPerLane Frag) -------------------
 // c(r) = d(r) * z(r) for r < n (z real, core lift): the dgmm Left lift on a register column.
-template <class Ops = arith::Native, class T, int N, class L, class Dv, class Zv>
-BATCHLAS_DEVICE_INLINE void dgmm_lift(Frag<T, N, L>& c, const Dv& d, const Zv& z, const int& n) {
-    using AR = arith_t<Ops, T>;
+template <class Ops = arith::Native, class Scalar, int N, class L, class Dv, class Zv>
+BATCHLAS_DEVICE_INLINE void dgmm_lift(Frag<Scalar, N, L>& c, const Dv& d, const Zv& z, const int& n) {
+    using AR = arith_t<Ops, Scalar>;
 #pragma unroll
     for (int r = 0; r < N; ++r) {
-        if (r < n) c[r] = AR::mul(d(r), lift<T>(z(r)));
+        if (r < n) c[r] = AR::mul(d(r), lift<Scalar>(z(r)));
     }
 }
 
 // c := H e_k = e_k - tau v for the QL vector v (v(k) = 1, v(r > k) = 0): column k of xORG2L.
-template <class Ops = arith::Native, class T, int N, class L, class V>
-BATCHLAS_DEVICE_INLINE void larf_unit_col(Frag<T, N, L>& c, const Published<V>& v, T tau, int k) {
-    using AR = arith_t<Ops, T>;
+template <class Ops = arith::Native, class Scalar, int N, class L, class V>
+BATCHLAS_DEVICE_INLINE void larf_unit_col(Frag<Scalar, N, L>& c, const Published<V>& v, Scalar tau, int k) {
+    using AR = arith_t<Ops, Scalar>;
 #pragma unroll
     for (int r = 0; r < N; ++r) c[r] = (r < k) ? AR::mul(AR::neg(tau), v(r)) : ((r == k) ? AR::sub(AR::one(), tau) : AR::zero());
 }
@@ -123,12 +123,12 @@ template <class Ex, class Vs, class Rm> BATCHLAS_DEVICE_INLINE void stage_ql_ref
 // xORG2L, column-owner form (no column shift): lane l < n - 1 ends with column l of
 // Q = H(n-2) ... H(0) (columns >= n - 1 are the caller's). Column k is generated at step k,
 // so the reflector store may overlap the columns of Q not yet generated.
-template <class Ops = arith::Native, class Ex, class T, int N, class L, class Vs, class Rm>
-BATCHLAS_DEVICE_INLINE void org2l(const Ex& ex, Frag<T, N, L>& q, const Vs& vs, const Rm& refl, T tau_lane, const int& n) {
+template <class Ops = arith::Native, class Ex, class Scalar, int N, class L, class Vs, class Rm>
+BATCHLAS_DEVICE_INLINE void org2l(const Ex& ex, Frag<Scalar, N, L>& q, const Vs& vs, const Rm& refl, Scalar tau_lane, const int& n) {
     const int lane = ex.lid();
-    fill(q, arith_t<Ops, T>::zero());
+    fill(q, arith_t<Ops, Scalar>::zero());
     for (int k = 0; k < n - 1; ++k) {
-        const T tau_k = ex.bcast(tau_lane, static_cast<std::uint32_t>(k));
+        const Scalar tau_k = ex.bcast(tau_lane, static_cast<std::uint32_t>(k));
         detail::stage_ql_reflector(ex, vs, refl, k);
         detail::chunk_barrier(ex);
         if (lane < k) larf<Side::Left, Ops>(q, assume_published(vs), tau_k);
@@ -139,14 +139,14 @@ BATCHLAS_DEVICE_INLINE void org2l(const Ex& ex, Frag<T, N, L>& q, const Vs& vs, 
 
 // xORM2L, Side::Left, NoTrans, column-owner form: c := H(n-2) ... H(0) c on the lanes < n
 // (the n x n block's columns); a reflector with tau == 0 is skipped.
-template <class Ops = arith::Native, class Ex, class T, int N, class L, class Vs, class Rm>
-BATCHLAS_DEVICE_INLINE void orm2l(const Ex& ex, Frag<T, N, L>& c, const Vs& vs, const Rm& refl, T tau_lane, const int& n) {
+template <class Ops = arith::Native, class Ex, class Scalar, int N, class L, class Vs, class Rm>
+BATCHLAS_DEVICE_INLINE void orm2l(const Ex& ex, Frag<Scalar, N, L>& c, const Vs& vs, const Rm& refl, Scalar tau_lane, const int& n) {
     const int lane = ex.lid();
     for (int k = 0; k < n - 1; ++k) {
-        const T tau_k = ex.bcast(tau_lane, static_cast<std::uint32_t>(k));
+        const Scalar tau_k = ex.bcast(tau_lane, static_cast<std::uint32_t>(k));
         detail::stage_ql_reflector(ex, vs, refl, k);
         detail::chunk_barrier(ex);
-        if (lane < n && tau_k != arith_t<Ops, T>::zero()) larf<Side::Left, Ops>(c, assume_published(vs), tau_k);
+        if (lane < n && tau_k != arith_t<Ops, Scalar>::zero()) larf<Side::Left, Ops>(c, assume_published(vs), tau_k);
         detail::chunk_barrier(ex);
     }
 }
@@ -157,23 +157,24 @@ namespace detail {
 // The tile layout: real eigenvector input reduces, accumulates and reads out on ONE tile, so it
 // carries the accumulator's P + 1 padding (read by column on write-out: LD == 32 serializes 32
 // ways on bank conflicts); Hermitian input with vectors adds a separate real accumulator.
-template <bool V, int P, class T> struct cta_layout {
-    static constexpr bool fused_orgql = V && !Arith<T>::is_complex;
+template <bool V, int P, class Scalar> struct cta_layout {
+    static constexpr bool fused_orgql = V && !Arith<Scalar>::is_complex;
     static constexpr bool separate_q = V && !fused_orgql;
     static constexpr int ldq = P + 1;
     static constexpr int lda = fused_orgql ? ldq : P;
 };
 // The Cta tier's workspace: the tile (lda x N), v and w (N each), the real accumulator (ldq x N
 // for Hermitian input with vectors), all local.
-template <bool V, int N, class T> struct syev_cta_plan {
-    using L = cta_layout<V, N, T>;
+template <bool V, int N, class Scalar> struct syev_cta_plan {
+    using L = cta_layout<V, N, Scalar>;
     Plan plan{};
-    WsSlot<T> a{}, v{}, w{};
-    WsSlot<real_t<T>> q{};
+    WsSlot<Scalar> a{}, v{}, w{};
+    WsSlot<real_t<Scalar>> q{};
     constexpr syev_cta_plan()
-        : a(plan.take<T>(WsSpace::Local, static_cast<std::size_t>(L::lda) * N)), v(plan.take<T>(WsSpace::Local, N)),
-          w(plan.take<T>(WsSpace::Local, N)),
-          q(plan.take<real_t<T>>(WsSpace::Local, L::separate_q ? static_cast<std::size_t>(L::ldq) * N : 0)) {}
+        : a(plan.take<Scalar>(WsSpace::Local,
+                              static_cast<std::size_t>(L::lda) * N)), v(plan.take<Scalar>(WsSpace::Local, N)),
+          w(plan.take<Scalar>(WsSpace::Local, N)),
+          q(plan.take<real_t<Scalar>>(WsSpace::Local, L::separate_q ? static_cast<std::size_t>(L::ldq) * N : 0)) {}
 };
 
 struct cta_opts {  // the host SteqrParams fields of the same meaning
@@ -191,20 +192,20 @@ struct cta_opts {  // the host SteqrParams fields of the same meaning
 // vector operand), column rank of A_out := its vector; on_solved(failed) runs between the solve
 // and the stores. live == false (a dead chunk or a masked item) runs every stage on a zero
 // matrix and stores nothing. Buf / QBuf: a sycl::local_accessor or a decorated local pointer.
-template <class T, std::size_t P, bool V, std::int32_t LDA, std::int32_t LDQ, bool M, class SP, class Buf, class QBuf, class MA,
+template <class Scalar, std::size_t P, bool V, std::int32_t LDA, std::int32_t LDQ, bool M, class SP, class Buf, class QBuf, class MA,
           class MO, class WV, class F>
 BATCHLAS_DEVICE_INLINE void syev_cta_run(const SubGroupPartition<P, M>& part, const SP& solve_part, const Buf& A_local, std::int32_t base_a,
                                       const Buf& V_local, std::int32_t base_v, const Buf& W_local, std::int32_t base_w,
                                       const QBuf& Q_local, std::int32_t base_q, const MA& A_in, const MO& A_out, const WV& W,
                                       std::int32_t nn, bool is_upper, bool live, const cta_opts& o, F&& on_solved) {
-    using Real = real_t<T>;
-    constexpr bool kComplex = Arith<T>::is_complex;
-    constexpr bool kFusedOrgql = cta_layout<V, static_cast<int>(P), T>::fused_orgql;
+    using Real = real_t<Scalar>;
+    constexpr bool kComplex = Arith<Scalar>::is_complex;
+    constexpr bool kFusedOrgql = cta_layout<V, static_cast<int>(P), Scalar>::fused_orgql;
     constexpr int kP = static_cast<int>(P);
     const std::int32_t lane = static_cast<std::int32_t>(part.get_local_linear_id());
     using Ops = arith::Native;  // the std::complex operators (strict port)
     const auto pex = wrap(part);
-    using ATile = Mat<T, Ext<kP>, Ext<kP>, Ext<LDA>, Mem::Local, Cyclic, Buf>;
+    using ATile = Mat<Scalar, Ext<kP>, Ext<kP>, Ext<LDA>, Mem::Local, Cyclic, Buf>;
     const auto store_w = [&](std::int32_t dst, Real x) BATCHLAS_DEVICE_BODY {
         if constexpr (std::is_pointer_v<WV>) W[dst] = x;
         else W(dst) = x;
@@ -213,26 +214,26 @@ BATCHLAS_DEVICE_INLINE void syev_cta_run(const SubGroupPartition<P, M>& part, co
     // ---- Stage 0: load the Hermitian completion of the stored triangle. ----
     const auto Ah = herm_view<alg::ThreeLoads, Ops>(A_in, is_upper ? Uplo::Upper : Uplo::Lower);
     for (std::int32_t c = 0; c < kP; ++c) {
-        T v = T(0);
+        Scalar v = Scalar(0);
         if (live && lane < nn && c < nn) v = Ah(lane, c);
         A_local[base_a + lane + c * LDA] = v;
     }
     group_barrier(part);
     const ATile tile{A_local, {}, {}, {}, base_a};
-    [[maybe_unused]] const Vec<T, Dyn, Unit, Mem::Local, Cyclic, Buf> vs{V_local, Dyn{kP}, Unit{}, base_v};
+    [[maybe_unused]] const Vec<Scalar, Dyn, Unit, Mem::Local, Cyclic, Buf> vs{V_local, Dyn{kP}, Unit{}, base_v};
 
     // ---- Stage 1: tridiagonal reduction (SYTD2, upper path). ----
-    const T tau_lane = detail::sytd2_upper_tile<T, LDA>(part, detail::decorated_ptr(A_local), base_a,
-                                                              detail::decorated_ptr(V_local), base_v,
-                                                              detail::decorated_ptr(W_local), base_w, nn);
+    const Scalar tau_lane = detail::sytd2_upper_tile<Scalar, LDA>(part, detail::decorated_ptr(A_local), base_a,
+                                                                        detail::decorated_ptr(V_local), base_v,
+                                                                        detail::decorated_ptr(W_local), base_w, nn);
 
     // The tridiagonal off the tile; above the superdiagonal is the packed reflector store.
-    const T d_c = (lane < nn) ? A_local[base_a + lane + lane * LDA] : T(0);
-    const T e_c = (lane < (nn - 1)) ? A_local[base_a + lane + (lane + 1) * LDA] : T(0);
+    const Scalar d_c = (lane < nn) ? A_local[base_a + lane + lane * LDA] : Scalar(0);
+    const Scalar e_c = (lane < (nn - 1)) ? A_local[base_a + lane + (lane + 1) * LDA] : Scalar(0);
 
     Real diag = re(d_c);
     Real offdiag = Real(0);
-    T phase = T(1);
+    Scalar phase = Scalar(1);
 
     if constexpr (kComplex) {
         // Hermitian -> real tridiagonal (T' = S^H T S); each lane replays S itself.
@@ -311,8 +312,8 @@ BATCHLAS_DEVICE_INLINE void syev_cta_run(const SubGroupPartition<P, M>& part, co
         if (live && lane < nn) store_w(dst, diag);
 
         // ---- Stage 3: back-transform, Z := Q_house * S * Z. ----
-        Frag<T, kP, ColPerLane> C_col;
-        fill(C_col, T(0));
+        Frag<Scalar, kP, ColPerLane> C_col;
+        fill(C_col, Scalar(0));
 
         // Zc = diag(S) Z (dgmm Left), staged before vs is reused for the reflectors.
         V_local[base_v + lane] = phase;
@@ -329,35 +330,35 @@ BATCHLAS_DEVICE_INLINE void syev_cta_run(const SubGroupPartition<P, M>& part, co
 
 // ---- tier::Blocked<NB>: one problem per work-group, A in global memory --------------------------
 
-template <class T> constexpr int ormqr_nb = larfb_default_nb<T>();
-template <class T> using ormqr_tier = tier::Blocked<ormqr_nb<T>>;
+template <class Scalar> constexpr int ormqr_nb = larfb_default_nb<Scalar>();
+template <class Scalar> using ormqr_tier = tier::Blocked<ormqr_nb<Scalar>>;
 
 // The Blocked tier's workspace: d, e, tau (A's scalar type), the real tridiagonal and the phase
 // chain S (complex), Z (n x n, vectors), the rank of each eigenvalue, then ONE slice the stages
 // take in turn (sytrd, steqr, ormqr: max of their global and of their local bytes).
-template <bool V, int NB, class T> struct syev_blocked_plan {
-    using R = real_t<T>;
-    static constexpr bool kCplx = Arith<T>::is_complex;
+template <bool V, int NB, class Scalar> struct syev_blocked_plan {
+    using R = real_t<Scalar>;
+    static constexpr bool kCplx = Arith<Scalar>::is_complex;
     Plan plan{};
-    WsSlot<T> d{}, e{}, tau{}, s{}, z{};
+    WsSlot<Scalar> d{}, e{}, tau{}, s{}, z{};
     WsSlot<R> dr{}, er{};
     WsSlot<int> rank{};
     WsSlot<std::byte> sub_g{}, sub_l{};
     static constexpr std::size_t mx(std::size_t a, std::size_t b) { return a > b ? a : b; }
     constexpr explicit syev_blocked_plan(int n) {
         const std::size_t un = static_cast<std::size_t>(n), um = n > 1 ? un - 1 : 1;
-        d = plan.take<T>(WsSpace::Global, un);
-        e = plan.take<T>(WsSpace::Global, um);
-        tau = plan.take<T>(WsSpace::Global, um);
+        d = plan.take<Scalar>(WsSpace::Global, un);
+        e = plan.take<Scalar>(WsSpace::Global, um);
+        tau = plan.take<Scalar>(WsSpace::Global, um);
         dr = plan.take<R>(WsSpace::Global, kCplx ? un : 0);
         er = plan.take<R>(WsSpace::Global, kCplx ? um : 0);
-        s = plan.take<T>(WsSpace::Global, kCplx && V ? un : 0);
-        z = plan.take<T>(WsSpace::Global, V ? un * un : 0);
+        s = plan.take<Scalar>(WsSpace::Global, kCplx && V ? un : 0);
+        z = plan.take<Scalar>(WsSpace::Global, V ? un * un : 0);
         rank = plan.take<int>(WsSpace::Global, un);
         constexpr JobType J = V ? JobType::EigenVectors : JobType::NoEigenVectors;
-        const WorkspaceSize s1 = buffer_size<routine::sytrd<Uplo::Lower>, tier::Blocked<NB>, T>(n);
+        const WorkspaceSize s1 = buffer_size<routine::sytrd<Uplo::Lower>, tier::Blocked<NB>, Scalar>(n);
         const WorkspaceSize s2 = buffer_size<routine::steqr<J>, tier::Blocked<1>, R>(n);
-        const WorkspaceSize s3 = V && n > 1 ? buffer_size<routine::ormqr<Side::Left, Transpose::NoTrans>, ormqr_tier<T>, T>(n - 1, n) : WorkspaceSize{};
+        const WorkspaceSize s3 = V && n > 1 ? buffer_size<routine::ormqr<Side::Left, Transpose::NoTrans>, ormqr_tier<Scalar>, Scalar>(n - 1, n) : WorkspaceSize{};
         sub_g = plan.take<std::byte>(WsSpace::Global, mx(s1.global_bytes, mx(s2.global_bytes, s3.global_bytes)));
         sub_l = plan.take<std::byte>(WsSpace::Local, mx(s1.local_bytes, mx(s2.local_bytes, s3.local_bytes)));
     }
@@ -368,18 +369,18 @@ template <bool V, int NB, class T> struct syev_blocked_plan {
 // similarity S (item 0); steqr<J, Blocked<1>> on Z = I; Z := S Z; Z(1:, :) := Q Z by ormqr on
 // sytrd's reflectors A(1:, 0:n-1). The eigenvalues leave ascending (NaN last, ties by index) in W,
 // column j of Z in column rank(j) of A. Returns steqr's info (uniform).
-template <bool V, Uplo UL, int NB, int WG, class T, class WV>
-BATCHLAS_DEVICE_INLINE int syev_blocked_run(const WorkGroup<WG>& ex, const l3::Global<T>& a, const WV& W, const Workspace& ws,
+template <bool V, Uplo UL, int NB, int WG, class Scalar, class WV>
+BATCHLAS_DEVICE_INLINE int syev_blocked_run(const WorkGroup<WG>& ex, const l3::Global<Scalar>& a, const WV& W, const Workspace& ws,
                                          const SteqrOptions& opts) {
-    using R = real_t<T>;
-    using Ar = Arith<T>;
+    using R = real_t<Scalar>;
+    using Ar = Arith<Scalar>;
     constexpr JobType J = V ? JobType::EigenVectors : JobType::NoEigenVectors;
     const int n = a.m, nm1 = n - 1, lda = a.ld;
-    const syev_blocked_plan<V, NB, T> plan(n);
-    T* const dp = carve_global(ws, plan.d);
-    T* const ep = carve_global(ws, plan.e);
-    T* const tp = carve_global(ws, plan.tau);
-    T* const zp = carve_global(ws, plan.z);
+    const syev_blocked_plan<V, NB, Scalar> plan(n);
+    Scalar* const dp = carve_global(ws, plan.d);
+    Scalar* const ep = carve_global(ws, plan.e);
+    Scalar* const tp = carve_global(ws, plan.tau);
+    Scalar* const zp = carve_global(ws, plan.z);
     int* const rk = carve_global(ws, plan.rank);
     const Workspace sub{carve_local(ws, plan.sub_l), carve_global(ws, plan.sub_g)};
 
@@ -415,13 +416,13 @@ BATCHLAS_DEVICE_INLINE int syev_blocked_run(const WorkGroup<WG>& ex, const l3::G
     ex.barrier(Mem::Global);
     if constexpr (V) {
         if constexpr (Ar::is_complex) {
-            const T* const sp = carve_global(ws, plan.s);
+            const Scalar* const sp = carve_global(ws, plan.s);
             for (int j = 0; j < n; ++j)
                 for_each_owned(ex, n, [&](int i) BATCHLAS_DEVICE_BODY { z(i, j) = sp[i] * z(i, j); });
             ex.barrier(Mem::Global);
         }
         if (n > 1)
-            (void)ormqr<Side::Left, Transpose::NoTrans, ormqr_tier<T>>(ex, mat(a.p + 1, nm1, nm1, lda), vec(tp, nm1), mat(zp + 1, nm1, n, n), sub);
+            (void)ormqr<Side::Left, Transpose::NoTrans, ormqr_tier<Scalar>>(ex, mat(a.p + 1, nm1, nm1, lda), vec(tp, nm1), mat(zp + 1, nm1, n, n), sub);
         ex.barrier(Mem::Global);
     }
     for_each_owned(ex, n, [&](int i) BATCHLAS_DEVICE_BODY {
@@ -520,26 +521,26 @@ template <JobType J, Uplo UL> struct syev {
 };
 }  // namespace routine
 
-template <JobType J, Uplo UL, int N, class Alg, class T> struct tier_info<routine::syev<J, UL>, tier::Cta<N, Alg>, T> {
+template <JobType J, Uplo UL, int N, class Alg, class Scalar> struct tier_info<routine::syev<J, UL>, tier::Cta<N, Alg>, Scalar> {
     static_assert(N == 4 || N == 8 || N == 16 || N == 32, "syev: tier::Cta<N> has N in {4, 8, 16, 32}");
     static constexpr int wg_size = 32;  // the smallest launch: one sub-group, 32 / N problems
     static constexpr int sg_size = 32;
     using executor = SgpPartition<N>;
     static constexpr int per_group = wg_size / N;
     static constexpr bool admits(int n) { return n >= 1 && n <= N; }
-    static constexpr WorkspaceSize buffer_size(int) { return detail::syev_cta_plan<J == JobType::EigenVectors, N, T>{}.plan.size(); }
+    static constexpr WorkspaceSize buffer_size(int) { return detail::syev_cta_plan<J == JobType::EigenVectors, N, Scalar>{}.plan.size(); }
 };
-template <JobType J, Uplo UL, int NB, class Alg, class T> struct tier_info<routine::syev<J, UL>, tier::Blocked<NB, Alg>, T> {
-    static constexpr int wg_size = detail::blocked_cfg<T>::threads;  // 256: sytrd's, steqr's and ormqr's
+template <JobType J, Uplo UL, int NB, class Alg, class Scalar> struct tier_info<routine::syev<J, UL>, tier::Blocked<NB, Alg>, Scalar> {
+    static constexpr int wg_size = detail::blocked_cfg<Scalar>::threads;  // 256: sytrd's, steqr's and ormqr's
     static constexpr int sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 1; }
     static constexpr WorkspaceSize buffer_size(int n) {
-        return detail::syev_blocked_plan<J == JobType::EigenVectors, NB, T>(n).plan.size();
+        return detail::syev_blocked_plan<J == JobType::EigenVectors, NB, Scalar>(n).plan.size();
     }
 };
-template <JobType J, Uplo UL, class T> struct tiers<routine::syev<J, UL>, T> {
+template <JobType J, Uplo UL, class Scalar> struct tiers<routine::syev<J, UL>, Scalar> {
     using type = tier::list<tier::Cta<4>, tier::Cta<8>, tier::Cta<16>, tier::Cta<32>, tier::Blocked<32>>;
 };
 

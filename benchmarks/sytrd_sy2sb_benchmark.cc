@@ -39,7 +39,7 @@ inline void SytrdSy2sbBenchSizesNetlib(Benchmark* b) {
     }
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_SYTRD_SY2SB(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
@@ -47,10 +47,10 @@ void BM_SYTRD_SY2SB(minibench::State& state) {
     const int uplo_i = static_cast<int>(state.range(3));
     const Uplo uplo = (uplo_i == 0) ? Uplo::Lower : Uplo::Upper;
 
-    auto A0 = Matrix<T>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/2026);
-    auto A = Matrix<T>::Zeros(n, n, batch);
-    auto AB = Matrix<T, MatrixFormat::Dense>::Zeros(kd + 1, n, batch);
-    auto tau = Vector<T>::zeros(std::max<int>(0, static_cast<int>(n) - kd), batch);
+    auto A0 = Matrix<Scalar>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/2026);
+    auto A = Matrix<Scalar>::Zeros(n, n, batch);
+    auto AB = Matrix<Scalar, MatrixFormat::Dense>::Zeros(kd + 1, n, batch);
+    auto tau = Vector<Scalar>::zeros(std::max<int>(0, static_cast<int>(n) - kd), batch);
 
     const std::string device_str = (B == Backend::NETLIB) ? "cpu" : "gpu";
     const bool in_order = true;
@@ -59,7 +59,7 @@ void BM_SYTRD_SY2SB(minibench::State& state) {
     const size_t ws_bytes = sytrd_sy2sb_buffer_size(*q,
                                                          A,
                                                          AB,
-                                                         VectorView<T>(tau),
+                                                         VectorView<Scalar>(tau),
                                                          uplo,
                                                          kd);
     UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});

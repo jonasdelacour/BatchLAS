@@ -31,7 +31,7 @@
 
 namespace batchlas {
 // Forward declarations with default template parameters
-template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
+template <typename Scalar = float, MatrixFormat MType = MatrixFormat::Dense>
 class BATCHLAS_API Matrix;
 
 template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
@@ -46,7 +46,7 @@ struct Vector;
 
 /// @brief Backend-library descriptor for a matrix (cuSPARSE / rocSPARSE handles); defined in src/.
 /// @ingroup api_internal_helpers
-template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
+template <typename Scalar = float, MatrixFormat MType = MatrixFormat::Dense>
 class BackendMatrixHandle;
 
 /// @brief Non-zero count (per-item capacity) of a CSR matrix, as a distinct type.
@@ -801,28 +801,28 @@ public:
     /// @brief @p x as promoted_type.
     /// @param[in] x  the value to promote
     /// @return @p x in double or complex<double>
-    template <typename U = T>
-        requires(std::is_floating_point_v<U> || is_std_complex_v<U>)
-    static promoted_type up(U x) { return promoted_type(x); }
+    template <typename Scalar = T>
+        requires(std::is_floating_point_v<Scalar> || is_std_complex_v<Scalar>)
+    static promoted_type up(Scalar x) { return promoted_type(x); }
 
     /// @brief \f$\mathrm{re} + i\,\mathrm{im}\f$ rounded to T; the imaginary part is dropped for a real T.
     /// @param[in] re  real part
     /// @param[in] im  imaginary part (ignored for a real T)
     /// @return the value in T's precision
-    template <typename U = T>
-        requires(std::is_floating_point_v<U> || is_std_complex_v<U>)
-    static U make(double re, double im = 0.0) {
-        if constexpr (is_std_complex_v<U>) return U(float_t<U>(re), float_t<U>(im));
-        else { (void)im; return U(re); }
+    template <typename Scalar = T>
+        requires(std::is_floating_point_v<Scalar> || is_std_complex_v<Scalar>)
+    static Scalar make(double re, double im = 0.0) {
+        if constexpr (is_std_complex_v<Scalar>) return Scalar(float_t<Scalar>(re), float_t<Scalar>(im));
+        else { (void)im; return Scalar(re); }
     }
 
     /// @brief The complex conjugate \f$\bar{x}\f$ of @p x; @p x itself for a real T.
     /// @param[in] x  the value to conjugate
     /// @return \f$\bar{x}\f$
-    template <typename U = T>
-        requires(std::is_floating_point_v<U> || is_std_complex_v<U>)
-    static U conj(U x) {
-        if constexpr (is_std_complex_v<U>) return std::conj(x);
+    template <typename Scalar = T>
+        requires(std::is_floating_point_v<Scalar> || is_std_complex_v<Scalar>)
+    static Scalar conj(Scalar x) {
+        if constexpr (is_std_complex_v<Scalar>) return std::conj(x);
         else return x;
     }
 
@@ -830,20 +830,20 @@ public:
     ///        \f$\lvert x \rvert\f$ for a real T.
     /// @param[in] x  the value to measure
     /// @return the 1-norm of @p x's components, in double
-    template <typename U = T>
-        requires(std::is_floating_point_v<U> || is_std_complex_v<U>)
-    static double cabs1(U x) {
-        if constexpr (is_std_complex_v<U>) return std::fabs(double(x.real())) + std::fabs(double(x.imag()));
+    template <typename Scalar = T>
+        requires(std::is_floating_point_v<Scalar> || is_std_complex_v<Scalar>)
+    static double cabs1(Scalar x) {
+        if constexpr (is_std_complex_v<Scalar>) return std::fabs(double(x.real())) + std::fabs(double(x.imag()));
         else return std::fabs(double(x));
     }
 
     /// @brief True when every component of @p x is finite.
     /// @param[in] x  the value to test
     /// @return whether neither part is infinite or NaN
-    template <typename U = T>
-        requires(std::is_floating_point_v<U> || is_std_complex_v<U>)
-    static bool finite(U x) {
-        if constexpr (is_std_complex_v<U>) return std::isfinite(double(x.real())) && std::isfinite(double(x.imag()));
+    template <typename Scalar = T>
+        requires(std::is_floating_point_v<Scalar> || is_std_complex_v<Scalar>)
+    static bool finite(Scalar x) {
+        if constexpr (is_std_complex_v<Scalar>) return std::isfinite(double(x.real())) && std::isfinite(double(x.imag()));
         else return std::isfinite(double(x));
     }
 
@@ -1975,16 +1975,16 @@ protected:
 ///
 /// A dense batch may be **heterogeneous**: set_active_dims() attaches per-item
 /// active extents no larger than the allocated rows() \f$\times\f$ cols().
-/// @tparam T      scalar type (`float`, `double`, `std::complex<float>`, `std::complex<double>`)
+/// @tparam Scalar      scalar type (`float`, `double`, `std::complex<float>`, `std::complex<double>`)
 /// @tparam MType  MatrixFormat::Dense (default) or MatrixFormat::CSR
 /// @see @ref design_matrix_model, and the user guide's data-layout section in @ref md_docs_2cpp-api
 /// @ingroup api_matrix
 // BATCHLAS_API sits on the class template, not on the explicit instantiations: only it
 // reaches the member-template instantiations, and g++ rejects it on an instantiation.
 // evidence: docs/design/symbol-visibility.md#symbol-visibility-the-export-attribute-on-the-matrix-class-template
-template <typename T, MatrixFormat MType>
-class BATCHLAS_API Matrix : public MatrixView<T, MType> {
-    using Base = MatrixView<T, MType>;
+template <typename Scalar, MatrixFormat MType>
+class BATCHLAS_API Matrix : public MatrixView<Scalar, MType> {
+    using Base = MatrixView<Scalar, MType>;
     using Base::ld_, Base::stride_, Base::nnz_, Base::matrix_stride_, Base::offset_stride_;
 
 public:
@@ -1999,7 +1999,7 @@ public:
     /// @throws batchlas::invalid_argument on a negative argument, a resolved \f$\mathrm{ld} < \mathrm{rows}\f$,
     ///         or a resolved \f$\mathrm{stride} < \mathrm{ld} \cdot \mathrm{cols}\f$
     /// @note Exactly \f$\mathrm{stride} \cdot \mathrm{batch\_size}\f$ elements are allocated; nothing pads.
-    template <typename U = T, MatrixFormat M = MType>
+    template <typename U = Scalar, MatrixFormat M = MType>
         requires DenseMatrixFormat<M>
     Matrix(int rows, int cols, int batch_size = 1, int ld = 0, int stride = 0);
 
@@ -2009,7 +2009,7 @@ public:
     /// @param[in] nnz         per-item capacity; \f$\mathrm{matrix\_stride} = \mathrm{nnz}\f$,
     ///                        \f$\mathrm{offset\_stride} = \mathrm{rows} + 1\f$
     /// @param[in] batch_size  number of items
-    template <typename U = T, MatrixFormat M = MType>
+    template <typename U = Scalar, MatrixFormat M = MType>
         requires CsrMatrixFormat<M>
     Matrix(int rows, int cols, NonZeros nnz, int batch_size = 1);
 
@@ -2018,7 +2018,7 @@ public:
     /// @param[in] cols        columns per item
     /// @param[in] nnz         the count, which must be spelled `NonZeros{nnz}`
     /// @param[in] batch_size  number of items
-    template <typename U = T, MatrixFormat M = MType>
+    template <typename U = Scalar, MatrixFormat M = MType>
         requires CsrMatrixFormat<M>
     Matrix(int rows, int cols, int nnz, int batch_size = 1) = delete;
 
@@ -2038,9 +2038,9 @@ public:
     /// @throws batchlas::invalid_argument on null @p data, \f$\mathrm{rows} \le 0\f$ or \f$\mathrm{cols} \le 0\f$,
     ///         \f$\mathrm{batch\_size} \le 0\f$, a resolved \f$\mathrm{ld} < \mathrm{rows}\f$, or
     ///         (\f$\mathrm{batch\_size} > 1\f$) a \f$\mathrm{stride} < \mathrm{ld} \cdot \mathrm{cols}\f$
-    template <typename U = T, MatrixFormat M = MType>
+    template <typename U = Scalar, MatrixFormat M = MType>
         requires DenseMatrixFormat<M>
-    Matrix(const T* data, int rows, int cols, int ld, int stride = 0, int batch_size = 1);
+    Matrix(const Scalar* data, int rows, int cols, int ld, int stride = 0, int batch_size = 1);
 
     /// @brief Dense batch copied from a Span; as the pointer overload, plus a length check.
     /// @param[in] data        source elements, laid out as described by @p ld and @p stride
@@ -2050,21 +2050,21 @@ public:
     /// @param[in] stride      source batch stride; 0 means \f$\mathrm{ld} \cdot \mathrm{cols}\f$ with the resolved ld
     /// @param[in] batch_size  number of items
     /// @throws batchlas::invalid_argument also when @p data is shorter than the layout needs
-    template <typename U = T, MatrixFormat M = MType>
+    template <typename U = Scalar, MatrixFormat M = MType>
         requires DenseMatrixFormat<M>
-    Matrix(Span<const T> data, int rows, int cols, int ld, int stride = 0, int batch_size = 1);
+    Matrix(Span<const Scalar> data, int rows, int cols, int ld, int stride = 0, int batch_size = 1);
 
-    /// @brief Mutable-Span (and UnifiedVector) spelling of the Span<const T> overload.
+    /// @brief Mutable-Span (and UnifiedVector) spelling of the Span<const Scalar> overload.
     /// @param[in] data        source elements, laid out as described by @p ld and @p stride (only read)
     /// @param[in] rows        rows per item
     /// @param[in] cols        columns per item
     /// @param[in] ld          source leading dimension; 0 means @p rows
     /// @param[in] stride      source batch stride; 0 means \f$\mathrm{ld} \cdot \mathrm{cols}\f$ with the resolved ld
     /// @param[in] batch_size  number of items
-    template <typename U = T, MatrixFormat M = MType>
+    template <typename U = Scalar, MatrixFormat M = MType>
         requires DenseMatrixFormat<M>
-    Matrix(Span<T> data, int rows, int cols, int ld, int stride = 0, int batch_size = 1)
-        : Matrix(Span<const T>(data.data(), data.size()), rows, cols, ld, stride, batch_size) {}
+    Matrix(Span<Scalar> data, int rows, int cols, int ld, int stride = 0, int batch_size = 1)
+        : Matrix(Span<const Scalar>(data.data(), data.size()), rows, cols, ld, stride, batch_size) {}
 
     /// @brief CSR batch copied from existing host-readable arrays.
     /// @param[in] values         \f$\mathrm{matrix\_stride} \cdot \mathrm{batch\_size}\f$ values
@@ -2076,9 +2076,9 @@ public:
     /// @param[in] matrix_stride  distance between items' value arrays; 0 means @p nnz. May exceed it.
     /// @param[in] offset_stride  distance between items' offset arrays; 0 means \f$\mathrm{rows} + 1\f$
     /// @param[in] batch_size     number of items
-    template <typename U = T, MatrixFormat M = MType>
+    template <typename U = Scalar, MatrixFormat M = MType>
         requires CsrMatrixFormat<M>
-    Matrix(const T* values, const int* row_offsets, const int* col_indices,
+    Matrix(const Scalar* values, const int* row_offsets, const int* col_indices,
            int rows, int cols, NonZeros nnz, int matrix_stride = 0,
            int offset_stride = 0, int batch_size = 1);
 
@@ -2092,9 +2092,9 @@ public:
     /// @param[in] matrix_stride  distance between items' value arrays
     /// @param[in] offset_stride  distance between items' offset arrays
     /// @param[in] batch_size     number of items
-    template <typename U = T, MatrixFormat M = MType>
+    template <typename U = Scalar, MatrixFormat M = MType>
         requires CsrMatrixFormat<M>
-    Matrix(const T* values, const int* row_offsets, const int* col_indices,
+    Matrix(const Scalar* values, const int* row_offsets, const int* col_indices,
            int nnz, int rows, int cols, int matrix_stride = 0,
            int offset_stride = 0, int batch_size = 1) = delete;
 
@@ -2107,9 +2107,9 @@ public:
     /// @param[in] n           matrix order
     /// @param[in] batch_size  number of items
     /// @return the new batch
-    template <typename U = T, MatrixFormat M = MType>
+    template <typename U = Scalar, MatrixFormat M = MType>
         requires DenseMatrixFormat<M>
-    static Matrix<T, MType> Identity(int n, int batch_size = 1);
+    static Matrix<Scalar, MType> Identity(int n, int batch_size = 1);
 
     /// @brief Entries uniform in \f$[-1, 1]\f$ (real and imaginary parts independently).
     ///
@@ -2123,9 +2123,10 @@ public:
     /// @param[in] seed        RNG seed
     /// @return the new batch
     /// @throws batchlas::invalid_argument if @p hermitian and \f$\mathrm{rows} \ne \mathrm{cols}\f$
-    template <typename U = T, MatrixFormat M = MType>
+    template <typename U = Scalar, MatrixFormat M = MType>
         requires DenseMatrixFormat<M>
-    static Matrix<T, MType> Random(int rows, int cols, bool hermitian = false, int batch_size = 1, unsigned seed = 42);
+    static Matrix<Scalar, MType> Random(int rows, int cols, bool hermitian = false, int batch_size = 1,
+                                        unsigned seed = 42);
 
     /// @brief Random diagonally dominant sparse Hermitian batch; see csr_generators::random_sparse_hermitian_csr().
     /// @param[in] n               matrix order
@@ -2135,13 +2136,13 @@ public:
     /// @param[in] diagonal_boost  margin added to each diagonal above its off-diagonal row sum
     /// @param[in] shared_pattern  true: every item has the same sparsity pattern; false: one per item
     /// @return the new CSR batch
-    template <typename U = T, MatrixFormat M = MType>
+    template <typename U = Scalar, MatrixFormat M = MType>
         requires CsrMatrixFormat<M>
-    static Matrix<T, MType> RandomSparseHermitian(int n,
+    static Matrix<Scalar, MType> RandomSparseHermitian(int n,
                               float density,
                               int batch_size = 1,
                               unsigned seed = 42,
-                              typename base_type<T>::type diagonal_boost = typename base_type<T>::type(1),
+                              typename base_type<Scalar>::type diagonal_boost = typename base_type<Scalar>::type(1),
                               bool shared_pattern = true);
 
     /// @brief Random \f$n \times n\f$ triangular batch; see MatrixView::fill_triangular_random().
@@ -2151,10 +2152,10 @@ public:
     /// @param[in] batch_size  number of items
     /// @param[in] seed        RNG seed
     /// @return the new batch
-    template <typename U = T, MatrixFormat M = MType>
+    template <typename U = Scalar, MatrixFormat M = MType>
         requires DenseMatrixFormat<M>
-    static Matrix<T, MType> RandomTriangular(int n, Uplo uplo, Diag diag = Diag::NonUnit, int batch_size = 1, unsigned seed = 42) {
-        auto result = Matrix<T, MType>(n, n, batch_size);
+    static Matrix<Scalar, MType> RandomTriangular(int n, Uplo uplo, Diag diag = Diag::NonUnit, int batch_size = 1, unsigned seed = 42) {
+        auto result = Matrix<Scalar, MType>(n, n, batch_size);
         result.fill_triangular_random(uplo, diag, seed).wait();
         return result;
     }
@@ -2164,27 +2165,27 @@ public:
     /// @param[in] cols        columns per item
     /// @param[in] batch_size  number of items
     /// @return the new batch
-    template <typename U = T, MatrixFormat M = MType>
+    template <typename U = Scalar, MatrixFormat M = MType>
         requires DenseMatrixFormat<M>
-    static Matrix<T, MType> Zeros(int rows, int cols, int batch_size = 1);
+    static Matrix<Scalar, MType> Zeros(int rows, int cols, int batch_size = 1);
 
     /// @brief A batch of all-ones matrices.
     /// @param[in] rows        rows per item
     /// @param[in] cols        columns per item
     /// @param[in] batch_size  number of items
     /// @return the new batch
-    template <typename U = T, MatrixFormat M = MType>
+    template <typename U = Scalar, MatrixFormat M = MType>
         requires DenseMatrixFormat<M>
-    static Matrix<T, MType> Ones(int rows, int cols, int batch_size = 1);
+    static Matrix<Scalar, MType> Ones(int rows, int cols, int batch_size = 1);
 
     /// @brief A batch of \f$n \times n\f$ diagonal matrices, \f$n\f$ = `diag_values.size()`, each with
     ///        @p diag_values on the diagonal.
     /// @param[in] diag_values  the \f$n\f$ diagonal entries, shared by every item
     /// @param[in] batch_size   number of items
     /// @return the new batch
-    template <typename U = T, MatrixFormat M = MType>
+    template <typename U = Scalar, MatrixFormat M = MType>
         requires DenseMatrixFormat<M>
-    static Matrix<T, MType> Diagonal(const Span<T>& diag_values, int batch_size = 1);
+    static Matrix<Scalar, MType> Diagonal(const Span<Scalar>& diag_values, int batch_size = 1);
 
     /// @brief \f$n \times n\f$ matrices with @p diagonal_value on the diagonal, @p non_diagonal_value in
     ///        the @p uplo strict triangle and zero elsewhere.
@@ -2194,10 +2195,10 @@ public:
     /// @param[in] non_diagonal_value  value in the strict triangle
     /// @param[in] batch_size          number of items
     /// @return the new batch
-    template <typename U = T, MatrixFormat M = MType>
+    template <typename U = Scalar, MatrixFormat M = MType>
         requires DenseMatrixFormat<M>
-    static Matrix<T, MType> Triangular(int n, Uplo uplo, T diagonal_value = T(1),
-                                      T non_diagonal_value = T(0.5), int batch_size = 1);
+    static Matrix<Scalar, MType> Triangular(int n, Uplo uplo, Scalar diagonal_value = Scalar(1),
+                                            Scalar non_diagonal_value = Scalar(0.5), int batch_size = 1);
 
     /// @brief \f$n \times n\f$ tridiagonal Toeplitz matrices (constant diagonal, sub- and super-diagonal).
     /// @param[in] n           matrix order
@@ -2206,10 +2207,11 @@ public:
     /// @param[in] super_diag  value on the superdiagonal
     /// @param[in] batch_size  number of items
     /// @return the new batch
-    template <typename U = T, MatrixFormat M = MType>
+    template <typename U = Scalar, MatrixFormat M = MType>
         requires DenseMatrixFormat<M>
-    static Matrix<T, MType> TriDiagToeplitz(int n, T diag = T(1),
-                                            T sub_diag = T(-0.5), T super_diag = T(0.5), int batch_size = 1);
+    static Matrix<Scalar, MType> TriDiagToeplitz(int n, Scalar diag = Scalar(1),
+                                                 Scalar sub_diag = Scalar(-0.5), Scalar super_diag = Scalar(0.5),
+                                                 int batch_size = 1);
     /// @}
 
     /// @brief Reinterprets this matrix's storage as row-major data and returns it column-major.
@@ -2224,16 +2226,16 @@ public:
     ///         allocation, straddles the next item, or is 0 on a non-packed matrix
     /// @see @ref md_docs_2cpp-api, section "Row-major source data"
     // evidence: docs/cpp-api.md#row-major-source-data
-    template <typename U = T, MatrixFormat M = MType>
+    template <typename U = Scalar, MatrixFormat M = MType>
         requires DenseMatrixFormat<M>
-    Matrix<T, MType> to_column_major(const Queue& ctx, int row_pitch = 0) const;
+    Matrix<Scalar, MType> to_column_major(const Queue& ctx, int row_pitch = 0) const;
 
     /// @brief to_column_major() on an internal queue.
     /// @param[in] row_pitch  source row pitch in elements; 0 means packed (cols())
     /// @return a packed column-major copy
-    template <typename U = T, MatrixFormat M = MType>
+    template <typename U = Scalar, MatrixFormat M = MType>
         requires DenseMatrixFormat<M>
-    Matrix<T, MType> to_column_major(int row_pitch = 0) const;
+    Matrix<Scalar, MType> to_column_major(int row_pitch = 0) const;
 
     /// @brief Copy in another storage format, on the default queue.
     ///
@@ -2246,7 +2248,7 @@ public:
     /// @return the copy in format @p NewMType
     /// @throws batchlas::unsupported for any other pair of formats
     template <MatrixFormat NewMType>
-    Matrix<T, NewMType> convert_to(const float_t<T>& zero_threshold = 1e-7) const;
+    Matrix<Scalar, NewMType> convert_to(const float_t<Scalar>& zero_threshold = 1e-7) const;
 
     /// @brief Packed row-major copy (row pitch cols(), batch stride rows() \f$\cdot\f$ cols()).
     ///
@@ -2254,15 +2256,15 @@ public:
     /// round-trip. Waits on @p ctx before returning.
     /// @param[in] ctx  queue for the conversion kernel
     /// @return the row-major copy, held in a Matrix of the same shape
-    template <typename U = T, MatrixFormat M = MType>
+    template <typename U = Scalar, MatrixFormat M = MType>
         requires DenseMatrixFormat<M>
-    Matrix<T, MType> to_row_major(const Queue& ctx) const;
+    Matrix<Scalar, MType> to_row_major(const Queue& ctx) const;
 
     /// @brief to_row_major() on an internal queue.
     /// @return the row-major copy, held in a Matrix of the same shape
-    template <typename U = T, MatrixFormat M = MType>
+    template <typename U = Scalar, MatrixFormat M = MType>
         requires DenseMatrixFormat<M>
-    Matrix<T, MType> to_row_major() const;
+    Matrix<Scalar, MType> to_row_major() const;
 
     /// @name Copy and move
     /// Copies are deep (values, active extents, CSR arrays) and get their own backend
@@ -2307,17 +2309,17 @@ public:
 
     /// @brief Deep copy in this matrix's own layout (ld, stride, CSR strides, active extents, batch mask).
     /// @return the independent copy
-    Matrix<T, MType> clone() const {
-        Matrix<T, MType> result = [&]() -> Matrix<T, MType> {
+    Matrix<Scalar, MType> clone() const {
+        Matrix<Scalar, MType> result = [&]() -> Matrix<Scalar, MType> {
             if constexpr (MType == MatrixFormat::CSR) {
                 // matrix_stride_ (not nnz_) is the allocated slots per batch item, so
                 // it is what the copies below need room for.
-                return Matrix<T, MType>(rows_, cols_, NonZeros{matrix_stride_}, batch_size_);
+                return Matrix<Scalar, MType>(rows_, cols_, NonZeros{matrix_stride_}, batch_size_);
             } else {
                 // Must be allocated in *this* matrix's layout: the copy below is a flat
                 // std::copy of length stride_ * batch_size_, so a packed destination is
                 // overrun -- a heap write past the end -- by any padded ld_.
-                return Matrix<T, MType>(rows_, cols_, batch_size_, ld_, stride_);
+                return Matrix<Scalar, MType>(rows_, cols_, batch_size_, ld_, stride_);
             }
         }();
 
@@ -2340,7 +2342,7 @@ public:
 
     /// @brief This matrix as a plain MatrixView (a sliced copy); shares the backend handle.
     /// @return a view of this matrix's storage
-    MatrixView<T, MType> view() const { return *this; }
+    MatrixView<Scalar, MType> view() const { return *this; }
     /// @brief A dense view of the leading @p rows \f$\times\f$ @p cols block of every item.
     /// @param[in] rows    rows of the view
     /// @param[in] cols    columns of the view
@@ -2348,7 +2350,7 @@ public:
     /// @param[in] stride  batch stride of the view; \f$\le 0\f$ keeps stride()
     /// @return a view of this matrix's storage
     /// @throws batchlas::unsupported on a CSR matrix
-    MatrixView<T, MType> view(int rows, int cols, int ld = -1, int stride = -1) const;
+    MatrixView<Scalar, MType> view(int rows, int cols, int ld = -1, int stride = -1) const;
 
     /// @brief Dense copy with every element converted by `static_cast<U>`, in this layout; a batch mask is copied as by MatrixView::astype().
     /// @tparam U  element type of the result
@@ -2359,7 +2361,7 @@ public:
 
     /// @brief Sets every element of every item to @p value; waits.
     /// @param[in] value  the value written
-    void fill(T value) { Base::fill(value).wait(); }
+    void fill(Scalar value) { Base::fill(value).wait(); }
     using Base::fill;
 
     /// @brief Host reference to element (@p row, @p col) of item @p batch anywhere in the
@@ -2373,7 +2375,7 @@ public:
     /// @return a reference to the element
     template <MatrixFormat M = MType>
         requires DenseMatrixFormat<M>
-    T& operator()(int row, int col, int batch) {
+    Scalar& operator()(int row, int col, int batch) {
         // The batch term in int64_t; see KernelMatrixView::operator() for why only that one.
         return values_.at(static_cast<int64_t>(batch) * stride_ + col * ld_ + row);
     }
@@ -2385,7 +2387,7 @@ public:
     /// @return a const reference to the element
     template <MatrixFormat M = MType>
         requires DenseMatrixFormat<M>
-    const T& operator()(int row, int col, int batch) const {
+    const Scalar& operator()(int row, int col, int batch) const {
         return values_.at(static_cast<int64_t>(batch) * stride_ + col * ld_ + row);
     }
     using Base::operator();
@@ -2394,7 +2396,7 @@ public:
     /// @param[in] src  the batch to copy, same rows, cols and batch size; host-readable
     /// @pre For CSR, @p src has exactly this matrix's strides and capacity.
     /// @throws batchlas::invalid_argument if rows, cols or batch size differ
-    void copy_from(const MatrixView<T, MType>& src);
+    void copy_from(const MatrixView<Scalar, MType>& src);
 
     /// @brief Attaches per-item active extents (copied), or clears them when both spans are empty.
     ///
@@ -2407,7 +2409,7 @@ public:
     ///         each in \f$[0, \mathrm{rows}]\f$ and \f$[0, \mathrm{cols}]\f$ respectively
     template <MatrixFormat M = MType>
         requires DenseMatrixFormat<M>
-    Matrix<T, MType>& set_active_dims(Span<int> active_rows, Span<int> active_cols) {
+    Matrix<Scalar, MType>& set_active_dims(Span<int> active_rows, Span<int> active_cols) {
         detail::validate_dense_active_dims(rows_, cols_, batch_size_, active_rows, active_cols);
         active_rows_store_.resize(active_rows.size());
         active_cols_store_.resize(active_cols.size());
@@ -2443,8 +2445,8 @@ private:
         this->batch_mask_ = Span<const std::uint8_t>(batch_mask_store_.data(), batch_mask_store_.size());
     }
 
-    UnifiedVector<T> values_;
-    UnifiedVector<T*> ptrs_;  // one base pointer per item; allocated only when batch_size > 1
+    UnifiedVector<Scalar> values_;
+    UnifiedVector<Scalar*> ptrs_;  // one base pointer per item; allocated only when batch_size > 1
     UnifiedVector<int> active_rows_store_;
     UnifiedVector<int> active_cols_store_;
     UnifiedVector<int> row_offsets_store_;
@@ -2456,8 +2458,8 @@ private:
 /// @param[in] view  the view to describe
 /// @return the new descriptor, owned by the returned pointer
 /// @ingroup api_internal_helpers
-template <typename T, MatrixFormat MType>
-std::shared_ptr<BackendMatrixHandle<T, MType>> createBackendHandle(const MatrixView<T, MType>& view);
+template <typename Scalar, MatrixFormat MType>
+std::shared_ptr<BackendMatrixHandle<Scalar, MType>> createBackendHandle(const MatrixView<Scalar, MType>& view);
 
 /// @brief Non-owning view of a batch of strided vectors: the vector argument type of the entry points.
 ///
@@ -2992,9 +2994,9 @@ private:
 // ------------------------------------------------------------------
 // Conversion helpers
 // ------------------------------------------------------------------
-template <typename T, MatrixFormat MType>
+template <typename Scalar, MatrixFormat MType>
 template <typename U>
-Matrix<U, MType> Matrix<T, MType>::astype() const {
+Matrix<U, MType> Matrix<Scalar, MType>::astype() const {
     static_assert(MType == MatrixFormat::Dense, "Matrix::astype only supports dense matrices");
     Matrix<U, MType> result(rows_, cols_, batch_size_, ld_, stride_);
     if (this->has_batch_mask()) detail::copy_batch_mask(result.enable_batch_mask(), this->batch_mask_);
@@ -3138,8 +3140,8 @@ std::ostream& operator<<(std::ostream& os, const VectorView<T>& view) {
 /// @return event of the kernel
 /// @throws batchlas::unsupported for CSR
 /// @ingroup api_extra
-template <typename T, MatrixFormat MType>
-BATCHLAS_API Event scale(Queue& ctx, const T& alpha, const MatrixView<T, MType>& mat_view);
+template <typename Scalar, MatrixFormat MType>
+BATCHLAS_API Event scale(Queue& ctx, const Scalar& alpha, const MatrixView<Scalar, MType>& mat_view);
 
 /// @brief In-place \f$x := \alpha x\f$ on every entry of every item.
 /// @param[in]     ctx       queue the kernel is enqueued on
@@ -3147,7 +3149,7 @@ BATCHLAS_API Event scale(Queue& ctx, const T& alpha, const MatrixView<T, MType>&
 /// @param[in,out] vec_view  vectors to scale (inc and stride honoured)
 /// @return event of the kernel
 /// @ingroup api_extra
-template <typename T>
-BATCHLAS_API Event scale(Queue& ctx, const T& alpha, const VectorView<T>& vec_view);
+template <typename Scalar>
+BATCHLAS_API Event scale(Queue& ctx, const Scalar& alpha, const VectorView<Scalar>& vec_view);
 
 }  // namespace batchlas

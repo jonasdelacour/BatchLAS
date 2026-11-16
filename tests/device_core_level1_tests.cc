@@ -20,11 +20,11 @@ using namespace device_core_test;
 
 namespace {
 
-template <class T> T conj_t(const T& v) {
-    if constexpr (is_cplx<T>) return std::conj(v);
+template <class Scalar> Scalar conj_t(const Scalar& v) {
+    if constexpr (is_cplx<Scalar>) return std::conj(v);
     else return v;
 }
-template <class T> class DeviceCoreLevel1Test : public DeviceCoreTest<T> {};
+template <class Scalar> class DeviceCoreLevel1Test : public DeviceCoreTest<Scalar> {};
 TYPED_TEST_SUITE(DeviceCoreLevel1Test, AllTypes);
 
 TYPED_TEST(DeviceCoreLevel1Test, FillMapManyInterleaveReverse) {

@@ -149,9 +149,9 @@ void make_dyadic_symmetric(int n, unsigned seed,
     }
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct SyevJacobiCtaConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 

@@ -27,17 +27,17 @@ namespace batchlas {
 
 namespace backend {
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t potrf_vendor_buffer_size(Queue& ctx,
-                        const MatrixView<T, MatrixFormat::Dense>& A,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& A,
                         Uplo uplo) {
     static LinalgHandle<B> handle;
     handle.setStream(ctx);
     int size = 0;
     if (A.batch_size() == 1) {
-        call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSpotrf_bufferSize, cusolverDnDpotrf_bufferSize, cusolverDnCpotrf_bufferSize, cusolverDnZpotrf_bufferSize,
+        call_backend<Scalar, BackendLibrary::CUSOLVER, B>(cusolverDnSpotrf_bufferSize, cusolverDnDpotrf_bufferSize, cusolverDnCpotrf_bufferSize, cusolverDnZpotrf_bufferSize,
             handle, uplo, A.rows(), A.data_ptr(), A.ld(), &size);
-        size = BumpAllocator::allocation_size<T>(ctx, size) + BumpAllocator::allocation_size<int>(ctx, 1);
+        size = BumpAllocator::allocation_size<Scalar>(ctx, size) + BumpAllocator::allocation_size<int>(ctx, 1);
     } else {
         size =  BumpAllocator::allocation_size<int>(ctx, A.batch_size());
     }
@@ -48,36 +48,36 @@ size_t potrf_vendor_buffer_size(Queue& ctx,
 
 namespace backend {
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event potrf_vendor(Queue& ctx,
-                const MatrixView<T, MatrixFormat::Dense>& descrA,
+                const MatrixView<Scalar, MatrixFormat::Dense>& descrA,
                 Uplo uplo,
                 Span<std::byte> workspace,
                 Span<int32_t> info_out) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::potrf, "potrf_vendor", B, descrA);
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::potrf, "potrf_vendor", B, descrA);
     static LinalgHandle<B> handle;
     BumpAllocator pool(workspace);
     // Keep `backend::`: the VENDOR query, never the public facade one (unqualified lookup found
     // the facade and silently passed cuSOLVER a native size). evidence: docs/perf/dispatch.md#dispatch-buffer-size-queries-and-the-route-they-size
-    auto Lwork = backend::potrf_vendor_buffer_size<B, T>(ctx, descrA, uplo)
+    auto Lwork = backend::potrf_vendor_buffer_size<B, Scalar>(ctx, descrA, uplo)
                  - BumpAllocator::allocation_size<int>(ctx, 1);
     if (descrA.batch_size() == 1) {
-        // cuSOLVER sizes the workspace in elements of T (Lwork), not bytes.
-        const int lwork = static_cast<int>(Lwork / sizeof(T));
-        auto potrf_span = pool.allocate<T>(ctx, lwork);
+        // cuSOLVER sizes the workspace in elements of Scalar (Lwork), not bytes.
+        const int lwork = static_cast<int>(Lwork / sizeof(Scalar));
+        auto potrf_span = pool.allocate<Scalar>(ctx, lwork);
         auto info = detail::info_target(ctx, pool, info_out, 1);
         impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
             handle.setStream(stream);
-            call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSpotrf, cusolverDnDpotrf, cusolverDnCpotrf, cusolverDnZpotrf,
+            call_backend<Scalar, BackendLibrary::CUSOLVER, B>(cusolverDnSpotrf, cusolverDnDpotrf, cusolverDnCpotrf, cusolverDnZpotrf,
                 handle, uplo, descrA.rows(), descrA.data_ptr(), descrA.ld(), potrf_span.data(), lwork, info.data());
         });
     } else {
         auto info = detail::info_target(ctx, pool, info_out, descrA.batch_size());
-        const auto arrays = ::batchlas::detail::vendor_ptr_arrays<T>(ctx, descrA);  // never inside run_native
-        T** a_ptrs = arrays[0];
+        const auto arrays = ::batchlas::detail::vendor_ptr_arrays<Scalar>(ctx, descrA);  // never inside run_native
+        Scalar** a_ptrs = arrays[0];
         impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
             handle.setStream(stream);
-            call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSpotrfBatched, cusolverDnDpotrfBatched, cusolverDnCpotrfBatched, cusolverDnZpotrfBatched,
+            call_backend<Scalar, BackendLibrary::CUSOLVER, B>(cusolverDnSpotrfBatched, cusolverDnDpotrfBatched, cusolverDnCpotrfBatched, cusolverDnZpotrfBatched,
                 handle, uplo, descrA.rows(), a_ptrs, descrA.ld(), info.data(), descrA.batch_size());
         });
     }
@@ -87,21 +87,21 @@ Event potrf_vendor(Queue& ctx,
 }  // namespace backend
 
 namespace backend {
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event syev_vendor(Queue& ctx,
-                  const MatrixView<T, MatrixFormat::Dense>& descrA,
-                  Span<typename base_type<T>::type> eigenvalues,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& descrA,
+                  Span<typename base_type<Scalar>::type> eigenvalues,
                   JobType jobtype,
                   Uplo uplo,
                   Span<std::byte> workspace,
                   Span<int32_t> info_out) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::syev, "syev_vendor", B, descrA);
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::syev, "syev_vendor", B, descrA);
     static LinalgHandle<B> handle;
     handle.setStream(ctx);  // for the in-function bufferSize queries below
     BumpAllocator pool(workspace);
     size_t l_work_device_bytes = 0;
     size_t l_work_host_bytes = 0;
-    int l_work_device_elems = 0; // legacy API returns lwork in elements of T
+    int l_work_device_elems = 0; // legacy API returns lwork in elements of Scalar
     cusolverDnParams_t params;
     check_status(cusolverDnCreateParams(&params));
     const auto eig_mode = enum_convert<BackendLibrary::CUSOLVER>(jobtype);
@@ -118,11 +118,11 @@ Event syev_vendor(Queue& ctx,
         if (descrA.batch_size() == 1 || !tightly_packed) {
             // Per-batch loop (also used for batch_size==1).
             check_status(cusolverDnXsyevd_bufferSize(handle, params, eig_mode, fill_mode, descrA.rows(),
-                                                    BackendScalar<T, BackendLibrary::CUSOLVER>::type,
+                                                    BackendScalar<Scalar, BackendLibrary::CUSOLVER>::type,
                                                     descrA.data_ptr(), descrA.ld(),
-                                                    BackendScalar<float_t<T>, BackendLibrary::CUSOLVER>::type,
+                                                    BackendScalar<float_t<Scalar>, BackendLibrary::CUSOLVER>::type,
                                                     eigenvalues.data(),
-                                                    BackendScalar<T, BackendLibrary::CUSOLVER>::type,
+                                                    BackendScalar<Scalar, BackendLibrary::CUSOLVER>::type,
                                                     &l_work_device_bytes, &l_work_host_bytes));
 
             auto host_workspace = pool.allocate<std::byte>(ctx, l_work_host_bytes);
@@ -143,12 +143,12 @@ Event syev_vendor(Queue& ctx,
                                                  eig_mode,
                                                  fill_mode,
                                                  descrA.rows(),
-                                                 BackendScalar<T, BackendLibrary::CUSOLVER>::type,
+                                                 BackendScalar<Scalar, BackendLibrary::CUSOLVER>::type,
                                                  descrA.data_ptr() + static_cast<std::ptrdiff_t>(i) * descrA.stride(),
                                                  descrA.ld(),
-                                                 BackendScalar<float_t<T>, BackendLibrary::CUSOLVER>::type,
+                                                 BackendScalar<float_t<Scalar>, BackendLibrary::CUSOLVER>::type,
                                                  eigenvalues.data() + i * descrA.rows(),
-                                                 BackendScalar<T, BackendLibrary::CUSOLVER>::type,
+                                                 BackendScalar<Scalar, BackendLibrary::CUSOLVER>::type,
                                                  device_workspace_bytes.data(),
                                                  l_work_device_bytes,
                                                  host_workspace.data(),
@@ -160,11 +160,11 @@ Event syev_vendor(Queue& ctx,
             // Tightly packed batch: safe to use cuSOLVER batched API.
 #if USE_CUSOLVER_X_API
                 check_status(cusolverDnXsyevBatched_bufferSize(handle, params, eig_mode, fill_mode, descrA.rows(),
-                                                              BackendScalar<T, BackendLibrary::CUSOLVER>::type,
+                                                              BackendScalar<Scalar, BackendLibrary::CUSOLVER>::type,
                                                               descrA.data_ptr(), descrA.ld(),
-                                                              BackendScalar<float_t<T>, BackendLibrary::CUSOLVER>::type,
-                                                              eigenvalues.data(),
-                                                              BackendScalar<T, BackendLibrary::CUSOLVER>::type,
+                                                              BackendScalar<float_t<Scalar>,
+                                                               BackendLibrary::CUSOLVER>::type, eigenvalues.data(),
+                                                              BackendScalar<Scalar, BackendLibrary::CUSOLVER>::type,
                                                               &l_work_device_bytes, &l_work_host_bytes, descrA.batch_size()));
 
                 auto host_workspace = pool.allocate<std::byte>(ctx, l_work_host_bytes);
@@ -177,12 +177,12 @@ Event syev_vendor(Queue& ctx,
                                                        eig_mode,
                                                        fill_mode,
                                                        descrA.rows(),
-                                                       BackendScalar<T, BackendLibrary::CUSOLVER>::type,
+                                                       BackendScalar<Scalar, BackendLibrary::CUSOLVER>::type,
                                                        descrA.data_ptr(),
                                                        descrA.ld(),
-                                                       BackendScalar<float_t<T>, BackendLibrary::CUSOLVER>::type,
+                                                       BackendScalar<float_t<Scalar>, BackendLibrary::CUSOLVER>::type,
                                                        eigenvalues.data(),
-                                                       BackendScalar<T, BackendLibrary::CUSOLVER>::type,
+                                                       BackendScalar<Scalar, BackendLibrary::CUSOLVER>::type,
                                                        device_workspace_bytes.data(),
                                                        l_work_device_bytes,
                                                        host_workspace.data(),
@@ -194,16 +194,16 @@ Event syev_vendor(Queue& ctx,
                 syevjInfo_t syevj_info;
                 check_status(cusolverDnCreateSyevjInfo(&syevj_info));
                 try {
-                    call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSsyevjBatched_bufferSize, cusolverDnDsyevjBatched_bufferSize, cusolverDnCheevjBatched_bufferSize, cusolverDnZheevjBatched_bufferSize,
+                    call_backend<Scalar, BackendLibrary::CUSOLVER, B>(cusolverDnSsyevjBatched_bufferSize, cusolverDnDsyevjBatched_bufferSize, cusolverDnCheevjBatched_bufferSize, cusolverDnZheevjBatched_bufferSize,
                         handle, eig_mode, fill_mode, descrA.rows(), descrA.data_ptr(), descrA.ld(), base_float_ptr_convert(eigenvalues.data()), &l_work_device_elems, syevj_info, descrA.batch_size());
 
-                    auto device_workspace_elems = pool.allocate<T>(ctx, static_cast<size_t>(l_work_device_elems));
+                    auto device_workspace_elems = pool.allocate<Scalar>(ctx, static_cast<size_t>(l_work_device_elems));
                     // syevj's info IS LAPACK-like (> 0 == did not converge), so
                     // it needs no translation into the contract `info` documents.
                     auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(descrA.batch_size()));
                     impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
                         handle.setStream(stream);
-                        call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSsyevjBatched, cusolverDnDsyevjBatched, cusolverDnCheevjBatched, cusolverDnZheevjBatched,
+                        call_backend<Scalar, BackendLibrary::CUSOLVER, B>(cusolverDnSsyevjBatched, cusolverDnDsyevjBatched, cusolverDnCheevjBatched, cusolverDnZheevjBatched,
                             handle, eig_mode, fill_mode, descrA.rows(), descrA.data_ptr(), descrA.ld(), base_float_ptr_convert(eigenvalues.data()), device_workspace_elems.data(), l_work_device_elems, info.data(), syevj_info, descrA.batch_size());
                     });
                 } catch (...) {
@@ -221,10 +221,10 @@ Event syev_vendor(Queue& ctx,
     return ctx.create_event_after_external_work();
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t syev_vendor_buffer_size(Queue& ctx,
-                               const MatrixView<T, MatrixFormat::Dense>& descrA,
-                               Span<typename base_type<T>::type> eigenvalues,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& descrA,
+                               Span<typename base_type<Scalar>::type> eigenvalues,
                                JobType jobtype,
                                Uplo uplo) {
     static LinalgHandle<B> handle;
@@ -244,26 +244,26 @@ size_t syev_vendor_buffer_size(Queue& ctx,
         if (descrA.batch_size() == 1 || !tightly_packed) {
             // Per-batch loop uses Xsyevd workspace for a single matrix.
             check_status(cusolverDnXsyevd_bufferSize(handle, params, eig_mode, fill_mode, descrA.rows(),
-                                                    BackendScalar<T, BackendLibrary::CUSOLVER>::type,
+                                                    BackendScalar<Scalar, BackendLibrary::CUSOLVER>::type,
                                                     descrA.data_ptr(), descrA.ld(),
-                                                    BackendScalar<float_t<T>, BackendLibrary::CUSOLVER>::type,
+                                                    BackendScalar<float_t<Scalar>, BackendLibrary::CUSOLVER>::type,
                                                     eigenvalues.data(),
-                                                    BackendScalar<T, BackendLibrary::CUSOLVER>::type,
+                                                    BackendScalar<Scalar, BackendLibrary::CUSOLVER>::type,
                                                     &l_work_device_bytes, &l_work_host_bytes));
         } else {
 #if USE_CUSOLVER_X_API
                 check_status(cusolverDnXsyevBatched_bufferSize(handle, params, eig_mode, fill_mode, descrA.rows(),
-                                                              BackendScalar<T, BackendLibrary::CUSOLVER>::type,
+                                                              BackendScalar<Scalar, BackendLibrary::CUSOLVER>::type,
                                                               descrA.data_ptr(), descrA.ld(),
-                                                              BackendScalar<float_t<T>, BackendLibrary::CUSOLVER>::type,
-                                                              eigenvalues.data(),
-                                                              BackendScalar<T, BackendLibrary::CUSOLVER>::type,
+                                                              BackendScalar<float_t<Scalar>,
+                                                               BackendLibrary::CUSOLVER>::type, eigenvalues.data(),
+                                                              BackendScalar<Scalar, BackendLibrary::CUSOLVER>::type,
                                                               &l_work_device_bytes, &l_work_host_bytes, descrA.batch_size()));
 #else
                 syevjInfo_t syevj_info;
                 check_status(cusolverDnCreateSyevjInfo(&syevj_info));
                 try {
-                    call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSsyevjBatched_bufferSize, cusolverDnDsyevjBatched_bufferSize, cusolverDnCheevjBatched_bufferSize, cusolverDnZheevjBatched_bufferSize,
+                    call_backend<Scalar, BackendLibrary::CUSOLVER, B>(cusolverDnSsyevjBatched_bufferSize, cusolverDnDsyevjBatched_bufferSize, cusolverDnCheevjBatched_bufferSize, cusolverDnZheevjBatched_bufferSize,
                         handle, eig_mode, fill_mode, descrA.rows(), descrA.data_ptr(), descrA.ld(), base_float_ptr_convert(eigenvalues.data()), &l_work_device_elems, syevj_info, descrA.batch_size());
                 } catch (...) {
                     cusolverDnDestroySyevjInfo(syevj_info);
@@ -280,28 +280,28 @@ size_t syev_vendor_buffer_size(Queue& ctx,
 
     return BumpAllocator::allocation_size<std::byte>(ctx, l_work_host_bytes)
          + BumpAllocator::allocation_size<std::byte>(ctx, l_work_device_bytes)
-         + BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(l_work_device_elems))
+         + BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(l_work_device_elems))
          + BumpAllocator::allocation_size<int>(ctx, descrA.batch_size());
 }
 
 namespace gesvd_detail {
 
-template <typename T> struct GesvdVhKernel;
+template <typename Scalar> struct GesvdVhKernel;
 
 // cuSOLVER's gesvdj family returns V; the BatchLAS gesvd contract is V^H.
 // Out-of-place: an in-place transpose would race between work-items.
 // src is n x n column-major with ld == n and stride == n*n (cuSOLVER's layout).
-template <typename T>
+template <typename Scalar>
 void write_vh_from_v(Queue& ctx,
-                     const T* v_src,
+                     const Scalar* v_src,
                      int64_t n,
                      int64_t batch,
-                     const MatrixView<T, MatrixFormat::Dense>& vh_out) {
+                     const MatrixView<Scalar, MatrixFormat::Dense>& vh_out) {
     ctx->submit([&](sycl::handler& h) {
         auto Vh = vh_out.kernel_view();
         const int64_t nn = n;
-        const T* src = v_src;
-        batchlas::impl::parallel_for<GesvdVhKernel<T>>(h,
+        const Scalar* src = v_src;
+        batchlas::impl::parallel_for<GesvdVhKernel<Scalar>>(h,
             sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n * n)),
             [=](sycl::id<2> id) {
                 const int64_t b = static_cast<int64_t>(id[0]);
@@ -317,16 +317,16 @@ void write_vh_from_v(Queue& ctx,
 // gesvdjBatched carries no stride arguments: A, U and V are each assumed
 // tightly packed with stride == ld * cols. MatrixView can carry arbitrary
 // strides (subviews), so every view handed to it must be checked.
-template <typename T>
-inline bool packed(const MatrixView<T, MatrixFormat::Dense>& m) {
+template <typename Scalar>
+inline bool packed(const MatrixView<Scalar, MatrixFormat::Dense>& m) {
     return m.batch_size() == 1 || m.stride() == m.ld() * m.cols();
 }
 
 // Documented limit of cusolverDn<t>gesvdjBatched.
 constexpr int64_t kGesvdjBatchedMaxDim = 32;
 
-template <typename T>
-inline bool batched_route_ok(const MatrixView<T, MatrixFormat::Dense>& A) {
+template <typename Scalar>
+inline bool batched_route_ok(const MatrixView<Scalar, MatrixFormat::Dense>& A) {
     return A.rows() <= kGesvdjBatchedMaxDim &&
            A.cols() <= kGesvdjBatchedMaxDim &&
            packed(A);
@@ -334,12 +334,12 @@ inline bool batched_route_ok(const MatrixView<T, MatrixFormat::Dense>& A) {
 
 }  // namespace gesvd_detail
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t gesvd_vendor_buffer_size(Queue& ctx,
-                                const MatrixView<T, MatrixFormat::Dense>& A,
-                                Span<typename base_type<T>::type> singular_values,
-                                const MatrixView<T, MatrixFormat::Dense>& U,
-                                const MatrixView<T, MatrixFormat::Dense>& Vh,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                Span<typename base_type<Scalar>::type> singular_values,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& U,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& Vh,
                                 SvdVectors jobu,
                                 SvdVectors jobvh) {
     (void)U;
@@ -384,7 +384,7 @@ size_t gesvd_vendor_buffer_size(Queue& ctx,
 
     int lwork = 0;
     try {
-        call_backend<T, BackendLibrary::CUSOLVER, B>(
+        call_backend<Scalar, BackendLibrary::CUSOLVER, B>(
             cusolverDnSgesvdjBatched_bufferSize, cusolverDnDgesvdjBatched_bufferSize,
             cusolverDnCgesvdjBatched_bufferSize, cusolverDnZgesvdjBatched_bufferSize,
             handle, jobz, m, n,
@@ -402,33 +402,33 @@ size_t gesvd_vendor_buffer_size(Queue& ctx,
     // One allocation_size per allocation the call side makes. Rounding a
     // summed byte total instead under-provisions: each request is padded up
     // to the pool's alignment independently.
-    size_t bytes = BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(lwork));
+    size_t bytes = BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(lwork));
     bytes += BumpAllocator::allocation_size<int>(ctx, static_cast<size_t>(batch));
     if (vectors) {
         // V scratch is unconditional when vectors are computed: cuSOLVER needs
         // somewhere to put V even when only U was asked for, and when Vh IS
         // wanted we still cannot transpose in place.
-        bytes += BumpAllocator::allocation_size<T>(
+        bytes += BumpAllocator::allocation_size<Scalar>(
             ctx, static_cast<size_t>(n) * static_cast<size_t>(n) * static_cast<size_t>(batch));
         if (!want_u) {
-            bytes += BumpAllocator::allocation_size<T>(
+            bytes += BumpAllocator::allocation_size<Scalar>(
                 ctx, static_cast<size_t>(m) * static_cast<size_t>(m) * static_cast<size_t>(batch));
         }
     }
     return bytes;
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event gesvd_vendor(Queue& ctx,
-                   const MatrixView<T, MatrixFormat::Dense>& A,
-                   Span<typename base_type<T>::type> singular_values,
-                   const MatrixView<T, MatrixFormat::Dense>& U,
-                   const MatrixView<T, MatrixFormat::Dense>& Vh,
+                   const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                   Span<typename base_type<Scalar>::type> singular_values,
+                   const MatrixView<Scalar, MatrixFormat::Dense>& U,
+                   const MatrixView<Scalar, MatrixFormat::Dense>& Vh,
                    SvdVectors jobu,
                    SvdVectors jobvh,
                    Span<std::byte> workspace,
                    Span<int32_t> info_out) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::gesvd, "gesvd_vendor", B, A, U, Vh);
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::gesvd, "gesvd_vendor", B, A, U, Vh);
     if (!gesvd_detail::batched_route_ok(A)) {
         throw batchlas::unsupported(
             "gesvd_vendor (CUSOLVER): only the gesvdjBatched route is implemented "
@@ -469,8 +469,8 @@ Event gesvd_vendor(Queue& ctx,
 
     gesvdjInfo_t params;
     check_status(cusolverDnCreateGesvdjInfo(&params));
-    T* v_ptr = nullptr;
-    T* u_ptr = nullptr;
+    Scalar* v_ptr = nullptr;
+    Scalar* u_ptr = nullptr;
     try {
         // Match the BatchLAS contract: singular values descending. cuSOLVER's sort
         // flag does exactly that, so no post-pass is needed.
@@ -480,7 +480,7 @@ Event gesvd_vendor(Queue& ctx,
             vectors ? CUSOLVER_EIG_MODE_VECTOR : CUSOLVER_EIG_MODE_NOVECTOR;
 
         int lwork = 0;
-        call_backend<T, BackendLibrary::CUSOLVER, B>(
+        call_backend<Scalar, BackendLibrary::CUSOLVER, B>(
             cusolverDnSgesvdjBatched_bufferSize, cusolverDnDgesvdjBatched_bufferSize,
             cusolverDnCgesvdjBatched_bufferSize, cusolverDnZgesvdjBatched_bufferSize,
             handle, jobz, m, n,
@@ -499,17 +499,17 @@ Event gesvd_vendor(Queue& ctx,
         //
         // gesvdjBatched's info is LAPACK-like (> 0 == did not converge) and
         // was allocated, passed and dropped until now.
-        auto work = pool.allocate<T>(ctx, static_cast<size_t>(lwork));
+        auto work = pool.allocate<Scalar>(ctx, static_cast<size_t>(lwork));
         auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(batch));
 
         if (vectors) {
-            auto v_scratch = pool.allocate<T>(
+            auto v_scratch = pool.allocate<Scalar>(
                 ctx, static_cast<size_t>(n) * static_cast<size_t>(n) * static_cast<size_t>(batch));
             v_ptr = v_scratch.data();
             if (want_u) {
                 u_ptr = U.data_ptr();
             } else {
-                auto u_scratch = pool.allocate<T>(
+                auto u_scratch = pool.allocate<Scalar>(
                     ctx, static_cast<size_t>(m) * static_cast<size_t>(m) * static_cast<size_t>(batch));
                 u_ptr = u_scratch.data();
             }
@@ -517,7 +517,7 @@ Event gesvd_vendor(Queue& ctx,
 
         impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
             handle.setStream(stream);
-            call_backend<T, BackendLibrary::CUSOLVER, B>(
+            call_backend<Scalar, BackendLibrary::CUSOLVER, B>(
                 cusolverDnSgesvdjBatched, cusolverDnDgesvdjBatched,
                 cusolverDnCgesvdjBatched, cusolverDnZgesvdjBatched,
                 handle, jobz, m, n,
@@ -538,7 +538,7 @@ Event gesvd_vendor(Queue& ctx,
         // cuSOLVER hands back V; the BatchLAS contract is V^H. An out-of-order queue orders
         // nothing across the SYCL/native boundary, so there the vendor call is waited out.
         if (!ctx.in_order()) ctx.wait();
-        gesvd_detail::write_vh_from_v<T>(ctx, v_ptr, n, batch, Vh);
+        gesvd_detail::write_vh_from_v<Scalar>(ctx, v_ptr, n, batch, Vh);
         e = ctx.get_event();
     }
     return e;

@@ -38,9 +38,9 @@ using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename device::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
-template <class T> using DevT = typename sycl_device::DevMap<T>::type;
+template <class Scalar> using real_of = typename device::Arith<Scalar>::real_t;
+template <class Scalar> constexpr bool is_cplx = device::Arith<Scalar>::is_complex;
+template <class Scalar> using DevT = typename sycl_device::DevMap<Scalar>::type;
 
 constexpr int kBatch = 1024;  // saturating batch: items repeat with period kPeriod
 constexpr int kPeriod = 3;
@@ -51,12 +51,12 @@ std::uint64_t mix(std::uint64_t x) {
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
     return x ^ (x >> 31);
 }
-template <class R> R uval(std::uint64_t i) { return static_cast<R>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
-template <class T> T val(std::uint64_t i) {
-    if constexpr (is_cplx<T>) return T(uval<real_of<T>>(2 * i), uval<real_of<T>>(2 * i + 1));
-    else return uval<T>(i);
+template <class Real> Real uval(std::uint64_t i) { return static_cast<Real>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
+template <class Scalar> Scalar val(std::uint64_t i) {
+    if constexpr (is_cplx<Scalar>) return Scalar(uval<real_of<Scalar>>(2 * i), uval<real_of<Scalar>>(2 * i + 1));
+    else return uval<Scalar>(i);
 }
-template <class T> T nan_v() { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }
+template <class Scalar> Scalar nan_v() { return Scalar(std::numeric_limits<real_of<Scalar>>::quiet_NaN()); }
 
 // kPeriod representatives built by make(b, i), copied to every item b from b % kPeriod.
 template <class T, class Make> std::vector<T> batched(int per_item, Make make, int items = kBatch) {
@@ -106,11 +106,11 @@ struct Dev {
     std::vector<void*> ptrs;
 };
 
-template <class T> class DeviceLapackLuTest : public ::testing::Test {
+template <class Scalar> class DeviceLapackLuTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx.device().supports_sub_group_size(32)) GTEST_SKIP() << "device tests launch sub-group size 32";
-        if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
+        if (test_utils::lacks_fp64<Scalar>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
 };
@@ -118,21 +118,21 @@ protected:
 using Types = ::testing::Types<float, double, std::complex<float>, std::complex<double>>;
 TYPED_TEST_SUITE(DeviceLapackLuTest, Types);
 
-template <class T> using LD = std::conditional_t<is_cplx<T>, std::complex<long double>, long double>;
-template <class T> LD<T> wide(T v) { return LD<T>(v); }
-template <class T> T conj_h(T v) {
-    if constexpr (is_cplx<T>) return std::conj(v);
+template <class Scalar> using LD = std::conditional_t<is_cplx<Scalar>, std::complex<long double>, long double>;
+template <class Scalar> LD<Scalar> wide(Scalar v) { return LD<Scalar>(v); }
+template <class Scalar> Scalar conj_h(Scalar v) {
+    if constexpr (is_cplx<Scalar>) return std::conj(v);
     else return v;
 }
-template <class T> double rel(T got, LD<T> ref, long double scale) {
-    const long double d = std::abs(LD<T>(got) - ref);
+template <class Scalar> double rel(Scalar got, LD<Scalar> ref, long double scale) {
+    const long double d = std::abs(LD<Scalar>(got) - ref);
     if (std::isnan(d)) return std::numeric_limits<double>::infinity();
-    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<T>>::min()));
+    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<Scalar>>::min()));
 }
 
 // True when the device flushes a denormal product to zero (Metal); the CUDA build keeps them.
-template <class T> bool device_flushes(Dev& dev) {
-    using R = real_of<T>;
+template <class Scalar> bool device_flushes(Dev& dev) {
+    using R = real_of<Scalar>;
     std::vector<R> h{std::numeric_limits<R>::denorm_min() * R(4), R(1)};
     R* p = dev.up(h);
     dev.template run<32>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
@@ -202,15 +202,15 @@ TYPED_TEST(DeviceLapackLuTest, SafeRecipIsGetf2ScalingBitForBit) {
 
 // Per item: src (ldA x NA) with the view at (i0, j0), m x n. out regions (each poisoned):
 // [lapmr (0-based) | core lacpy of conj_if(trans(src))], ld ldB / ldT.
-template <class T, int WG> void gather_case(Dev& dev) {
-    using D = DevT<T>;
+template <class Scalar, int WG> void gather_case(Dev& dev) {
+    using D = DevT<Scalar>;
     constexpr int m = 37, n = 5, i0 = 2, j0 = 1, ldA = m + 6, NA = n + 2, ldB = m + 5, ldT = n + 2;
     constexpr int kSrc = ldA * NA, kOut = ldB * n + ldT * m;
     auto perm = [](int i) { return (i * 7 + 3) % m; };
-    auto hs = batched<T>(kSrc, [](int b, int i) { return val<T>(std::uint64_t(b) * 7919u + i); });
-    std::vector<T> ho(std::size_t(kBatch) * kOut, nan_v<T>());
-    T* s = dev.up(hs);
-    T* o = dev.up(ho);
+    auto hs = batched<Scalar>(kSrc, [](int b, int i) { return val<Scalar>(std::uint64_t(b) * 7919u + i); });
+    std::vector<Scalar> ho(std::size_t(kBatch) * kOut, nan_v<Scalar>());
+    Scalar* s = dev.up(hs);
+    Scalar* o = dev.up(ho);
     dev.template run<WG>(kBatch, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const int b = static_cast<int>(it.get_group_linear_id());
         const device::RtGroup<> ex(it);  // the width is the launch's, a run-time value
@@ -224,18 +224,18 @@ template <class T, int WG> void gather_case(Dev& dev) {
     EXPECT_EQ(twin_diffs(h, kOut), 0) << "WG " << WG << ": items differ from their representative";
     int bad = 0, pad = 0;
     for (int b = 0; b < kPeriod; ++b) {
-        const T* sb = hs.data() + std::size_t(b) * kSrc;
-        const T* g = h.data() + std::size_t(b) * kOut;
+        const Scalar* sb = hs.data() + std::size_t(b) * kSrc;
+        const Scalar* g = h.data() + std::size_t(b) * kOut;
         auto A = [&](int i, int j) { return sb[(i0 + i) + std::size_t(j0 + j) * ldA]; };
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < ldB; ++i) {
-                const T v = g[i + j * ldB];
+                const Scalar v = g[i + j * ldB];
                 if (i >= m) pad += !std::isnan(std::real(v));
                 else bad += !same_bits(v, A(perm(i), j));
             }
         for (int i = 0; i < m; ++i)
             for (int j = 0; j < ldT; ++j) {
-                const T v = g[ldB * n + j + i * ldT];
+                const Scalar v = g[ldB * n + j + i * ldT];
                 if (j >= n) pad += !std::isnan(std::real(v));
                 else bad += !same_bits(v, conj_h(A(i, j)));
             }
@@ -390,35 +390,35 @@ TYPED_TEST(DeviceLapackLuTest, ShiftReduceIsTheShiftDownOrderBitForBit) {
 
 // A jb x jb block at ld jb + 1 whose op(A) (A, or A^H when Tr) is UL triangular: |diag| in [1, 2],
 // off-diagonal scaled by 1/jb; the other triangle, and the diagonal when Unit, are NaN.
-template <class T, Uplo UL, Diag DG, bool Tr> std::vector<T> tri_blocks(int jb, int ld) {
-    using R = real_of<T>;
-    return batched<T>(ld * jb, [=](int b, int e) {
+template <class Scalar, Uplo UL, Diag DG, bool Tr> std::vector<Scalar> tri_blocks(int jb, int ld) {
+    using R = real_of<Scalar>;
+    return batched<Scalar>(ld * jb, [=](int b, int e) {
         const int i = e % ld, j = e / ld;
-        if (i >= jb) return nan_v<T>();
+        if (i >= jb) return nan_v<Scalar>();
         const int oi = Tr ? j : i, oj = Tr ? i : j;  // op(A)(oi, oj) is stored at (i, j)
         const bool stored = UL == Uplo::Lower ? oi >= oj : oi <= oj;
-        if (!stored || (DG == Diag::Unit && i == j)) return nan_v<T>();
-        const T v = val<T>(std::uint64_t(b) * 65537u + e + 11u);
-        if (i == j) return T(R(1.5)) + T(R(0.5)) * v;
-        return v / T(R(jb));
+        if (!stored || (DG == Diag::Unit && i == j)) return nan_v<Scalar>();
+        const Scalar v = val<Scalar>(std::uint64_t(b) * 65537u + e + 11u);
+        if (i == j) return Scalar(R(1.5)) + Scalar(R(0.5)) * v;
+        return v / Scalar(R(jb));
     });
 }
-template <class T, Uplo UL, Diag DG, bool Tr> LD<T> op_at(const T* a, int ld, int i, int j) {
-    if (i == j && DG == Diag::Unit) return LD<T>(1);
-    if (UL == Uplo::Lower ? i < j : i > j) return LD<T>(0);
+template <class Scalar, Uplo UL, Diag DG, bool Tr> LD<Scalar> op_at(const Scalar* a, int ld, int i, int j) {
+    if (i == j && DG == Diag::Unit) return LD<Scalar>(1);
+    if (UL == Uplo::Lower ? i < j : i > j) return LD<Scalar>(0);
     return Tr ? wide(conj_h(a[j + std::size_t(i) * ld])) : wide(a[i + std::size_t(j) * ld]);
 }
 // Backward error of x for op(A) x = rhs, componentwise in the blas scale.
-template <class T, Uplo UL, Diag DG, bool Tr> double tri_residual(const T* a, int ld, int jb, const T* x, const T* rhs) {
+template <class Scalar, Uplo UL, Diag DG, bool Tr> double tri_residual(const Scalar* a, int ld, int jb, const Scalar* x, const Scalar* rhs) {
     double worst = 0;
     for (int i = 0; i < jb; ++i) {
-        LD<T> s = 0;
+        LD<Scalar> s = 0;
         long double sc = std::abs(wide(rhs[i]));
         for (int j = 0; j < jb; ++j) {
-            const LD<T> e = op_at<T, UL, DG, Tr>(a, ld, i, j);
+            const LD<Scalar> e = op_at<Scalar, UL, DG, Tr>(a, ld, i, j);
             s += e * wide(x[j]), sc += std::abs(e) * std::abs(wide(x[j]));
         }
-        worst = std::max(worst, rel(T(0), s - wide(rhs[i]), sc));
+        worst = std::max(worst, rel(Scalar(0), s - wide(rhs[i]), sc));
     }
     return worst;
 }

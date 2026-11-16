@@ -37,8 +37,8 @@ inline constexpr bool kSplitWords = sizeof(T) > 8 || (sizeof(T) & (sizeof(T) - 1
 
 template <typename T>
 struct is_std_complex : std::false_type {};
-template <typename R>
-struct is_std_complex<std::complex<R>> : std::true_type {};
+template <typename Real>
+struct is_std_complex<std::complex<Real>> : std::true_type {};
 
 template <typename T, typename Op>
 inline constexpr bool kSplitComplexSum =

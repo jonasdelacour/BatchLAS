@@ -18,26 +18,26 @@ namespace batchlas::linalg {
 
 namespace {
 
-template <typename T, BinaryOp Op>
+template <typename Scalar, BinaryOp Op>
 struct ElementwiseBinaryKernel {};
 
-template <typename T>
+template <typename Scalar>
 struct AxpbyKernel {};
 
-template <typename T, Uplo U>
+template <typename Scalar, Uplo U>
 struct TriangularMaskKernel {};
 
-template <typename T, BinaryOp Op>
-inline T apply(const T& a, const T& b) {
+template <typename Scalar, BinaryOp Op>
+inline Scalar apply(const Scalar& a, const Scalar& b) {
     if constexpr (Op == BinaryOp::Add) return a + b;
     else if constexpr (Op == BinaryOp::Subtract) return a - b;
     else if constexpr (Op == BinaryOp::Multiply) return a * b;
     else return a / b;
 }
 
-template <typename T>
-void check_same_shape(const MatrixView<T, MatrixFormat::Dense>& A,
-                      const MatrixView<T, MatrixFormat::Dense>& B,
+template <typename Scalar>
+void check_same_shape(const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                      const MatrixView<Scalar, MatrixFormat::Dense>& B,
                       const char* where) {
     if (A.rows() != B.rows() || A.cols() != B.cols() || A.batch_size() != B.batch_size()) {
         throw batchlas::invalid_argument(std::string(where) + ": operands must have the same shape");
@@ -64,12 +64,12 @@ Event launch_2d(Queue& ctx, int rows, int cols, int batch, const std::uint8_t* m
 
 }  // namespace
 
-template <typename T, BinaryOp Op>
+template <typename Scalar, BinaryOp Op>
 Event elementwise_into(Queue& ctx,
-                       const MatrixView<T, MatrixFormat::Dense>& A,
-                       const MatrixView<T, MatrixFormat::Dense>& B,
-                       const MatrixView<T, MatrixFormat::Dense>& C) {
-    ::batchlas::detail::require_device_fp64<T>(ctx, "linalg::elementwise");
+                       const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                       const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                       const MatrixView<Scalar, MatrixFormat::Dense>& C) {
+    ::batchlas::detail::require_device_fp64<Scalar>(ctx, "linalg::elementwise");
     check_same_shape(A, B, "linalg::elementwise_into");
     check_same_shape(A, C, "linalg::elementwise_into");
     const std::uint8_t* mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("linalg::elementwise_into", A, B, C));
@@ -78,20 +78,20 @@ Event elementwise_into(Queue& ctx,
     auto Av = A.kernel_view();
     auto Bv = B.kernel_view();
     auto Cv = C.kernel_view();
-    return launch_2d<ElementwiseBinaryKernel<T, Op>>(ctx, m, n, A.batch_size(), mask, [=](const auto& ex, int b) {
-        device::map2d(ex, device::item(Cv, b, m, n), [](T a, T bb) { return apply<T, Op>(a, bb); }, device::item(Av, b, m, n),
+    return launch_2d<ElementwiseBinaryKernel<Scalar, Op>>(ctx, m, n, A.batch_size(), mask, [=](const auto& ex, int b) {
+        device::map2d(ex, device::item(Cv, b, m, n), [](Scalar a, Scalar bb) { return apply<Scalar, Op>(a, bb); }, device::item(Av, b, m, n),
                         device::item(Bv, b, m, n));
     });
 }
 
-template <typename T>
+template <typename Scalar>
 Event axpby_into(Queue& ctx,
-                 T alpha,
-                 const MatrixView<T, MatrixFormat::Dense>& A,
-                 T beta,
-                 const MatrixView<T, MatrixFormat::Dense>& B,
-                 const MatrixView<T, MatrixFormat::Dense>& C) {
-    ::batchlas::detail::require_device_fp64<T>(ctx, "linalg::axpby");
+                 Scalar alpha,
+                 const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                 Scalar beta,
+                 const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                 const MatrixView<Scalar, MatrixFormat::Dense>& C) {
+    ::batchlas::detail::require_device_fp64<Scalar>(ctx, "linalg::axpby");
     check_same_shape(A, B, "linalg::axpby_into");
     check_same_shape(A, C, "linalg::axpby_into");
     const std::uint8_t* mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("linalg::axpby_into", A, B, C));
@@ -100,18 +100,18 @@ Event axpby_into(Queue& ctx,
     auto Av = A.kernel_view();
     auto Bv = B.kernel_view();
     auto Cv = C.kernel_view();
-    return launch_2d<AxpbyKernel<T>>(ctx, m, n, A.batch_size(), mask, [=](const auto& ex, int b) {
+    return launch_2d<AxpbyKernel<Scalar>>(ctx, m, n, A.batch_size(), mask, [=](const auto& ex, int b) {
         device::geam(ex, alpha, device::item(Av, b, m, n), beta, device::item(Bv, b, m, n), device::item(Cv, b, m, n));
     });
 }
 
-template <typename T>
+template <typename Scalar>
 Event triangular_mask_into(Queue& ctx,
-                           const MatrixView<T, MatrixFormat::Dense>& A,
-                           const MatrixView<T, MatrixFormat::Dense>& C,
+                           const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                           const MatrixView<Scalar, MatrixFormat::Dense>& C,
                            Uplo uplo,
                            int64_t k) {
-    ::batchlas::detail::require_device_fp64<T>(ctx, "linalg::triangular_mask");
+    ::batchlas::detail::require_device_fp64<Scalar>(ctx, "linalg::triangular_mask");
     check_same_shape(A, C, "linalg::triangular_mask_into");
     const std::uint8_t* mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("linalg::triangular_mask_into", A, C));
 
@@ -122,19 +122,19 @@ Event triangular_mask_into(Queue& ctx,
     auto Av = A.kernel_view();
     auto Cv = C.kernel_view();
     const auto run = [&](auto uplo_tag) {
-        return launch_2d<TriangularMaskKernel<T, decltype(uplo_tag)::value>>(ctx, m, n, A.batch_size(), mask,
-                                                                            [=](const auto& ex, int b) {
-            device::trimask(ex, device::tri(uplo_tag, kc), device::item(Av, b, m, n), device::item(Cv, b, m, n));
-        });
+        return launch_2d<TriangularMaskKernel<Scalar, decltype(uplo_tag)::value>>(ctx, m, n, A.batch_size(), mask,
+                                                                                  [=](const auto& ex, int b) {
+                  device::trimask(ex, device::tri(uplo_tag, kc), device::item(Av, b, m, n), device::item(Cv, b, m, n));
+              });
     };
     return uplo == Uplo::Upper ? run(device::UpperC{}) : run(device::LowerC{});
 }
 
-template <typename T>
-Event scale(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, T alpha) {
+template <typename Scalar>
+Event scale(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, Scalar alpha) {
     // beta = 0 with B = A, so the second term contributes nothing and A is
     // read and written in place by the same work-item.
-    return axpby_into<T>(ctx, alpha, A, T(0), A, A);
+    return axpby_into<Scalar>(ctx, alpha, A, Scalar(0), A, A);
 }
 
 #define ELEMENTWISE_INSTANTIATE(fp)                                                        \

@@ -33,8 +33,8 @@ using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename device::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
+template <class Scalar> using real_of = typename device::Arith<Scalar>::real_t;
+template <class Scalar> constexpr bool is_cplx = device::Arith<Scalar>::is_complex;
 
 constexpr int kBatch = 1024;  // saturating batch: items repeat with period kPeriod
 constexpr int kPeriod = 3;
@@ -45,31 +45,31 @@ std::uint64_t mix(std::uint64_t x) {
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
     return x ^ (x >> 31);
 }
-template <class R> R uval(std::uint64_t i) { return static_cast<R>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
-template <class T> T val(std::uint64_t i) {
-    if constexpr (is_cplx<T>) return T(uval<real_of<T>>(2 * i), uval<real_of<T>>(2 * i + 1));
-    else return uval<T>(i);
+template <class Real> Real uval(std::uint64_t i) { return static_cast<Real>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
+template <class Scalar> Scalar val(std::uint64_t i) {
+    if constexpr (is_cplx<Scalar>) return Scalar(uval<real_of<Scalar>>(2 * i), uval<real_of<Scalar>>(2 * i + 1));
+    else return uval<Scalar>(i);
 }
-template <class T> T nan_of() {
-    const real_of<T> q = std::numeric_limits<real_of<T>>::quiet_NaN();
-    if constexpr (is_cplx<T>) return T(q, q);
+template <class Scalar> Scalar nan_of() {
+    const real_of<Scalar> q = std::numeric_limits<real_of<Scalar>>::quiet_NaN();
+    if constexpr (is_cplx<Scalar>) return Scalar(q, q);
     else return q;
 }
-template <class T> T conj_h(T v) {
-    if constexpr (is_cplx<T>) return std::conj(v);
+template <class Scalar> Scalar conj_h(Scalar v) {
+    if constexpr (is_cplx<Scalar>) return std::conj(v);
     else return v;
 }
-template <class T> T with_imag(real_of<T> re, real_of<T> im) {
-    if constexpr (is_cplx<T>) return T(re, im);
+template <class Scalar> Scalar with_imag(real_of<Scalar> re, real_of<Scalar> im) {
+    if constexpr (is_cplx<Scalar>) return Scalar(re, im);
     else return re;
 }
 bool in_tri(Uplo ul, int i, int j) { return ul == Uplo::Lower ? i >= j : i <= j; }
 
 // kPeriod representatives (edited by fix(item pointer)) copied to every item b from b % kPeriod.
-template <class T, class Fix> std::vector<T> batched(int per_item, std::uint64_t seed, Fix fix) {
-    std::vector<T> h(static_cast<std::size_t>(kBatch) * per_item);
+template <class Scalar, class Fix> std::vector<Scalar> batched(int per_item, std::uint64_t seed, Fix fix) {
+    std::vector<Scalar> h(static_cast<std::size_t>(kBatch) * per_item);
     for (int b = 0; b < kPeriod; ++b) {
-        for (int i = 0; i < per_item; ++i) h[std::size_t(b) * per_item + i] = val<T>(seed + std::uint64_t(b) * 1000003u + i);
+        for (int i = 0; i < per_item; ++i) h[std::size_t(b) * per_item + i] = val<Scalar>(seed + std::uint64_t(b) * 1000003u + i);
         fix(h.data() + std::size_t(b) * per_item);
     }
     for (int b = kPeriod; b < kBatch; ++b)
@@ -116,12 +116,12 @@ struct Dev {
     std::vector<void*> ptrs;
 };
 
-template <class T> class DeviceLapackSygstTest : public ::testing::Test {
+template <class Scalar> class DeviceLapackSygstTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx) GTEST_SKIP() << "no SYCL device visible";
         if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "device tests launch sub-group size 32";
-        if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
+        if (test_utils::lacks_fp64<Scalar>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
 };
@@ -129,13 +129,13 @@ protected:
 using Types = ::testing::Types<float, double, std::complex<float>, std::complex<double>>;
 TYPED_TEST_SUITE(DeviceLapackSygstTest, Types);
 
-template <class T> using LD = std::conditional_t<is_cplx<T>, std::complex<long double>, long double>;
-template <class T> LD<T> wide(T v) { return LD<T>(v); }
+template <class Scalar> using LD = std::conditional_t<is_cplx<Scalar>, std::complex<long double>, long double>;
+template <class Scalar> LD<Scalar> wide(Scalar v) { return LD<Scalar>(v); }
 
-template <class T> double rel(T got, LD<T> ref, long double scale) {
-    const long double d = std::abs(LD<T>(got) - ref);
+template <class Scalar> double rel(Scalar got, LD<Scalar> ref, long double scale) {
+    const long double d = std::abs(LD<Scalar>(got) - ref);
     if (std::isnan(d)) return std::numeric_limits<double>::infinity();
-    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<T>>::min()));
+    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<Scalar>>::min()));
 }
 
 template <class NE> NE make_ne(int n) {
@@ -222,9 +222,9 @@ void check_tri(Dev& dev, int n, const char* what) {
     EXPECT_VERIFY(T, Check::blas, n, worst) << what;
 }
 
-template <class T, Uplo UP, Transpose TR, bool Solve> void check_tri_extents(Dev& dev, const char* what) {
-    check_tri<T, UP, TR, Solve, device::Ext<16>, 16>(dev, 16, what);  // compile-time order, whole packs
-    check_tri<T, UP, TR, Solve, device::Dyn, 32>(dev, 13, what);       // run-time order < N, partial last pack
+template <class Scalar, Uplo UP, Transpose TR, bool Solve> void check_tri_extents(Dev& dev, const char* what) {
+    check_tri<Scalar, UP, TR, Solve, device::Ext<16>, 16>(dev, 16, what);  // compile-time order, whole packs
+    check_tri<Scalar, UP, TR, Solve, device::Dyn, 32>(dev, 13, what);       // run-time order < N, partial last pack
 }
 
 TYPED_TEST(DeviceLapackSygstTest, TrsvPackedEveryUploAndTranspose) {
@@ -248,29 +248,30 @@ TYPED_TEST(DeviceLapackSygstTest, TrmvPackedEveryUploAndTranspose) {
 // S stores one triangle (the other 1e6, Im(diag) 1e3). Per column j: O1(:, j) = column j of the
 // Hermitian S, O2(:, j) = conj(row j of S), loaded into a Frag and stored; O3 = herm(S) by
 // device::lacpy element by element. Rows n.. of O1, O2, O3 (ld n + 2) stay NaN.
-template <class T, class NE, int N> void check_views(Dev& dev, Uplo ul, int n) {
+template <class Scalar, class NE, int N> void check_views(Dev& dev, Uplo ul, int n) {
     const int lds = n + 3, ldo = n + 2, per_s = lds * n, per_o = ldo * n;
-    auto hs = batched<T>(per_s, 21, [&](T* s) {
+    auto hs = batched<Scalar>(per_s, 21, [&](Scalar* s) {
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i) {
-                if (i == j) s[i + j * lds] = with_imag<T>(std::real(s[i + j * lds]), real_of<T>(1e3));
-                else if (!in_tri(ul, i, j)) s[i + j * lds] = with_imag<T>(real_of<T>(1e6), real_of<T>(-1e6));
+                if (i == j) s[i + j * lds] = with_imag<Scalar>(std::real(s[i + j * lds]), real_of<Scalar>(1e3));
+                else if (!in_tri(ul, i, j)) s[i + j * lds] = with_imag<Scalar>(real_of<Scalar>(1e6),
+                                                                               real_of<Scalar>(-1e6));
             }
     });
-    std::vector<T> ho(std::size_t(kBatch) * per_o, nan_of<T>());
-    const T* S = dev.up(hs);
-    T* O1 = dev.up(ho);
-    T* O2 = dev.up(ho);
-    T* O3 = dev.up(ho);
+    std::vector<Scalar> ho(std::size_t(kBatch) * per_o, nan_of<Scalar>());
+    const Scalar* S = dev.up(hs);
+    Scalar* O1 = dev.up(ho);
+    Scalar* O2 = dev.up(ho);
+    Scalar* O3 = dev.up(ho);
     dev.template run<32>(kBatch / 32, [=](sycl::nd_item<1> it) {
         const int b = static_cast<int>(it.get_group_linear_id()) * 32 + static_cast<int>(it.get_local_linear_id());
         const NE ne = make_ne<NE>(n);
-        const device::Mat<const T, NE, NE, device::Dyn> s{S + std::ptrdiff_t(b) * per_s, ne, ne, device::Dyn{lds}};
-        const device::Mat<T, NE, NE, device::Dyn> o1{O1 + std::ptrdiff_t(b) * per_o, ne, ne, device::Dyn{ldo}};
-        const device::Mat<T, NE, NE, device::Dyn> o2{O2 + std::ptrdiff_t(b) * per_o, ne, ne, device::Dyn{ldo}};
-        const device::Mat<T, NE, NE, device::Dyn> o3{O3 + std::ptrdiff_t(b) * per_o, ne, ne, device::Dyn{ldo}};
+        const device::Mat<const Scalar, NE, NE, device::Dyn> s{S + std::ptrdiff_t(b) * per_s, ne, ne, device::Dyn{lds}};
+        const device::Mat<Scalar, NE, NE, device::Dyn> o1{O1 + std::ptrdiff_t(b) * per_o, ne, ne, device::Dyn{ldo}};
+        const device::Mat<Scalar, NE, NE, device::Dyn> o2{O2 + std::ptrdiff_t(b) * per_o, ne, ne, device::Dyn{ldo}};
+        const device::Mat<Scalar, NE, NE, device::Dyn> o3{O3 + std::ptrdiff_t(b) * per_o, ne, ne, device::Dyn{ldo}};
         for (int j = 0; j < n; ++j) {
-            device::Frag<T, N> x{};
+            device::Frag<Scalar, N> x{};
             device::load(x, device::herm_view(s, ul).col(j), n);
             device::store(x, o1.col(j), n);
             device::load(x, device::conj_view(s.row(j)), n);
@@ -281,16 +282,16 @@ template <class T, class NE, int N> void check_views(Dev& dev, Uplo ul, int n) {
     const auto g1 = dev.down(O1, ho.size()), g2 = dev.down(O2, ho.size()), g3 = dev.down(O3, ho.size());
     int bad = 0;
     for (int b = 0; b < kBatch; ++b) {
-        const T* s = hs.data() + std::size_t(b) * per_s;
+        const Scalar* s = hs.data() + std::size_t(b) * per_s;
         const std::size_t o = std::size_t(b) * per_o;
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < ldo; ++i) {
                 const std::size_t at = o + std::size_t(j) * ldo + i;
                 if (i >= n) {
-                    bad += !same_bits(g1[at], nan_of<T>()) + !same_bits(g2[at], nan_of<T>()) + !same_bits(g3[at], nan_of<T>());
+                    bad += !same_bits(g1[at], nan_of<Scalar>()) + !same_bits(g2[at], nan_of<Scalar>()) + !same_bits(g3[at], nan_of<Scalar>());
                     continue;
                 }
-                const T h = i == j ? with_imag<T>(std::real(s[i + i * lds]), 0) : in_tri(ul, i, j) ? s[i + j * lds] : conj_h(s[j + i * lds]);
+                const Scalar h = i == j ? with_imag<Scalar>(std::real(s[i + i * lds]), 0) : in_tri(ul, i, j) ? s[i + j * lds] : conj_h(s[j + i * lds]);
                 bad += !same_bits(g1[at], h) + !same_bits(g2[at], conj_h(s[j + i * lds])) + !same_bits(g3[at], h);
             }
     }

@@ -29,11 +29,11 @@ namespace ops::getri {
 
 using select::overloaded;
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
-template <typename T>
-select::Key key_of(const MV<T>& A) {
+template <typename Scalar>
+select::Key key_of(const MV<Scalar>& A) {
     return {{"n", A.rows()}, {"batch", A.batch_size()}};
 }
 
@@ -44,8 +44,8 @@ select::Key key_of(const MV<T>& A) {
 // netlib's pivots wrongly. evidence: docs/perf/lu.md#lu-correctness-findings
 // Vendor: exactly the launch's own guard. Not d.has_vendor && d.has_vendor: on ROCm
 // rocSOLVER and rocBLAS are separate options, and getri_vendor<ROCM> needs only rocSOLVER.
-template <Backend B, typename T>
-bool can_run(const GetriChoice& c, const select::Device& d, const MV<T>& A) {
+template <Backend B, typename Scalar>
+bool can_run(const GetriChoice& c, const select::Device& d, const MV<Scalar>& A) {
     // Masked: blocked and NETLIB's host loop skip an inactive item; the strided vendor calls cannot.
     const bool masked = detail::any_batch_mask(A);
     return std::visit(overloaded{
@@ -59,43 +59,45 @@ bool can_run(const GetriChoice& c, const select::Device& d, const MV<T>& A) {
     }, c);
 }
 
-template <Backend B, typename T>
-Event launch(Queue& q, const GetriChoice& c, const MV<T>& A, const MV<T>& C, Span<int64_t> pivots,
+template <Backend B, typename Scalar>
+Event launch(Queue& q, const GetriChoice& c, const MV<Scalar>& A, const MV<Scalar>& C, Span<int64_t> pivots,
              Span<std::byte> ws, Span<int32_t> info) {
     return std::visit(overloaded{
         [&](Blocked) {
-            return ops::getri::getri_blocked_dispatch<T>(
+            return ops::getri::getri_blocked_dispatch<Scalar>(
                 q, A, C, pivots, ws, info,
-                [](Queue& c2, const MV<T>& ta, const MV<T>& tb, T talpha, Side tside, Uplo tuplo, Transpose ttrans,
-                   Diag tdiag) { return trsm<B, T>(c2, ta, tb, talpha, tside, tuplo, ttrans, tdiag); });
+                [](Queue& c2, const MV<Scalar>& ta, const MV<Scalar>& tb, Scalar talpha, Side tside, Uplo tuplo,
+                   Transpose ttrans,
+                   Diag tdiag) { return trsm<B, Scalar>(c2, ta, tb, talpha, tside, tuplo, ttrans, tdiag); });
         },
         [&](Vendor) -> Event {
             if constexpr (select::has_library<B>(spec.vendor))
-                return backend::getri_vendor<B, T>(q, A, C, pivots, ws, info);
-            else select::no_vendor<B, T>(spec);
+                return backend::getri_vendor<B, Scalar>(q, A, C, pivots, ws, info);
+            else select::no_vendor<B, Scalar>(spec);
         },
     }, c);
 }
 
 // Exactly the chosen family's need (R5); Blocked's trsm calls take no workspace.
-template <Backend B, typename T>
-std::size_t workspace(Queue& q, const GetriChoice& c, const MV<T>& A) {
+template <Backend B, typename Scalar>
+std::size_t workspace(Queue& q, const GetriChoice& c, const MV<Scalar>& A) {
     return std::visit(overloaded{
-        [&](Blocked) { return ops::getri::getri_blocked_buffer_size<T>(q, A); },
+        [&](Blocked) { return ops::getri::getri_blocked_buffer_size<Scalar>(q, A); },
         [&](Vendor) -> std::size_t {
             if constexpr (select::has_library<B>(spec.vendor))
-                return backend::getri_vendor_buffer_size<B, T>(q, A);
-            else select::no_vendor<B, T>(spec);
+                return backend::getri_vendor_buffer_size<B, Scalar>(q, A);
+            else select::no_vendor<B, Scalar>(spec);
         },
     }, c);
 }
 
 }  // namespace ops::getri
 
-template <Backend Back, typename T>
-Event getri(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A_, const MatrixView<T, MatrixFormat::Dense>& C_,
+template <Backend Back, typename Scalar>
+Event getri(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A_, const MatrixView<Scalar,
+            MatrixFormat::Dense>& C_,
             Span<int64_t> pivots, Span<std::byte> workspace, Span<int32_t> info) {
-    getri_validate_params<T>(A_, C_);
+    getri_validate_params<Scalar>(A_, C_);
     // Selection reads A alone, so A and C both carry the call's mask whichever operand brought it.
     const auto mask = detail::call_mask("getri", A_, C_);
     const bool adopt = !mask.empty() && A_.batch_size() == C_.batch_size();
@@ -105,22 +107,22 @@ Event getri(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A_, const Matr
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key: m = k = order, n = A.cols (equal unless the vendor takes a non-square A).
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = A.rows(), .batch = A.batch_size()};
-    const select::Key key = ops::getri::key_of<T>(A);
-    return select::run<Back, T>(
-        ops::getri::spec, ctx, key, ops::getri::candidates<T>(),
-        [&](const auto& c, const auto& d) { return ops::getri::can_run<Back, T>(c, d, A); }, shape, key,
-        [&](const auto& c) { return ops::getri::launch<Back, T>(ctx, c, A, C, pivots, workspace, info); });
+    const select::Key key = ops::getri::key_of<Scalar>(A);
+    return select::run<Back, Scalar>(
+        ops::getri::spec, ctx, key, ops::getri::candidates<Scalar>(),
+        [&](const auto& c, const auto& d) { return ops::getri::can_run<Back, Scalar>(c, d, A); }, shape, key,
+        [&](const auto& c) { return ops::getri::launch<Back, Scalar>(ctx, c, A, C, pivots, workspace, info); });
 }
 
-template <Backend Back, typename T>
-size_t getri_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
-    getri_validate_params<T>(A);
+template <Backend Back, typename Scalar>
+size_t getri_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A) {
+    getri_validate_params<Scalar>(A);
     (void)detail::call_mask("getri_buffer_size", A);
     if (A.batch_size() == 0) return 0;
-    const auto c = select::pick<Back, T>(
-        ops::getri::spec, ctx, ops::getri::key_of<T>(A), ops::getri::candidates<T>(),
-        [&](const auto& k, const auto& d) { return ops::getri::can_run<Back, T>(k, d, A); });
-    return ops::getri::workspace<Back, T>(ctx, c, A);
+    const auto c = select::pick<Back, Scalar>(
+        ops::getri::spec, ctx, ops::getri::key_of<Scalar>(A), ops::getri::candidates<Scalar>(),
+        [&](const auto& k, const auto& d) { return ops::getri::can_run<Back, Scalar>(k, d, A); });
+    return ops::getri::workspace<Back, Scalar>(ctx, c, A);
 }
 
 #define GETRI_INSTANTIATE(B_, fp) \

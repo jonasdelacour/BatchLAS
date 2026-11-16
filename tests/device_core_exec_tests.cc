@@ -15,20 +15,20 @@ using namespace device_core_test;
 
 namespace {
 
-template <class T> class DeviceCoreExecTest : public DeviceCoreTest<T> {};
+template <class Scalar> class DeviceCoreExecTest : public DeviceCoreTest<Scalar> {};
 TYPED_TEST_SUITE(DeviceCoreExecTest, AllTypes);
 
 // Each executor's bcast / uniform / shuffle / shift on one WG of 64 items. Host model: team =
 // aligned block of `team` lanes inside the sub-group of 32; bcast is over the executor (`scope`
 // items), shuffle and shift inside the team.
-template <class T, class MakeEx> void check_moves(Dev& d, int team, int scope, MakeEx make) {
+template <class Scalar, class MakeEx> void check_moves(Dev& d, int team, int scope, MakeEx make) {
     constexpr int WG = 64;
-    const auto x_h = vals<T>(WG, 7 + team);
-    T* x = d.up(x_h);
-    T* bc = d.template alloc<T>(WG, T(0));
-    T* un = d.template alloc<T>(WG, T(0));
-    T* sh = d.template alloc<T>(WG, T(0));
-    T* sf = d.template alloc<T>(WG, T(0));
+    const auto x_h = vals<Scalar>(WG, 7 + team);
+    Scalar* x = d.up(x_h);
+    Scalar* bc = d.template alloc<Scalar>(WG, Scalar(0));
+    Scalar* un = d.template alloc<Scalar>(WG, Scalar(0));
+    Scalar* sh = d.template alloc<Scalar>(WG, Scalar(0));
+    Scalar* sf = d.template alloc<Scalar>(WG, Scalar(0));
     const int src = 5 % scope;
     d.template run<WG>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const auto ex = make(it);

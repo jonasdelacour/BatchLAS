@@ -3,14 +3,14 @@
 
 namespace batchlas::csr_generators {
 
-template <typename T>
-Matrix<T, MatrixFormat::CSR> random_sparse_hermitian_csr(int n,
-                                                         float density,
-                                                         int batch_size,
-                                                         unsigned seed,
-                                                         typename base_type<T>::type diagonal_boost,
-                                                         bool shared_pattern) {
-    return Matrix<T, MatrixFormat::CSR>::RandomSparseHermitian(
+template <typename Scalar>
+Matrix<Scalar, MatrixFormat::CSR> random_sparse_hermitian_csr(int n,
+                                                              float density,
+                                                              int batch_size,
+                                                              unsigned seed,
+                                                              typename base_type<Scalar>::type diagonal_boost,
+                                                              bool shared_pattern) {
+    return Matrix<Scalar, MatrixFormat::CSR>::RandomSparseHermitian(
         n,
         density,
         batch_size,

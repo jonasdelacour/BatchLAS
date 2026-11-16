@@ -38,8 +38,8 @@ using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename device::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
+template <class Scalar> using real_of = typename device::Arith<Scalar>::real_t;
+template <class Scalar> constexpr bool is_cplx = device::Arith<Scalar>::is_complex;
 
 constexpr int kBatch = 1024;
 constexpr int kPeriod = 3;
@@ -50,18 +50,19 @@ std::uint64_t mix(std::uint64_t x) {
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
     return x ^ (x >> 31);
 }
-template <class R> R uval(std::uint64_t i) { return static_cast<R>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
-template <class T> T val(std::uint64_t i) {
-    if constexpr (is_cplx<T>) return T(uval<real_of<T>>(2 * i), uval<real_of<T>>(2 * i + 1));
-    else return uval<T>(i);
+template <class Real> Real uval(std::uint64_t i) { return static_cast<Real>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
+template <class Scalar> Scalar val(std::uint64_t i) {
+    if constexpr (is_cplx<Scalar>) return Scalar(uval<real_of<Scalar>>(2 * i), uval<real_of<Scalar>>(2 * i + 1));
+    else return uval<Scalar>(i);
 }
-template <class T> T nanv() { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }
+template <class Scalar> Scalar nanv() { return Scalar(std::numeric_limits<real_of<Scalar>>::quiet_NaN()); }
 
 // kPeriod representatives (edited by fix(item pointer)), copied to every item b from b % kPeriod.
-template <class T, class Fix> std::vector<T> batched(int per_item, std::uint64_t seed, Fix fix, int items = kBatch) {
-    std::vector<T> h(static_cast<std::size_t>(items) * per_item);
+template <class Scalar, class Fix> std::vector<Scalar> batched(int per_item, std::uint64_t seed, Fix fix,
+                                                               int items = kBatch) {
+    std::vector<Scalar> h(static_cast<std::size_t>(items) * per_item);
     for (int b = 0; b < std::min(kPeriod, items); ++b) {
-        for (int i = 0; i < per_item; ++i) h[std::size_t(b) * per_item + i] = val<T>(seed + std::uint64_t(b) * 1000003u + i);
+        for (int i = 0; i < per_item; ++i) h[std::size_t(b) * per_item + i] = val<Scalar>(seed + std::uint64_t(b) * 1000003u + i);
         fix(h.data() + std::size_t(b) * per_item);
     }
     for (int b = kPeriod; b < items; ++b)
@@ -98,11 +99,11 @@ struct Dev {
     std::vector<void*> ptrs;
 };
 
-template <class T> class DeviceLapackSytrfTest : public ::testing::Test {
+template <class Scalar> class DeviceLapackSytrfTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx.device().supports_sub_group_size(32)) GTEST_SKIP() << "device tests launch sub-group size 32";
-        if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
+        if (test_utils::lacks_fp64<Scalar>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
 };
@@ -110,13 +111,13 @@ protected:
 using Types = ::testing::Types<float, double, std::complex<float>, std::complex<double>>;
 TYPED_TEST_SUITE(DeviceLapackSytrfTest, Types);
 
-template <class T> using LD = std::conditional_t<is_cplx<T>, std::complex<long double>, long double>;
-template <class T> LD<T> wide(T v) { return LD<T>(v); }
+template <class Scalar> using LD = std::conditional_t<is_cplx<Scalar>, std::complex<long double>, long double>;
+template <class Scalar> LD<Scalar> wide(Scalar v) { return LD<Scalar>(v); }
 
-template <class T> double rel(T got, LD<T> ref, long double scale) {
-    const long double d = std::abs(LD<T>(got) - ref);
+template <class Scalar> double rel(Scalar got, LD<Scalar> ref, long double scale) {
+    const long double d = std::abs(LD<Scalar>(got) - ref);
     if (std::isnan(d)) return std::numeric_limits<double>::infinity();
-    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<T>>::min()));
+    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<Scalar>>::min()));
 }
 
 // Every item equal to its representative, bit for bit.
@@ -181,18 +182,18 @@ enum SumSlot { kVal, kEmptyVal, kS0, kS1, kSEmpty, kSSlots };
 // x: three tied maxima (|re| + |im| = 4) at 10, 42, 138 (one owner at width 32; 10 / 138 one owner
 // at 128); y: NaN at 20 (real part) and 77 (imaginary part), 1e30 at 50. Sums: x^T z and z^T z
 // over [60, n), as ldl_solve composes them (for_each_owned, then sum_reduce), and an empty range.
-template <class T, int WG, bool SgOnly>
-void run_iamax(Dev& dev, int n, const std::vector<T>& hx, const std::vector<T>& hy, const std::vector<T>& hz, std::vector<int>& oi,
-               std::vector<T>& ov) {
-    using R = real_of<T>;
-    using A = device::arith_t<device::arith::Fma, T>;
-    T* x = dev.up(hx);
-    T* y = dev.up(hy);
-    T* z = dev.up(hz);
+template <class Scalar, int WG, bool SgOnly>
+void run_iamax(Dev& dev, int n, const std::vector<Scalar>& hx, const std::vector<Scalar>& hy, const std::vector<Scalar>& hz, std::vector<int>& oi,
+               std::vector<Scalar>& ov) {
+    using R = real_of<Scalar>;
+    using A = device::arith_t<device::arith::Fma, Scalar>;
+    Scalar* x = dev.up(hx);
+    Scalar* y = dev.up(hy);
+    Scalar* z = dev.up(hz);
     std::vector<int> hoi(std::size_t(kBatch) * kISlots, -7);
-    std::vector<T> hov(std::size_t(kBatch) * kSSlots, nanv<T>());
+    std::vector<Scalar> hov(std::size_t(kBatch) * kSSlots, nanv<Scalar>());
     int* oip = dev.up(hoi);
-    T* ovp = dev.up(hov);
+    Scalar* ovp = dev.up(hov);
     dev.template run<WG>(kBatch, (2 * sizeof(R) + sizeof(int)) * 32, [=](sycl::nd_item<1> it, unsigned char* lm) {
         const auto b = static_cast<std::ptrdiff_t>(it.get_group_linear_id());
         const auto sg = it.get_sub_group();
@@ -200,11 +201,11 @@ void run_iamax(Dev& dev, int n, const std::vector<T>& hx, const std::vector<T>& 
         R* sv = reinterpret_cast<R*>(lm);
         const auto am = device::argmax_slots<device::Mem::Global, true>(sv, reinterpret_cast<int*>(sv + 64));
         const device::detail::SumScratch<R> ss{sv, sv + 32};
-        const T* xb = x + b * n;
-        const T* yb = y + b * n;
-        const T* zb = z + b * n;
-        auto xv = [=](int i) -> const T& { return xb[i]; };
-        auto yv = [=](int i) -> const T& { return yb[i]; };
+        const Scalar* xb = x + b * n;
+        const Scalar* yb = y + b * n;
+        const Scalar* zb = z + b * n;
+        auto xv = [=](int i) -> const Scalar& { return xb[i]; };
+        auto yv = [=](int i) -> const Scalar& { return yb[i]; };
         auto body = [&](const auto& g) {
             const auto lo = device::iamax(g, xv, device::Range{3, n}, device::alg::TieRt{true}, am, device::None{}, -1, 32);
             const auto hi = device::iamax(g, xv, device::Range{3, n}, device::alg::TieRt{false}, am, device::None{}, -1, 32);
@@ -212,20 +213,20 @@ void run_iamax(Dev& dev, int n, const std::vector<T>& hx, const std::vector<T>& 
             const auto em = device::iamax(g, xv, device::Range{n, n}, device::alg::TieRt{true}, am, device::None{}, -1, 32);
             const auto nl = device::iamax(g, yv, device::Range{0, n}, device::alg::TieRt{true}, am, device::None{}, -1, 32);
             const auto nh = device::iamax(g, yv, device::Range{0, n}, device::alg::TieRt{false}, am, device::None{}, -1, 32);
-            T p0 = A::zero(), p1 = A::zero(), pe = A::zero();
+            Scalar p0 = A::zero(), p1 = A::zero(), pe = A::zero();
             device::for_each_owned(g, device::Range{60, n}, [&](int i) {
                 p0 = A::add(p0, A::mul(xb[i], zb[i]));
                 p1 = A::add(p1, A::mul(zb[i], zb[i]));
             });
             device::for_each_owned(g, device::Range{n, n}, [&](int i) { pe = A::add(pe, A::mul(xb[i], zb[i])); });
-            const T s0 = device::detail::sum_reduce(g, ss, p0);
-            const T s1 = device::detail::sum_reduce(g, ss, p1);
-            const T se = device::detail::sum_reduce(g, ss, pe);
+            const Scalar s0 = device::detail::sum_reduce(g, ss, p0);
+            const Scalar s1 = device::detail::sum_reduce(g, ss, p1);
+            const Scalar se = device::detail::sum_reduce(g, ss, pe);
             if (g.leader()) {
                 int* o = oip + b * kISlots;
                 o[kLow] = lo.index, o[kHigh] = hi.index, o[kSkip] = sk.index, o[kEmpty] = em.index, o[kNanLow] = nl.index, o[kNanHigh] = nh.index;
-                T* q = ovp + b * kSSlots;
-                q[kVal] = T(lo.value), q[kEmptyVal] = T(em.value), q[kS0] = s0, q[kS1] = s1, q[kSEmpty] = se;
+                Scalar* q = ovp + b * kSSlots;
+                q[kVal] = Scalar(lo.value), q[kEmptyVal] = Scalar(em.value), q[kS0] = s0, q[kS1] = s1, q[kSEmpty] = se;
             }
         };
         if constexpr (SgOnly) body(device::SubGroup<32>{sg});

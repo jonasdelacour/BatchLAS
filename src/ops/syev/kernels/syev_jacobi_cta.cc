@@ -28,7 +28,7 @@ namespace batchlas {
 
 // Kernel name tag. Must live outside the anonymous namespace below so it does
 // not depend on internal-linkage entities.
-template <typename T, size_t P, bool ComputeVectors, bool Upper>
+template <typename Scalar, size_t P, bool ComputeVectors, bool Upper>
 class SyevJacobiCTAKernel;
 
 // Tier-A Jacobi eigensolver: partition-resident cyclic two-sided Jacobi. One
@@ -40,15 +40,15 @@ class SyevJacobiCTAKernel;
 
 namespace {
 
-template <typename T, size_t P, bool ComputeVectors, bool Upper>
+template <typename Scalar, size_t P, bool ComputeVectors, bool Upper>
 inline void syev_jacobi_cta_impl(Queue& ctx,
-                                 MatrixView<T, MatrixFormat::Dense>& a,
-                                 typename base_type<T>::type* w_ptr,
+                                 MatrixView<Scalar, MatrixFormat::Dense>& a,
+                                 typename base_type<Scalar>::type* w_ptr,
                                  int32_t n,
-                                 JacobiParams<T> params,
+                                 JacobiParams<Scalar> params,
                                  int32_t* info,
                                  const std::uint8_t* mask) {
-    using Real = typename base_type<T>::type;
+    using Real = typename base_type<Scalar>::type;
 
     const auto batch_size = a.batch_size();
     if (n < 1 || n > static_cast<int32_t>(P) || a.rows() != n || a.cols() != n) {
@@ -91,13 +91,13 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
         constexpr std::size_t kRotSlots = (P / 2 > 0) ? (P / 2) : 1;
         constexpr std::size_t kPairSlots = (P - 1) * kRotSlots;
         constexpr std::size_t kPairTabBytes = kPairSlots * sizeof(int16_t);
-        constexpr bool kNeedPhase = detail::is_complex<T>::value;
+        constexpr bool kNeedPhase = detail::is_complex<Scalar>::value;
         {
             const std::size_t local_mem_bytes = impl::local_mem_bytes(dev);
             const std::size_t avail = (local_mem_bytes > kPairTabBytes) ? (local_mem_bytes - kPairTabBytes) : 1;
             const std::size_t z_elems = ComputeVectors ? kTileElems : 0;
-            const std::size_t bytes_per_prob = (kTileElems + z_elems) * sizeof(T)
-                                             + (kNeedPhase ? kRotSlots * sizeof(T) : 0)
+            const std::size_t bytes_per_prob = (kTileElems + z_elems) * sizeof(Scalar)
+                                             + (kNeedPhase ? kRotSlots * sizeof(Scalar) : 0)
                                              + 2 * kRotSlots * sizeof(Real);
             wg_size_multiplier = impl::cta_wg_multiplier("syev_jacobi_cta", wg_size_multiplier,
                                                          base_wg_size / static_cast<int32_t>(P), bytes_per_prob,
@@ -110,15 +110,15 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
         const int32_t global_size = num_wg * wg_size;
         const int32_t wg_sz = wg_size;
 
-        auto A_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * kTileElems), cgh);
-        auto Z_local = sycl::local_accessor<T, 1>(
+        auto A_local = sycl::local_accessor<Scalar, 1>(sycl::range<1>(probs_per_wg * kTileElems), cgh);
+        auto Z_local = sycl::local_accessor<Scalar, 1>(
             sycl::range<1>(ComputeVectors ? (probs_per_wg * kTileElems) : 1), cgh);
         // (c, s) packed into one vector: one LDS load instead of two in the update loops.
         auto Rcs_local = sycl::local_accessor<sycl::vec<Real, 2>, 1>(
             sycl::range<1>(probs_per_wg * kRotSlots), cgh);
         // The diagonal phase is identically 1 for real types, so it is neither
         // stored nor loaded there.
-        auto Rd_local = sycl::local_accessor<T, 1>(
+        auto Rd_local = sycl::local_accessor<Scalar, 1>(
             sycl::range<1>(kNeedPhase ? (probs_per_wg * kRotSlots) : 1), cgh);
         // Round-robin pivot pairs, precomputed once per work-group and shared by every
         // problem in it, both indices packed into one 16-bit slot (inline modulos
@@ -142,7 +142,7 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
         // makes info_store below a no-op.
         int32_t* const info_dev = info;
 
-        batchlas::impl::parallel_for<SyevJacobiCTAKernel<T, P, ComputeVectors, Upper>>(cgh,
+        batchlas::impl::parallel_for<SyevJacobiCTAKernel<Scalar, P, ComputeVectors, Upper>>(cgh,
             sycl::nd_range<1>(global_size, wg_size),
             [=](sycl::nd_item<1> it) {
                 constexpr int kP = static_cast<int>(P);
@@ -176,31 +176,31 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                 const bool row_lane = (lane < nn);
 
                 auto A_prob = A_view.batch_item(live ? prob_id : 0);
-                using Tile = device::Mat<T, device::Ext<kP>, device::Ext<kP>, device::Ext<LD>, device::Mem::Local, device::Cyclic,
-                                     sycl::local_accessor<T, 1>>;
+                using Tile = device::Mat<Scalar, device::Ext<kP>, device::Ext<kP>, device::Ext<LD>, device::Mem::Local, device::Cyclic,
+                                     sycl::local_accessor<Scalar, 1>>;
                 const int32_t tile_off = part_id * static_cast<int32_t>(kTileElems);
                 const Tile A{A_local, {}, {}, {}, tile_off};
                 // Without vectors Z_local is never named, so the kernel does not capture it.
                 std::conditional_t<ComputeVectors, Tile, device::None> Z{};
                 if constexpr (ComputeVectors) Z = Tile{Z_local, {}, {}, {}, tile_off};
                 const int32_t base_r = part_id * static_cast<int32_t>(kRotSlots);
-                // Real T never names Rd_local, so the kernel does not capture it.
+                // Real Scalar never names Rd_local, so the kernel does not capture it.
                 std::conditional_t<kNeedPhase, decltype(device::vec(Rd_local, 0)), device::None> rd{};
                 if constexpr (kNeedPhase) rd = device::vec(Rd_local, kRotSlots, base_r);
 
                 // ---- Load: A = the Hermitian matrix of the stored triangle, Z = I, zero pad. ----
                 for (int32_t c = 0; c < kP; ++c) {
-                    T v = T(0);
+                    Scalar v = Scalar(0);
                     if (live && lane < nn && c < nn) {
                         if constexpr (Upper) v = (lane <= c) ? A_prob(lane, c) : device::conj(A_prob(c, lane));
                         else v = (lane >= c) ? A_prob(lane, c) : device::conj(A_prob(c, lane));
                         // The diagonal of a Hermitian matrix is real: drop imaginary noise.
                         if (lane == c) {
-                            if constexpr (kNeedPhase) v = T(v.real(), Real(0));
+                            if constexpr (kNeedPhase) v = Scalar(v.real(), Real(0));
                         }
                     }
                     A(lane, c) = v;
-                    if constexpr (ComputeVectors) Z(lane, c) = (lane == c && row_lane) ? T(1) : T(0);
+                    if constexpr (ComputeVectors) Z(lane, c) = (lane == c && row_lane) ? Scalar(1) : Scalar(0);
                 }
                 // The partition's own barrier (chunk mask), not device::sync: partitions of one
                 // sub-group leave the sweep loop after different barrier counts.
@@ -214,7 +214,8 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                     int32_t rot_count = 0;
 
                     for (int32_t t = 0; t < rounds; ++t) {
-                        const auto rnd = device::detail::rot_round<T>(device::vec(Rcs_local, kRotSlots, base_r), rd,
+                        const auto rnd = device::detail::rot_round<Scalar>(device::vec(Rcs_local, kRotSlots, base_r),
+                                                                           rd,
                                                           device::vec(Pair_local, pairs_per_round, t * pairs_per_round));
 
                         device::detail::PivotPair pq{0, 0};
@@ -223,10 +224,10 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                             pq = rnd.pair(lane);
                             active = (pq.q < nn);
                         }
-                        device::detail::JacobiRotation<T> jr = device::detail::identity_rotation<T>();
+                        device::detail::JacobiRotation<Scalar> jr = device::detail::identity_rotation<Scalar>();
                         if (active) {
-                            jr = device::detail::sym_schur2<T>(device::Arith<T>::re(A(pq.p, pq.p)), device::Arith<T>::re(A(pq.q, pq.q)),
-                                                   static_cast<T>(A(pq.p, pq.q)), thr);
+                            jr = device::detail::sym_schur2<Scalar>(device::Arith<Scalar>::re(A(pq.p, pq.p)), device::Arith<Scalar>::re(A(pq.q, pq.q)),
+                                                   static_cast<Scalar>(A(pq.p, pq.q)), thr);
                         }
                         active = jr.active;
                         if (pair_lane) rnd.store(lane, jr);
@@ -264,12 +265,12 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                 // than by a serial sort on the leader; ties break on index so the
                 // permutation is a bijection.
                 if (live && row_lane) {
-                    const Real wj = device::Arith<T>::re(A(lane, lane));
+                    const Real wj = device::Arith<Scalar>::re(A(lane, lane));
                     int32_t dst = lane;
                     if (do_sort) {
                         int32_t rank = 0;
                         for (int32_t k = 0; k < nn; ++k) {
-                            const Real wk = device::Arith<T>::re(A(k, k));
+                            const Real wk = device::Arith<Scalar>::re(A(k, k));
                             // A strict total order (NaN after every number, ties and NaNs on index):
                             // the ranks are a bijection even for NaN input, so no slot is left stale.
                             const bool nan_j = sycl::isnan(wj), nan_k = sycl::isnan(wk);
@@ -295,14 +296,14 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
 
 }  // namespace
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event syev_jacobi_cta(Queue& ctx,
-                      const MatrixView<T, MatrixFormat::Dense>& a_in,
-                      Span<typename base_type<T>::type> eigenvalues,
+                      const MatrixView<Scalar, MatrixFormat::Dense>& a_in,
+                      Span<typename base_type<Scalar>::type> eigenvalues,
                       JobType jobz,
                       Uplo uplo,
                       const Span<std::byte>& ws,
-                      JacobiParams<T> params,
+                      JacobiParams<Scalar> params,
                       Span<int32_t> info) {
     const std::uint8_t* mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("syev_jacobi_cta", a_in));
     (void)ws;
@@ -332,7 +333,7 @@ Event syev_jacobi_cta(Queue& ctx,
         throw batchlas::unsupported("syev_jacobi_cta: device does not support subgroup size 32 required for CTA kernels.");
     }
 
-    auto& a = const_cast<MatrixView<T, MatrixFormat::Dense>&>(a_in);
+    auto& a = const_cast<MatrixView<Scalar, MatrixFormat::Dense>&>(a_in);
     auto* w_ptr = eigenvalues.data();
 
     const bool upper = (uplo == Uplo::Upper);
@@ -345,11 +346,11 @@ Event syev_jacobi_cta(Queue& ctx,
     auto launch = [&](auto P_tag) {
         constexpr size_t P = decltype(P_tag)::value;
         if (vectors) {
-            if (upper) syev_jacobi_cta_impl<T, P, true, true>(ctx, a, w_ptr, n, params, info_ptr, mask);
-            else       syev_jacobi_cta_impl<T, P, true, false>(ctx, a, w_ptr, n, params, info_ptr, mask);
+            if (upper) syev_jacobi_cta_impl<Scalar, P, true, true>(ctx, a, w_ptr, n, params, info_ptr, mask);
+            else       syev_jacobi_cta_impl<Scalar, P, true, false>(ctx, a, w_ptr, n, params, info_ptr, mask);
         } else {
-            if (upper) syev_jacobi_cta_impl<T, P, false, true>(ctx, a, w_ptr, n, params, info_ptr, mask);
-            else       syev_jacobi_cta_impl<T, P, false, false>(ctx, a, w_ptr, n, params, info_ptr, mask);
+            if (upper) syev_jacobi_cta_impl<Scalar, P, false, true>(ctx, a, w_ptr, n, params, info_ptr, mask);
+            else       syev_jacobi_cta_impl<Scalar, P, false, false>(ctx, a, w_ptr, n, params, info_ptr, mask);
         }
     };
 
@@ -366,11 +367,11 @@ Event syev_jacobi_cta(Queue& ctx,
     return ctx.get_event();
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t syev_jacobi_cta_buffer_size(Queue& ctx,
-                                   const MatrixView<T, MatrixFormat::Dense>& a,
+                                   const MatrixView<Scalar, MatrixFormat::Dense>& a,
                                    JobType jobz,
-                                   JacobiParams<T> params) {
+                                   JacobiParams<Scalar> params) {
     (void)ctx;
     (void)jobz;
     (void)params;

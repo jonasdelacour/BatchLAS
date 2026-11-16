@@ -19,7 +19,7 @@ inline void LatrdLowerPanelBenchSizes(Benchmark* b) {
     }
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void BM_LATRD_LOWER_PANEL(minibench::State& state) {
 #if BATCHLAS_HAS_CUDA_BACKEND
     const size_t n = state.range(0);
@@ -30,10 +30,10 @@ void BM_LATRD_LOWER_PANEL(minibench::State& state) {
 
     const double approx_flops = 2.0 * double(n) * double(n) * double(ib) * double(batch);
 
-    auto A0 = Matrix<T>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/2026);
-    auto e0 = Vector<T>::zeros(n - 1, batch);
-    auto tau0 = Vector<T>::zeros(n - 1, batch);
-    auto W0 = Matrix<T>::Zeros(n, std::max<int>(1, ib), batch);
+    auto A0 = Matrix<Scalar>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/2026);
+    auto e0 = Vector<Scalar>::zeros(n - 1, batch);
+    auto tau0 = Vector<Scalar>::zeros(n - 1, batch);
+    auto W0 = Matrix<Scalar>::Zeros(n, std::max<int>(1, ib), batch);
 
     auto q = std::make_shared<Queue>(Device("gpu"), B, /*in_order=*/true);
 
@@ -47,10 +47,10 @@ void BM_LATRD_LOWER_PANEL(minibench::State& state) {
         ib,
         fuse_trailing_update,
         [](Queue& q,
-           MatrixView<T, MatrixFormat::Dense> A,
-           VectorView<T> e,
-           VectorView<T> tau,
-           MatrixView<T, MatrixFormat::Dense> W,
+           MatrixView<Scalar, MatrixFormat::Dense> A,
+           VectorView<Scalar> e,
+           VectorView<Scalar> tau,
+           MatrixView<Scalar, MatrixFormat::Dense> W,
            int j0,
            int ib,
            bool fuse_trailing_update) {

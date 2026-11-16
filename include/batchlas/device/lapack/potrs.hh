@@ -25,12 +25,13 @@ namespace batchlas::device {
 namespace detail {
 
 // The Blocked plan: the L3 stage slot alone, at potrf's offset.
-template <class T> struct BlockedSolvePlan {
-    WsSlot<T> smem;
+template <class Scalar> struct BlockedSolvePlan {
+    WsSlot<Scalar> smem;
     WorkspaceSize size;
     static constexpr BlockedSolvePlan make() {
         Plan p;
-        const auto s = p.take<T>(WsSpace::Local, static_cast<std::size_t>(detail::PotrfBlockedCfg<T>::smem_elems));
+        const auto s = p.take<Scalar>(WsSpace::Local,
+                                      static_cast<std::size_t>(detail::PotrfBlockedCfg<Scalar>::smem_elems));
         return {s, p.size()};
     }
 };
@@ -87,15 +88,15 @@ template <Uplo UL> struct potrs {
 };
 }  // namespace routine
 
-template <Uplo UL, int NB, class Alg, class T> struct tier_info<routine::potrs<UL>, tier::Blocked<NB, Alg>, T> {
+template <Uplo UL, int NB, class Alg, class Scalar> struct tier_info<routine::potrs<UL>, tier::Blocked<NB, Alg>, Scalar> {
     static constexpr int wg_size = detail::kBlockedWg;
     static constexpr int sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
-    static constexpr WorkspaceSize buffer_size(int) { return detail::BlockedSolvePlan<T>::make().size; }
+    static constexpr WorkspaceSize buffer_size(int) { return detail::BlockedSolvePlan<Scalar>::make().size; }
 };
-template <Uplo UL, class T> struct tiers<routine::potrs<UL>, T> {
+template <Uplo UL, class Scalar> struct tiers<routine::potrs<UL>, Scalar> {
     using type = tier::list<tier::Blocked<32>>;
 };
 

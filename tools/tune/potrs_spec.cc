@@ -26,15 +26,15 @@ namespace {
 
 namespace S = ops::potrs;
 
-template <typename T>
+template <typename Scalar>
 struct PotrsProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     int n, nrhs, batch, lda, ldb;
     std::size_t sa, sb;
     Uplo uplo;
-    UnifiedVector<T> A0, L, B0, X;
-    UnifiedVector<T*> pA0, pL, pB0, pX;
+    UnifiedVector<Scalar> A0, L, B0, X;
+    UnifiedVector<Scalar*> pA0, pL, pB0, pX;
     MV A0v, Lv, B0v, Xv;
 
     PotrsProblem(Queue& q_, int n_, int nrhs_, int batch_, int ld_pad, Uplo u)
@@ -48,9 +48,9 @@ struct PotrsProblem {
         (void)A0v.fill_random_spd(q, 12345);
         (void)B0v.fill_random(q, false, 777);
         (void)MV::copy(q, Lv, A0v);
-        UnifiedVector<std::byte> fws(std::max<std::size_t>(1, potrf_buffer_size<kBackend, T>(q, Lv, uplo)));
+        UnifiedVector<std::byte> fws(std::max<std::size_t>(1, potrf_buffer_size<kBackend, Scalar>(q, Lv, uplo)));
         UnifiedVector<std::int32_t> info(std::size_t(batch_), 0);
-        (void)potrf<kBackend, T>(q, Lv, uplo, fws.to_span(), info.to_span());
+        (void)potrf<kBackend, Scalar>(q, Lv, uplo, fws.to_span(), info.to_span());
         q.wait();
         for (int b = 0; b < batch; ++b)
             if (info[std::size_t(b)] != 0) throw batchlas::convergence_error("potrs input: potrf reported a non-SPD item");
@@ -66,7 +66,7 @@ struct PotrsProblem {
     }
     void clear_info() {}
     void run(Span<std::byte>) {
-        (void)potrs<kBackend, T>(q, Lv, Xv, uplo);
+        (void)potrs<kBackend, Scalar>(q, Lv, Xv, uplo);
         q.wait();
     }
     std::pair<double, int> verify() { return {MV::solve_residual(q, A0v, Xv, B0v), 0}; }

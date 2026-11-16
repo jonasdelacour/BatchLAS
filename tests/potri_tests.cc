@@ -44,15 +44,15 @@ namespace {
 namespace ts = test_support;
 using ts::Live;
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
 // A0 the whole Hermitian A packed (one item when the batch is identical); a padded and poisoned
 // (ld n + 3, stride + 5) holding A0's uplo triangle, the factor after factor(), the inverse after potri.
-template <typename T>
+template <typename Scalar>
 struct Sys {
     Uplo uplo;
-    Matrix<T> A0, a;
+    Matrix<Scalar> A0, a;
 };
 
 template <typename Config>
@@ -120,19 +120,19 @@ namespace {
 using ops::potri::PotriChoice;
 
 // Every compiled candidate: cta, blocked:nb=64 and, for float only, blocked:nb=128.
-template <typename T>
+template <typename Scalar>
 std::vector<PotriChoice> potri_pins() {
-    const auto c = ops::potri::candidates<T>();
+    const auto c = ops::potri::candidates<Scalar>();
     return {c.begin(), c.end()};
 }
 
 std::string pin_name(const PotriChoice& c) { return select::to_string(c); }
 
 // The order the cta pin can run on this queue (the can_run term, read from the same device facts).
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 int cta_ceiling(Queue& q) {
     const auto& d = select::device_of<B>(q);
-    return ops::potri::cta_max_n<T>(static_cast<std::size_t>(d.slm_budget), d.max_wg);
+    return ops::potri::cta_max_n<Scalar>(static_cast<std::size_t>(d.slm_budget), d.max_wg);
 }
 
 }  // namespace

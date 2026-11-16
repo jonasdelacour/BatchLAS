@@ -32,17 +32,17 @@ struct RegTile {
 
 // The single register-tiled launcher. `trace` names the predicated
 // instantiation's trace scope, `trace_aligned` (if given) the unpredicated one.
-template <typename T, RegTile P>
+template <typename Scalar, RegTile P>
 Event launch_reg(Queue& ctx,
-                 const MatrixView<T, MatrixFormat::Dense>& A,
-                 const MatrixView<T, MatrixFormat::Dense>& B,
-                 const MatrixView<T, MatrixFormat::Dense>& C,
-                 T alpha,
-                 T beta,
+                 const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                 const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                 const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                 Scalar alpha,
+                 Scalar beta,
                  const char* trace,
                  const char* trace_aligned = nullptr) {
     if constexpr (P.try_aligned || P.require_aligned) {
-        const bool eligible = can_use_aligned_nn_fast_path<T, P.M, P.N, P.K, P.VA, P.VB>(A, B, C);
+        const bool eligible = can_use_aligned_nn_fast_path<Scalar, P.M, P.N, P.K, P.VA, P.VB>(A, B, C);
         if constexpr (P.require_aligned) {
             if (!eligible) {
                 throw batchlas::unsupported(
@@ -50,12 +50,12 @@ Event launch_reg(Queue& ctx,
             }
         }
         if (eligible) {
-            return launch_register_tiled<T, P.M, P.N, P.K, P.TR, P.TC, P.VA, P.VB, P.Unroll,
+            return launch_register_tiled<Scalar, P.M, P.N, P.K, P.TR, P.TC, P.VA, P.VB, P.Unroll,
                                          P.Stages, true, P.OpA, P.OpB>(
                 ctx, A, B, C, alpha, beta, trace_aligned != nullptr ? trace_aligned : trace);
         }
     }
-    return launch_register_tiled<T, P.M, P.N, P.K, P.TR, P.TC, P.VA, P.VB, P.Unroll, P.Stages,
+    return launch_register_tiled<Scalar, P.M, P.N, P.K, P.TR, P.TC, P.VA, P.VB, P.Unroll, P.Stages,
                                  false, P.OpA, P.OpB>(ctx, A, B, C, alpha, beta, trace);
 }
 

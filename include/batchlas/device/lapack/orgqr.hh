@@ -22,34 +22,35 @@ struct orgqr {
 }  // namespace routine
 
 namespace detail {
-template <class T> struct OrgqrSlots {
-    WsSlot<T> q;
-    detail::OrmqrSlots<T> apply;
+template <class Scalar> struct OrgqrSlots {
+    WsSlot<Scalar> q;
+    detail::OrmqrSlots<Scalar> apply;
 };
-template <int NB, class Cfg, class T> constexpr OrgqrSlots<T> orgqr_take(Plan& p, int m, int n) {
-    OrgqrSlots<T> s{};
-    s.q = p.take<T>(WsSpace::Global, static_cast<std::size_t>(m > 0 ? m : 0) * static_cast<std::size_t>(n > 0 ? n : 0));
-    s.apply = detail::ormqr_take<Side::Left, NB, Cfg, T>(p, m, n);
+template <int NB, class Cfg, class Scalar> constexpr OrgqrSlots<Scalar> orgqr_take(Plan& p, int m, int n) {
+    OrgqrSlots<Scalar> s{};
+    s.q = p.take<Scalar>(WsSpace::Global,
+                         static_cast<std::size_t>(m > 0 ? m : 0) * static_cast<std::size_t>(n > 0 ? n : 0));
+    s.apply = detail::ormqr_take<Side::Left, NB, Cfg, Scalar>(p, m, n);
     return s;
 }
-template <int NB, class Cfg, class T> constexpr WorkspaceSize orgqr_size(int m, int n) {
+template <int NB, class Cfg, class Scalar> constexpr WorkspaceSize orgqr_size(int m, int n) {
     Plan p;
-    (void)orgqr_take<NB, Cfg, T>(p, m, n);
+    (void)orgqr_take<NB, Cfg, Scalar>(p, m, n);
     return p.size();
 }
 }  // namespace detail
 
-template <int NB, class A, class T> struct tier_info<routine::orgqr, tier::Blocked<NB, A>, T> {
-    using cfg = larfb_cfg_t<A, T>;
+template <int NB, class A, class Scalar> struct tier_info<routine::orgqr, tier::Blocked<NB, A>, Scalar> {
+    using cfg = larfb_cfg_t<A, Scalar>;
     static constexpr int wg_size = cfg::threads, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
-    static constexpr WorkspaceSize buffer_size(int m, int n) { return detail::orgqr_size<NB, cfg, T>(m, n); }
+    static constexpr WorkspaceSize buffer_size(int m, int n) { return detail::orgqr_size<NB, cfg, Scalar>(m, n); }
     static constexpr WorkspaceSize buffer_size(int n) { return buffer_size(n, n); }
 };
-template <class T> struct tiers<routine::orgqr, T> {
-    using type = tier::list<tier::Blocked<larfb_default_nb<T>()>>;
+template <class Scalar> struct tiers<routine::orgqr, Scalar> {
+    using type = tier::list<tier::Blocked<larfb_default_nb<Scalar>()>>;
 };
 
 /// @brief ?ORGQR / ?UNGQR in a kernel: a (m x n, m >= n) := the first n columns of Q.

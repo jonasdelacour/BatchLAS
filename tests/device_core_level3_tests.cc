@@ -21,15 +21,16 @@ using batchlas::Uplo;
 
 namespace {
 
-template <class T> class DeviceCoreLevel3Test : public DeviceCoreTest<T> {};
+template <class Scalar> class DeviceCoreLevel3Test : public DeviceCoreTest<Scalar> {};
 TYPED_TEST_SUITE(DeviceCoreLevel3Test, AllTypes);
 
 constexpr int kItems = 1024;
 
-template <class T> LD<T> opw(const std::vector<T>& a, std::size_t base, int ld, int i, int j, Transpose tr) {
+template <class Scalar> LD<Scalar> opw(const std::vector<Scalar>& a, std::size_t base, int ld, int i, int j,
+                                       Transpose tr) {
     if (tr == Transpose::NoTrans) return wide(a[base + i + j * ld]);
-    const LD<T> v = wide(a[base + j + i * ld]);
-    if constexpr (is_cplx<T>) return tr == Transpose::ConjTrans ? std::conj(v) : v;
+    const LD<Scalar> v = wide(a[base + j + i * ld]);
+    if constexpr (is_cplx<Scalar>) return tr == Transpose::ConjTrans ? std::conj(v) : v;
     else return v;
 }
 
@@ -154,11 +155,11 @@ template <class T, Side SD, Uplo UL, Transpose TR, Diag DG> void check_trsm(Dev&
             }
 }
 
-template <class T, Side SD, Uplo UL> void check_trsm_ops(Dev& d) {
-    check_trsm<T, SD, UL, Transpose::NoTrans, Diag::NonUnit>(d);
-    check_trsm<T, SD, UL, Transpose::Trans, Diag::Unit>(d);
-    check_trsm<T, SD, UL, Transpose::ConjTrans, Diag::NonUnit>(d);
-    check_trsm<T, SD, UL, Transpose::NoTrans, Diag::Unit>(d);
+template <class Scalar, Side SD, Uplo UL> void check_trsm_ops(Dev& d) {
+    check_trsm<Scalar, SD, UL, Transpose::NoTrans, Diag::NonUnit>(d);
+    check_trsm<Scalar, SD, UL, Transpose::Trans, Diag::Unit>(d);
+    check_trsm<Scalar, SD, UL, Transpose::ConjTrans, Diag::NonUnit>(d);
+    check_trsm<Scalar, SD, UL, Transpose::NoTrans, Diag::Unit>(d);
 }
 
 TYPED_TEST(DeviceCoreLevel3Test, RegisterTrsmEverySideUploTransDiag) {

@@ -41,26 +41,26 @@ using batchlas::device::l3::copy_async_zfill;
 using batchlas::device::l3::LinearEpilogue;
 using batchlas::device::l3::Vec4;
 
-template <typename T, bool AlignedFastPath, bool StagedEpilogue, Transpose OpA, Transpose OpB, int Stages>
+template <typename Real, bool AlignedFastPath, bool StagedEpilogue, Transpose OpA, Transpose OpB, int Stages>
 class GemmRegister128x128Kernel;
 
-template <typename T>
-inline const Vec4<T>& vec4_ref(const T* p) {
-    return *reinterpret_cast<const Vec4<T>*>(__builtin_assume_aligned(p, 4 * sizeof(T)));
+template <typename Real>
+inline const Vec4<Real>& vec4_ref(const Real* p) {
+    return *reinterpret_cast<const Vec4<Real>*>(__builtin_assume_aligned(p, 4 * sizeof(Real)));
 }
 
-template <typename T>
-inline Vec4<T>& vec4_ref(T* p) {
-    return *reinterpret_cast<Vec4<T>*>(__builtin_assume_aligned(p, 4 * sizeof(T)));
+template <typename Real>
+inline Vec4<Real>& vec4_ref(Real* p) {
+    return *reinterpret_cast<Vec4<Real>*>(__builtin_assume_aligned(p, 4 * sizeof(Real)));
 }
 
 // A 16-byte global load that asks L2 to fetch the whole 128-byte line. PTX has
 // no portable spelling, so every other target takes the plain load.
-template <typename T>
-inline Vec4<T> load4_l2_line(const T* p) {
+template <typename Real>
+inline Vec4<Real> load4_l2_line(const Real* p) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
-    if constexpr (std::is_same_v<T, float>) {
-        Vec4<T> r;
+    if constexpr (std::is_same_v<Real, float>) {
+        Vec4<Real> r;
         asm("ld.global.L2::128B.v4.f32 {%0, %1, %2, %3}, [%4];"
             : "=f"(r.x), "=f"(r.y), "=f"(r.z), "=f"(r.w)
             : "l"(p));
@@ -69,14 +69,14 @@ inline Vec4<T> load4_l2_line(const T* p) {
 #elif BATCHLAS_SYCL_IMPL_ACPP && defined(__x86_64__)
     // SSCP: the asm passes x86 Sema (no "=f"; `{` is a dialect brace, hence %{ %}).
     // An arm64 host (macOS) rejects "l" and has no CUDA device: it takes the plain load.
-    if constexpr (std::is_same_v<T, float>) {
+    if constexpr (std::is_same_v<Real, float>) {
         if (sycl_impl::on_ptx()) {
             unsigned x = 0, y = 0, z = 0, w = 0;
             __acpp_if_target_sscp(asm("ld.global.L2::128B.v4.b32 %{%0, %1, %2, %3%}, [%4];"
                                       : "=r"(x), "=r"(y), "=r"(z), "=r"(w)
                                       : "l"(p));)
-            return Vec4<T>{__builtin_bit_cast(T, x), __builtin_bit_cast(T, y),
-                           __builtin_bit_cast(T, z), __builtin_bit_cast(T, w)};
+            return Vec4<Real>{__builtin_bit_cast(Real, x), __builtin_bit_cast(Real, y),
+                           __builtin_bit_cast(Real, z), __builtin_bit_cast(Real, w)};
         }
     }
 #endif
@@ -86,20 +86,20 @@ inline Vec4<T> load4_l2_line(const T* p) {
 inline constexpr int kStagedEpilogueMaxK = 64;
 
 // The scalar form, for the predicated leg's B loads.
-template <typename T>
-inline T load1_l2_line(const T* p) {
+template <typename Scalar>
+inline Scalar load1_l2_line(const Scalar* p) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
-    if constexpr (std::is_same_v<T, float>) {
-        T r;
+    if constexpr (std::is_same_v<Scalar, float>) {
+        Scalar r;
         asm("ld.global.L2::128B.f32 %0, [%1];" : "=f"(r) : "l"(p));
         return r;
     }
 #elif BATCHLAS_SYCL_IMPL_ACPP && defined(__x86_64__)
-    if constexpr (std::is_same_v<T, float>) {
+    if constexpr (std::is_same_v<Scalar, float>) {
         if (sycl_impl::on_ptx()) {
             unsigned r = 0;
             __acpp_if_target_sscp(asm("ld.global.L2::128B.b32 %0, [%1];" : "=r"(r) : "l"(p));)
-            return __builtin_bit_cast(T, r);
+            return __builtin_bit_cast(Scalar, r);
         }
     }
 #endif
@@ -108,10 +108,10 @@ inline T load1_l2_line(const T* p) {
 
 // Does this problem satisfy everything the unpredicated path assumes? A leg predicate only:
 // it picks aligned vs predicated inside the launcher and is never a routing term.
-template <typename T>
-inline bool can_use_128x128_fast_path(const MatrixView<T, MatrixFormat::Dense>& A,
-                                      const MatrixView<T, MatrixFormat::Dense>& B,
-                                      const MatrixView<T, MatrixFormat::Dense>& C,
+template <typename Scalar>
+inline bool can_use_128x128_fast_path(const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                      const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                                      const MatrixView<Scalar, MatrixFormat::Dense>& C,
                                       Transpose transA, Transpose transB) {
     constexpr int TileM = 128, TileN = 128, TileK = 8;
     const auto [m, k] = get_effective_dims(A, transA);
@@ -124,8 +124,8 @@ inline bool can_use_128x128_fast_path(const MatrixView<T, MatrixFormat::Dense>& 
     // from the base pointer, so the base itself must be 4-element aligned and
     // the leading dimensions must preserve that. A transposed operand's packet
     // runs down k from a multiple of 4 instead of down m or n: the same terms.
-    auto aligned = [](const T* p, int ld, int stride) {
-        return p != nullptr && (reinterpret_cast<std::uintptr_t>(p) % (4 * sizeof(T))) == 0 &&
+    auto aligned = [](const Scalar* p, int ld, int stride) {
+        return p != nullptr && (reinterpret_cast<std::uintptr_t>(p) % (4 * sizeof(Scalar))) == 0 &&
             (ld % 4) == 0 && (stride % 4) == 0;
     };
     return aligned(A.data_ptr(), A.ld(), A.stride()) &&
@@ -152,7 +152,7 @@ inline bool can_use_128x128_fast_path(const MatrixView<T, MatrixFormat::Dense>& 
 // A real scalar only: a transposed operand is read as Trans (ConjTrans folds to it).
 // Stages > 2 (predicated leg only) fills Stages local slabs by zero-filled copy_async elements
 // instead of the register prefetch.
-template <typename T, bool AlignedFastPath, bool StagedEpilogue, Transpose OpA = Transpose::NoTrans,
+template <typename Real, bool AlignedFastPath, bool StagedEpilogue, Transpose OpA = Transpose::NoTrans,
           Transpose OpB = Transpose::NoTrans, int Stages = 2>
 struct Gemm128x128Body {
     static constexpr int TileM = 128, TileN = 128, TileK = 8;
@@ -175,7 +175,7 @@ struct Gemm128x128Body {
                                           ? 32 * StageStride
                                           : Stages * TileK * AStride;
     static constexpr int TileBElems = Stages * TileK * BStride;
-    static_assert(Stages == 2 || (Stages == 4 && !AlignedFastPath && sizeof(T) == 4),
+    static_assert(Stages == 2 || (Stages == 4 && !AlignedFastPath && sizeof(Real) == 4),
                   "the copy_async pipeline is the float predicated leg at four stages (trace names say s4)");
     static constexpr KernelVariant kVariant =
         Stages == 2 ? (!AK ? (BK ? KernelVariant::Tiled128x128RegisterK8 : KernelVariant::Tiled128x128RegisterK8NT)
@@ -184,14 +184,14 @@ struct Gemm128x128Body {
                            : (BK ? KernelVariant::Tiled128x128RegisterK8S4TN
                                  : KernelVariant::Tiled128x128RegisterK8S4TT));
 
-    const T* a_ptr;
-    const T* b_ptr;
-    T* c_ptr;
+    const Real* a_ptr;
+    const Real* b_ptr;
+    Real* c_ptr;
     int m, n, k, lda, ldb, ldc;
     std::ptrdiff_t stride_a, stride_b, stride_c;
     int batch;
-    T alpha, beta;
-    sycl::local_accessor<T, 1> tile_a, tile_b;
+    Real alpha, beta;
+    sycl::local_accessor<Real, 1> tile_a, tile_b;
     const std::uint8_t* mask;  // the batch mask; null unmasked
 
     BATCHLAS_LAUNCH_BOUNDS(Threads, kMinGroupsPerCu)
@@ -210,11 +210,11 @@ struct Gemm128x128Body {
 
         const int m0 = static_cast<int>(item.get_group(1)) * TileM;
         const int n0 = static_cast<int>(item.get_group(2)) * TileN;
-        const T* Ab = a_ptr + static_cast<std::ptrdiff_t>(bid) * stride_a;
-        const T* Bb = b_ptr + static_cast<std::ptrdiff_t>(bid) * stride_b;
-        T* Cb = c_ptr + static_cast<std::ptrdiff_t>(bid) * stride_c;
-        T* sa = tile_a.template get_multi_ptr<sycl::access::decorated::no>().get();
-        T* sb = tile_b.template get_multi_ptr<sycl::access::decorated::no>().get();
+        const Real* Ab = a_ptr + static_cast<std::ptrdiff_t>(bid) * stride_a;
+        const Real* Bb = b_ptr + static_cast<std::ptrdiff_t>(bid) * stride_b;
+        Real* Cb = c_ptr + static_cast<std::ptrdiff_t>(bid) * stride_c;
+        Real* sa = tile_a.template get_multi_ptr<sycl::access::decorated::no>().get();
+        Real* sb = tile_b.template get_multi_ptr<sycl::access::decorated::no>().get();
         [[maybe_unused]] std::uint32_t sa_l = 0, sb_l = 0;  // shared-window byte addresses (cp.async)
 #if BATCHLAS_GEMM_CP_ASYNC
         if constexpr (Stages > 2) {
@@ -225,8 +225,8 @@ struct Gemm128x128Body {
 #endif
 
         const device::Grid2D<> ex{item};
-        device::Tile<T, ThreadTile, ThreadTile> accum;
-        device::fill(accum, T(0));
+        device::Tile<Real, ThreadTile, ThreadTile> accum;
+        device::fill(accum, Real(0));
 
         // Stages == 2 (the Stages > 2 lane map is described at kLaneMap):
         // one packet of each operand per thread per slab, both coalesced. Down m or n (A, B^T):
@@ -237,14 +237,14 @@ struct Gemm128x128Body {
         const int a_k = AK ? (kLaneMap ? tid % 8 : (tid % 2) * 4) : tid / 32;
         const int b_n = BK ? (kLaneMap ? tid / 8 : tid / 2) : (tid % 32) * (kLaneMap ? 1 : 4);
         const int b_k = BK ? (kLaneMap ? tid % 8 : (tid % 2) * 4) : tid / 32;
-        const T* ga = AK ? Ab + a_k + static_cast<std::ptrdiff_t>(m0 + a_m) * lda
+        const Real* ga = AK ? Ab + a_k + static_cast<std::ptrdiff_t>(m0 + a_m) * lda
                          : Ab + (m0 + a_m) + static_cast<std::ptrdiff_t>(a_k) * lda;
-        const T* gb = BK ? Bb + b_k + static_cast<std::ptrdiff_t>(n0 + b_n) * ldb
+        const Real* gb = BK ? Bb + b_k + static_cast<std::ptrdiff_t>(n0 + b_n) * ldb
                          : Bb + (n0 + b_n) + static_cast<std::ptrdiff_t>(b_k) * ldb;
 
         // B^T bumps gb one slab per call (gload runs once per slab, in order): an int k0 * ldb
         // overflows on a large item, and a 64-bit product spilled the staged NT leg.
-        Vec4<T> ra, rb;
+        Vec4<Real> ra, rb;
         auto gload = [&](int k0, auto edge) __attribute__((always_inline)) {
             if constexpr (AlignedFastPath) {
                 if constexpr (AK) ra = load4_l2_line(ga + k0);
@@ -262,10 +262,10 @@ BATCHLAS_UNROLL_FULL
                         if constexpr (BK) rb[i] = load1_l2_line(gb + k0 + i);
                         else rb[i] = gb[i];
                     } else {
-                        if constexpr (AK) ra[i] = k0 + a_k + i < k ? load1_l2_line(ga + k0 + i) : T(0);
-                        else ra[i] = k0 + a_k < k ? ga[static_cast<std::ptrdiff_t>(k0) * lda + i] : T(0);
-                        if constexpr (BK) rb[i] = k0 + b_k + i < k ? load1_l2_line(gb + k0 + i) : T(0);
-                        else rb[i] = k0 + b_k < k ? gb[i] : T(0);
+                        if constexpr (AK) ra[i] = k0 + a_k + i < k ? load1_l2_line(ga + k0 + i) : Real(0);
+                        else ra[i] = k0 + a_k < k ? ga[static_cast<std::ptrdiff_t>(k0) * lda + i] : Real(0);
+                        if constexpr (BK) rb[i] = k0 + b_k + i < k ? load1_l2_line(gb + k0 + i) : Real(0);
+                        else rb[i] = k0 + b_k < k ? gb[i] : Real(0);
                     }
                 }
             } else {
@@ -280,16 +280,16 @@ BATCHLAS_UNROLL_FULL
 BATCHLAS_UNROLL_FULL
                 for (int i = 0; i < 4; ++i) {
                     if constexpr (AK)
-                        ra[i] = (k0 + a_k + i < k && m0 + a_m < m) ? load1_l2_line(ga + k0 + i) : T(0);
+                        ra[i] = (k0 + a_k + i < k && m0 + a_m < m) ? load1_l2_line(ga + k0 + i) : Real(0);
                     else if constexpr (kOneIntA)
-                        ra[i] = i < lim_a ? ga[static_cast<std::ptrdiff_t>(k0) * lda + i] : T(0);
+                        ra[i] = i < lim_a ? ga[static_cast<std::ptrdiff_t>(k0) * lda + i] : Real(0);
                     else
                         ra[i] = (m0 + a_m + i < m && k0 + a_k < k) ? ga[static_cast<std::ptrdiff_t>(k0) * lda + i]
-                                                                   : T(0);
+                                                                   : Real(0);
                     if constexpr (BK)
-                        rb[i] = (k0 + b_k + i < k && n0 + b_n < n) ? load1_l2_line(gb + k0 + i) : T(0);
+                        rb[i] = (k0 + b_k + i < k && n0 + b_n < n) ? load1_l2_line(gb + k0 + i) : Real(0);
                     else
-                        rb[i] = i < lim_b ? gb[i] : T(0);
+                        rb[i] = i < lim_b ? gb[i] : Real(0);
                 }
             }
             if constexpr (!BK) gb += static_cast<std::ptrdiff_t>(TileK) * ldb;
@@ -313,16 +313,16 @@ BATCHLAS_UNROLL_FULL
             }
         };
         auto compute = [&](int buf) __attribute__((always_inline)) {
-            const T* xa = sa + buf * TileK * AStride;
-            const T* xb = sb + buf * TileK * BStride;
+            const Real* xa = sa + buf * TileK * AStride;
+            const Real* xb = sb + buf * TileK * BStride;
 BATCHLAS_UNROLL_FULL
             for (int kk = 0; kk < TileK; ++kk) {
-                const Vec4<T> a0 = vec4_ref(&xa[kk * AStride + mb]);
-                const Vec4<T> a1 = vec4_ref(&xa[kk * AStride + BandM + mb]);
-                const Vec4<T> b0 = vec4_ref(&xb[kk * BStride + nb]);
-                const Vec4<T> b1 = vec4_ref(&xb[kk * BStride + BandN + nb]);
-                const T af[ThreadTile] = {a0.x, a0.y, a0.z, a0.w, a1.x, a1.y, a1.z, a1.w};
-                const T bf[ThreadTile] = {b0.x, b0.y, b0.z, b0.w, b1.x, b1.y, b1.z, b1.w};
+                const Vec4<Real> a0 = vec4_ref(&xa[kk * AStride + mb]);
+                const Vec4<Real> a1 = vec4_ref(&xa[kk * AStride + BandM + mb]);
+                const Vec4<Real> b0 = vec4_ref(&xb[kk * BStride + nb]);
+                const Vec4<Real> b1 = vec4_ref(&xb[kk * BStride + BandN + nb]);
+                const Real af[ThreadTile] = {a0.x, a0.y, a0.z, a0.w, a1.x, a1.y, a1.z, a1.w};
+                const Real bf[ThreadTile] = {b0.x, b0.y, b0.z, b0.w, b1.x, b1.y, b1.z, b1.w};
                 device::l3::outer_mac(accum, af, bf);
             }
         };
@@ -410,7 +410,7 @@ BATCHLAS_UNROLL_FULL
             // then each warp stores 4 of them as whole 128-row columns: 16-byte
             // stores on the aligned leg, predicated scalars at rows lane + 32 i
             // on the other (a per-group 16-byte branch there spilled at the cap).
-            T* sc = sa;
+            Real* sc = sa;
             int tid2 = static_cast<int>(item.get_local_id(2));
 #if BATCHLAS_GEMM_CP_ASYNC
             // Opaque re-read keeps every epilogue address out of the mainloop (no hoist) on u4 and on
@@ -426,7 +426,7 @@ BATCHLAS_UNROLL_FULL
                     const int slot = (nb >> 2) + half * (BandN / 4);
 BATCHLAS_UNROLL_FULL
                     for (int band = 0; band < 2; ++band) {
-                        Vec4<T> v;
+                        Vec4<Real> v;
 BATCHLAS_UNROLL_FULL
                         for (int i = 0; i < 4; ++i) {
                             v[i] = accum(band * Band + i, p + half * Band);
@@ -438,17 +438,17 @@ BATCHLAS_UNROLL_FULL
                 // accumulators are dead) and before the barrier, all in flight at once. Read inline, each
                 // load waited before its store: 0.84x u4's time at 256x512x78 strided.
                 // evidence: docs/perf/gemm.md#gemm-wp-f-float-mid-size-parity-on-sm_120
-                [[maybe_unused]] T prior[4][4];
+                [[maybe_unused]] Real prior[4][4];
                 if constexpr (!AlignedFastPath) {
-                    const bool bz = beta == T(0);
+                    const bool bz = beta == Real(0);
                     const int rows_left = m - m0 - (tid2 & 31);
 BATCHLAS_UNROLL_FULL
                     for (int q = 0; q < 4; ++q) {
                         const int col = n0 + ((tid2 >> 5) * 4 + q) * 4 + p;
-                        const T* src = &Cb[m0 + (tid2 & 31) + static_cast<std::ptrdiff_t>(col) * ldc];
+                        const Real* src = &Cb[m0 + (tid2 & 31) + static_cast<std::ptrdiff_t>(col) * ldc];
 BATCHLAS_UNROLL_FULL
                         for (int i = 0; i < 4; ++i)
-                            prior[q][i] = !bz && col < n && 32 * i < rows_left ? src[32 * i] : T(0);
+                            prior[q][i] = !bz && col < n && 32 * i < rows_left ? src[32 * i] : Real(0);
                     }
                 }
                 ex.barrier();
@@ -458,16 +458,16 @@ BATCHLAS_UNROLL_FULL
                     const int col = n0 + slot * 4 + p;
                     if constexpr (AlignedFastPath) {
                         const int row = (tid2 & 31) * 4;
-                        T* dst = &Cb[m0 + row + static_cast<std::ptrdiff_t>(col) * ldc];
-                        const Vec4<T> v = vec4_ref(&sc[slot * StageStride + row]);
-                        Vec4<T> out;
-                        if (beta == T(0)) {
+                        Real* dst = &Cb[m0 + row + static_cast<std::ptrdiff_t>(col) * ldc];
+                        const Vec4<Real> v = vec4_ref(&sc[slot * StageStride + row]);
+                        Vec4<Real> out;
+                        if (beta == Real(0)) {
                             out = alpha * v;
                         } else {
-                            const Vec4<T> prior = vec4_ref(const_cast<const T*>(dst));
+                            const Vec4<Real> prior = vec4_ref(const_cast<const Real*>(dst));
 BATCHLAS_UNROLL_FULL
                             for (int i = 0; i < 4; ++i) {
-                                out[i] = LinearEpilogue<T>::apply(alpha, beta, v[i], prior[i]);
+                                out[i] = LinearEpilogue<Real>::apply(alpha, beta, v[i], prior[i]);
                             }
                         }
                         vec4_ref(dst) = out;
@@ -475,14 +475,14 @@ BATCHLAS_UNROLL_FULL
                         // A warp store is a whole 128-byte piece of the column at any ldc.
                         if (col >= n) continue;
                         const int rows_left = m - m0 - (tid2 & 31);
-                        T* dst = &Cb[m0 + (tid2 & 31) + static_cast<std::ptrdiff_t>(col) * ldc];
-                        const T* src = &sc[slot * StageStride + (tid2 & 31)];
+                        Real* dst = &Cb[m0 + (tid2 & 31) + static_cast<std::ptrdiff_t>(col) * ldc];
+                        const Real* src = &sc[slot * StageStride + (tid2 & 31)];
 BATCHLAS_UNROLL_FULL
                         for (int i = 0; i < 4; ++i)
                             if (32 * i < rows_left)  // beta = 0 is alpha * acc alone: -0 + 0 would be +0
-                                dst[32 * i] = beta == T(0) ? alpha * src[32 * i]
-                                                           : LinearEpilogue<T>::apply(alpha, beta, src[32 * i],
-                                                                                      prior[q][i]);
+                                dst[32 * i] = beta == Real(0) ? alpha * src[32 * i]
+                                                           : LinearEpilogue<Real>::apply(alpha, beta, src[32 * i],
+                                                                                         prior[q][i]);
                     }
                 }
                 ex.barrier();
@@ -499,18 +499,18 @@ BATCHLAS_UNROLL_FULL
             for (int j = 0; j < ThreadTile; ++j) {
                 const int gn = n0 + (j < Band ? nb + j : BandN + nb + j - Band);
                 if constexpr (AlignedFastPath) {
-                    T* p = &Cb[gm + static_cast<std::ptrdiff_t>(gn) * ldc];
-                    Vec4<T> out;
-                    if (beta == T(0)) {
+                    Real* p = &Cb[gm + static_cast<std::ptrdiff_t>(gn) * ldc];
+                    Vec4<Real> out;
+                    if (beta == Real(0)) {
 BATCHLAS_UNROLL_FULL
                         for (int i = 0; i < 4; ++i) {
                             out[i] = alpha * accum(band * Band + i, j);
                         }
                     } else {
-                        const Vec4<T> prior = vec4_ref(const_cast<const T*>(p));
+                        const Vec4<Real> prior = vec4_ref(const_cast<const Real*>(p));
 BATCHLAS_UNROLL_FULL
                         for (int i = 0; i < 4; ++i) {
-                            out[i] = LinearEpilogue<T>::apply(alpha, beta, accum(band * Band + i, j), prior[i]);
+                            out[i] = LinearEpilogue<Real>::apply(alpha, beta, accum(band * Band + i, j), prior[i]);
                         }
                     }
                     vec4_ref(p) = out;
@@ -524,9 +524,9 @@ BATCHLAS_UNROLL_FULL
                         if (row >= m) {
                             continue;
                         }
-                        T* p = &Cb[row + static_cast<std::ptrdiff_t>(gn) * ldc];
-                        *p = LinearEpilogue<T>::apply(alpha, beta, accum(band * Band + i, j),
-                                                      beta == T(0) ? T(0) : *p);
+                        Real* p = &Cb[row + static_cast<std::ptrdiff_t>(gn) * ldc];
+                        *p = LinearEpilogue<Real>::apply(alpha, beta, accum(band * Band + i, j),
+                                                         beta == Real(0) ? Real(0) : *p);
                     }
                 }
             }
@@ -559,15 +559,15 @@ struct Gemm128x128Pipelined {
     }
 };
 
-template <typename T, bool AlignedFastPath, bool StagedEpilogue, Transpose OpA, Transpose OpB, int Stages>
+template <typename Real, bool AlignedFastPath, bool StagedEpilogue, Transpose OpA, Transpose OpB, int Stages>
 Event launch_register_128x128_k8_leg(Queue& ctx,
-                                 const MatrixView<T, MatrixFormat::Dense>& A,
-                                 const MatrixView<T, MatrixFormat::Dense>& B,
-                                 const MatrixView<T, MatrixFormat::Dense>& C,
-                                 T alpha,
-                                 T beta,
+                                 const MatrixView<Real, MatrixFormat::Dense>& A,
+                                 const MatrixView<Real, MatrixFormat::Dense>& B,
+                                 const MatrixView<Real, MatrixFormat::Dense>& C,
+                                 Real alpha,
+                                 Real beta,
                                  const char* (*kernel_trace_name)(KernelVariant)) {
-    using Body = Gemm128x128Body<T, AlignedFastPath, StagedEpilogue, OpA, OpB, Stages>;
+    using Body = Gemm128x128Body<Real, AlignedFastPath, StagedEpilogue, OpA, OpB, Stages>;
     BATCHLAS_KERNEL_TRACE_SCOPE(kernel_trace_name(Body::kVariant));
 
     const auto [m, k] = get_effective_dims(A, OpA);
@@ -580,12 +580,12 @@ Event launch_register_128x128_k8_leg(Queue& ctx,
                                 static_cast<size_t>(group_cols) * Body::Threads);
 
     ctx->submit([&](sycl::handler& h) {
-        sycl::local_accessor<T, 1> tile_a(sycl::range<1>(Body::TileAElems), h);
-        sycl::local_accessor<T, 1> tile_b(sycl::range<1>(Body::TileBElems), h);
+        sycl::local_accessor<Real, 1> tile_a(sycl::range<1>(Body::TileAElems), h);
+        sycl::local_accessor<Real, 1> tile_b(sycl::range<1>(Body::TileBElems), h);
         Body body{A.data_ptr(), B.data_ptr(), C.data_ptr(), m, n, k, A.ld(), B.ld(), C.ld(),
                   A.stride(), B.stride(), C.stride(), A.batch_size(), alpha, beta, tile_a, tile_b,
                   item_mask(A, B, C)};
-        using Name = GemmRegister128x128Kernel<T, AlignedFastPath, StagedEpilogue, OpA, OpB, Stages>;
+        using Name = GemmRegister128x128Kernel<Real, AlignedFastPath, StagedEpilogue, OpA, OpB, Stages>;
         // Out of line, the copy_async asm's memory clobber reloads every member through `this` (a
         // stack copy of the functor) after each copy: 23-33x slower. Stages > 2 always inlines.
         // evidence: docs/perf/gemm.md#gemm-wp-n2-the-u4-stack-frame-and-zero-filled-predicated-copies
@@ -607,24 +607,24 @@ Event launch_register_128x128_k8_leg(Queue& ctx,
 // stores touched 3.7x the sectors of a staged one. An epilogue choice, never a routing term.
 // evidence: docs/perf/gemm.md#the-staged-epilogue
 // evidence: docs/perf/gemm.md#gemm-wp-f-float-mid-size-parity-on-sm_120
-template <typename T, bool AlignedFastPath = false, Transpose OpA = Transpose::NoTrans,
+template <typename Real, bool AlignedFastPath = false, Transpose OpA = Transpose::NoTrans,
           Transpose OpB = Transpose::NoTrans, int Stages = 2>
 Event launch_register_128x128_k8(Queue& ctx,
-                                 const MatrixView<T, MatrixFormat::Dense>& A,
-                                 const MatrixView<T, MatrixFormat::Dense>& B,
-                                 const MatrixView<T, MatrixFormat::Dense>& C,
-                                 T alpha,
-                                 T beta,
+                                 const MatrixView<Real, MatrixFormat::Dense>& A,
+                                 const MatrixView<Real, MatrixFormat::Dense>& B,
+                                 const MatrixView<Real, MatrixFormat::Dense>& C,
+                                 Real alpha,
+                                 Real beta,
                                  const char* (*kernel_trace_name)(KernelVariant)) {
     if constexpr (!AlignedFastPath) {
-        return launch_register_128x128_k8_leg<T, false, true, OpA, OpB, Stages>(ctx, A, B, C, alpha, beta,
-                                                                                kernel_trace_name);
+        return launch_register_128x128_k8_leg<Real, false, true, OpA, OpB, Stages>(ctx, A, B, C, alpha, beta,
+                                                                                   kernel_trace_name);
     } else {
         if (get_effective_dims(A, OpA).second <= kStagedEpilogueMaxK)
-            return launch_register_128x128_k8_leg<T, true, true, OpA, OpB, Stages>(ctx, A, B, C, alpha, beta,
+            return launch_register_128x128_k8_leg<Real, true, true, OpA, OpB, Stages>(ctx, A, B, C, alpha, beta,
+                                                                                      kernel_trace_name);
+        return launch_register_128x128_k8_leg<Real, true, false, OpA, OpB, Stages>(ctx, A, B, C, alpha, beta,
                                                                                    kernel_trace_name);
-        return launch_register_128x128_k8_leg<T, true, false, OpA, OpB, Stages>(ctx, A, B, C, alpha, beta,
-                                                                                kernel_trace_name);
     }
 }
 

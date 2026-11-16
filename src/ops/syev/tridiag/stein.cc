@@ -26,22 +26,22 @@
 
 namespace batchlas {
 
-template <Backend B, typename T>
+template <Backend B, typename Real>
 struct SteinIterateKernel;
 
-template <Backend B, typename T>
+template <Backend B, typename Real>
 struct SteinOrthoKernel;
 
-template <Backend B, typename T>
+template <Backend B, typename Real>
 Event stein(Queue& ctx,
-            const VectorView<T>& d,
-            const VectorView<T>& e,
-            const VectorView<T>& w,
+            const VectorView<Real>& d,
+            const VectorView<Real>& e,
+            const VectorView<Real>& w,
             size_t k_in,
             Span<const int32_t> counts,
-            const MatrixView<T, MatrixFormat::Dense>& Z,
+            const MatrixView<Real, MatrixFormat::Dense>& Z,
             const Span<std::byte>& ws,
-            SteinParams<T> params) {
+            SteinParams<Real> params) {
     const std::uint8_t* mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("stein", d, e, w, Z));
     const int64_t n = d.size();
     const int64_t k = static_cast<int64_t>(k_in);
@@ -68,15 +68,15 @@ Event stein(Queue& ctx,
     // scratch points into five length-n arrays plus the pivot flags per (batch, vector).
     auto pool = BumpAllocator(ws);
     const size_t slots = static_cast<size_t>(n * k * batch_size);
-    auto dl = pool.allocate<T>(ctx, slots);
-    auto dd = pool.allocate<T>(ctx, slots);
-    auto du = pool.allocate<T>(ctx, slots);
-    auto du2 = pool.allocate<T>(ctx, slots);
-    auto xb = pool.allocate<T>(ctx, slots);
+    auto dl = pool.allocate<Real>(ctx, slots);
+    auto dd = pool.allocate<Real>(ctx, slots);
+    auto du = pool.allocate<Real>(ctx, slots);
+    auto du2 = pool.allocate<Real>(ctx, slots);
+    auto xb = pool.allocate<Real>(ctx, slots);
     auto piv = pool.allocate<unsigned char>(ctx, slots);
 
     const int32_t max_iter = std::max<int32_t>(1, params.max_iterations);
-    const T ortho_threshold = params.ortho_threshold;
+    const Real ortho_threshold = params.ortho_threshold;
     const uint32_t seed = params.seed;
 
     const size_t wg_iter = std::min<size_t>(
@@ -93,9 +93,9 @@ Event stein(Queue& ctx,
 
     // Phase 1: independent inverse iteration per eigenvector.
     auto iterate_evt = ctx->submit([&](sycl::handler& h) {
-        auto norm_local = sycl::local_accessor<T, 1>(sycl::range<1>(1), h);
+        auto norm_local = sycl::local_accessor<Real, 1>(sycl::range<1>(1), h);
 
-        batchlas::impl::parallel_for<SteinIterateKernel<B, T>>(h,
+        batchlas::impl::parallel_for<SteinIterateKernel<B, Real>>(h,
             sycl::nd_range<1>(sycl::range<1>{static_cast<size_t>(batch_size) * wg_iter},
                               sycl::range<1>{wg_iter}),
             [=](sycl::nd_item<1> it) {
@@ -106,9 +106,9 @@ Event stein(Queue& ctx,
                 // value range the count is data-dependent and per item.
                 const int64_t raw = counts_ptr ? static_cast<int64_t>(counts_ptr[bid]) : k;
                 const int kb = static_cast<int>((raw < 0) ? int64_t(0) : ((raw > k) ? k : raw));
-                const device::SteinOptions<T> p{max_iter, ortho_threshold, seed + static_cast<uint32_t>(bid * 7919)};
+                const device::SteinOptions<Real> p{max_iter, ortho_threshold, seed + static_cast<uint32_t>(bid * 7919)};
                 const int b = static_cast<int>(bid);
-                const device::detail::SteinScratch<T> s{norm_local.template get_multi_ptr<sycl::access::decorated::yes>(),
+                const device::detail::SteinScratch<Real> s{norm_local.template get_multi_ptr<sycl::access::decorated::yes>(),
                                                      dl_ptr, dd_ptr, du_ptr, du2_ptr, xb_ptr, piv_ptr, bid * k};
                 device::detail::iterate(ex, device::item(d, b), device::item(e, b), device::item(w, b), kb,
                                           device::item(Zv, b, int(n), int(k)), s, p);
@@ -123,9 +123,9 @@ Event stein(Queue& ctx,
     ctx->submit([&](sycl::handler& h) {
         // Phase 2 reads what phase 1 wrote; do not rely on queue ordering.
         h.depends_on(iterate_evt);
-        auto scratch = sycl::local_accessor<T, 1>(sycl::range<1>(1), h);
+        auto scratch = sycl::local_accessor<Real, 1>(sycl::range<1>(1), h);
 
-        batchlas::impl::parallel_for<SteinOrthoKernel<B, T>>(h,
+        batchlas::impl::parallel_for<SteinOrthoKernel<B, Real>>(h,
             sycl::nd_range<1>(sycl::range<1>{static_cast<size_t>(batch_size) * wg_ortho},
                               sycl::range<1>{wg_ortho}),
             [=](sycl::nd_item<1> it) {
@@ -141,8 +141,8 @@ Event stein(Queue& ctx,
                 // Stopping at kb, not k, is a COST bound (a stale tail forms one bogus cluster);
                 // phase 1's kb bound is the one that protects correctness.
                 // evidence: docs/design/syevx.md#syevx-range-steins-per-item-count-bound
-                const device::SteinOptions<T> p{max_iter, ortho_threshold, seed};
-                const device::detail::SteinScratch<T> s{scratch.template get_multi_ptr<sycl::access::decorated::yes>(),
+                const device::SteinOptions<Real> p{max_iter, ortho_threshold, seed};
+                const device::detail::SteinScratch<Real> s{scratch.template get_multi_ptr<sycl::access::decorated::yes>(),
                                                      nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0};
                 device::detail::reorthogonalize(ex, dv, ev, device::item(w, static_cast<int>(bid)), kb, Zb, s, p);
             });
@@ -152,25 +152,25 @@ Event stein(Queue& ctx,
 }
 
 // Uniform-capacity form: every item uses all k slots. Forwards rather than
-// duplicating, so there is exactly one kernel definition per (B, T).
-template <Backend B, typename T>
+// duplicating, so there is exactly one kernel definition per (B, Real).
+template <Backend B, typename Real>
 Event stein(Queue& ctx,
-            const VectorView<T>& d,
-            const VectorView<T>& e,
-            const VectorView<T>& w,
+            const VectorView<Real>& d,
+            const VectorView<Real>& e,
+            const VectorView<Real>& w,
             size_t k_in,
-            const MatrixView<T, MatrixFormat::Dense>& Z,
+            const MatrixView<Real, MatrixFormat::Dense>& Z,
             const Span<std::byte>& ws,
-            SteinParams<T> params) {
-    return stein<B, T>(ctx, d, e, w, k_in, Span<const int32_t>(), Z, ws, params);
+            SteinParams<Real> params) {
+    return stein<B, Real>(ctx, d, e, w, k_in, Span<const int32_t>(), Z, ws, params);
 }
 
-template <Backend B, typename T>
-size_t stein_buffer_size(Queue& ctx, size_t n, size_t k, size_t batch_size, SteinParams<T> params) {
+template <Backend B, typename Real>
+size_t stein_buffer_size(Queue& ctx, size_t n, size_t k, size_t batch_size, SteinParams<Real> params) {
     (void)params;
     const size_t slots = n * k * batch_size;
     size_t bytes = 0;
-    bytes += BumpAllocator::allocation_size<T>(ctx, slots) * 5;
+    bytes += BumpAllocator::allocation_size<Real>(ctx, slots) * 5;
     bytes += BumpAllocator::allocation_size<unsigned char>(ctx, slots);
     return bytes;
 }

@@ -26,28 +26,28 @@
 // Implementation using the new MatrixView structure
 namespace batchlas {
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 struct OrthoNormalizeVector {};
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 struct StridedCopyKernel {};
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 struct OrthoTransposeCopyKernel {};
 
 // dst := src^T, unconjugated: the columns of the copy span the rows of src, and back again.
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 void ortho_transpose_copy(Queue& ctx,
-                          const MatrixView<T, MatrixFormat::Dense>& src,
-                          const MatrixView<T, MatrixFormat::Dense>& dst,
+                          const MatrixView<Scalar, MatrixFormat::Dense>& src,
+                          const MatrixView<Scalar, MatrixFormat::Dense>& dst,
                           const std::uint8_t* mask) {
     const int64_t r = src.rows(), c = src.cols();
     const int64_t lds = src.ld(), ldd = dst.ld(), ss = src.stride(), sd = dst.stride();
-    const T* s = src.data_ptr();
-    T* d = dst.data_ptr();
+    const Scalar* s = src.data_ptr();
+    Scalar* d = dst.data_ptr();
     const size_t total = size_t(r * c * src.batch_size());
     const bool masked = mask != nullptr;  // captured as a bool: see ortho()
-    ctx->parallel_for<OrthoTransposeCopyKernel<B, T>>(sycl::range<1>(total), [=](sycl::id<1> id) {
+    ctx->parallel_for<OrthoTransposeCopyKernel<B, Scalar>>(sycl::range<1>(total), [=](sycl::id<1> id) {
         const int64_t lin = int64_t(id[0]);
         const int64_t b = lin / (r * c), e = lin % (r * c);
         if (masked && !mask[b]) return;
@@ -56,17 +56,17 @@ void ortho_transpose_copy(Queue& ctx,
     });
 }
 
-template <typename T>
+template <typename Scalar>
 struct OrthoWorkspace {
-    MatrixView<T, MatrixFormat::Dense> C;   // k x k Gram matrix A^H A
+    MatrixView<Scalar, MatrixFormat::Dense> C;   // k x k Gram matrix A^H A
     Span<std::byte> potrf_ws;
-    Span<typename base_type<T>::type> diags;
-    Span<typename base_type<T>::type> lambdas;
+    Span<typename base_type<Scalar>::type> diags;
+    Span<typename base_type<Scalar>::type> lambdas;
     Span<std::byte> syev_ws;
-    Span<T> output_basis;
-    Span<T> Ymem;                           // CGS2 only
-    Span<T> tau;                            // Householder only
-    MatrixView<T, MatrixFormat::Dense> H;   // Householder's operand: A, or A^T for rows
+    Span<Scalar> output_basis;
+    Span<Scalar> Ymem;                           // CGS2 only
+    Span<Scalar> tau;                            // Householder only
+    MatrixView<Scalar, MatrixFormat::Dense> H;   // Householder's operand: A, or A^T for rows
     Span<std::byte> geqrf_ws;
     Span<std::byte> orgqr_ws;
 };
@@ -89,16 +89,16 @@ inline bool ortho_force_householder(const Queue& ctx) {
 // which live in this workspace. That is sound only because none of those
 // queries dereferences the pointer it is given -- the previous sizing code
 // passed literal nullptrs to exactly these calls.
-template <Backend B, typename T>
-OrthoWorkspace<T> ortho_layout(Queue& ctx,
-                               BumpAllocator& pool,
-                               const MatrixView<T, MatrixFormat::Dense>& A,
-                               int64_t m,
-                               int64_t k,
-                               OrthoAlgorithm algo,
-                               bool row_arm,
-                               Span<const std::uint8_t> mask) {
-    using float_t = typename base_type<T>::type;
+template <Backend B, typename Scalar>
+OrthoWorkspace<Scalar> ortho_layout(Queue& ctx,
+                                    BumpAllocator& pool,
+                                    const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                    int64_t m,
+                                    int64_t k,
+                                    OrthoAlgorithm algo,
+                                    bool row_arm,
+                                    Span<const std::uint8_t> mask) {
+    using float_t = typename base_type<Scalar>::type;
     constexpr auto fmt = MatrixFormat::Dense;
     const auto batch_size = A.batch_size();
 
@@ -108,40 +108,40 @@ OrthoWorkspace<T> ortho_layout(Queue& ctx,
     const bool is_cgs = algo == OrthoAlgorithm::CGS2;
     const bool is_householder = algo == OrthoAlgorithm::Householder;
 
-    auto ATA = pool.allocate<T>(ctx, k * k * batch_size);
-    auto matAmem = pool.allocate<T*>(ctx, batch_size);
-    auto matATAmem = pool.allocate<T*>(ctx, batch_size);
+    auto ATA = pool.allocate<Scalar>(ctx, k * k * batch_size);
+    auto matAmem = pool.allocate<Scalar*>(ctx, batch_size);
+    auto matATAmem = pool.allocate<Scalar*>(ctx, batch_size);
     (void)matAmem;
 
     // Every scratch view carries the call's mask, so each size query asks for the masked family.
-    auto C = MatrixView<T, fmt>(ATA.data(), k, k, k, k * k, batch_size, matATAmem.data()).with_batch_mask(mask);
+    auto C = MatrixView<Scalar, fmt>(ATA.data(), k, k, k, k * k, batch_size, matATAmem.data()).with_batch_mask(mask);
     auto potrf_ws = pool.allocate<std::byte>(ctx, is_cholesky ? potrf_buffer_size<B>(ctx, C, Uplo::Lower) : 0);
 
     auto diags = pool.allocate<float_t>(ctx, is_svqb ? batch_size * k : 0);
     auto lambdas = pool.allocate<float_t>(ctx, is_svqb ? batch_size * k : 0);
     auto syev_ws = pool.allocate<std::byte>(
         ctx, is_svqb ? syev_buffer_size<B>(ctx, C, lambdas, JobType::EigenVectors, Uplo::Lower) : 0);
-    auto output_basis = pool.allocate<T>(ctx, is_svqb ? batch_size * m * k : 0);
+    auto output_basis = pool.allocate<Scalar>(ctx, is_svqb ? batch_size * m * k : 0);
 
-    auto Ymem = pool.allocate<T>(ctx, is_cgs ? batch_size * m : 0);
+    auto Ymem = pool.allocate<Scalar>(ctx, is_cgs ? batch_size * m : 0);
 
     // geqrf/orgqr work on columns, so the row arm QRs an m x k transposed copy.
     const bool transposed_copy = is_householder && row_arm;
-    auto At = pool.allocate<T>(ctx, transposed_copy ? m * k * batch_size : 0);
-    auto Atptrs = pool.allocate<T*>(ctx, transposed_copy ? batch_size : 0);
+    auto At = pool.allocate<Scalar>(ctx, transposed_copy ? m * k * batch_size : 0);
+    auto Atptrs = pool.allocate<Scalar*>(ctx, transposed_copy ? batch_size : 0);
     auto H = transposed_copy
-                 ? MatrixView<T, fmt>(At.data(), m, k, m, m * k, batch_size, Atptrs.data()).with_batch_mask(mask)
+                 ? MatrixView<Scalar, fmt>(At.data(), m, k, m, m * k, batch_size, Atptrs.data()).with_batch_mask(mask)
                  : A;
-    auto tau = pool.allocate<T>(ctx, is_householder ? k * batch_size : 0);
+    auto tau = pool.allocate<Scalar>(ctx, is_householder ? k * batch_size : 0);
     auto geqrf_ws = pool.allocate<std::byte>(ctx, is_householder ? geqrf_buffer_size<B>(ctx, H, tau) : 0);
     auto orgqr_ws = pool.allocate<std::byte>(ctx, is_householder ? orgqr_buffer_size<B>(ctx, H, tau) : 0);
 
     return {C, potrf_ws, diags, lambdas, syev_ws, output_basis, Ymem, tau, H, geqrf_ws, orgqr_ws};
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event ortho(Queue& ctx,
-            const MatrixView<T, MatrixFormat::Dense>& A,
+            const MatrixView<Scalar, MatrixFormat::Dense>& A,
             Transpose transA,
             Span<std::byte> workspace,
             OrthoAlgorithm algo) {
@@ -150,7 +150,7 @@ Event ortho(Queue& ctx,
     const bool masked = mk != nullptr;  // a captured null pointer can read as non-null on AdaptiveCpp Metal
     // If transA == NoTrans we find the orthonormal basis of the column space
     // Else we find the orthonormal basis of the row space
-    using float_t = typename base_type<T>::type;
+    using float_t = typename base_type<Scalar>::type;
     constexpr auto fmt = MatrixFormat::Dense;
     static LinalgHandle<B> handle;
     auto batch_size = A.batch_size();
@@ -162,42 +162,42 @@ Event ortho(Queue& ctx,
     }
     bool is_A_trans = transA == Transpose::Trans || transA == Transpose::ConjTrans;
     Transpose inv_trans = is_A_trans ? Transpose::NoTrans :
-                        std::is_same_v<T, std::complex<float_t>> ? Transpose::ConjTrans : Transpose::Trans;
+                        std::is_same_v<Scalar, std::complex<float_t>> ? Transpose::ConjTrans : Transpose::Trans;
     assert(k <= m);
     // If k > m && transA == NoTrans the columns of A are linearly dependent
     // Else if k > m && transA == Trans the rows of A are linearly dependent
-    auto wsl = ortho_layout<B, T>(ctx, pool, A, m, k, algo, is_A_trans, mask);
+    auto wsl = ortho_layout<B, Scalar>(ctx, pool, A, m, k, algo, is_A_trans, mask);
     auto C = wsl.C;
     auto potrf_workspace = wsl.potrf_ws;
     auto ATA_stride = k * k;
 
-    // Gram C = A^H A via syrk (real T, k <= 64 float / 128 double), else GEMM.
+    // Gram C = A^H A via syrk (real Scalar, k <= 64 float / 128 double), else GEMM.
     // evidence: docs/perf/ortho.md#ortho-the-gram-matrix-through-syrk-per-precision
     // syrk writes only the lower triangle; potrf/trsm/shift read only that.
     // svqb_alg must keep its GEMM (it scales the whole k x k). A/B with
     // BATCHLAS_ORTHO_GRAM=gemm.
-    constexpr bool gram_is_real = !device::Arith<T>::is_complex;
+    constexpr bool gram_is_real = !device::Arith<Scalar>::is_complex;
     const bool gram_pinned_to_gemm = [] {
         const char* raw = batchlas::settings().selection.ortho_gram.get();
         return raw != nullptr && std::string(raw) == "gemm";
     }();
-    constexpr int gram_max_k = std::is_same_v<T, float> ? 64 : 128;
+    constexpr int gram_max_k = std::is_same_v<Scalar, float> ? 64 : 128;
     // "syrk reaches the gram tile kernel on this route", not "this is NVIDIA".
     const bool gram_via_syrk =
-        select::level3_tile_substitution_enabled<B, T> && gram_is_real &&
+        select::level3_tile_substitution_enabled<B, Scalar> && gram_is_real &&
         k <= gram_max_k && !gram_pinned_to_gemm;
     auto gram_into_C = [&](const auto& in_mat) {
-        if constexpr (select::level3_tile_substitution_enabled<B, T> && gram_is_real) {
+        if constexpr (select::level3_tile_substitution_enabled<B, Scalar> && gram_is_real) {
             if (gram_via_syrk) {
-                return syrk<B, T>(ctx, in_mat, C, T(1), T(0), Uplo::Lower, inv_trans);
+                return syrk<B, Scalar>(ctx, in_mat, C, Scalar(1), Scalar(0), Uplo::Lower, inv_trans);
             }
         }
         return gemm<B>(ctx, in_mat, in_mat, C, {.transA = inv_trans, .transB = transA});
     };
 
     auto chol_alg = [&]{
-        constexpr T alpha = 1.0;
-        constexpr T beta = 0.0;
+        constexpr Scalar alpha = 1.0;
+        constexpr Scalar beta = 0.0;
         // Compute StS = S^T * S or StS = S * S^T (depending on transA)
         (void)gram_into_C(A);
         // Compute the Cholesky Factorization of StS
@@ -211,8 +211,8 @@ Event ortho(Queue& ctx,
                 {.alpha = alpha, .side = is_A_trans ? Side::Left : Side::Right, .trans = inv_trans});
     };
 
-    auto conj_vector = [&](const VectorView<T>& v) {
-        if constexpr (device::Arith<T>::is_complex) {
+    auto conj_vector = [&](const VectorView<Scalar>& v) {
+        if constexpr (device::Arith<Scalar>::is_complex) {
             auto x = v;
             ctx->parallel_for(sycl::range<2>(size_t(x.batch_size()), size_t(x.size())), [=](sycl::id<2> id) {
                 if (masked && !mk[id[0]]) return;
@@ -230,11 +230,11 @@ Event ortho(Queue& ctx,
         // 3. Normalize A[:,0 .. k-1]
         // Repeat until all vectors are orthogonal
         auto Ymem = wsl.Ymem;
-        auto normalize_wg_size = std::min(get_kernel_max_wg_size<OrthoNormalizeVector<B, T>>(ctx), size_t(m));
+        auto normalize_wg_size = std::min(get_kernel_max_wg_size<OrthoNormalizeVector<B, Scalar>>(ctx), size_t(m));
         for (int i = 0; i < k; i++) {
             // The first i vectors and vector i, in stored orientation: columns, or rows of A.
-            auto A_i = (is_A_trans ? MatrixView<T, fmt>(A.data_ptr(), i, m, A.ld(), A.stride(), batch_size)
-                                   : MatrixView<T, fmt>(A.data_ptr(), m, i, A.ld(), A.stride(), batch_size))
+            auto A_i = (is_A_trans ? MatrixView<Scalar, fmt>(A.data_ptr(), i, m, A.ld(), A.stride(), batch_size)
+                                   : MatrixView<Scalar, fmt>(A.data_ptr(), m, i, A.ld(), A.stride(), batch_size))
                            .with_batch_mask(mask);
             auto C = VectorView(Ymem.data(), i, batch_size).with_batch_mask(mask);
             auto A_next = is_A_trans ? A(i, Slice()) : A(Slice(), i);
@@ -248,7 +248,7 @@ Event ortho(Queue& ctx,
                             A_i,
                             C,
                             A_next,
-                            {.alpha = T(-1.0), .beta = T(1.0), .transA = transA});
+                            {.alpha = Scalar(-1.0), .beta = Scalar(1.0), .transA = transA});
                 }
                 if (is_A_trans) (void)conj_vector(A_next);
             }
@@ -259,7 +259,7 @@ Event ortho(Queue& ctx,
                 const int64_t vbase = is_A_trans ? i : int64_t(i) * A.ld();
                 const int vstep = is_A_trans ? A.ld() : 1;
 
-                batchlas::impl::parallel_for<OrthoNormalizeVector<B, T>>(h,
+                batchlas::impl::parallel_for<OrthoNormalizeVector<B, Scalar>>(h,
                     sycl::nd_range<1>(sycl::range<1>{size_t(batch_size * normalize_wg_size)}, sycl::range<1>{size_t(normalize_wg_size)}),
                     [=](sycl::nd_item<1> it) {
                         auto bid = it.get_group_linear_id();
@@ -284,10 +284,10 @@ Event ortho(Queue& ctx,
                 const auto d = device::vec(ATA_ptr + bid * ATA_stride, k, k + 1);  // diag(C)
                 // ||A||_F^2 = trace(A^H A) bounds ||A||_2^2; the shift scales with the Gram
                 // matrix, so with the square of the norm, in the real type's epsilon.
-                const float_t fro2 = ex.group_reduce(device::Arith<T>::re(d(ex.lid())));
+                const float_t fro2 = ex.group_reduce(device::Arith<Scalar>::re(d(ex.lid())));
                 const float_t eps = device::lamch<'P', float_t>();
                 const float_t shift = float_t(11) * (float_t(m * k) + float_t(k + 1) * float_t(k)) * eps * fro2;
-                device::for_each_owned_exact(ex, k, [&](int i) { d(i) = device::Arith<T>::add(d(i), T(shift)); });  // C + shift I
+                device::for_each_owned_exact(ex, k, [&](int i) { d(i) = device::Arith<Scalar>::add(d(i), Scalar(shift)); });  // C + shift I
             });
         });
         // Compute the Cholesky Factorization of StS
@@ -320,7 +320,7 @@ Event ortho(Queue& ctx,
             const auto c_diag = device::vec(ATA_ptr + bid * k * k, k, k + 1);
             const auto d_out = device::vec(diags.data() + bid * k, k);
             device::for_each_owned_exact(ex, k, [&](int i) {
-                const float_t diag = sycl::fmax(float_t(0), device::Arith<T>::re(c_diag(i)));
+                const float_t diag = sycl::fmax(float_t(0), device::Arith<Scalar>::re(c_diag(i)));
                 d_out(i) = (diag <= device::lamch<'U', float_t>()) ? float_t(0) : sycl::rsqrt(diag);
             });
             });
@@ -365,18 +365,18 @@ Event ortho(Queue& ctx,
     };
     // The m x k vectors op(A) C land in output_basis as columns; rows of A take their conjugates.
     auto svqb_into_A = [&] {
-        auto output_view = MatrixView<T, fmt>(output_basis.data(), m, k, m, k*m, batch_size).with_batch_mask(mask);
+        auto output_view = MatrixView<Scalar, fmt>(output_basis.data(), m, k, m, k*m, batch_size).with_batch_mask(mask);
         svqb_alg(A, output_view);
         auto A_stride = A.stride();
         auto A_ld = A.ld();
         auto Adata = A.data_ptr();
-        auto wgs = std::min(get_kernel_max_wg_size<StridedCopyKernel<B, T>>(ctx), size_t(m * k));
-        ctx->parallel_for<StridedCopyKernel<B, T>>(sycl::nd_range<1>(sycl::range<1>{size_t(batch_size * wgs)}, sycl::range<1>{size_t(wgs)}), [=](sycl::nd_item<1> it) {
+        auto wgs = std::min(get_kernel_max_wg_size<StridedCopyKernel<B, Scalar>>(ctx), size_t(m * k));
+        ctx->parallel_for<StridedCopyKernel<B, Scalar>>(sycl::nd_range<1>(sycl::range<1>{size_t(batch_size * wgs)}, sycl::range<1>{size_t(wgs)}), [=](sycl::nd_item<1> it) {
             auto batch_idx = it.get_group().get_group_id()[0];
             if (masked && !mk[batch_idx]) return;
             const device::RtGroup<> ex{it};
             const auto Q = device::mat(output_basis.data() + batch_idx * m * k, m, k, m);
-            T* const a = Adata + batch_idx * A_stride;
+            Scalar* const a = Adata + batch_idx * A_stride;
             // A := Q, or rows of A := Q^H (is_A_trans is uniform: one branch per launch)
             if (is_A_trans) device::lacpy<device::Part::Full, Transpose::ConjTrans, device::alg::DivMod>(ex, Q, device::mat(a, k, m, A_ld));
             else device::lacpy<device::Part::Full, Transpose::NoTrans, device::alg::DivMod>(ex, Q, device::mat(a, m, k, A_ld));
@@ -395,10 +395,10 @@ Event ortho(Queue& ctx,
             shift_chol_alg();
             break;
         case OrthoAlgorithm::Householder: {
-            if (is_A_trans) ortho_transpose_copy<B, T>(ctx, A, wsl.H, mk);
+            if (is_A_trans) ortho_transpose_copy<B, Scalar>(ctx, A, wsl.H, mk);
             (void)geqrf<B>(ctx, wsl.H, wsl.tau, wsl.geqrf_ws);
             (void)orgqr<B>(ctx, wsl.H, wsl.tau, wsl.orgqr_ws);
-            if (is_A_trans) ortho_transpose_copy<B, T>(ctx, wsl.H, A, mk);
+            if (is_A_trans) ortho_transpose_copy<B, Scalar>(ctx, wsl.H, A, mk);
             break;
         }
         case OrthoAlgorithm::CGS2:
@@ -413,7 +413,8 @@ Event ortho(Queue& ctx,
                 svqb_into_A();
                 break;
             }
-            auto output_view = MatrixView<T, fmt>(output_basis.data(), m, k, m, k*m, batch_size).with_batch_mask(mask);
+            auto output_view = MatrixView<Scalar, fmt>(output_basis.data(), m, k, m, k*m,
+                                                       batch_size).with_batch_mask(mask);
             svqb_alg(A, output_view);
             svqb_alg(output_view, A);
             break;
@@ -425,9 +426,9 @@ Event ortho(Queue& ctx,
     return ctx.get_event();
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t ortho_buffer_size(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A,
                          Transpose transA,
                          OrthoAlgorithm algo) {
     const auto mask = detail::call_mask("ortho", A);
@@ -437,14 +438,14 @@ size_t ortho_buffer_size(Queue& ctx,
     }
     const bool row_arm = transA != Transpose::NoTrans;
     return workspace_bytes([&, m = m, k = k](BumpAllocator& pool) {
-        return ortho_layout<B, T>(ctx, pool, A, m, k, algo, row_arm, mask);
+        return ortho_layout<B, Scalar>(ctx, pool, A, m, k, algo, row_arm, mask);
     });
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event ortho(Queue& ctx,
-            const MatrixView<T, MatrixFormat::Dense>& A,
-            const MatrixView<T, MatrixFormat::Dense>& M,
+            const MatrixView<Scalar, MatrixFormat::Dense>& A,
+            const MatrixView<Scalar, MatrixFormat::Dense>& M,
             Transpose transA,
             Transpose transM,
             Span<std::byte> workspace,
@@ -469,16 +470,16 @@ Event ortho(Queue& ctx,
         throw batchlas::invalid_argument("ortho: The number of vectors in A (" + std::to_string(nA) + ") and M (" + std::to_string(nM) + ") must sum to at most the dimension of these vectors (" + std::to_string(k) + ")");
     }
     assert(k == (transM == Transpose::NoTrans ? M.rows_ : M.cols_));
-    auto trans = device::Arith<T>::is_complex ? Transpose::ConjTrans : Transpose::Trans;
+    auto trans = device::Arith<Scalar>::is_complex ? Transpose::ConjTrans : Transpose::Trans;
     auto no_trans = Transpose::NoTrans;
     auto inv_transA = transA == trans ? no_trans : trans;
     auto inv_transM = transM == trans ? no_trans : trans;
     auto batch_size = A.batch_size();
-    auto MAmem = pool.allocate<T>(ctx, nM*nA * batch_size);
+    auto MAmem = pool.allocate<Scalar>(ctx, nM*nA * batch_size);
     // A carries the call's mask even when only M did, so its own ortho skips the same items.
     const auto Am = A.with_batch_mask(mask);
     auto orthoworkspace = pool.allocate<std::byte>(ctx, ortho_buffer_size<B>(ctx, Am, transA, algo));
-    auto descrMA = MatrixView<T, fmt>(MAmem.data(), nM, nA, nM, nM*nA, batch_size).with_batch_mask(mask);
+    auto descrMA = MatrixView<Scalar, fmt>(MAmem.data(), nM, nA, nM, nM*nA, batch_size).with_batch_mask(mask);
     auto isAtrans = transA == trans;
     // ConjTrans for complex: a bool cast to Transpose is Trans, which projects onto conj(M).
     auto is_first_transposed = ((transA == trans) || (transM == trans)) ? trans : no_trans;
@@ -490,17 +491,17 @@ Event ortho(Queue& ctx,
                 isAtrans ? descrMA : M,
                 isAtrans ? M : descrMA,
                 A,
-                {.alpha = T(-1.0), .beta = T(1.0), .transA = is_first_transposed, .transB = is_second_transposed});
+                {.alpha = Scalar(-1.0), .beta = Scalar(1.0), .transA = is_first_transposed, .transB = is_second_transposed});
 
         (void)ortho<B>(ctx, Am, transA, orthoworkspace, algo);
     }
     return ctx.get_event();
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t ortho_buffer_size(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A,
-                         const MatrixView<T, MatrixFormat::Dense>& M,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& M,
                          Transpose transA,
                          Transpose transM,
                          OrthoAlgorithm algo,
@@ -514,7 +515,7 @@ size_t ortho_buffer_size(Queue& ctx,
     }
 
     return  BumpAllocator::allocation_size<std::byte>(ctx, ortho_buffer_size<B>(ctx, A.with_batch_mask(mask), transA, algo)) +
-            BumpAllocator::allocation_size<T>(ctx, nM*nA * batch_size);
+            BumpAllocator::allocation_size<Scalar>(ctx, nM*nA * batch_size);
 }
 
 #define ORTHO_INSTANTIATE(back, fp) \

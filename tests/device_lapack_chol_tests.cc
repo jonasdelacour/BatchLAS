@@ -57,19 +57,19 @@ constexpr int kWg = batchlas::device::detail::kBlockedWg;
 constexpr int kPeriod = 3;
 constexpr int kBatch = 6;
 constexpr int kNrhs = 3;
-template <class T> constexpr int kNb = batchlas::device::detail::reg_max_n<T> >= 32 ? 32 : 16;
-template <class T> using Big = batchlas::device::tier::Blocked<kNb<T>>;  // the tier potrf's and posv's lists end with
+template <class Scalar> constexpr int kNb = batchlas::device::detail::reg_max_n<Scalar> >= 32 ? 32 : 16;
+template <class Scalar> using Big = batchlas::device::tier::Blocked<kNb<Scalar>>;  // the tier potrf's and posv's lists end with
 using Small = batchlas::device::tier::Blocked<8>;
 
 struct alignas(16) Slab {
     unsigned char b[16];
 };
 
-template <class T> T poison() {
-    if constexpr (is_cplx<T>) return T(real_of<T>(1e6), real_of<T>(-1e6));
-    else return T(1e6);
+template <class Scalar> Scalar poison() {
+    if constexpr (is_cplx<Scalar>) return Scalar(real_of<Scalar>(1e6), real_of<Scalar>(-1e6));
+    else return Scalar(1e6);
 }
-template <class T> real_of<T> scale_of(int b) { return real_of<T>(1) + real_of<T>(b % 7) * real_of<T>(0.25); }
+template <class Scalar> real_of<Scalar> scale_of(int b) { return real_of<Scalar>(1) + real_of<Scalar>(b % 7) * real_of<Scalar>(0.25); }
 
 // rows x cols per item at ld = rows + pad, stride = ld * cols + 5.
 struct Shape {
@@ -98,56 +98,56 @@ bool slab_index(const Shape& s, int e, int& i, int& j) {
     return i < s.rows && j < s.cols;
 }
 
-template <class T> std::vector<T> spd(int n, std::uint64_t seed) {
-    using R = real_of<T>;
-    std::vector<T> m(std::size_t(n) * n), a(std::size_t(n) * n);
-    for (std::size_t i = 0; i < m.size(); ++i) m[i] = val<T>(seed * 7919u + i);
+template <class Scalar> std::vector<Scalar> spd(int n, std::uint64_t seed) {
+    using R = real_of<Scalar>;
+    std::vector<Scalar> m(std::size_t(n) * n), a(std::size_t(n) * n);
+    for (std::size_t i = 0; i < m.size(); ++i) m[i] = val<Scalar>(seed * 7919u + i);
     for (int i = 0; i < n; ++i)
         for (int j = 0; j < n; ++j) {
-            LD<T> s{};
+            LD<Scalar> s{};
             for (int k = 0; k < n; ++k) {
-                const LD<T> x = wide(m[i + std::size_t(k) * n]), y = wide(m[j + std::size_t(k) * n]);
-                if constexpr (is_cplx<T>) s += x * std::conj(y);
+                const LD<Scalar> x = wide(m[i + std::size_t(k) * n]), y = wide(m[j + std::size_t(k) * n]);
+                if constexpr (is_cplx<Scalar>) s += x * std::conj(y);
                 else s += x * y;
             }
-            a[i + std::size_t(j) * n] = static_cast<T>(s / static_cast<long double>(n));
+            a[i + std::size_t(j) * n] = static_cast<Scalar>(s / static_cast<long double>(n));
         }
-    for (int i = 0; i < n; ++i) a[i + std::size_t(i) * n] = T(std::real(a[i + std::size_t(i) * n]) + R(2));
+    for (int i = 0; i < n; ++i) a[i + std::size_t(i) * n] = Scalar(std::real(a[i + std::size_t(i) * n]) + R(2));
     return a;
 }
 
 // Item b is representative b % 3 scaled by scale_of(b) (repeat: representative 0 unscaled on
 // every item). plant: representative 1 gets the pivot -1000 at n / 2, representative 2 a NaN last.
-template <class T> struct Spd {
+template <class Scalar> struct Spd {
     Shape s;
     Uplo uplo;
     bool repeat;
-    std::vector<T> ref;  // kPeriod full n x n Hermitian matrices, real diagonal
-    std::vector<T> h;    // the stored triangle in the s layout, poison elsewhere
-    T full(int b, int i, int j) const {
+    std::vector<Scalar> ref;  // kPeriod full n x n Hermitian matrices, real diagonal
+    std::vector<Scalar> h;    // the stored triangle in the s layout, poison elsewhere
+    Scalar full(int b, int i, int j) const {
         const int n = s.rows;
-        const T v = ref[std::size_t(repeat ? 0 : b % kPeriod) * n * n + i + std::size_t(j) * n];
-        return repeat ? v : v * scale_of<T>(b);
+        const Scalar v = ref[std::size_t(repeat ? 0 : b % kPeriod) * n * n + i + std::size_t(j) * n];
+        return repeat ? v : v * scale_of<Scalar>(b);
     }
 };
-template <class T> Spd<T> make_spd(int n, Uplo uplo, int batch, bool plant, bool repeat = false) {
-    using R = real_of<T>;
-    Spd<T> p{shape_of(n, n, batch, 3), uplo, repeat, {}, {}};
+template <class Scalar> Spd<Scalar> make_spd(int n, Uplo uplo, int batch, bool plant, bool repeat = false) {
+    using R = real_of<Scalar>;
+    Spd<Scalar> p{shape_of(n, n, batch, 3), uplo, repeat, {}, {}};
     for (int r = 0; r < kPeriod; ++r) {
-        auto a = spd<T>(n, 17u + 3u * r + 101u * n);
+        auto a = spd<Scalar>(n, 17u + 3u * r + 101u * n);
         const int k = r == 1 ? n / 2 : n - 1;
-        if (plant && r == 1) a[k + std::size_t(k) * n] = T(R(-1000));
-        if (plant && r == 2) a[k + std::size_t(k) * n] = T(std::numeric_limits<R>::quiet_NaN());
+        if (plant && r == 1) a[k + std::size_t(k) * n] = Scalar(R(-1000));
+        if (plant && r == 2) a[k + std::size_t(k) * n] = Scalar(std::numeric_limits<R>::quiet_NaN());
         p.ref.insert(p.ref.end(), a.begin(), a.end());
     }
-    p.h.assign(p.s.elems(), poison<T>());
+    p.h.assign(p.s.elems(), poison<Scalar>());
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i) {
                 if (!in_region(region_of(uplo), i, j)) continue;
-                T v = p.full(b, i, j);
-                if constexpr (is_cplx<T>)
-                    if (i == j) v = T(v.real(), R(0.75));  // Im(diag) is ignored by contract
+                Scalar v = p.full(b, i, j);
+                if constexpr (is_cplx<Scalar>)
+                    if (i == j) v = Scalar(v.real(), R(0.75));  // Im(diag) is ignored by contract
                 p.h[p.s.at(b, i, j)] = v;
             }
     return p;
@@ -159,8 +159,8 @@ int expected_info(int n, int b, bool plant) {
 }
 
 // src's region of every item over a fresh poison buffer (the other triangle re-poisoned).
-template <class T> std::vector<T> keep_region(const std::vector<T>& src, const Shape& s, Region r) {
-    std::vector<T> out(src.size(), poison<T>());
+template <class Scalar> std::vector<Scalar> keep_region(const std::vector<Scalar>& src, const Shape& s, Region r) {
+    std::vector<Scalar> out(src.size(), poison<Scalar>());
     for (int b = 0; b < s.batch; ++b)
         for (int j = 0; j < s.cols; ++j)
             for (int i = 0; i < s.rows; ++i)
@@ -168,11 +168,11 @@ template <class T> std::vector<T> keep_region(const std::vector<T>& src, const S
     return out;
 }
 
-template <class T> MatrixView<T, MatrixFormat::Dense> view(T* p, const Shape& s) {
-    return MatrixView<T, MatrixFormat::Dense>(p, s.rows, s.cols, s.ld, s.stride, s.batch);
+template <class Scalar> MatrixView<Scalar, MatrixFormat::Dense> view(Scalar* p, const Shape& s) {
+    return MatrixView<Scalar, MatrixFormat::Dense>(p, s.rows, s.cols, s.ld, s.stride, s.batch);
 }
-template <class T> KernelMatrixView<T, MatrixFormat::Dense> kview(T* p, const Shape& s) {
-    return KernelMatrixView<T, MatrixFormat::Dense>(p, s.rows, s.cols, s.ld, s.stride, s.batch);
+template <class Scalar> KernelMatrixView<Scalar, MatrixFormat::Dense> kview(Scalar* p, const Shape& s) {
+    return KernelMatrixView<Scalar, MatrixFormat::Dense>(p, s.rows, s.cols, s.ld, s.stride, s.batch);
 }
 
 // The user kernel: one matrix per WorkGroup<256, 32>, the tier's local bytes from a 16-byte
@@ -203,7 +203,7 @@ inline std::byte* host_ws(Dev& d, std::size_t bytes) {
     std::byte* const p = d.alloc<std::byte>(std::max<std::size_t>(bytes, 1) + al, std::byte{0});
     return p + (al - reinterpret_cast<std::uintptr_t>(p) % al) % al;
 }
-template <class T> std::vector<std::int32_t> host_potrf(Dev& d, T* a, const Shape& s, Uplo uplo) {
+template <class Scalar> std::vector<std::int32_t> host_potrf(Dev& d, Scalar* a, const Shape& s, Uplo uplo) {
     const select::ScopedPin<ops::potrf::PotrfChoice> pin("potrf", ops::potrf::PotrfChoice{ops::potrf::Blocked{}});
     Queue& ctx = *d.ctx;
     const auto V = view(a, s);
@@ -214,13 +214,13 @@ template <class T> std::vector<std::int32_t> host_potrf(Dev& d, T* a, const Shap
     ctx.wait();
     return d.down(info, s.batch);
 }
-template <class T> void host_potrs(Dev& d, T* a, const Shape& sa, T* b, const Shape& sb, Uplo uplo) {
+template <class Scalar> void host_potrs(Dev& d, Scalar* a, const Shape& sa, Scalar* b, const Shape& sb, Uplo uplo) {
     const select::ScopedPin<ops::potrs::PotrsChoice> pin("potrs", ops::potrs::PotrsChoice{ops::potrs::Trsm{}});
     Queue& ctx = *d.ctx;
     (void)batchlas::potrs(ctx, view(a, sa), view(b, sb), uplo);
     ctx.wait();
 }
-template <class T> std::vector<std::int32_t> host_posv(Dev& d, T* a, const Shape& sa, T* b, const Shape& sb, Uplo uplo) {
+template <class Scalar> std::vector<std::int32_t> host_posv(Dev& d, Scalar* a, const Shape& sa, Scalar* b, const Shape& sb, Uplo uplo) {
     const select::ScopedPin<ops::posv::PosvChoice> pin("posv", ops::posv::PosvChoice{ops::posv::Blocked{}});
     const select::ScopedPin<ops::potrf::PotrfChoice> pin_potrf("potrf", ops::potrf::PotrfChoice{ops::potrf::Blocked{}});
     Queue& ctx = *d.ctx;
@@ -233,7 +233,7 @@ template <class T> std::vector<std::int32_t> host_posv(Dev& d, T* a, const Shape
     ctx.wait();
     return d.down(info, sa.batch);
 }
-template <class T> std::vector<std::int32_t> host_potri(Dev& d, T* a, const Shape& s, Uplo uplo) {
+template <class Scalar> std::vector<std::int32_t> host_potri(Dev& d, Scalar* a, const Shape& s, Uplo uplo) {
     const select::ScopedPin<ops::potri::PotriChoice> pin("potri", ops::potri::PotriChoice{ops::potri::Blocked{64}});
     Queue& ctx = *d.ctx;
     const auto V = view(a, s);
@@ -247,14 +247,14 @@ template <class T> std::vector<std::int32_t> host_potri(Dev& d, T* a, const Shap
 
 // ---- comparisons -----------------------------------------------------------------------------
 // max over `items` of ||x - y||_F / ||y||_F over each item's region (NaN-propagating).
-template <class T> double rel_diff(const std::vector<T>& x, const std::vector<T>& y, const Shape& s, Region r, const std::vector<int>& items) {
+template <class Scalar> double rel_diff(const std::vector<Scalar>& x, const std::vector<Scalar>& y, const Shape& s, Region r, const std::vector<int>& items) {
     double worst = 0;
     for (int b : items) {
         long double num = 0, den = 0;
         for (int j = 0; j < s.cols; ++j)
             for (int i = 0; i < s.rows; ++i) {
                 if (!in_region(r, i, j)) continue;
-                const LD<T> dx = wide(x[s.at(b, i, j)]) - wide(y[s.at(b, i, j)]);
+                const LD<Scalar> dx = wide(x[s.at(b, i, j)]) - wide(y[s.at(b, i, j)]);
                 num += std::norm(dx);
                 den += std::norm(wide(y[s.at(b, i, j)]));
             }
@@ -281,7 +281,7 @@ template <class T> int items_changed(const std::vector<T>& got, const std::vecto
         for (int e = 0; e < s.stride; ++e) bad += !same_bits(got[std::size_t(b) * s.stride + e], before[std::size_t(b) * s.stride + e]);
     return bad;
 }
-template <class T> std::vector<int> spd_items(const Spd<T>& p, bool plant) {
+template <class Scalar> std::vector<int> spd_items(const Spd<Scalar>& p, bool plant) {
     std::vector<int> v;
     for (int b = 0; b < p.s.batch; ++b)
         if (expected_info(p.s.rows, b, plant) == 0) v.push_back(b);
@@ -290,12 +290,12 @@ template <class T> std::vector<int> spd_items(const Spd<T>& p, bool plant) {
 
 // The full input matrices of `items` (n x n, ld n) and a slab copy of `got`'s items, in unified
 // memory (the verify residuals read on the host).
-template <class T> struct Residual {
-    UnifiedVector<T> a0, x, b0;
+template <class Scalar> struct Residual {
+    UnifiedVector<Scalar> a0, x, b0;
 };
-template <class T> void fill_a0(const Spd<T>& p, const std::vector<int>& items, UnifiedVector<T>& a0) {
+template <class Scalar> void fill_a0(const Spd<Scalar>& p, const std::vector<int>& items, UnifiedVector<Scalar>& a0) {
     const int n = p.s.rows;
-    a0 = UnifiedVector<T>(std::size_t(n) * n * items.size());
+    a0 = UnifiedVector<Scalar>(std::size_t(n) * n * items.size());
     for (std::size_t q = 0; q < items.size(); ++q)
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i) a0.data()[q * n * n + i + std::size_t(j) * n] = p.full(items[q], i, j);
@@ -344,24 +344,24 @@ template <class T, Uplo UL, class Tier> void potrf_case(Dev& d, int n) {
 }
 
 template <class T> Shape rhs_shape(int n, int batch) { return shape_of(n, kNrhs, batch, 2); }
-template <class T> std::vector<T> make_rhs(const Shape& s, std::uint64_t seed) {
-    std::vector<T> h(s.elems(), poison<T>());
+template <class Scalar> std::vector<Scalar> make_rhs(const Shape& s, std::uint64_t seed) {
+    std::vector<Scalar> h(s.elems(), poison<Scalar>());
     for (int b = 0; b < s.batch; ++b)
         for (int j = 0; j < s.cols; ++j)
-            for (int i = 0; i < s.rows; ++i) h[s.at(b, i, j)] = val<T>(seed * 1000003u + s.at(b, i, j));
+            for (int i = 0; i < s.rows; ++i) h[s.at(b, i, j)] = val<Scalar>(seed * 1000003u + s.at(b, i, j));
     return h;
 }
-template <class T> double solve_res(Dev& d, const Spd<T>& p, const std::vector<T>& x, const std::vector<T>& b0, const Shape& sb,
-                                    const std::vector<int>& items) {
-    Residual<T> r;
+template <class Scalar> double solve_res(Dev& d, const Spd<Scalar>& p, const std::vector<Scalar>& x, const std::vector<Scalar>& b0, const Shape& sb,
+                                         const std::vector<int>& items) {
+    Residual<Scalar> r;
     fill_a0(p, items, r.a0);
     fill_slabs(x, sb, items, r.x);
     fill_slabs(b0, sb, items, r.b0);
     const int n = p.s.rows, k = int(items.size());
-    return MatrixView<T, MatrixFormat::Dense>::solve_residual(
-        *d.ctx, MatrixView<T, MatrixFormat::Dense>(r.a0.data(), n, n, n, n * n, k),
-        MatrixView<T, MatrixFormat::Dense>(r.x.data(), n, sb.cols, sb.ld, sb.stride, k),
-        MatrixView<T, MatrixFormat::Dense>(r.b0.data(), n, sb.cols, sb.ld, sb.stride, k), iota_items<T>(k));
+    return MatrixView<Scalar, MatrixFormat::Dense>::solve_residual(
+        *d.ctx, MatrixView<Scalar, MatrixFormat::Dense>(r.a0.data(), n, n, n, n * n, k),
+        MatrixView<Scalar, MatrixFormat::Dense>(r.x.data(), n, sb.cols, sb.ld, sb.stride, k),
+        MatrixView<Scalar, MatrixFormat::Dense>(r.b0.data(), n, sb.cols, sb.ld, sb.stride, k), iota_items<Scalar>(k));
 }
 
 template <class T, Uplo UL, class Tier> void potrs_case(Dev& d, int n) {
@@ -528,18 +528,18 @@ template <class T, Uplo UL, class Tier> void trtri_unit_case(Dev& d, int n) {
     EXPECT_VERIFY(T, Check::solve, n, rel_diff(got, ref, s, strict, iota_items<T>(kBatch))) << where << ": vs the substitution";
 }
 
-template <class T> class DeviceApiCholTest : public DeviceCoreTest<T> {
+template <class Scalar> class DeviceApiCholTest : public DeviceCoreTest<Scalar> {
 protected:
     void SetUp() override {
-        DeviceCoreTest<T>::SetUp();
+        DeviceCoreTest<Scalar>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (this->dev.ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the pinned host blocked routes are GPU kernels";
     }
 };
 TYPED_TEST_SUITE(DeviceApiCholTest, AllTypes);
 
-template <class T> std::vector<int> big_orders() {
-    constexpr int nb = kNb<T>;
+template <class Scalar> std::vector<int> big_orders() {
+    constexpr int nb = kNb<Scalar>;
     return {1, nb - 1, nb, nb + 1, 2 * nb + 1, 8 * nb + 1};
 }
 
@@ -686,10 +686,10 @@ TYPED_TEST(DeviceApiCholTest, ArgumentsAreMinusI) {
     EXPECT_EQ(items_changed(this->dev.down(db, b0.size()), b0, sb, {0, 1}), 0) << "B changed";
 }
 
-template <class Routine, class T> std::string pick(const batchlas::device::DeviceLimits& lim, int n) {
+template <class Routine, class Scalar> std::string pick(const batchlas::device::DeviceLimits& lim, int n) {
     std::string got = "none";
     try {
-        batchlas::device::with_tier<Routine, T>(lim, n, [&]<class Tier>(Tier) { got = "blocked" + std::to_string(Tier::nb); });
+        batchlas::device::with_tier<Routine, Scalar>(lim, n, [&]<class Tier>(Tier) { got = "blocked" + std::to_string(Tier::nb); });
     } catch (const batchlas::invalid_argument& e) {
         got = std::string(e.what()).find(std::string(Routine::name) + ": no device tier admits n=" + std::to_string(n)) != std::string::npos
                   ? "throw"

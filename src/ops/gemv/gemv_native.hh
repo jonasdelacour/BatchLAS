@@ -32,27 +32,27 @@ inline int gemv_wg_ladder(int64_t work_units, int max_wg, int cu,
     return wg;
 }
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API Event gemv_native_direct(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A,
-                         const VectorView<T>& X,
-                         const VectorView<T>& Y,
-                         T alpha,
-                         T beta,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         const VectorView<Scalar>& X,
+                         const VectorView<Scalar>& Y,
+                         Scalar alpha,
+                         Scalar beta,
                          Transpose transA);
 
 // transA MUST NOT be NoTrans; a direct caller that violates it gets a throw.
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API Event gemv_native_cta(Queue& ctx,
-                      const MatrixView<T, MatrixFormat::Dense>& A,
-                      const VectorView<T>& X,
-                      const VectorView<T>& Y,
-                      T alpha,
-                      T beta,
+                      const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                      const VectorView<Scalar>& X,
+                      const VectorView<Scalar>& Y,
+                      Scalar alpha,
+                      Scalar beta,
                       Transpose transA);
 
 // TEST-ONLY, launcher's own gate: 1 = body 3, W >= 2 = body 5 at W; pass A.cols()*batch.
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API int gemv_seg_trans_width_debug(Queue& ctx, int red_len, int64_t out_len_times_batch);
 
 }  // namespace batchlas::ops::gemv

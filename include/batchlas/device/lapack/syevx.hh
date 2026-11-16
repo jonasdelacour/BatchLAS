@@ -16,8 +16,9 @@ namespace batchlas::device::detail {
 // The lowest `capacity` are kept (reversed when reverse) into w and v; v's columns past them
 // are exactly zero. q, v are touched only when want_v. Returns the true count (int: m's type).
 // evidence: docs/design/syevx.md#syevx-range-direct-and-directsubset-may-disagree-on-m-by-one
-template <class Ex, class L, class R, class Blk, class W, class Q, class V>
-BATCHLAS_DEVICE_INLINE int syevx_select(const Ex& ex, const L& lam, bool value_range, R vl, R vu, std::int64_t first,
+template <class Ex, class L, class Real, class Blk, class W, class Q, class V>
+BATCHLAS_DEVICE_INLINE int syevx_select(const Ex& ex, const L& lam, bool value_range, Real vl, Real vu,
+                                        std::int64_t first,
                                          std::int64_t count, std::int64_t capacity, bool reverse, const Blk& block, const W& w,
                                          bool want_v, const Q& q, const V& v) {
     if (value_range) {

@@ -58,33 +58,33 @@ std::string label(const Shape& s) {
 
 using test_support::spread;
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Problem {
     Queue& q;
     Shape s;
-    Matrix<T> A, Bm, C;
+    Matrix<Scalar> A, Bm, C;
     UnifiedVector<std::int64_t> piv;
     UnifiedVector<std::int32_t> info;
-    std::vector<T> lu;                 ///< A's LU factors (getrs, getri inputs), one unmasked getrf
+    std::vector<Scalar> lu;                 ///< A's LU factors (getrs, getri inputs), one unmasked getrf
     std::vector<std::int64_t> lu_piv;  ///< and their pivots, in this backend's format
 
     Problem(Queue& queue, const Shape& shape)
-        : q(queue), s(shape), A(test_support::padded<T>(s.n, s.n, s.batch)),
-          Bm(test_support::padded<T>(s.n, s.nrhs, s.batch)), C(test_support::padded<T>(s.n, s.n, s.batch)),
+        : q(queue), s(shape), A(test_support::padded<Scalar>(s.n, s.n, s.batch)),
+          Bm(test_support::padded<Scalar>(s.n, s.nrhs, s.batch)), C(test_support::padded<Scalar>(s.n, s.n, s.batch)),
           piv(std::size_t(s.n) * s.batch), info(std::size_t(s.batch)) {}
 
     static constexpr bool kInt64Pivots = B == Backend::NETLIB;
 
-    void fill(Matrix<T>& M, int cols, int salt, bool singular) {
-        T* p = M.data_ptr();
+    void fill(Matrix<Scalar>& M, int cols, int salt, bool singular) {
+        Scalar* p = M.data_ptr();
         const std::size_t per = std::size_t(M.stride()), ld = std::size_t(M.ld());
-        std::fill_n(p, per * s.batch, test_support::poison<T>());
+        std::fill_n(p, per * s.batch, test_support::poison<Scalar>());
         for (std::size_t b = 0; b < std::size_t(s.batch); ++b)
             for (std::size_t j = 0; j < std::size_t(cols); ++j)
                 for (std::size_t i = 0; i < std::size_t(s.n); ++i) {
                     const std::size_t item = s.identical ? 0 : b, e = i + j * ld;
                     const bool zero = singular && s.singular && !s.identical && b == 5 && j == 2;
-                    p[b * per + e] = zero ? T(0) : MatrixView<T>::make(spread(item, e, salt), spread(item, e, salt + 1));
+                    p[b * per + e] = zero ? Scalar(0) : MatrixView<Scalar>::make(spread(item, e, salt), spread(item, e, salt + 1));
                 }
     }
     void poison_outputs() {
@@ -95,8 +95,8 @@ struct Problem {
     void factor() {
         fill(A, s.n, 1, true);
         poison_outputs();
-        UnifiedVector<std::byte> ws(std::max<std::size_t>(getrf_buffer_size<B, T>(q, A.view()), 1));
-        getrf<B, T>(q, A.view(), piv.to_span(), ws.to_span(), info.to_span());
+        UnifiedVector<std::byte> ws(std::max<std::size_t>(getrf_buffer_size<B, Scalar>(q, A.view()), 1));
+        getrf<B, Scalar>(q, A.view(), piv.to_span(), ws.to_span(), info.to_span());
         q.wait();
         lu.assign(A.data_ptr(), A.data_ptr() + std::size_t(A.stride()) * s.batch);
         lu_piv.assign(piv.begin(), piv.end());
@@ -132,10 +132,10 @@ struct Problem {
             fill(Bm, s.nrhs, 5, false);
         };
         c.call = [this](Span<const std::uint8_t> m, Span<std::byte> ws) {
-            getrs<B, T>(q, A.view().with_batch_mask(m), Bm.view().with_batch_mask(m), s.trans, piv.to_span(), ws);
+            getrs<B, Scalar>(q, A.view().with_batch_mask(m), Bm.view().with_batch_mask(m), s.trans, piv.to_span(), ws);
         };
         c.buffer_size = [this](Span<const std::uint8_t> m) {
-            return getrs_buffer_size<B, T>(q, A.view().with_batch_mask(m), Bm.view().with_batch_mask(m), s.trans);
+            return getrs_buffer_size<B, Scalar>(q, A.view().with_batch_mask(m), Bm.view().with_batch_mask(m), s.trans);
         };
         c.outputs = [this] {
             return std::vector<mc::Output>{mc::Output::matrix("B", Bm.view()), mc::Output::matrix("A", A.view()),
@@ -151,10 +151,11 @@ struct Problem {
             poison_outputs();
         };
         c.call = [this](Span<const std::uint8_t> m, Span<std::byte> ws) {
-            gesv<B, T>(q, A.view().with_batch_mask(m), Bm.view().with_batch_mask(m), piv.to_span(), ws, info.to_span());
+            gesv<B, Scalar>(q, A.view().with_batch_mask(m), Bm.view().with_batch_mask(m), piv.to_span(), ws,
+                            info.to_span());
         };
         c.buffer_size = [this](Span<const std::uint8_t> m) {
-            return gesv_buffer_size<B, T>(q, A.view().with_batch_mask(m), Bm.view().with_batch_mask(m));
+            return gesv_buffer_size<B, Scalar>(q, A.view().with_batch_mask(m), Bm.view().with_batch_mask(m));
         };
         c.outputs = [this] {
             return std::vector<mc::Output>{mc::Output::matrix("A", A.view()), mc::Output::matrix("B", Bm.view()),
@@ -167,14 +168,15 @@ struct Problem {
         mc::Case c = base_case();
         c.prepare = [this] {
             restore_factors();
-            std::fill_n(C.data_ptr(), std::size_t(C.stride()) * s.batch, test_support::poison<T>());
+            std::fill_n(C.data_ptr(), std::size_t(C.stride()) * s.batch, test_support::poison<Scalar>());
             std::fill(info.begin(), info.end(), std::int32_t(-77));
         };
         c.call = [this](Span<const std::uint8_t> m, Span<std::byte> ws) {
-            getri<B, T>(q, A.view().with_batch_mask(m), C.view().with_batch_mask(m), piv.to_span(), ws, info.to_span());
+            getri<B, Scalar>(q, A.view().with_batch_mask(m), C.view().with_batch_mask(m), piv.to_span(), ws,
+                             info.to_span());
         };
         c.buffer_size = [this](Span<const std::uint8_t> m) {
-            return getri_buffer_size<B, T>(q, A.view().with_batch_mask(m));
+            return getri_buffer_size<B, Scalar>(q, A.view().with_batch_mask(m));
         };
         c.outputs = [this] {
             return std::vector<mc::Output>{mc::Output::matrix("C", C.view()), mc::Output::matrix("A", A.view()),
@@ -186,12 +188,12 @@ struct Problem {
         mc::Case c = base_case();
         c.prepare = [this] {
             fill(A, s.n, 1, false);
-            std::fill_n(C.data_ptr(), std::size_t(C.stride()) * s.batch, test_support::poison<T>());
+            std::fill_n(C.data_ptr(), std::size_t(C.stride()) * s.batch, test_support::poison<Scalar>());
         };
         c.call = [this](Span<const std::uint8_t> m, Span<std::byte> ws) {
-            inv<B, T>(q, A.view().with_batch_mask(m), C.view().with_batch_mask(m), ws);
+            inv<B, Scalar>(q, A.view().with_batch_mask(m), C.view().with_batch_mask(m), ws);
         };
-        c.buffer_size = [this](Span<const std::uint8_t> m) { return inv_buffer_size<B, T>(q, A.view().with_batch_mask(m)); };
+        c.buffer_size = [this](Span<const std::uint8_t> m) { return inv_buffer_size<B, Scalar>(q, A.view().with_batch_mask(m)); };
         c.outputs = [this] {
             return std::vector<mc::Output>{mc::Output::matrix("Ainv", C.view()), mc::Output::matrix("A", A.view())};
         };

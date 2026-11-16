@@ -15,14 +15,14 @@ namespace batchlas::ops::trsm {
 
 // Zero means "no native TRSM kernel in this build": trsm's can_run (src/ops/trsm/trsm.cc)
 // then refuses cta and blocked.
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API int trsm_cta_max_n();
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API Event trsm_native_v1_dispatch(Queue& ctx,
-                                                    const MatrixView<T, MatrixFormat::Dense>& A,
-                                                    const MatrixView<T, MatrixFormat::Dense>& B,
-                                                    T alpha,
+                                                    const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                                    const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                                                    Scalar alpha,
                                                     Side side,
                                                     Uplo uplo,
                                                     Transpose transA,
@@ -47,11 +47,11 @@ constexpr int trsm_v1_ladder_wg(int max_wg, int cu, int q, int bs) {
 // kTrsmSgLeftWgSize (static_assert in trsm_sg_left.cc). trsm's `sg_left` choice.
 inline constexpr int kTrsmSgLeftMaxN = 32;
 inline constexpr int kTrsmSgLeftWgSize = 128;
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API Event trsm_native_sg_left_dispatch(Queue& ctx,
-                                                         const MatrixView<T, MatrixFormat::Dense>& A,
-                                                         const MatrixView<T, MatrixFormat::Dense>& B,
-                                                         T alpha,
+                                                         const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                                         const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                                                         Scalar alpha,
                                                          Uplo uplo,
                                                          Transpose transA,
                                                          Diag diag);
@@ -60,23 +60,23 @@ BATCHLAS_INTERNAL_API Event trsm_native_sg_left_dispatch(Queue& ctx,
 // which keeps this layer dispatch-free and lets gemm pick its kernel; the native
 // kernel collapses on the strided sub-views a panel passes.
 // evidence: docs/perf/trsm.md#the-final-grid-after-the-routed-trailing-gemm
-template <typename T>
+template <typename Scalar>
 using TrsmTrailingGemm = std::function<Event(
     Queue&,
-    const MatrixView<T, MatrixFormat::Dense>&,
-    const MatrixView<T, MatrixFormat::Dense>&,
-    const MatrixView<T, MatrixFormat::Dense>&,
-    T, T, Transpose, Transpose, ComputePrecision)>;
+    const MatrixView<Scalar, MatrixFormat::Dense>&,
+    const MatrixView<Scalar, MatrixFormat::Dense>&,
+    const MatrixView<Scalar, MatrixFormat::Dense>&,
+    Scalar, Scalar, Transpose, Transpose, ComputePrecision)>;
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API Event trsm_native_blocked(Queue& ctx,
-                                                const MatrixView<T, MatrixFormat::Dense>& A,
-                                                const MatrixView<T, MatrixFormat::Dense>& B,
-                                                T alpha,
+                                                const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                                const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                                                Scalar alpha,
                                                 Side side,
                                                 Uplo uplo,
                                                 Transpose transA,
                                                 Diag diag,
-                                                TrsmTrailingGemm<T> trailing_gemm);
+                                                TrsmTrailingGemm<Scalar> trailing_gemm);
 
 }  // namespace batchlas::ops::trsm

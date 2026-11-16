@@ -37,15 +37,15 @@ inline constexpr int trmm_lanes(int tile) {
     return tile >= 32 ? 8 : 4;
 }
 
-template <typename T, int TileM>
+template <typename Scalar, int TileM>
 class TrmmTriangularTilesKernel;
 
-template <typename T, int TileM>
+template <typename Scalar, int TileM>
 Event launch_trmm_triangular_tiles(Queue& ctx,
-                                   const MatrixView<T, MatrixFormat::Dense>& A,
-                                   const MatrixView<T, MatrixFormat::Dense>& B,
-                                   const MatrixView<T, MatrixFormat::Dense>& C,
-                                   T alpha,
+                                   const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                   const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                                   const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                                   Scalar alpha,
                                    Uplo uplo,
                                    Transpose transA,
                                    Diag diag) {
@@ -57,7 +57,7 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
     // Complex at TileM >= 64 halves the column lanes (4x16 thread tile) to get off the shared-load
     // limit; not below 64, where the block is already small and bandwidth bound.
     // evidence: docs/perf/level3.md#trmm-triangular-tiles-kernel-design
-    constexpr int LocalCols = (is_std_complex_v<T> && TileM >= 64)
+    constexpr int LocalCols = (is_std_complex_v<Scalar> && TileM >= 64)
                                   ? trmm_lanes(TileN) / 2
                                   : trmm_lanes(TileN);
     constexpr int ThreadRows = TileM / LocalRows;
@@ -99,12 +99,12 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
 
     impl::check_group_count(*ctx, sycl::nd_range<3>(global, local));
     ctx->submit([&](sycl::handler& h) {
-        sycl::local_accessor<T, 1> tile_a(sycl::range<1>(TileK * SA), h);
-        sycl::local_accessor<T, 1> tile_b(sycl::range<1>(TileK * SB), h);
+        sycl::local_accessor<Scalar, 1> tile_a(sycl::range<1>(TileK * SA), h);
+        sycl::local_accessor<Scalar, 1> tile_b(sycl::range<1>(TileK * SB), h);
 
-        const T* a_ptr = A.data_ptr();
-        const T* b_ptr = B.data_ptr();
-        T* c_ptr = C.data_ptr();
+        const Scalar* a_ptr = A.data_ptr();
+        const Scalar* b_ptr = B.data_ptr();
+        Scalar* c_ptr = C.data_ptr();
         const int lda = A.ld();
         const int ldb = B.ld();
         const int ldc = C.ld();
@@ -114,7 +114,7 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
         // The batch mask (null unmasked); one item per work-group, so its return is uniform (I1).
         const std::uint8_t* mask = batchlas::detail::mask_ptr(batchlas::detail::call_mask("trmm", A, B, C));
 
-        batchlas::impl::parallel_for<TrmmTriangularTilesKernel<T, TileM>>(h,
+        batchlas::impl::parallel_for<TrmmTriangularTilesKernel<Scalar, TileM>>(h,
             sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
                 const int bid = static_cast<int>(item.get_group(0));
                 if (bid >= batch || (mask != nullptr && mask[bid] == 0)) {
@@ -130,11 +130,11 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
                 const int tr = tid % LocalRows;
                 const int tc = tid / LocalRows;
 
-                const T* Ab = a_ptr + static_cast<std::ptrdiff_t>(bid) * stride_a;
-                const T* Bb = b_ptr + static_cast<std::ptrdiff_t>(bid) * stride_b;
-                T* Cb = c_ptr + static_cast<std::ptrdiff_t>(bid) * stride_c;
-                T* sa = tile_a.template get_multi_ptr<sycl::access::decorated::no>().get();
-                T* sb = tile_b.template get_multi_ptr<sycl::access::decorated::no>().get();
+                const Scalar* Ab = a_ptr + static_cast<std::ptrdiff_t>(bid) * stride_a;
+                const Scalar* Bb = b_ptr + static_cast<std::ptrdiff_t>(bid) * stride_b;
+                Scalar* Cb = c_ptr + static_cast<std::ptrdiff_t>(bid) * stride_c;
+                Scalar* sa = tile_a.template get_multi_ptr<sycl::access::decorated::no>().get();
+                Scalar* sb = tile_b.template get_multi_ptr<sycl::access::decorated::no>().get();
 
                 auto swizzle_a = [](int packet, int pp) {
                     return packet ^ ((pp >> 2) & (PacksA - 1));
@@ -143,12 +143,12 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
                     return packet ^ ((pp >> 2) & (PacksB - 1));
                 };
 
-                T accum[ThreadRows][ThreadCols];
+                Scalar accum[ThreadRows][ThreadCols];
 BATCHLAS_UNROLL_FULL
                 for (int i = 0; i < ThreadRows; ++i) {
 BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < ThreadCols; ++j) {
-                        accum[i][j] = T(0);
+                        accum[i][j] = Scalar(0);
                     }
                 }
 
@@ -169,17 +169,17 @@ BATCHLAS_UNROLL_FULL
 BATCHLAS_UNROLL_FULL
                             for (int e = 0; e < 4; ++e) {
                                 const int p = p0 + pp0 + e;
-                                T value = T(0);
+                                Scalar value = Scalar(0);
                                 if (i < m && p < m) {
                                     // ConjTrans: conjugate on the way in; a unit diagonal is a literal 1.
                                     if (i == p) {
                                         value = unit
-                                            ? T(1)
+                                            ? Scalar(1)
                                             : conjugated
                                                 ? batchlas::device::conj(Ab[i + static_cast<std::ptrdiff_t>(i) * lda])
                                                 : Ab[i + static_cast<std::ptrdiff_t>(i) * lda];
                                     } else if (lower_eff ? (p < i) : (p > i)) {
-                                        const T raw = Ab[p + static_cast<std::ptrdiff_t>(i) * lda];
+                                        const Scalar raw = Ab[p + static_cast<std::ptrdiff_t>(i) * lda];
                                         value = conjugated ? batchlas::device::conj(raw) : raw;
                                     }
                                 }
@@ -193,15 +193,15 @@ BATCHLAS_UNROLL_FULL
                         const int p = p0 + pp;
                         const int phys = swizzle_a(ii0 >> 2, pp) << 2;
                         // One 128-bit store of four adjacent rows: single stores would hit 8 banks.
-                        TileVec4<T> packet;
+                        TileVec4<Scalar> packet;
 BATCHLAS_UNROLL_FULL
                         for (int e = 0; e < 4; ++e) {
                             const int i = m0 + ii0 + e;
-                            T value = T(0);
+                            Scalar value = Scalar(0);
                             if (i < m && p < m) {
                                 if (i == p) {
                                     value = unit
-                                        ? T(1)
+                                        ? Scalar(1)
                                         : Ab[i + static_cast<std::ptrdiff_t>(i) * lda];
                                 } else if (lower_eff ? (p < i) : (p > i)) {
                                     value = Ab[i + static_cast<std::ptrdiff_t>(p) * lda];
@@ -227,20 +227,20 @@ BATCHLAS_UNROLL_FULL
                             sb[(pp0 + e) * SB + phys] =
                                 (j < n && p < m)
                                 ? Bb[p + static_cast<std::ptrdiff_t>(j) * ldb]
-                                : T(0);
+                                : Scalar(0);
                         }
                     }
                     item.barrier(sycl::access::fence_space::local_space);
 
 #pragma unroll 4
                     for (int p = 0; p < TileK; ++p) {
-                        const T* rowa = &sa[p * SA];
-                        const T* rowb = &sb[p * SB];
-                        T af[ThreadRows];
-                        T bf[ThreadCols];
+                        const Scalar* rowa = &sa[p * SA];
+                        const Scalar* rowb = &sb[p * SB];
+                        Scalar af[ThreadRows];
+                        Scalar bf[ThreadCols];
 BATCHLAS_UNROLL_FULL
                         for (int b = 0; b < BandsR; ++b) {
-                            const TileVec4<T> v =
+                            const TileVec4<Scalar> v =
                                 tile_load4(rowa + (swizzle_a(b * (BandSpanR / 4) + tr, p) << 2));
 BATCHLAS_UNROLL_FULL
                             for (int e = 0; e < 4; ++e) {
@@ -249,7 +249,7 @@ BATCHLAS_UNROLL_FULL
                         }
 BATCHLAS_UNROLL_FULL
                         for (int b = 0; b < BandsC; ++b) {
-                            const TileVec4<T> v =
+                            const TileVec4<Scalar> v =
                                 tile_load4(rowb + (swizzle_b(b * (BandSpanC / 4) + tc, p) << 2));
 BATCHLAS_UNROLL_FULL
                             for (int e = 0; e < 4; ++e) {
@@ -293,10 +293,10 @@ BATCHLAS_UNROLL_FULL
 // of the queue. Left side only: the right-side product \f$C = \alpha B\,\mathrm{op}(A)\f$
 // puts the triangle on the column index, which is a different k-loop bound and
 // a different staging assignment, not a transpose of this one.
-template <typename T>
-bool trmm_tiles_supported(const MatrixView<T, MatrixFormat::Dense>& A,
-                          const MatrixView<T, MatrixFormat::Dense>& B,
-                          const MatrixView<T, MatrixFormat::Dense>& C,
+template <typename Scalar>
+bool trmm_tiles_supported(const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                          const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                          const MatrixView<Scalar, MatrixFormat::Dense>& C,
                           Side side) {
     if (side != Side::Left) {
         return false;
@@ -319,10 +319,10 @@ bool trmm_tiles_supported(const MatrixView<T, MatrixFormat::Dense>& A,
 // The row tile: a smaller tile does less arithmetic but re-reads B. The scalar type decides which
 // wins (float: bandwidth bound, widest tile; double and complex: compute bound, narrowest), so the
 // thresholds are per type. evidence: docs/perf/level3.md#trmm-choosing-the-row-tile-by-scalar-type
-template <typename T>
+template <typename Scalar>
 inline int trmm_row_tile(int m) {
-    constexpr bool complex_t = is_std_complex_v<T>;
-    constexpr bool wide = sizeof(typename base_type<T>::type) > 4 || complex_t;
+    constexpr bool complex_t = is_std_complex_v<Scalar>;
+    constexpr bool wide = sizeof(typename base_type<Scalar>::type) > 4 || complex_t;
     if constexpr (wide) {
         // Complex stops at 32: its 64-row cell was a wash and the wider tile keeps the block larger.
         if (m <= (complex_t ? 32 : 64)) {
@@ -339,41 +339,41 @@ inline int trmm_row_tile(int m) {
 }
 // The row tile the launch below instantiates: BATCHLAS_TRMM_TILE_M (0 = unset, not latched) or
 // trmm_row_tile, rounded up to 16/32/64/128. can_run's grid term reads the same function.
-template <typename T>
+template <typename Scalar>
 inline int trmm_launch_tile_m(int m) {
     const int forced = batchlas::settings().geometry.trmm_tile_m;
-    const int tile_m = forced ? forced : trmm_row_tile<T>(m);
+    const int tile_m = forced ? forced : trmm_row_tile<Scalar>(m);
     return tile_m <= 16 ? 16 : (tile_m <= 32 ? 32 : (tile_m <= 64 ? 64 : 128));
 }
 
 // Work-groups in SYCL dim 1 (CUDA grid y, capped at 65535): one per (row tile, column tile).
-template <typename T>
+template <typename Scalar>
 inline std::int64_t trmm_tile_groups(std::int64_t m, std::int64_t n) {
-    const std::int64_t tile_m = trmm_launch_tile_m<T>(static_cast<int>(m));
+    const std::int64_t tile_m = trmm_launch_tile_m<Scalar>(static_cast<int>(m));
     return ((m + tile_m - 1) / tile_m) * ((n + kTrmmTileN - 1) / kTrmmTileN);
 }
 
-template <typename T>
+template <typename Scalar>
 Event trmm_triangular_tiles(Queue& ctx,
-                            const MatrixView<T, MatrixFormat::Dense>& A,
-                            const MatrixView<T, MatrixFormat::Dense>& B,
-                            const MatrixView<T, MatrixFormat::Dense>& C,
-                            T alpha,
+                            const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                            const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                            const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                            Scalar alpha,
                             Uplo uplo,
                             Transpose transA,
                             Diag diag) {
     // BATCHLAS_TRMM_TILE_M pins the row tile so the trade-off above can be swept from one binary.
-    const int tile_m = trmm_launch_tile_m<T>(static_cast<int>(C.rows()));
+    const int tile_m = trmm_launch_tile_m<Scalar>(static_cast<int>(C.rows()));
     if (tile_m <= 16) {
-        return launch_trmm_triangular_tiles<T, 16>(ctx, A, B, C, alpha, uplo, transA, diag);
+        return launch_trmm_triangular_tiles<Scalar, 16>(ctx, A, B, C, alpha, uplo, transA, diag);
     }
     if (tile_m <= 32) {
-        return launch_trmm_triangular_tiles<T, 32>(ctx, A, B, C, alpha, uplo, transA, diag);
+        return launch_trmm_triangular_tiles<Scalar, 32>(ctx, A, B, C, alpha, uplo, transA, diag);
     }
     if (tile_m <= 64) {
-        return launch_trmm_triangular_tiles<T, 64>(ctx, A, B, C, alpha, uplo, transA, diag);
+        return launch_trmm_triangular_tiles<Scalar, 64>(ctx, A, B, C, alpha, uplo, transA, diag);
     }
-    return launch_trmm_triangular_tiles<T, 128>(ctx, A, B, C, alpha, uplo, transA, diag);
+    return launch_trmm_triangular_tiles<Scalar, 128>(ctx, A, B, C, alpha, uplo, transA, diag);
 }
 
 }  // namespace batchlas::backend::detail

@@ -41,10 +41,10 @@ inline ExpandGroupShape expand_group_shape(int n) {
 
 // Dense op of a triangular A: zeros opposite, ones on a unit diagonal. That
 // storage is never read, so it may hold anything.
-template <typename T>
+template <typename Scalar>
 Event expand_triangular(Queue& ctx,
-                        const MatrixView<T, MatrixFormat::Dense>& out,
-                        const MatrixView<T, MatrixFormat::Dense>& A,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& out,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& A,
                         Uplo uplo,
                         Diag diag) {
     const int n = A.rows();
@@ -52,8 +52,8 @@ Event expand_triangular(Queue& ctx,
     const bool lower = uplo == Uplo::Lower;
     const bool unit = diag == Diag::Unit;
 
-    const T* src = A.data_ptr();
-    T* dst = out.data_ptr();
+    const Scalar* src = A.data_ptr();
+    Scalar* dst = out.data_ptr();
     const int lda = A.ld();
     const int ldo = out.ld();
     const std::size_t stride_a = static_cast<std::size_t>(A.stride());
@@ -86,18 +86,18 @@ constexpr int kMirrorGroupCols = 8;
 // Full symmetric (Conjugate = false) or Hermitian (true) matrix from A's
 // referenced triangle. One tile pair per work-group through local memory, so the
 // read and both writes coalesce. evidence: docs/perf/level3.md#level-3-scratch-expansions-and-their-ceilings
-template <typename T, bool Conjugate>
+template <typename Scalar, bool Conjugate>
 Event expand_mirrored(Queue& ctx,
-                      const MatrixView<T, MatrixFormat::Dense>& out,
-                      const MatrixView<T, MatrixFormat::Dense>& A,
+                      const MatrixView<Scalar, MatrixFormat::Dense>& out,
+                      const MatrixView<Scalar, MatrixFormat::Dense>& A,
                       Uplo uplo) {
     const int n = A.rows();
     const int batch = A.batch_size();
     const int tiles = ::batchlas::detail::ceil_div(n, kMirrorTile);
     const bool lower = uplo == Uplo::Lower;
 
-    const T* src = A.data_ptr();
-    T* dst = out.data_ptr();
+    const Scalar* src = A.data_ptr();
+    Scalar* dst = out.data_ptr();
     const int lda = A.ld();
     const int ldo = out.ld();
     const std::size_t stride_a = static_cast<std::size_t>(A.stride());
@@ -113,7 +113,7 @@ Event expand_mirrored(Queue& ctx,
     impl::check_group_count(*ctx, sycl::nd_range<3>(global, local));
     ctx->submit([&](sycl::handler& cgh) {
         // Padded by one column so the transposed read strides across all banks.
-        auto tile = sycl::local_accessor<T, 1>(
+        auto tile = sycl::local_accessor<Scalar, 1>(
             sycl::range<1>(kMirrorTile * (kMirrorTile + 1)), cgh);
 
         batchlas::impl::parallel_for(cgh, sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {

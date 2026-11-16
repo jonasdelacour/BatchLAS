@@ -30,11 +30,11 @@ using Pack = device::detail::Pack16<D>;  // F is read as aligned 16-byte packs (
 template <typename D>
 constexpr int kVec = device::detail::pack16_elems<D>;
 
-template <bool Inverse, int KB, typename T, typename D>
+template <bool Inverse, int KB, typename Scalar, typename D>
 void launch_diag(Queue& ctx, D* ap, int lda, std::ptrdiff_t stride_a, const D* bp, int ldb, std::ptrdiff_t stride_b,
                  int kb_rt, int batch, bool lower, D* hp, int ldh, std::ptrdiff_t stride_h, const std::uint8_t* mask) {
     const int kb = KB ? KB : kb_rt;
-    const int ipw = diag_items_per_group<T>(kb), ldf = diag_ldf<T>(kb), lds = kb + 1;
+    const int ipw = diag_items_per_group<Scalar>(kb), ldf = diag_ldf<Scalar>(kb), lds = kb + 1;
     const int fper = kb * ldf, sper = kb * lds, groups = (batch + ipw - 1) / ipw;
     const int wg = (ipw * kb + 31) / 32 * 32;
     const std::size_t packs = (static_cast<std::size_t>(ipw) * (fper + sper) + kVec<D> - 1) / kVec<D>;
@@ -59,12 +59,13 @@ void launch_diag(Queue& ctx, D* ap, int lda, std::ptrdiff_t stride_a, const D* b
 
 }  // namespace
 
-template <typename T>
-Event sygst_diag(Queue& ctx, T* a, int lda, std::ptrdiff_t stride_a, const T* b, int ldb, std::ptrdiff_t stride_b,
-                 int kb, int batch, int itype, Uplo uplo, T* full, int ldf, std::ptrdiff_t stride_f,
+template <typename Scalar>
+Event sygst_diag(Queue& ctx, Scalar* a, int lda, std::ptrdiff_t stride_a, const Scalar* b, int ldb,
+                 std::ptrdiff_t stride_b,
+                 int kb, int batch, int itype, Uplo uplo, Scalar* full, int ldf, std::ptrdiff_t stride_f,
                  const std::uint8_t* mask) {
-    using D = typename sycl_device::DevMap<T>::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    using D = typename sycl_device::DevMap<Scalar>::type;
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
     if (kb < 1 || kb > kDiagMaxOrder || batch < 1) return ctx.get_event();
     D* const ap = reinterpret_cast<D*>(a);
     D* const hp = reinterpret_cast<D*>(full);
@@ -73,7 +74,8 @@ Event sygst_diag(Queue& ctx, T* a, int lda, std::ptrdiff_t stride_a, const T* b,
     // Compile-time orders for the blocks nb 16, 32, 64 produce and n = 8; any other order runs generic.
     auto run = [&]<bool Inv>() {
         auto go = [&]<int K>() {
-            launch_diag<Inv, K, T>(ctx, ap, lda, stride_a, bp, ldb, stride_b, kb, batch, lo, hp, ldf, stride_f, mask);
+            launch_diag<Inv, K, Scalar>(ctx, ap, lda, stride_a, bp, ldb, stride_b, kb, batch, lo, hp, ldf, stride_f,
+                                        mask);
         };
         if (kb == 32) go.template operator()<32>();
         else if (kb == 16) go.template operator()<16>();
@@ -85,10 +87,11 @@ Event sygst_diag(Queue& ctx, T* a, int lda, std::ptrdiff_t stride_a, const T* b,
     return ctx.get_event();
 }
 
-template <typename T>
-Event sygst_mirror(Queue& ctx, const T* a, int lda, std::ptrdiff_t stride_a, int kb, int batch, Uplo uplo, T* full,
+template <typename Scalar>
+Event sygst_mirror(Queue& ctx, const Scalar* a, int lda, std::ptrdiff_t stride_a, int kb, int batch, Uplo uplo,
+                   Scalar* full,
                    int ldf, std::ptrdiff_t stride_f, const std::uint8_t* mask) {
-    using D = typename sycl_device::DevMap<T>::type;
+    using D = typename sycl_device::DevMap<Scalar>::type;
     const D* const ap = reinterpret_cast<const D*>(a);
     D* const hp = reinterpret_cast<D*>(full);
     const std::size_t per = static_cast<std::size_t>(kb) * static_cast<std::size_t>(kb);

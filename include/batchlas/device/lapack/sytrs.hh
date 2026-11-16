@@ -24,26 +24,28 @@ namespace detail {
 
 // ?SYTRS's 2 x 2 solve: x0 / x1 and d0 / d1 the first / second row's value and diagonal, off the
 // block's off-diagonal. ldl_block2 divides once per block; ldl_block2_row gives one row.
-template <class T> struct LdlBlock2 {
-    T akm1, ak, denom, b0, b1;
+template <class Scalar> struct LdlBlock2 {
+    Scalar akm1, ak, denom, b0, b1;
 };
-template <class T> BATCHLAS_DEVICE_INLINE LdlBlock2<T> ldl_block2(T x0, T x1, T d0, T d1, T off) {
-    using A = arith_t<arith::Fma, T>;
-    const T akm1 = A::div(d0, off);
-    const T ak = A::div(d1, off);
-    const T denom = A::sub(A::mul(akm1, ak), A::one());
+template <class Scalar> BATCHLAS_DEVICE_INLINE LdlBlock2<Scalar> ldl_block2(Scalar x0, Scalar x1, Scalar d0, Scalar d1,
+                                                                            Scalar off) {
+    using A = arith_t<arith::Fma, Scalar>;
+    const Scalar akm1 = A::div(d0, off);
+    const Scalar ak = A::div(d1, off);
+    const Scalar denom = A::sub(A::mul(akm1, ak), A::one());
     return {akm1, ak, denom, A::div(x0, off), A::div(x1, off)};
 }
-template <class T> BATCHLAS_DEVICE_INLINE T ldl_block2_row(const LdlBlock2<T>& b, bool second) {
-    using A = arith_t<arith::Fma, T>;
+template <class Scalar> BATCHLAS_DEVICE_INLINE Scalar ldl_block2_row(const LdlBlock2<Scalar>& b, bool second) {
+    using A = arith_t<arith::Fma, Scalar>;
     return second ? A::div(A::sub(A::mul(b.akm1, b.b1), b.b0), b.denom) : A::div(A::sub(A::mul(b.ak, b.b0), b.b1), b.denom);
 }
 
 // Row t of D^-1 x for a block of kind kd (0: 1 x 1; 1 / 2: the first / second row of a 2 x 2):
 // x is row t's value, xp its partner's, dtt and dpp their diagonals, off the block's
 // off-diagonal. Bitwise sytrs_col's rows.
-template <class T> BATCHLAS_DEVICE_HELPER T ldl_dsolve_row(int kd, T x, T xp, T dtt, T dpp, T off) {
-    using A = arith_t<arith::Fma, T>;
+template <class Scalar> BATCHLAS_DEVICE_HELPER Scalar ldl_dsolve_row(int kd, Scalar x, Scalar xp, Scalar dtt,
+                                                                     Scalar dpp, Scalar off) {
+    using A = arith_t<arith::Fma, Scalar>;
     if (kd == 0) return A::mul(x, A::recip(dtt));
     const bool first = kd == 1;
     return ldl_block2_row(ldl_block2(first ? x : xp, first ? xp : x, first ? dtt : dpp, first ? dpp : dtt, off), !first);
@@ -105,10 +107,10 @@ inline void build_perm(const int* ps, int n, int* perm, int* kind) {
 // x := D^-1 x for D block diagonal with 1 x 1 / 2 x 2 blocks: kind[t] as ldl_dsolve_row's, the
 // diagonal on d(t, t), e[k] the off-diagonal of the block starting at k. The partner rows come
 // from neighbor_exchange.
-template <class Ex, class MD, class T, int R>
-BATCHLAS_DEVICE_INLINE void ldl_dsolve_frag(const Ex& ex, const MD& d, const int* kind, const T* e, int n, Frag<T, R, Cyclic>& x) {
+template <class Ex, class MD, class Scalar, int R>
+BATCHLAS_DEVICE_INLINE void ldl_dsolve_frag(const Ex& ex, const MD& d, const int* kind, const Scalar* e, int n, Frag<Scalar, R, Cyclic>& x) {
     static_assert(Ex::size == 32, "sytrs ldl_dsolve_frag: a 32-lane executor");
-    Frag<T, R, Cyclic> up, dn;
+    Frag<Scalar, R, Cyclic> up, dn;
     neighbor_exchange(ex, x, up, dn);
     const int lane = ex.lane();
     BATCHLAS_UNROLL_FULL
@@ -118,7 +120,7 @@ BATCHLAS_DEVICE_INLINE void ldl_dsolve_frag(const Ex& ex, const MD& d, const int
         const int kd = kind[t];
         const int p = kd == 1 ? t + 1 : kd == 2 ? t - 1 : t;
         // One load at a selected index: a select of two local pointers fails Metal compilation.
-        const T off = kd == 0 ? arith_t<arith::Fma, T>::one() : e[kd == 1 ? t : t - 1];
+        const Scalar off = kd == 0 ? arith_t<arith::Fma, Scalar>::one() : e[kd == 1 ? t : t - 1];
         x[r] = ldl_dsolve_row(kd, x[r], select(kd == 1, up[r], dn[r]), d(t, t), d(p, p), off);
     }
 }
@@ -127,7 +129,8 @@ BATCHLAS_DEVICE_INLINE void ldl_dsolve_frag(const Ex& ex, const MD& d, const int
 // in step order (a 2 x 2 step at k swaps row k + 1), and the 2 x 2 off-diagonal of a block
 // starting at j moved to e[j]. ps is the logical ipiv (+(p + 1) / -(p + 1)). e is never null:
 // a null test on a local e breaks AdaptiveCpp's Metal address-space inference.
-template <class T, class ML> BATCHLAS_DEVICE_HELPER void syconv_col(const ML& l, const int* ps, int n, int j, T* e) {
+template <class Scalar, class ML> BATCHLAS_DEVICE_HELPER void syconv_col(const ML& l, const int* ps, int n, int j,
+                                                                         Scalar* e) {
     for (int k = 0; k < n;) {
         const int v = ps[k];
         if (v > 0) {
@@ -136,7 +139,7 @@ template <class T, class ML> BATCHLAS_DEVICE_HELPER void syconv_col(const ML& l,
         } else {
             if (k == j) {
                 e[j] = l(j + 1, j);
-                l(j + 1, j) = arith_t<arith::Fma, T>::zero();
+                l(j + 1, j) = arith_t<arith::Fma, Scalar>::zero();
             }
             if (k > j) std::swap(l(k + 1, j), l(-v - 1, j));
             k += 2;
@@ -353,42 +356,42 @@ template <Uplo UL> struct sytrs {
 
 namespace detail {
 
-template <class T> struct SytrsCtaPlan {
-    WsSlot<T> tile;   // the n x n factor at ld n | 1, then e (n)
+template <class Scalar> struct SytrsCtaPlan {
+    WsSlot<Scalar> tile;   // the n x n factor at ld n | 1, then e (n)
     WsSlot<int> idx;  // ps, perm, kind (n each), the validity flag
     WorkspaceSize size;
 };
-template <class T> constexpr SytrsCtaPlan<T> sytrs_cta_plan(int n) {
+template <class Scalar> constexpr SytrsCtaPlan<Scalar> sytrs_cta_plan(int n) {
     Plan p;
     const auto un = static_cast<std::size_t>(n);
-    const auto tile = p.take<T>(WsSpace::Local, un * static_cast<std::size_t>(n | 1) + un);
+    const auto tile = p.take<Scalar>(WsSpace::Local, un * static_cast<std::size_t>(n | 1) + un);
     const auto idx = p.take<int>(WsSpace::Local, 3 * un + 1);
     return {tile, idx, p.size()};
 }
-template <class R> struct SytrsWgPlan {
-    WsSlot<R> red;  // SumScratch: re then im, one slot per sub-group
+template <class Real> struct SytrsWgPlan {
+    WsSlot<Real> red;  // SumScratch: re then im, one slot per sub-group
     WorkspaceSize size;
 };
-template <class R> constexpr SytrsWgPlan<R> sytrs_wg_plan() {
+template <class Real> constexpr SytrsWgPlan<Real> sytrs_wg_plan() {
     Plan p;
-    const auto red = p.take<R>(WsSpace::Local, 2 * (detail::sytrf_wg_max / 32));
+    const auto red = p.take<Real>(WsSpace::Local, 2 * (detail::sytrf_wg_max / 32));
     return {red, p.size()};
 }
-template <class T> struct SytrsBlockedPlan {
+template <class Scalar> struct SytrsBlockedPlan {
     WsSlot<int> flag;  // local: the pivot list's validity
-    WsSlot<T> smem;    // local: the in-group trsm's tiles
-    WsSlot<T> l;       // global: the converted factor, n x n at ld n (the strict triangle)
-    WsSlot<T> y;       // global: P^T B, n x nrhs at ld n
+    WsSlot<Scalar> smem;    // local: the in-group trsm's tiles
+    WsSlot<Scalar> l;       // global: the converted factor, n x n at ld n (the strict triangle)
+    WsSlot<Scalar> y;       // global: P^T B, n x nrhs at ld n
     WsSlot<int> idx;   // global: ps, perm, kind, sig, inv (n each)
     WorkspaceSize size;
 };
-template <class T> constexpr SytrsBlockedPlan<T> sytrs_blocked_plan(int n, int nrhs) {
+template <class Scalar> constexpr SytrsBlockedPlan<Scalar> sytrs_blocked_plan(int n, int nrhs) {
     Plan p;
     const auto un = static_cast<std::size_t>(n);
     const auto flag = p.take<int>(WsSpace::Local, 1);
-    const auto sm = p.take<T>(WsSpace::Local, l3::smem_elems<detail::sytrf_l3_cfg<T>>());
-    const auto l = p.take<T>(WsSpace::Global, un * un);
-    const auto y = p.take<T>(WsSpace::Global, un * static_cast<std::size_t>(nrhs));
+    const auto sm = p.take<Scalar>(WsSpace::Local, l3::smem_elems<detail::sytrf_l3_cfg<Scalar>>());
+    const auto l = p.take<Scalar>(WsSpace::Global, un * un);
+    const auto y = p.take<Scalar>(WsSpace::Global, un * static_cast<std::size_t>(nrhs));
     const auto idx = p.take<int>(WsSpace::Global, 5 * un);
     return {flag, sm, l, y, idx, p.size()};
 }
@@ -520,31 +523,31 @@ BATCHLAS_DEVICE_INLINE void sytrs_run(tier::Blocked<NB>, const Ex& ex, const MA&
 
 }  // namespace detail
 
-template <Uplo UL, class T> struct tiers<routine::sytrs<UL>, T> {
+template <Uplo UL, class Scalar> struct tiers<routine::sytrs<UL>, Scalar> {
     using type = tier::list<tier::Cta<32>, tier::Cta<64>, tier::Cta<128>, tier::Blocked<1>>;
 };
-template <Uplo UL, int N, class T> struct tier_info<routine::sytrs<UL>, tier::Cta<N>, T> {
+template <Uplo UL, int N, class Scalar> struct tier_info<routine::sytrs<UL>, tier::Cta<N>, Scalar> {
     static_assert(N <= 128, "sytrs tier::Cta<N>: N <= 128 (at most four registers per lane)");
     static constexpr int wg_size = 32, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0 && n <= N; }
-    static constexpr WorkspaceSize buffer_size(int n, int = 1) { return detail::sytrs_cta_plan<T>(n).size; }
+    static constexpr WorkspaceSize buffer_size(int n, int = 1) { return detail::sytrs_cta_plan<Scalar>(n).size; }
 };
-template <Uplo UL, class T> struct tier_info<routine::sytrs<UL>, tier::Blocked<1>, T> {
+template <Uplo UL, class Scalar> struct tier_info<routine::sytrs<UL>, tier::Blocked<1>, Scalar> {
     static constexpr int wg_size = detail::sytrf_wg_max, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
-    static constexpr WorkspaceSize buffer_size(int, int = 1) { return detail::sytrs_wg_plan<real_t<T>>().size; }
+    static constexpr WorkspaceSize buffer_size(int, int = 1) { return detail::sytrs_wg_plan<real_t<Scalar>>().size; }
 };
 // Its local part does not depend on nrhs, so with_tier's buffer_size(n) filter is exact.
-template <Uplo UL, int NB, class T> struct tier_info<routine::sytrs<UL>, tier::Blocked<NB>, T> {
+template <Uplo UL, int NB, class Scalar> struct tier_info<routine::sytrs<UL>, tier::Blocked<NB>, Scalar> {
     static constexpr int wg_size = detail::sytrf_blocked_wg, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
-    static constexpr WorkspaceSize buffer_size(int n, int nrhs = 1) { return detail::sytrs_blocked_plan<T>(n, nrhs).size; }
+    static constexpr WorkspaceSize buffer_size(int n, int nrhs = 1) { return detail::sytrs_blocked_plan<Scalar>(n, nrhs).size; }
 };
 
 // ?sytrs of one matrix inside a kernel: B := A^-1 B from sytrf's factor (A and ipiv as sytrf

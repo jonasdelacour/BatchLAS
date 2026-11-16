@@ -28,8 +28,8 @@ using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename device::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
+template <class Scalar> using real_of = typename device::Arith<Scalar>::real_t;
+template <class Scalar> constexpr bool is_cplx = device::Arith<Scalar>::is_complex;
 
 constexpr int kBatch = 1024;
 constexpr int kPeriod = 3;
@@ -40,20 +40,20 @@ std::uint64_t mix(std::uint64_t x) {
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
     return x ^ (x >> 31);
 }
-template <class R> R uval(std::uint64_t i) { return static_cast<R>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
-template <class T> T val(std::uint64_t i) {
-    if constexpr (is_cplx<T>) return T(uval<real_of<T>>(2 * i), uval<real_of<T>>(2 * i + 1));
-    else return uval<T>(i);
+template <class Real> Real uval(std::uint64_t i) { return static_cast<Real>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
+template <class Scalar> Scalar val(std::uint64_t i) {
+    if constexpr (is_cplx<Scalar>) return Scalar(uval<real_of<Scalar>>(2 * i), uval<real_of<Scalar>>(2 * i + 1));
+    else return uval<Scalar>(i);
 }
-template <class T> T nan_v() { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }
+template <class Scalar> Scalar nan_v() { return Scalar(std::numeric_limits<real_of<Scalar>>::quiet_NaN()); }
 template <class T> bool same_bits(const T& a, const T& b) { return std::memcmp(&a, &b, sizeof(T)) == 0; }
-template <class T> bool is_nan(const T& v) { return std::isnan(std::real(v)); }
+template <class Scalar> bool is_nan(const Scalar& v) { return std::isnan(std::real(v)); }
 
 // kPeriod representatives copied to every item (b from b % kPeriod).
-template <class T> std::vector<T> batched(int per_item, std::uint64_t seed) {
-    std::vector<T> h(std::size_t(kBatch) * per_item);
+template <class Scalar> std::vector<Scalar> batched(int per_item, std::uint64_t seed) {
+    std::vector<Scalar> h(std::size_t(kBatch) * per_item);
     for (int b = 0; b < kBatch; ++b)
-        for (int i = 0; i < per_item; ++i) h[std::size_t(b) * per_item + i] = val<T>(seed + std::uint64_t(b % kPeriod) * 1000003u + i);
+        for (int i = 0; i < per_item; ++i) h[std::size_t(b) * per_item + i] = val<Scalar>(seed + std::uint64_t(b % kPeriod) * 1000003u + i);
     return h;
 }
 template <class T> int period_diffs(const std::vector<T>& h, int per_item) {
@@ -91,12 +91,12 @@ struct Dev {
     std::vector<void*> ptrs;
 };
 
-template <class T> class DeviceLapackBdsdcTest : public ::testing::Test {
+template <class Scalar> class DeviceLapackBdsdcTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx) GTEST_SKIP() << "no SYCL device visible";
         if (!dev.ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "device tests launch sub-group size 32";
-        if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
+        if (test_utils::lacks_fp64<Scalar>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
 };
@@ -104,26 +104,26 @@ protected:
 using Types = ::testing::Types<float, double, std::complex<float>, std::complex<double>>;
 TYPED_TEST_SUITE(DeviceLapackBdsdcTest, Types);
 
-template <class T> using LD = std::conditional_t<is_cplx<T>, std::complex<long double>, long double>;
-template <class T> LD<T> wide(T v) { return LD<T>(v); }
-template <class T> double rel(T got, LD<T> ref, long double scale) {
-    const long double d = std::abs(LD<T>(got) - ref);
+template <class Scalar> using LD = std::conditional_t<is_cplx<Scalar>, std::complex<long double>, long double>;
+template <class Scalar> LD<Scalar> wide(Scalar v) { return LD<Scalar>(v); }
+template <class Scalar> double rel(Scalar got, LD<Scalar> ref, long double scale) {
+    const long double d = std::abs(LD<Scalar>(got) - ref);
     if (std::isnan(d)) return std::numeric_limits<double>::infinity();
-    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<T>>::min()));
+    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<Scalar>>::min()));
 }
 
 // ---- interleave from item(v, b, n) operands into a slice of an item vector -------------------------
 // Thread runs on lane 0 (BdsdcBuildGk's executor); WG 64 with n = 101 owns 1 or 2 per item.
-template <class T, int WG, bool OnThread> void run_interleave(Dev& dev, int nb) {
+template <class Scalar, int WG, bool OnThread> void run_interleave(Dev& dev, int nb) {
     constexpr int n = 101, ainc = 2, astride = 2 * n * ainc + 3, step = 3, ylen = 2 * n * step + 4;
     const int written = n + nb;
-    auto ha = batched<T>(astride, 21), hb = batched<T>(astride, 22);
-    std::vector<T> hy(std::size_t(kBatch) * ylen, nan_v<T>());
-    T* pa = dev.up(ha);
-    T* pb = dev.up(hb);
-    T* py = dev.up(hy);
-    const VectorView<T> av(pa, n, kBatch, ainc, astride), bv(pb, n, kBatch, ainc, astride);
-    const VectorView<T> yv(py, ylen, kBatch, 1, ylen);
+    auto ha = batched<Scalar>(astride, 21), hb = batched<Scalar>(astride, 22);
+    std::vector<Scalar> hy(std::size_t(kBatch) * ylen, nan_v<Scalar>());
+    Scalar* pa = dev.up(ha);
+    Scalar* pb = dev.up(hb);
+    Scalar* py = dev.up(hy);
+    const VectorView<Scalar> av(pa, n, kBatch, ainc, astride), bv(pb, n, kBatch, ainc, astride);
+    const VectorView<Scalar> yv(py, ylen, kBatch, 1, ylen);
     dev.template run<WG>(kBatch, [=](sycl::nd_item<1> it) {
         const int b = static_cast<int>(it.get_group_linear_id());
         const auto y = device::slice(device::item(yv, b), 1, 2 * n, step);
@@ -137,9 +137,9 @@ template <class T, int WG, bool OnThread> void run_interleave(Dev& dev, int nb) 
     EXPECT_EQ(period_diffs(g, ylen), 0) << "WG " << WG << " nb " << nb;
     int bad = 0;
     for (int b = 0; b < kPeriod; ++b) {
-        const T* yb = g.data() + std::size_t(b) * ylen;
-        const T* ab = ha.data() + std::size_t(b) * astride;
-        const T* bb = hb.data() + std::size_t(b) * astride;
+        const Scalar* yb = g.data() + std::size_t(b) * ylen;
+        const Scalar* ab = ha.data() + std::size_t(b) * astride;
+        const Scalar* bb = hb.data() + std::size_t(b) * astride;
         for (int k = 0; k < ylen; ++k) {
             const int q = k - 1;
             if (q >= 0 && q % step == 0 && q / step < written) {

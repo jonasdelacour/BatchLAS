@@ -33,11 +33,11 @@ namespace {
 
 using ops::ormqr::wy_trmm_applicable;
 
-template <typename T>
-inline void validate_ormqr_dims(const MatrixView<T, MatrixFormat::Dense>& a,
-                               const MatrixView<T, MatrixFormat::Dense>& c,
+template <typename Scalar>
+inline void validate_ormqr_dims(const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& c,
                                Side side,
-                               Span<T> tau) {
+                               Span<Scalar> tau) {
     if (a.batch_size() != c.batch_size()) {
         throw batchlas::invalid_argument("ormqr_blocked: expected A.batch_size() == C.batch_size()");
     }
@@ -67,13 +67,13 @@ inline int resolved_nb(int32_t block_size) {
 
 // Items per pass: C, V, W1 and W2 pass between the three gemms of every block through L2,
 // and the gemms are routed at this batch. evidence: docs/perf/qr.md#qr-l2-batch-chunking
-template <typename T>
-int ormqr_blocked_chunk(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& a,
-                        const MatrixView<T, MatrixFormat::Dense>& c, Side side, int nb) {
+template <typename Scalar>
+int ormqr_blocked_chunk(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& c, Side side, int nb) {
     const int64_t nq = a.rows(), k = std::min(a.rows(), a.cols());
     const int64_t w = (side == Side::Left) ? int64_t(nb) * c.cols() : int64_t(c.rows()) * nb;
     const int64_t item = (nq * k + int64_t(c.rows()) * c.cols() + nq * nb + 2 * w) *
-                         static_cast<int64_t>(sizeof(T));
+                         static_cast<int64_t>(sizeof(Scalar));
     const auto dev = ctx.device();
     // pack_v puts the batch in grid z: no part may exceed it.
     return select::grid_capped_chunk(ctx, static_cast<int>(tuning::blocked_chunk_items(
@@ -87,42 +87,42 @@ inline int ormqr_blocked_part(int chunk, int batch) {
     return batch < 2 * chunk ? batch : chunk + batch % chunk;
 }
 
-template <typename T>
+template <typename Scalar>
 size_t ormqr_blocked_part_bytes(Queue& ctx, int nq, int m, int n, Side side, int nb, int batch) {
     size_t size = 0;
-    size += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(nq) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
-    size += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(nb) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
+    size += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(nq) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
+    size += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(nb) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
 
     const size_t w_elems = (side == Side::Left)
                                ? static_cast<size_t>(nb) * static_cast<size_t>(n)
                                : static_cast<size_t>(m) * static_cast<size_t>(nb);
-    size += 2 * BumpAllocator::allocation_size<T>(ctx, w_elems * static_cast<size_t>(batch));
+    size += 2 * BumpAllocator::allocation_size<Scalar>(ctx, w_elems * static_cast<size_t>(batch));
 
     return size;
 }
 
-template <Backend B, typename T, int NB>
+template <Backend B, typename Scalar, int NB>
 size_t ormqr_blocked_buffer_size_impl(Queue& ctx,
-                                      const MatrixView<T, MatrixFormat::Dense>& a,
-                                      const MatrixView<T, MatrixFormat::Dense>& c,
+                                      const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                                      const MatrixView<Scalar, MatrixFormat::Dense>& c,
                                       Side side,
                                       Transpose trans,
-                                      Span<T> tau,
+                                      Span<Scalar> tau,
                                       int32_t block_size) {
     (void)trans;
     (void)tau;
     const int nb = resolved_nb<NB>(block_size);
-    const int part = ormqr_blocked_part(ormqr_blocked_chunk<T>(ctx, a, c, side, nb), a.batch_size());
-    return ormqr_blocked_part_bytes<T>(ctx, a.rows(), c.rows(), c.cols(), side, nb, part);
+    const int part = ormqr_blocked_part(ormqr_blocked_chunk<Scalar>(ctx, a, c, side, nb), a.batch_size());
+    return ormqr_blocked_part_bytes<Scalar>(ctx, a.rows(), c.rows(), c.cols(), side, nb, part);
 }
 
-template <Backend B, typename T, int NB>
+template <Backend B, typename Scalar, int NB>
 Event ormqr_blocked_impl(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& a_all,
-                         const MatrixView<T, MatrixFormat::Dense>& c_all,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& a_all,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& c_all,
                          Side side,
                          Transpose trans,
-                         Span<T> tau_all,
+                         Span<Scalar> tau_all,
                          Span<std::byte> workspace,
                          int32_t block_size) {
     const int nq = a_all.rows();
@@ -138,21 +138,21 @@ Event ormqr_blocked_impl(Queue& ctx,
     // Chunk by chunk (the queue is in order, so parts sharing the scratch serialise). A caller
     // that sized a larger shape (sytrd's sub-views) may hold less than this shape's part needs,
     // so the chunk halves until it fits. evidence: docs/perf/qr.md#qr-l2-batch-chunking
-    int chunk = ormqr_blocked_chunk<T>(ctx, a_all, c_all, side, nb);
-    while (chunk > 1 && ormqr_blocked_part_bytes<T>(ctx, nq, mC, nC, side, nb,
-                                                    ormqr_blocked_part(chunk, batch_all)) > workspace.size())
+    int chunk = ormqr_blocked_chunk<Scalar>(ctx, a_all, c_all, side, nb);
+    while (chunk > 1 && ormqr_blocked_part_bytes<Scalar>(ctx, nq, mC, nC, side, nb,
+                                                         ormqr_blocked_part(chunk, batch_all)) > workspace.size())
         chunk = (chunk + 1) / 2;
     const int part = ormqr_blocked_part(chunk, batch_all);
 
     BumpAllocator pool(workspace);
-    auto Vbuf = pool.allocate<T>(q, static_cast<size_t>(nq) * static_cast<size_t>(nb) * static_cast<size_t>(part));
-    auto Tbuf = pool.allocate<T>(q, static_cast<size_t>(nb) * static_cast<size_t>(nb) * static_cast<size_t>(part));
+    auto Vbuf = pool.allocate<Scalar>(q, static_cast<size_t>(nq) * static_cast<size_t>(nb) * static_cast<size_t>(part));
+    auto Tbuf = pool.allocate<Scalar>(q, static_cast<size_t>(nb) * static_cast<size_t>(nb) * static_cast<size_t>(part));
 
     const size_t w_elems = (side == Side::Left)
                                ? static_cast<size_t>(nb) * static_cast<size_t>(nC)
                                : static_cast<size_t>(mC) * static_cast<size_t>(nb);
-    auto W1buf = pool.allocate<T>(q, w_elems * static_cast<size_t>(part));
-    auto W2buf = pool.allocate<T>(q, w_elems * static_cast<size_t>(part));
+    auto W1buf = pool.allocate<Scalar>(q, w_elems * static_cast<size_t>(part));
+    auto W2buf = pool.allocate<Scalar>(q, w_elems * static_cast<size_t>(part));
 
     const bool transpose_apply = (trans != Transpose::NoTrans);
 
@@ -161,13 +161,13 @@ Event ormqr_blocked_impl(Queue& ctx,
         batch = batch_all - b0 < 2 * chunk ? batch_all - b0 : chunk;   // the last part takes the remainder
         const auto a = a_all.batch_range(b0, batch);
         const auto c = c_all.batch_range(b0, batch);
-        const Span<T> tau = tau_all.subspan(static_cast<size_t>(b0) * k, static_cast<size_t>(batch) * k);
+        const Span<Scalar> tau = tau_all.subspan(static_cast<size_t>(b0) * k, static_cast<size_t>(batch) * k);
         const auto mask = ::batchlas::detail::call_mask("ormqr_blocked", a, c);
         const std::uint8_t* const mask_p = ::batchlas::detail::mask_ptr(mask);
 
         // Workspace views are rebuilt from raw pointers: each re-attaches the part's mask.
-        const auto Vmat = MatrixView<T, MatrixFormat::Dense>(Vbuf.data(), nq, nb, nq, nq * nb, batch).with_batch_mask(mask);
-        const auto Tmat = MatrixView<T, MatrixFormat::Dense>(Tbuf.data(), nb, nb, nb, nb * nb, batch).with_batch_mask(mask);
+        const auto Vmat = MatrixView<Scalar, MatrixFormat::Dense>(Vbuf.data(), nq, nb, nq, nq * nb, batch).with_batch_mask(mask);
+        const auto Tmat = MatrixView<Scalar, MatrixFormat::Dense>(Tbuf.data(), nb, nb, nb, nb * nb, batch).with_batch_mask(mask);
 
         auto apply_block = [&](int i0) {
             const int ib = std::min(nb, k - i0);
@@ -175,13 +175,13 @@ Event ormqr_blocked_impl(Queue& ctx,
             const int m = nq - i0;
             {
                 BATCHLAS_KERNEL_TRACE_SCOPE("ormqr_blocked.pack_v_panel");
-                (void)wy::pack_v_panel_batched<OrmqrWyTag, T>(
+                (void)wy::pack_v_panel_batched<OrmqrWyTag, Scalar>(
                     q, Vmat.data_ptr(), Vmat.ld(), Vmat.stride(), a, i0, ib, nq, mask_p);
             }
 
             {
                 BATCHLAS_KERNEL_TRACE_SCOPE("ormqr_blocked.larft");
-                (void)wy::larft_forward_columnwise_batched<OrmqrWyTag, T>(
+                (void)wy::larft_forward_columnwise_batched<OrmqrWyTag, Scalar>(
                     q, Tmat.data_ptr(), Tmat.ld(), Tmat.stride(),
                     Vmat.data_ptr(), Vmat.ld(), Vmat.stride(), m, ib,
                     tau.data(), /*tau_stride=*/k, /*tau_offset=*/i0, batch, mask_p);
@@ -192,8 +192,8 @@ Event ormqr_blocked_impl(Queue& ctx,
                 auto Vblk = Vmat({0, m}, {0, ib});
                 auto Tblk = Tmat({0, ib}, {0, ib});
 
-                const auto W1full = MatrixView<T, MatrixFormat::Dense>(W1buf.data(), nb, nC, nb, nb * nC, batch).with_batch_mask(mask);
-                const auto W2full = MatrixView<T, MatrixFormat::Dense>(W2buf.data(), nb, nC, nb, nb * nC, batch).with_batch_mask(mask);
+                const auto W1full = MatrixView<Scalar, MatrixFormat::Dense>(W1buf.data(), nb, nC, nb, nb * nC, batch).with_batch_mask(mask);
+                const auto W2full = MatrixView<Scalar, MatrixFormat::Dense>(W2buf.data(), nb, nC, nb, nb * nC, batch).with_batch_mask(mask);
                 auto W1 = W1full({0, ib}, Slice());
                 auto W2 = W2full({0, ib}, Slice());
 
@@ -204,25 +204,25 @@ Event ormqr_blocked_impl(Queue& ctx,
                 const Transpose t_eff = transpose_apply ? Transpose::ConjTrans : Transpose::NoTrans;
                 // W2 = op(T) W1. The trmm substitution is valid only because every
                 // trmm route ormqr can reach writes C with beta = 0, as this GEMM does.
-                if (wy_trmm_applicable<B, T>(ib)) {
-                    (void)trmm<B, T>(q, Tblk, W1, W2, T(1),
+                if (wy_trmm_applicable<B, Scalar>(ib)) {
+                    (void)trmm<B, Scalar>(q, Tblk, W1, W2, Scalar(1),
                                Side::Left, Uplo::Upper, t_eff, Diag::NonUnit);
                 } else {
                     (void)gemm<B>(q, Tblk, W1, W2, {.transA = t_eff});
                 }
 
-                (void)gemm<B>(q, Vblk, W2, Csub, {.alpha = T(-1), .beta = T(1)});
+                (void)gemm<B>(q, Vblk, W2, Csub, {.alpha = Scalar(-1), .beta = Scalar(1)});
             } else {
                 auto Csub = c(Slice(), {i0, SliceEnd()});
                 auto Vblk = Vmat({0, m}, {0, ib});
                 auto Tblk = Tmat({0, ib}, {0, ib});
 
-                const auto W1full = MatrixView<T, MatrixFormat::Dense>(W1buf.data(), mC, nb, mC, mC * nb, batch).with_batch_mask(mask);
-                const auto W2full = MatrixView<T, MatrixFormat::Dense>(W2buf.data(), mC, nb, mC, mC * nb, batch).with_batch_mask(mask);
+                const auto W1full = MatrixView<Scalar, MatrixFormat::Dense>(W1buf.data(), mC, nb, mC, mC * nb, batch).with_batch_mask(mask);
+                const auto W2full = MatrixView<Scalar, MatrixFormat::Dense>(W2buf.data(), mC, nb, mC, mC * nb, batch).with_batch_mask(mask);
                 auto W1 = W1full(Slice(), {0, ib});
                 auto W2 = W2full(Slice(), {0, ib});
 
-                (void)gemm<B>(q, Csub, Vblk, W1, GemmOptions<T>{});
+                (void)gemm<B>(q, Csub, Vblk, W1, GemmOptions<Scalar>{});
 
                 const Transpose t_eff = transpose_apply ? Transpose::ConjTrans : Transpose::NoTrans;
                 (void)gemm<B>(q, W1, Tblk, W2, {.transB = t_eff});
@@ -231,7 +231,7 @@ Event ormqr_blocked_impl(Queue& ctx,
                         W2,
                         Vblk,
                         Csub,
-                        {.alpha = T(-1), .beta = T(1), .transB = Transpose::ConjTrans});
+                        {.alpha = Scalar(-1), .beta = Scalar(1), .transB = Transpose::ConjTrans});
             }
 
         };
@@ -251,13 +251,13 @@ Event ormqr_blocked_impl(Queue& ctx,
     return ctx.get_event();
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t ormqr_blocked_buffer_size(Queue& ctx,
-                                 const MatrixView<T, MatrixFormat::Dense>& a,
-                                 const MatrixView<T, MatrixFormat::Dense>& c,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& c,
                                  Side side,
                                  Transpose trans,
-                                 Span<T> tau,
+                                 Span<Scalar> tau,
                                  int32_t block_size) {
     validate_ormqr_dims(a, c, side, tau);
 
@@ -265,25 +265,25 @@ size_t ormqr_blocked_buffer_size(Queue& ctx,
     const int nb = std::max<int>(1, block_size);
     switch (nb) {
         case 16:
-            return ormqr_blocked_buffer_size_impl<B, T, 16>(ctx, a, c, side, trans, tau, block_size);
+            return ormqr_blocked_buffer_size_impl<B, Scalar, 16>(ctx, a, c, side, trans, tau, block_size);
         case 32:
-            return ormqr_blocked_buffer_size_impl<B, T, 32>(ctx, a, c, side, trans, tau, block_size);
+            return ormqr_blocked_buffer_size_impl<B, Scalar, 32>(ctx, a, c, side, trans, tau, block_size);
         case 64:
-            return ormqr_blocked_buffer_size_impl<B, T, 64>(ctx, a, c, side, trans, tau, block_size);
+            return ormqr_blocked_buffer_size_impl<B, Scalar, 64>(ctx, a, c, side, trans, tau, block_size);
         case 128:
-            return ormqr_blocked_buffer_size_impl<B, T, 128>(ctx, a, c, side, trans, tau, block_size);
+            return ormqr_blocked_buffer_size_impl<B, Scalar, 128>(ctx, a, c, side, trans, tau, block_size);
         default:
-            return ormqr_blocked_buffer_size_impl<B, T, -1>(ctx, a, c, side, trans, tau, block_size);
+            return ormqr_blocked_buffer_size_impl<B, Scalar, -1>(ctx, a, c, side, trans, tau, block_size);
     }
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event ormqr_blocked(Queue& ctx,
-                    const MatrixView<T, MatrixFormat::Dense>& a_in,
-                    const MatrixView<T, MatrixFormat::Dense>& c_in,
+                    const MatrixView<Scalar, MatrixFormat::Dense>& a_in,
+                    const MatrixView<Scalar, MatrixFormat::Dense>& c_in,
                     Side side,
                     Transpose trans,
-                    Span<T> tau,
+                    Span<Scalar> tau,
                     Span<std::byte> workspace,
                     int32_t block_size) {
     // NETLIB's gemm is its host BLAS, which cannot skip an item: refuse before pack_v launches,
@@ -300,7 +300,7 @@ Event ormqr_blocked(Queue& ctx,
         throw batchlas::invalid_argument("ormqr_blocked: requires an in-order Queue");
     }
 
-    if constexpr (detail::is_complex<T>::value) {
+    if constexpr (detail::is_complex<Scalar>::value) {
         if (trans == Transpose::Trans) {
             throw batchlas::unsupported("ormqr_blocked: Trans not supported for complex; use ConjTrans");
         }
@@ -310,15 +310,15 @@ Event ormqr_blocked(Queue& ctx,
     const int nb = std::max<int>(1, block_size);
     switch (nb) {
         case 16:
-            return ormqr_blocked_impl<B, T, 16>(ctx, a, c, side, trans, tau, workspace, block_size);
+            return ormqr_blocked_impl<B, Scalar, 16>(ctx, a, c, side, trans, tau, workspace, block_size);
         case 32:
-            return ormqr_blocked_impl<B, T, 32>(ctx, a, c, side, trans, tau, workspace, block_size);
+            return ormqr_blocked_impl<B, Scalar, 32>(ctx, a, c, side, trans, tau, workspace, block_size);
         case 64:
-            return ormqr_blocked_impl<B, T, 64>(ctx, a, c, side, trans, tau, workspace, block_size);
+            return ormqr_blocked_impl<B, Scalar, 64>(ctx, a, c, side, trans, tau, workspace, block_size);
         case 128:
-            return ormqr_blocked_impl<B, T, 128>(ctx, a, c, side, trans, tau, workspace, block_size);
+            return ormqr_blocked_impl<B, Scalar, 128>(ctx, a, c, side, trans, tau, workspace, block_size);
         default:
-            return ormqr_blocked_impl<B, T, -1>(ctx, a, c, side, trans, tau, workspace, block_size);
+            return ormqr_blocked_impl<B, Scalar, -1>(ctx, a, c, side, trans, tau, workspace, block_size);
     }
 }
 

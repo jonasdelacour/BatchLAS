@@ -23,21 +23,21 @@ namespace batchlas {
 // Signature aliases for explicit instantiation (BATCHLAS_INSTANTIATE, in
 // src/util/template-instantiations.hh); keep in sync with the declarations below.
 namespace sig {
-template <typename T>
+template <typename Scalar>
 using syev = Event(Queue&,
-                   const MatrixView<T, MatrixFormat::Dense>&,
-                   Span<typename base_type<T>::type>,
+                   const MatrixView<Scalar, MatrixFormat::Dense>&,
+                   Span<typename base_type<Scalar>::type>,
                    JobType, Uplo, Span<std::byte>, Span<int32_t>);
 
-template <typename T>
+template <typename Scalar>
 using syev_buffer_size = size_t(Queue&,
-                                const MatrixView<T, MatrixFormat::Dense>&,
-                                Span<typename base_type<T>::type>,
+                                const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                Span<typename base_type<Scalar>::type>,
                                 JobType, Uplo);
 
 // backend::syev_vendor / syev_vendor_buffer_size share these signatures.
-template <typename T> using syev_vendor = syev<T>;
-template <typename T> using syev_vendor_buffer_size = syev_buffer_size<T>;
+template <typename Scalar> using syev_vendor = syev<Scalar>;
+template <typename Scalar> using syev_vendor_buffer_size = syev_buffer_size<Scalar>;
 }  // namespace sig
 
 /// @brief Eigenvalues, and optionally eigenvectors, of a batch of symmetric/Hermitian
@@ -52,7 +52,7 @@ template <typename T> using syev_vendor_buffer_size = syev_buffer_size<T>;
 /// Asynchronous: returns once the work is enqueued.
 ///
 /// @tparam B  backend (NETLIB always runs the vendor LAPACKE path)
-/// @tparam T  float, double, std::complex<float> or std::complex<double>
+/// @tparam Scalar  float, double, std::complex<float> or std::complex<double>
 /// @param[in]     ctx          queue the work is enqueued on
 /// @param[in,out] descrA       batch of \f$n \times n\f$ symmetric/Hermitian matrices; with
 ///                             `JobType::EigenVectors` overwritten by the orthonormal eigenvectors
@@ -80,10 +80,10 @@ template <typename T> using syev_vendor_buffer_size = syev_buffer_size<T>;
 /// @see @ref selection_tables (which family ranks first where), @ref perf_syev,
 ///      @ref md_docs_2cpp-api (convergence status)
 /// @ingroup api_eigen
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event syev(Queue& ctx,
-                        const MatrixView<T, MatrixFormat::Dense>& descrA, // A is overwritten with eigenvectors
-                        Span<typename base_type<T>::type> eigenvalues,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& descrA, // A is overwritten with eigenvectors
+                        Span<typename base_type<Scalar>::type> eigenvalues,
                         JobType jobtype,
                         Uplo uplo,
                         Span<std::byte> workspace,
@@ -102,14 +102,14 @@ BATCHLAS_API Event syev(Queue& ctx,
 /// @param[out]    workspace    scratch of at least syev_buffer_size() bytes; contents undefined on return
 /// @return event of the last enqueued kernel
 /// @ingroup api_eigen
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 inline Event syev(Queue& ctx,
-           const MatrixView<T, MatrixFormat::Dense>& descrA,
-           Span<typename base_type<T>::type> eigenvalues,
+           const MatrixView<Scalar, MatrixFormat::Dense>& descrA,
+           Span<typename base_type<Scalar>::type> eigenvalues,
            JobType jobtype,
            Uplo uplo,
            Span<std::byte> workspace) {
-    return syev<B, T>(ctx, descrA, eigenvalues, jobtype, uplo, workspace, Span<int32_t>{});
+    return syev<B, Scalar>(ctx, descrA, eigenvalues, jobtype, uplo, workspace, Span<int32_t>{});
 }
 
 /// @brief Workspace, in bytes, that syev() needs for the same arguments.
@@ -123,10 +123,10 @@ inline Event syev(Queue& ctx,
 /// @param[in] uplo         the call's triangle
 /// @return bytes to pass as the `workspace` span of syev()
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t syev_buffer_size(Queue& ctx,
-                                     const MatrixView<T, MatrixFormat::Dense>& A,
-                                     Span<typename base_type<T>::type> eigenvalues,
+                                     const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                     Span<typename base_type<Scalar>::type> eigenvalues,
                                      JobType jobtype,
                                      Uplo uplo);
 
@@ -152,10 +152,10 @@ namespace batchlas::backend {
 ///                             means "not requested"
 /// @return event of the last enqueued kernel
 /// @ingroup api_dispatch
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event syev_vendor(Queue& ctx,
-                               const MatrixView<T, MatrixFormat::Dense>& descrA,
-                               Span<typename base_type<T>::type> eigenvalues,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& descrA,
+                               Span<typename base_type<Scalar>::type> eigenvalues,
                                JobType jobtype,
                                Uplo uplo,
                                Span<std::byte> workspace,
@@ -169,10 +169,10 @@ BATCHLAS_API Event syev_vendor(Queue& ctx,
 /// @param[in] uplo         the call's triangle
 /// @return bytes to pass as the `workspace` span of backend::syev_vendor()
 /// @ingroup api_dispatch
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t syev_vendor_buffer_size(Queue& ctx,
-                                            const MatrixView<T, MatrixFormat::Dense>& descrA,
-                                            Span<typename base_type<T>::type> eigenvalues,
+                                            const MatrixView<Scalar, MatrixFormat::Dense>& descrA,
+                                            Span<typename base_type<Scalar>::type> eigenvalues,
                                             JobType jobtype,
                                             Uplo uplo);
 
@@ -183,28 +183,29 @@ namespace batchlas::ops::syev::detail {
 /// @brief Capability introspection for the Python binding: whether the `cta` kernel can run
 ///        @p A on this queue's device. Asks syev's own can_run (src/ops/syev/syev.cc), so it
 ///        cannot drift from what selection does.
-/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @tparam Scalar  scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in] ctx  queue whose device is asked
 /// @param[in] A    batch of \f$n \times n\f$ matrices; only the shape is read
 /// @return true when the `cta` kernel can run @p A
-template <typename T>
-BATCHLAS_API bool syev_supports_cta(const Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A);
+template <typename Scalar>
+BATCHLAS_API bool syev_supports_cta(const Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A);
 /// @brief As syev_supports_cta(), for the `blocked` kernel.
-/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @tparam Scalar  scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in] ctx   queue whose device is asked
 /// @param[in] A     batch of \f$n \times n\f$ matrices; only the shape is read
 /// @param[in] uplo  accepted and ignored: the kernel mirrors Upper into Lower
 /// @return true when the `blocked` kernel can run @p A
-template <typename T>
-BATCHLAS_API bool syev_supports_blocked(const Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo);
+template <typename Scalar>
+BATCHLAS_API bool syev_supports_blocked(const Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, Uplo uplo);
 /// @brief As syev_supports_cta(), for the `two_stage` kernel.
-/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @tparam Scalar  scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in] ctx   queue whose device is asked
 /// @param[in] A     batch of \f$n \times n\f$ matrices; only the shape is read
 /// @param[in] uplo  accepted and ignored: the kernel mirrors Upper into Lower
 /// @return true when the `two_stage` kernel can run @p A
-template <typename T>
-BATCHLAS_API bool syev_supports_two_stage(const Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo);
+template <typename Scalar>
+BATCHLAS_API bool syev_supports_two_stage(const Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                          Uplo uplo);
 
 }  // namespace batchlas::ops::syev::detail
 

@@ -33,14 +33,14 @@ namespace detail {
 
 // The fused tile of sysv `cta`: the (N + 1) x N factor then e (N); the int part holds ipiv's
 // copy [0, N), ps, perm, kind (N each), the validity flag at 4N and the factor's info at 4N + 1.
-template <int N, class T> struct SysvCtaPlan {
-    WsSlot<T> tile;
+template <int N, class Scalar> struct SysvCtaPlan {
+    WsSlot<Scalar> tile;
     WsSlot<int> idx;
     WorkspaceSize size;
 };
-template <int N, class T> constexpr SysvCtaPlan<N, T> sysv_cta_plan() {
+template <int N, class Scalar> constexpr SysvCtaPlan<N, Scalar> sysv_cta_plan() {
     Plan p;
-    const auto tile = p.take<T>(WsSpace::Local, static_cast<std::size_t>(N + 1) * N + N);
+    const auto tile = p.take<Scalar>(WsSpace::Local, static_cast<std::size_t>(N + 1) * N + N);
     const auto idx = p.take<int>(WsSpace::Local, 4 * static_cast<std::size_t>(N) + 2);
     return {tile, idx, p.size()};
 }
@@ -101,33 +101,35 @@ constexpr WorkspaceSize sysv_max(const WorkspaceSize& a, const WorkspaceSize& b)
 
 }  // namespace detail
 
-template <Uplo UL, class T> struct tiers<routine::sysv<UL>, T> {
+template <Uplo UL, class Scalar> struct tiers<routine::sysv<UL>, Scalar> {
     using type = tier::list<tier::Cta<32>, tier::Blocked<1>>;
 };
-template <Uplo UL, int N, class T> struct tier_info<routine::sysv<UL>, tier::Cta<N>, T> {
+template <Uplo UL, int N, class Scalar> struct tier_info<routine::sysv<UL>, tier::Cta<N>, Scalar> {
     static_assert(N <= 32, "sysv tier::Cta<N>: N <= 32 (one sub-group factors)");
     static constexpr int wg_size = 32, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0 && n <= N; }
-    static constexpr WorkspaceSize buffer_size(int, int = 1) { return detail::sysv_cta_plan<N, T>().size; }
+    static constexpr WorkspaceSize buffer_size(int, int = 1) { return detail::sysv_cta_plan<N, Scalar>().size; }
 };
-template <Uplo UL, class T> struct tier_info<routine::sysv<UL>, tier::Blocked<1>, T> {
+template <Uplo UL, class Scalar> struct tier_info<routine::sysv<UL>, tier::Blocked<1>, Scalar> {
     static constexpr int wg_size = detail::sytrf_wg_max, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int, int = 1) {
-        return detail::sysv_max(detail::sytrf_wg_plan<real_t<T>>().size, detail::sytrs_wg_plan<real_t<T>>().size);
+        return detail::sysv_max(detail::sytrf_wg_plan<real_t<Scalar>>().size,
+                                detail::sytrs_wg_plan<real_t<Scalar>>().size);
     }
 };
-template <Uplo UL, int NB, class T> struct tier_info<routine::sysv<UL>, tier::Blocked<NB>, T> {
+template <Uplo UL, int NB, class Scalar> struct tier_info<routine::sysv<UL>, tier::Blocked<NB>, Scalar> {
     static constexpr int wg_size = detail::sytrf_blocked_wg, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int n, int nrhs = 1) {
-        return detail::sysv_max(detail::sytrf_blocked_plan<NB, T>(n).size, detail::sytrs_blocked_plan<T>(n, nrhs).size);
+        return detail::sysv_max(detail::sytrf_blocked_plan<NB, Scalar>(n).size,
+                                detail::sytrs_blocked_plan<Scalar>(n, nrhs).size);
     }
 };
 

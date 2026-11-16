@@ -32,16 +32,16 @@ using namespace batchlas;
 
 namespace {
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
-template <typename T>
-using Real = typename base_type<T>::type;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+template <typename Scalar>
+using Real = typename base_type<Scalar>::type;
 using verify::Check;
 
 constexpr int kBatch = 5;
 
-template <typename T> T cj(T v) {
-    if constexpr (is_std_complex_v<T>) return std::conj(v);
+template <typename Scalar> Scalar cj(Scalar v) {
+    if constexpr (is_std_complex_v<Scalar>) return std::conj(v);
     else return v;
 }
 
@@ -50,35 +50,35 @@ inline std::uint32_t mix(std::uint32_t x) {
     return x;
 }
 
-// Deterministic entry in [-1, 1] (both parts for complex T), distinct per item and salt.
-template <typename T> T entry(int i, int j, int b, int salt) {
+// Deterministic entry in [-1, 1] (both parts for complex Scalar), distinct per item and salt.
+template <typename Scalar> Scalar entry(int i, int j, int b, int salt) {
     const std::uint32_t s = mix(std::uint32_t(i) * 7919u + std::uint32_t(j) * 104729u +
                                 std::uint32_t(b) * 1299709u + std::uint32_t(salt) * 15485863u);
     const double re = mix(s) / 4294967295.0 * 2.0 - 1.0;
-    if constexpr (is_std_complex_v<T>) {
+    if constexpr (is_std_complex_v<Scalar>) {
         const double im = mix(s + 1u) / 4294967295.0 * 2.0 - 1.0;
-        return T(Real<T>(re), Real<T>(im));
+        return Scalar(Real<Scalar>(re), Real<Scalar>(im));
     } else {
-        return T(re);
+        return Scalar(re);
     }
 }
 
-template <typename T> T poison() {
-    if constexpr (is_std_complex_v<T>) return T(Real<T>(777), Real<T>(-777));
-    else return T(777);
+template <typename Scalar> Scalar poison() {
+    if constexpr (is_std_complex_v<Scalar>) return Scalar(Real<Scalar>(777), Real<Scalar>(-777));
+    else return Scalar(777);
 }
 
 // A batch in the caller's own USM at ld = rows + 3 and stride = ld * cols + 5.
-template <typename T>
+template <typename Scalar>
 struct RawBatch {
     int rows, cols, ld, stride;
-    UnifiedVector<T> buf;
+    UnifiedVector<Scalar> buf;
     RawBatch(int r, int c)
-        : rows(r), cols(c), ld(r + 3), stride((r + 3) * c + 5), buf(std::size_t((r + 3) * c + 5) * kBatch, poison<T>()) {}
-    T& at(int i, int j, int b) { return buf[std::size_t(b) * stride + i + std::size_t(j) * ld]; }
-    MV<T> view() { return MV<T>(buf.data(), rows, cols, ld, stride, kBatch); }
-    std::vector<T> item(int b) {
-        std::vector<T> out(std::size_t(rows) * cols);
+        : rows(r), cols(c), ld(r + 3), stride((r + 3) * c + 5), buf(std::size_t((r + 3) * c + 5) * kBatch, poison<Scalar>()) {}
+    Scalar& at(int i, int j, int b) { return buf[std::size_t(b) * stride + i + std::size_t(j) * ld]; }
+    MV<Scalar> view() { return MV<Scalar>(buf.data(), rows, cols, ld, stride, kBatch); }
+    std::vector<Scalar> item(int b) {
+        std::vector<Scalar> out(std::size_t(rows) * cols);
         for (int j = 0; j < cols; ++j)
             for (int i = 0; i < rows; ++i) out[i + std::size_t(j) * rows] = at(i, j, b);
         return out;
@@ -89,43 +89,43 @@ struct RawBatch {
             for (int o = 0; o < stride; ++o) {
                 const int j = o / ld, i = o % ld;
                 if (j < cols && i < rows) continue;
-                if (buf[std::size_t(b) * stride + o] != poison<T>())
+                if (buf[std::size_t(b) * stride + o] != poison<Scalar>())
                     return ::testing::AssertionFailure() << "item " << b << " offset " << o << " overwritten";
             }
         return ::testing::AssertionSuccess();
     }
 };
 
-template <typename T>
-double fro(const std::vector<T>& v) {
+template <typename Scalar>
+double fro(const std::vector<Scalar>& v) {
     double s = 0;
-    for (const T& x : v) s += double(std::norm(std::complex<double>(x)));
+    for (const Scalar& x : v) s += double(std::norm(std::complex<double>(x)));
     return std::sqrt(s);
 }
 
 // C (m x n) = A (m x k) * B (k x n), column-major, natural ld.
-template <typename T>
-std::vector<T> matmul(const std::vector<T>& A, const std::vector<T>& B, int m, int k, int n) {
-    std::vector<T> C(std::size_t(m) * n, T(0));
+template <typename Scalar>
+std::vector<Scalar> matmul(const std::vector<Scalar>& A, const std::vector<Scalar>& B, int m, int k, int n) {
+    std::vector<Scalar> C(std::size_t(m) * n, Scalar(0));
     for (int j = 0; j < n; ++j)
         for (int p = 0; p < k; ++p)
             for (int i = 0; i < m; ++i) C[i + std::size_t(j) * m] += A[i + std::size_t(p) * m] * B[p + std::size_t(j) * k];
     return C;
 }
 
-template <typename T>
-std::vector<T> op_of(const std::vector<T>& A, int n, Transpose t) {
+template <typename Scalar>
+std::vector<Scalar> op_of(const std::vector<Scalar>& A, int n, Transpose t) {
     if (t == Transpose::NoTrans) return A;
-    std::vector<T> out(A.size());
+    std::vector<Scalar> out(A.size());
     for (int j = 0; j < n; ++j)
         for (int i = 0; i < n; ++i)
             out[i + std::size_t(j) * n] = t == Transpose::ConjTrans ? cj(A[j + std::size_t(i) * n]) : A[j + std::size_t(i) * n];
     return out;
 }
 
-template <typename T>
-std::vector<T> diff(const std::vector<T>& a, const std::vector<T>& b) {
-    std::vector<T> d(a.size());
+template <typename Scalar>
+std::vector<Scalar> diff(const std::vector<Scalar>& a, const std::vector<Scalar>& b) {
+    std::vector<Scalar> d(a.size());
     for (std::size_t i = 0; i < a.size(); ++i) d[i] = a[i] - b[i];
     return d;
 }
@@ -137,8 +137,8 @@ inline std::vector<int> pivots_of(const UnifiedVector<int64_t>& piv, int n, int 
 }
 
 // Row-permute A (n x cols) by the LAPACK swap sequence: P * A.
-template <typename T>
-std::vector<T> permute_rows(std::vector<T> A, int n, int cols, const std::vector<int>& ipiv) {
+template <typename Scalar>
+std::vector<Scalar> permute_rows(std::vector<Scalar> A, int n, int cols, const std::vector<int>& ipiv) {
     for (int i = 0; i < n; ++i) {
         const int r = ipiv[i] - 1;
         if (r != i)
@@ -148,12 +148,12 @@ std::vector<T> permute_rows(std::vector<T> A, int n, int cols, const std::vector
 }
 
 // Fill a general n x n item with a shifted diagonal so the solves stay well conditioned.
-template <typename T>
-void fill_general(RawBatch<T>& M, int salt, double shift) {
+template <typename Scalar>
+void fill_general(RawBatch<Scalar>& M, int salt, double shift) {
     for (int b = 0; b < kBatch; ++b)
         for (int j = 0; j < M.cols; ++j)
             for (int i = 0; i < M.rows; ++i)
-                M.at(i, j, b) = entry<T>(i, j, b, salt) + (i == j ? T(Real<T>(shift)) : T(0));
+                M.at(i, j, b) = entry<Scalar>(i, j, b, salt) + (i == j ? Scalar(Real<Scalar>(shift)) : Scalar(0));
 }
 
 // Success, or the exception's message: a refusal must say what threw.
@@ -169,9 +169,9 @@ template <typename F>
 
 }  // namespace
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct TestConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 

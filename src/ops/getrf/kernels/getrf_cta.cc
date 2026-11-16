@@ -46,19 +46,19 @@ constexpr int getrf_tile_ld(int m) { return m | 1; }
 
 // Tile plus the pivot search's slots, and CONSTANT IN THE WORK-GROUP WIDTH: the
 // capacity query, the fit predicate and the launcher each pick their own wg.
-template <typename T>
+template <typename Scalar>
 constexpr std::size_t getrf_scratch_bytes() {
-    using DM = sycl_device::DevMap<T>;
+    using DM = sycl_device::DevMap<Scalar>;
     return static_cast<std::size_t>(device::detail::kRedSlots) *
            (sizeof(typename DM::real) + sizeof(int));
 }
 
-template <typename T>
+template <typename Scalar>
 constexpr std::size_t getrf_slm_bytes(int m, int n) {
-    using DM = sycl_device::DevMap<T>;
+    using DM = sycl_device::DevMap<Scalar>;
     return static_cast<std::size_t>(getrf_tile_ld(m)) * static_cast<std::size_t>(n) *
                sizeof(typename DM::type) +
-           getrf_scratch_bytes<T>();
+           getrf_scratch_bytes<Scalar>();
 }
 
 // The 48 KB launch hole (resident::hole_padded): no group collective here, so the pad is
@@ -90,11 +90,11 @@ struct GetrfLeafLaunch {
     bool packed = false;
 };
 
-template <typename T>
+template <typename Scalar>
 GetrfLeafLaunch getrf_leaf_launch(int m, int n, std::size_t wg_slm_budget, int max_wg) {
     GetrfLeafLaunch p;
     if (getrf_packable(m, n)) {
-        p.G = resident::pack_matrices_per_wg(getrf_slm_bytes<T>(m, n), 32,
+        p.G = resident::pack_matrices_per_wg(getrf_slm_bytes<Scalar>(m, n), 32,
                                              wg_slm_budget, max_wg);
     }
     if (p.G > 1) {
@@ -107,24 +107,24 @@ GetrfLeafLaunch getrf_leaf_launch(int m, int n, std::size_t wg_slm_budget, int m
     return p;
 }
 
-template <typename T, device::Scope SC> class GetrfPanelResidentKernel;
-template <typename T> class GetrfPanelGlobalKernel;
+template <typename Scalar, device::Scope SC> class GetrfPanelResidentKernel;
+template <typename Scalar> class GetrfPanelGlobalKernel;
 
 // The RESIDENT leaf: stage, factor in local memory, store. Under SubGroup scope G matrices
 // share the work-group, one per sub-group; G == 1 keeps work-group scope and the wider group.
-template <typename T, device::Scope SC>
+template <typename Scalar, device::Scope SC>
 Event getrf_panel_resident_launch(Queue& ctx,
-                                  T* a_ptr, int ld, int stride,
+                                  Scalar* a_ptr, int ld, int stride,
                                   int m, int n, int batch,
                                   int* piv_ptr, int piv_stride, int piv_base,
                                   int32_t* info_ptr,
                                   int wg, int G, const std::uint8_t* mask) {
     // std::complex is re-typed HERE, at the pointer boundary, and never enters the
     // kernel body: its Annex-G operator* costs an isnan branch and a library call.
-    using DM = sycl_device::DevMap<T>;
+    using DM = sycl_device::DevMap<Scalar>;
     using D = typename DM::type;
     using R = typename DM::real;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     static_assert(SC == device::Scope::Sub || SC == device::Scope::Group);
 
@@ -137,7 +137,7 @@ Event getrf_panel_resident_launch(Queue& ctx,
     // The allocation steps over the 48 KB hole; the body indexes only tile_elems, so the pad is
     // capacity, never data. Same arithmetic as getrf_leaf_fits with G tiles side by side; the
     // argmax slots are shared because SubGroup scope, the only G > 1 scope, never reads them.
-    const std::size_t scratch = getrf_scratch_bytes<T>();
+    const std::size_t scratch = getrf_scratch_bytes<Scalar>();
     const std::size_t raw =
         static_cast<std::size_t>(G) * tile_elems * sizeof(D) + scratch;
     const std::size_t padded = resident::hole_padded(raw);
@@ -150,7 +150,7 @@ Event getrf_panel_resident_launch(Queue& ctx,
             sycl::range<1>(static_cast<std::size_t>(device::detail::kRedSlots)), h);
         sycl::local_accessor<int, 1> ridx(
             sycl::range<1>(static_cast<std::size_t>(device::detail::kRedSlots)), h);
-        batchlas::impl::parallel_for<GetrfPanelResidentKernel<T, SC>>(h,
+        batchlas::impl::parallel_for<GetrfPanelResidentKernel<Scalar, SC>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
@@ -187,17 +187,17 @@ Event getrf_panel_resident_launch(Queue& ctx,
 
 // The GLOBAL leaf: the same device body streamed from global memory, for the
 // blocked driver's (m - j0) x nb panel, whose m the resident tile cannot hold.
-template <typename T>
+template <typename Scalar>
 Event getrf_panel_global_launch(Queue& ctx,
-                                T* a_ptr, int ld, int stride,
+                                Scalar* a_ptr, int ld, int stride,
                                 int m, int n, int batch,
                                 int* piv_ptr, int piv_stride, int piv_base,
                                 int32_t* info_ptr,
                                 int wg, const std::uint8_t* mask) {
-    using DM = sycl_device::DevMap<T>;
+    using DM = sycl_device::DevMap<Scalar>;
     using D = typename DM::type;
     using R = typename DM::real;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     D* const ap = reinterpret_cast<D*>(a_ptr);
     const int kmax = std::min(m, n);
@@ -207,7 +207,7 @@ Event getrf_panel_global_launch(Queue& ctx,
             sycl::range<1>(static_cast<std::size_t>(device::detail::kRedSlots)), h);
         sycl::local_accessor<int, 1> ridx(
             sycl::range<1>(static_cast<std::size_t>(device::detail::kRedSlots)), h);
-        batchlas::impl::parallel_for<GetrfPanelGlobalKernel<T>>(h,
+        batchlas::impl::parallel_for<GetrfPanelGlobalKernel<Scalar>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
@@ -228,41 +228,41 @@ Event getrf_panel_global_launch(Queue& ctx,
 }  // namespace
 
 // The ONE fit predicate the capacity query, the launcher and the blocked driver share.
-template <typename T>
+template <typename Scalar>
 bool getrf_leaf_fits(int m, int n, std::size_t slm_budget_bytes) {
     if (m < 1 || n < 1) return false;
     // int64 first: (m|1)*n overflows int at m ~ 46341, reachable as a panel height.
     const std::int64_t elems = static_cast<std::int64_t>(getrf_tile_ld(m)) *
                                static_cast<std::int64_t>(n);
-    using DM = sycl_device::DevMap<T>;
+    using DM = sycl_device::DevMap<Scalar>;
     if (elems > static_cast<std::int64_t>(slm_budget_bytes / sizeof(typename DM::type))) {
         return false;
     }
-    return resident::hole_padded(getrf_slm_bytes<T>(m, n)) <= slm_budget_bytes;
+    return resident::hole_padded(getrf_slm_bytes<Scalar>(m, n)) <= slm_budget_bytes;
 }
 
 // The TIER's admission test, and so occupancy-scaled by default: what can_run
 // advertises and what getrf_cta_dispatch refuses must be one predicate. The blocked
 // driver asks getrf_leaf_fits instead, at the whole budget -- a different question.
-template <typename T>
+template <typename Scalar>
 bool getrf_cta_fits(int n, std::size_t slm_budget_bytes, int min_blocks_per_sm) {
-    return getrf_cta_fits_rect<T>(n, n, slm_budget_bytes, min_blocks_per_sm);
+    return getrf_cta_fits_rect<Scalar>(n, n, slm_budget_bytes, min_blocks_per_sm);
 }
 
-template <typename T>
+template <typename Scalar>
 bool getrf_cta_fits_rect(int m, int n, std::size_t slm_budget_bytes, int min_blocks_per_sm) {
-    return getrf_leaf_fits<T>(
+    return getrf_leaf_fits<Scalar>(
         m, n, resident::occupancy_budget(slm_budget_bytes, min_blocks_per_sm));
 }
 
 // 0 spells "this tier is not in this build". The walk's `break` clause and why it is
 // load-bearing are documented at resident_max_n.
-template <typename T>
+template <typename Scalar>
 int getrf_cta_max_n_for_slm(std::size_t slm_budget_bytes, int min_blocks_per_sm) {
-    using DM = sycl_device::DevMap<T>;
+    using DM = sycl_device::DevMap<Scalar>;
     const std::size_t wg_budget =
         resident::occupancy_budget(slm_budget_bytes, min_blocks_per_sm);
-    const std::size_t scratch = getrf_scratch_bytes<T>();
+    const std::size_t scratch = getrf_scratch_bytes<Scalar>();
     if (wg_budget <= scratch) return 0;
     // sqrt bound only: the walk still decides, and it must stop at the first miss.
     const double cap = static_cast<double>((wg_budget - scratch) /
@@ -270,24 +270,24 @@ int getrf_cta_max_n_for_slm(std::size_t slm_budget_bytes, int min_blocks_per_sm)
     const int hi = static_cast<int>(std::sqrt(cap)) + 2;
     return resident::resident_max_n(
         [](int n) {
-            return resident::hole_padded(getrf_slm_bytes<T>(n, n));
+            return resident::hole_padded(getrf_slm_bytes<Scalar>(n, n));
         },
         slm_budget_bytes, min_blocks_per_sm, hi);
 }
 
 // ONE term: the fallback `info` span for a caller that supplied none -- an empty OR SHORT span
 // means "not requested". A may carry a null data_ptr() here.
-template <typename T>
-std::size_t getrf_cta_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
+template <typename Scalar>
+std::size_t getrf_cta_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A) {
     const int batch = static_cast<int>(A.batch_size());
     if (batch < 1) return 0;
     return detail::info_scratch_bytes(ctx, batch);
 }
 
 // The panel leaf, and the ONE place the residency is chosen.
-template <typename T>
+template <typename Scalar>
 Event getrf_panel_factorize(Queue& ctx,
-                            T* a_ptr, int ld, int stride,
+                            Scalar* a_ptr, int ld, int stride,
                             int m, int n, int batch,
                             int* piv_ptr, int piv_stride, int piv_base,
                             int32_t* info_ptr,
@@ -301,48 +301,48 @@ Event getrf_panel_factorize(Queue& ctx,
     // The RESIDENCY question is asked at the whole budget: a blocked driver's panel that
     // stops being resident streams from global memory, which is a large-n regression, not
     // an occupancy win. The occupancy rule governs the advertised TIER capacity instead.
-    const bool resident = getrf_leaf_fits<T>(m, n, budget);
+    const bool resident = getrf_leaf_fits<Scalar>(m, n, budget);
     if (used_resident_out) *used_resident_out = resident;
 
     if (!resident) {
-        return getrf_panel_global_launch<T>(ctx, a_ptr, ld, stride, m, n, batch, piv_ptr,
-                                            piv_stride, piv_base, info_ptr,
-                                            getrf_leaf_wg(m, n, max_wg), mask);
+        return getrf_panel_global_launch<Scalar>(ctx, a_ptr, ld, stride, m, n, batch, piv_ptr,
+                                                 piv_stride, piv_base, info_ptr,
+                                                 getrf_leaf_wg(m, n, max_wg), mask);
     }
 
     // Packing is offered against the OCCUPANCY slice: G matrices share one work-group,
     // and the point of holding several is that the group stays small enough to be
     // resident several times over.
-    const auto p = getrf_leaf_launch<T>(
+    const auto p = getrf_leaf_launch<Scalar>(
         m, n, resident::occupancy_budget(budget), max_wg);
     if (p.packed) {
-        return getrf_panel_resident_launch<T, device::Scope::Sub>(
+        return getrf_panel_resident_launch<Scalar, device::Scope::Sub>(
             ctx, a_ptr, ld, stride, m, n, batch, piv_ptr, piv_stride, piv_base,
             info_ptr, p.wg, p.G, mask);
     }
-    return getrf_panel_resident_launch<T, device::Scope::Group>(
+    return getrf_panel_resident_launch<Scalar, device::Scope::Group>(
         ctx, a_ptr, ld, stride, m, n, batch, piv_ptr, piv_stride, piv_base,
         info_ptr, p.wg, 1, mask);
 }
 
 // Test hook: low 16 bits G (matrices per work-group), high 16 the work-group width.
 // 0 when the panel is not resident at all. See getrf_native.hh.
-template <typename T>
+template <typename Scalar>
 unsigned getrf_cta_debug_launch(Queue& ctx, int m, int n) {
     const auto dev = ctx.device();
     const std::size_t budget = resident::device_slm_budget(
         dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
-    if (!getrf_leaf_fits<T>(m, n, budget)) return 0u;
+    if (!getrf_leaf_fits<Scalar>(m, n, budget)) return 0u;
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
-    const auto p = getrf_leaf_launch<T>(m, n, resident::occupancy_budget(budget), max_wg);
+    const auto p = getrf_leaf_launch<Scalar>(m, n, resident::occupancy_budget(budget), max_wg);
     return (static_cast<unsigned>(p.wg) << 16) | static_cast<unsigned>(p.G);
 }
 
 // Direct entry point. Every can_run gate is re-applied here: the driver is also
 // reached directly (tests), and can_run must equal it exactly (R3).
-template <typename T>
+template <typename Scalar>
 Event getrf_cta_dispatch(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A,
                          Span<int64_t> pivots,
                          Span<std::byte> workspace,
                          Span<int32_t> info_out) {
@@ -364,14 +364,14 @@ Event getrf_cta_dispatch(Queue& ctx,
         dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
     // The occupancy-scaled gate, matching can_run: an order this refuses is one the
     // selector never picks here, and one that would leave a single block resident per SM.
-    if (!getrf_cta_fits_rect<T>(m, n, budget)) {
+    if (!getrf_cta_fits_rect<Scalar>(m, n, budget)) {
         throw batchlas::invalid_argument(
             "getrf_cta: " + std::to_string(m) + " x " + std::to_string(n) +
             " does not fit this device's per-work-group local-memory budget (needs " +
-            std::to_string(getrf_slm_bytes<T>(m, n)) + " B of " +
+            std::to_string(getrf_slm_bytes<Scalar>(m, n)) + " B of " +
             std::to_string(resident::occupancy_budget(budget)) +
             " B); the ceiling for this type is " +
-            std::to_string(getrf_cta_max_n_for_slm<T>(budget)));
+            std::to_string(getrf_cta_max_n_for_slm<Scalar>(budget)));
     }
 
     BumpAllocator pool(workspace);
@@ -386,9 +386,9 @@ Event getrf_cta_dispatch(Queue& ctx,
     auto piv_i32 = pivots.as_span<int>();
 
     bool resident = false;
-    Event e = getrf_panel_factorize<T>(ctx, A.data_ptr(), A.ld(), A.stride(), m, n, batch,
-                                       piv_i32.data(), mn, 0, info.data(), &resident,
-                                       batchlas::detail::mask_ptr(mask));
+    Event e = getrf_panel_factorize<Scalar>(ctx, A.data_ptr(), A.ld(), A.stride(), m, n, batch,
+                                            piv_i32.data(), mn, 0, info.data(), &resident,
+                                            batchlas::detail::mask_ptr(mask));
     if (!resident) {
         // Unreachable: same budget and same arithmetic as the check above. Asserted
         // because a tier silently becoming the other is what a pinned test misses.

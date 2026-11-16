@@ -24,8 +24,8 @@ namespace device_core_test {
 
 using namespace batchlas;
 
-template <class T> using real_of = typename device::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
+template <class Scalar> using real_of = typename device::Arith<Scalar>::real_t;
+template <class Scalar> constexpr bool is_cplx = device::Arith<Scalar>::is_complex;
 
 inline std::uint64_t mix(std::uint64_t x) {
     x += 0x9e3779b97f4a7c15ull;
@@ -34,14 +34,14 @@ inline std::uint64_t mix(std::uint64_t x) {
     return x ^ (x >> 31);
 }
 // Uniform in [-1, 1): seeded, reproducible, independent of the op under test.
-template <class R> R uval(std::uint64_t i) { return static_cast<R>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
-template <class T> T val(std::uint64_t i) {
-    if constexpr (is_cplx<T>) return T(uval<real_of<T>>(2 * i), uval<real_of<T>>(2 * i + 1));
-    else return uval<T>(i);
+template <class Real> Real uval(std::uint64_t i) { return static_cast<Real>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
+template <class Scalar> Scalar val(std::uint64_t i) {
+    if constexpr (is_cplx<Scalar>) return Scalar(uval<real_of<Scalar>>(2 * i), uval<real_of<Scalar>>(2 * i + 1));
+    else return uval<Scalar>(i);
 }
-template <class T> std::vector<T> vals(std::size_t n, std::uint64_t seed) {
-    std::vector<T> v(n);
-    for (std::size_t i = 0; i < n; ++i) v[i] = val<T>(seed * 1000003u + i);
+template <class Scalar> std::vector<Scalar> vals(std::size_t n, std::uint64_t seed) {
+    std::vector<Scalar> v(n);
+    for (std::size_t i = 0; i < n; ++i) v[i] = val<Scalar>(seed * 1000003u + i);
     return v;
 }
 template <class T> bool same_bits(const T& a, const T& b) { return std::memcmp(&a, &b, sizeof(T)) == 0; }
@@ -78,13 +78,13 @@ struct Dev {
     std::vector<void*> ptrs;
 };
 
-template <class T> class DeviceCoreTest : public ::testing::Test {
+template <class Scalar> class DeviceCoreTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx) GTEST_SKIP() << "no SYCL device visible";
         const auto sgs = dev.q().get_device().get_info<sycl::info::device::sub_group_sizes>();
         if (std::find(sgs.begin(), sgs.end(), std::size_t(32)) == sgs.end()) GTEST_SKIP() << "device_core tests launch sub-group size 32";
-        if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
+        if (test_utils::lacks_fp64<Scalar>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
 };
@@ -92,9 +92,10 @@ protected:
 using AllTypes = ::testing::Types<float, double, std::complex<float>, std::complex<double>>;
 
 // The host-side scalar reference arithmetic in long double (complex parts separately).
-template <class T> using LD = std::conditional_t<is_cplx<T>, std::complex<long double>, long double>;
-template <class T> LD<T> wide(T v) { return LD<T>(v); }
-template <class T> double err(T got, LD<T> ref) { return static_cast<double>(std::abs(wide(got) - ref)); }
-template <class T> double tol(double scale = 1.0) { return scale * 64.0 * static_cast<double>(std::numeric_limits<real_of<T>>::epsilon()); }
+template <class Scalar> using LD = std::conditional_t<is_cplx<Scalar>, std::complex<long double>, long double>;
+template <class Scalar> LD<Scalar> wide(Scalar v) { return LD<Scalar>(v); }
+template <class Scalar> double err(Scalar got,
+                                   LD<Scalar> ref) { return static_cast<double>(std::abs(wide(got) - ref)); }
+template <class Scalar> double tol(double scale = 1.0) { return scale * 64.0 * static_cast<double>(std::numeric_limits<real_of<Scalar>>::epsilon()); }
 
 }  // namespace device_core_test

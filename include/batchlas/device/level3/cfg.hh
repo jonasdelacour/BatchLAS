@@ -47,16 +47,16 @@ template <int TM, int TN, int TK, int TR, int TC = TR, int UnrollK_ = 1, int Sta
     }
 };
 
-/// The Arith policy a configuration defaults to: Native for a real T (the tuned kernels' form: an
-/// in-group gemm is bit-identical to the host reg route), Explicit for a complex T (no Annex-G).
-template <class T> using default_ops_t = std::conditional_t<Arith<T>::is_complex, arith::Explicit, arith::Native>;
+/// The Arith policy a configuration defaults to: Native for a real Scalar (the tuned kernels' form: an
+/// in-group gemm is bit-identical to the host reg route), Explicit for a complex Scalar (no Annex-G).
+template <class Scalar> using default_ops_t = std::conditional_t<Arith<Scalar>::is_complex, arith::Explicit, arith::Native>;
 
 namespace cfg {
-/// The register-tiled preset (design C.9 RegTiled): RegGeom for T, executor size threads.
-template <class T, int TM, int TN, int TK, int TR, int TC = TR, int Stages_ = 1, int UnrollK_ = 1, class Ops_ = default_ops_t<T>>
+/// The register-tiled preset (design C.9 RegTiled): RegGeom for Scalar, executor size threads.
+template <class Scalar, int TM, int TN, int TK, int TR, int TC = TR, int Stages_ = 1, int UnrollK_ = 1, class Ops_ = default_ops_t<Scalar>>
 struct RegTiled : RegGeom<TM, TN, TK, TR, TC, UnrollK_, Stages_> {
     using G = RegGeom<TM, TN, TK, TR, TC, UnrollK_, Stages_>;
-    using value_type = T;
+    using value_type = Scalar;
     using ops = Ops_;
     using geom = G;
     static constexpr int threads = G::ThreadsPerGroup;
@@ -69,8 +69,8 @@ struct RegTiled : RegGeom<TM, TN, TK, TR, TC, UnrollK_, Stages_> {
 };
 
 template <class C> inline constexpr bool is_reg_tiled_v = false;
-template <class T, int TM, int TN, int TK, int TR, int TC, int S, int U, class O>
-inline constexpr bool is_reg_tiled_v<RegTiled<T, TM, TN, TK, TR, TC, S, U, O>> = true;
+template <class Scalar, int TM, int TN, int TK, int TR, int TC, int S, int U, class O>
+inline constexpr bool is_reg_tiled_v<RegTiled<Scalar, TM, TN, TK, TR, TC, S, U, O>> = true;
 }  // namespace cfg
 
 template <class C> concept Config = cfg::is_reg_tiled_v<C>;

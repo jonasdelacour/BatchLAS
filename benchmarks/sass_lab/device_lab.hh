@@ -25,10 +25,10 @@ template <class T, int N, int V, int WG> class KWSymv;
 template <class T, int N, int V, int WG> class KWGer;
 template <class T, int N, int V, int WG> class KWLatrd;
 
-template <class T, int N, int V, class F> inline void addw(const char* op, int wg, bool inplace, F f) {
+template <class Real, int N, int V, class F> inline void addw(const char* op, int wg, bool inplace, F f) {
     const std::string name = std::string(op) + "@" + std::to_string(wg);
-    registry().push_back(Entry{name, tname<T>(), N, V, inplace, [f](sycl::queue& q, void* d, int n) {
-        return f(q, *static_cast<Data<T>*>(d), n);
+    registry().push_back(Entry{name, tname<Real>(), N, V, inplace, [f](sycl::queue& q, void* d, int n) {
+        return f(q, *static_cast<Data<Real>*>(d), n);
     }});
 }
 

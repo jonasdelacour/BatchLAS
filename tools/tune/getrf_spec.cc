@@ -24,14 +24,14 @@ namespace {
 
 namespace F = ops::getrf;
 
-template <typename T>
+template <typename Scalar>
 struct GetrfProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     int n, batch, ld;
     std::size_t stride;
-    UnifiedVector<T> A0, A;
-    UnifiedVector<T*> pA0, pA;
+    UnifiedVector<Scalar> A0, A;
+    UnifiedVector<Scalar*> pA0, pA;
     MV A0v, Av;
     UnifiedVector<std::int64_t> piv;
     UnifiedVector<std::int32_t> info;
@@ -45,7 +45,7 @@ struct GetrfProblem {
         (void)A0v.fill_random_pivoted(q, 12345);
         q.wait();
     }
-    std::size_t workspace() { return getrf_buffer_size<kBackend, T>(q, Av); }
+    std::size_t workspace() { return getrf_buffer_size<kBackend, Scalar>(q, Av); }
     void reset() {
         (void)MV::copy(q, Av, A0v);
         q.wait();
@@ -57,15 +57,15 @@ struct GetrfProblem {
         for (std::int64_t& p : piv) p = 0;
     }
     void run(Span<std::byte> ws) {
-        (void)getrf<kBackend, T>(q, Av, piv.to_span(), ws, info.to_span());
+        (void)getrf<kBackend, Scalar>(q, Av, piv.to_span(), ws, info.to_span());
         q.wait();
     }
     std::pair<double, int> verify() {
         int bad = 0;
         for (int b = 0; b < batch; ++b) bad += info[std::size_t(b)] != 0;
         const VectorView<std::int32_t> p32(reinterpret_cast<std::int32_t*>(piv.data()), n, batch, 1, n);
-        const double res = MV::getrf_residual(q, A0v, Av, p32) / verify::bound<T>(verify::Check::factorization, n);
-        return {verify::nanmax(res, MV::pivot_ratio(Av) / verify::pivot_ratio_bound<T>()), bad};
+        const double res = MV::getrf_residual(q, A0v, Av, p32) / verify::bound<Scalar>(verify::Check::factorization, n);
+        return {verify::nanmax(res, MV::pivot_ratio(Av) / verify::pivot_ratio_bound<Scalar>()), bad};
     }
 };
 

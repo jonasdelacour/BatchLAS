@@ -14,16 +14,16 @@ namespace batchlas::ops::gemm {
 using batchlas::device::l3::LinearEpilogue;
 using batchlas::device::l3::OperandAccessor;
 
-template <typename T, int Tile, Transpose OpA, Transpose OpB>
+template <typename Scalar, int Tile, Transpose OpA, Transpose OpB>
 class GemmTiledGeneralKernel;
 
-template <typename T, int Tile, Transpose OpA, Transpose OpB>
+template <typename Scalar, int Tile, Transpose OpA, Transpose OpB>
 Event launch_tiled_general(Queue& ctx,
-                           const MatrixView<T, MatrixFormat::Dense>& A,
-                           const MatrixView<T, MatrixFormat::Dense>& B,
-                           const MatrixView<T, MatrixFormat::Dense>& C,
-                           T alpha,
-                           T beta,
+                           const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                           const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                           const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                           Scalar alpha,
+                           Scalar beta,
                            const char* (*kernel_trace_name)(KernelVariant)) {
     BATCHLAS_KERNEL_TRACE_SCOPE(kernel_trace_name(KernelVariant::Tiled16));
 
@@ -37,12 +37,12 @@ Event launch_tiled_general(Queue& ctx,
                                 static_cast<size_t>(((n + Tile - 1) / Tile) * Tile));
 
     ctx->submit([&](sycl::handler& h) {
-        sycl::local_accessor<T, 1> tile_a(sycl::range<1>(Tile * Tile), h);
-        sycl::local_accessor<T, 1> tile_b(sycl::range<1>(Tile * Tile), h);
+        sycl::local_accessor<Scalar, 1> tile_a(sycl::range<1>(Tile * Tile), h);
+        sycl::local_accessor<Scalar, 1> tile_b(sycl::range<1>(Tile * Tile), h);
 
-        const T* a_ptr = A.data_ptr();
-        const T* b_ptr = B.data_ptr();
-        T* c_ptr = C.data_ptr();
+        const Scalar* a_ptr = A.data_ptr();
+        const Scalar* b_ptr = B.data_ptr();
+        Scalar* c_ptr = C.data_ptr();
         const int lda = A.ld();
         const int ldb = B.ld();
         const int ldc = C.ld();
@@ -52,7 +52,7 @@ Event launch_tiled_general(Queue& ctx,
         const int batch = A.batch_size();
         const std::uint8_t* mask = item_mask(A, B, C);
 
-        batchlas::impl::parallel_for<GemmTiledGeneralKernel<T, Tile, OpA, OpB>>(h, sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
+        batchlas::impl::parallel_for<GemmTiledGeneralKernel<Scalar, Tile, OpA, OpB>>(h, sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
             const int bid = static_cast<int>(item.get_group(0));
             const int local_row = static_cast<int>(item.get_local_id(1));
             const int local_col = static_cast<int>(item.get_local_id(2));
@@ -63,29 +63,31 @@ Event launch_tiled_general(Queue& ctx,
             }
 
             // Rebased per item in 64 bits (bid * stride passes \f$2^{31}\f$); offsets within an item stay int.
-            const T* const a_item = a_ptr + static_cast<std::ptrdiff_t>(bid) * stride_a;
-            const T* const b_item = b_ptr + static_cast<std::ptrdiff_t>(bid) * stride_b;
-            T* const c_item = c_ptr + static_cast<std::ptrdiff_t>(bid) * stride_c;
+            const Scalar* const a_item = a_ptr + static_cast<std::ptrdiff_t>(bid) * stride_a;
+            const Scalar* const b_item = b_ptr + static_cast<std::ptrdiff_t>(bid) * stride_b;
+            Scalar* const c_item = c_ptr + static_cast<std::ptrdiff_t>(bid) * stride_c;
             const device::Grid2D<> ex{item};
             // This item's row of the A tile and column of the B tile, read through the accessors
             // (shared address space; a generic-pointer Vec cost 4 REG on complex<float> N/T x C).
-            auto a_row = [&](int t) -> const T& { return tile_a[local_row * Tile + t]; };
-            auto b_col = [&](int t) -> const T& { return tile_b[t * Tile + local_col]; };
-            T sum = T(0);
+            auto a_row = [&](int t) -> const Scalar& { return tile_a[local_row * Tile + t]; };
+            auto b_col = [&](int t) -> const Scalar& { return tile_b[t * Tile + local_col]; };
+            Scalar sum = Scalar(0);
 
             for (int kk0 = 0; kk0 < k; kk0 += Tile) {
                 const int tile_col = kk0 + local_col;
                 const int tile_row = kk0 + local_row;
                 tile_a[local_row * Tile + local_col] =
-                    (row < m && tile_col < k) ? OperandAccessor<T, OpA>::load(a_item, lda, 0, row, tile_col) : T(0);
+                    (row < m && tile_col < k) ? OperandAccessor<Scalar, OpA>::load(a_item, lda, 0, row,
+                                                                                   tile_col) : Scalar(0);
                 tile_b[local_row * Tile + local_col] =
-                    (col < n && tile_row < k) ? OperandAccessor<T, OpB>::load(b_item, ldb, 0, tile_row, col) : T(0);
+                    (col < n && tile_row < k) ? OperandAccessor<Scalar, OpB>::load(b_item, ldb, 0, tile_row,
+                                                                                   col) : Scalar(0);
                 ex.barrier();
                 device::dot_slab<Tile, device::arith::Native>(sum, a_row, b_col, kk0, k);  // operator*: Annex G for complex, as tuned
                 ex.barrier();
             }
 
-            if (row < m && col < n) LinearEpilogue<T>::store(c_item + col * ldc + row, alpha, beta, sum);
+            if (row < m && col < n) LinearEpilogue<Scalar>::store(c_item + col * ldc + row, alpha, beta, sum);
         });
     });
 

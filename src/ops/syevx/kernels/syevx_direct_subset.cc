@@ -38,7 +38,7 @@
 
 namespace batchlas {
 
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 struct SyevxSubsetFinalizeKernel;
 
 namespace {
@@ -52,24 +52,24 @@ inline size_t subset_w_sub_len(int64_t n, int64_t capacity, bool value_range) {
 
 }  // namespace
 
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 Event syevx_direct_subset(Queue& ctx,
-                          const MatrixView<T, MFormat>& A,
-                          Span<typename base_type<T>::type> W,
+                          const MatrixView<Scalar, MFormat>& A,
+                          Span<typename base_type<Scalar>::type> W,
                           Span<int32_t> m,
                           size_t neigs,
                           Span<std::byte> workspace,
                           JobType jobz,
-                          const MatrixView<T, MatrixFormat::Dense>& V,
-                          const SyevxParams<T>& params,
+                          const MatrixView<Scalar, MatrixFormat::Dense>& V,
+                          const SyevxParams<Scalar>& params,
                           Span<int32_t> info) {
     // The plumbing below carries the mask to every child and kernel. On the host backend gemm is the
     // host BLAS, which refuses a mask: refused here, before info_clear writes an item.
     if constexpr (B == Backend::NETLIB) ::batchlas::detail::refuse_batch_mask("syevx_direct_subset", A, V);
     const Span<const std::uint8_t> mask = ::batchlas::detail::call_mask("syevx_direct_subset", A, V);
-    using Real = typename base_type<T>::type;
+    using Real = typename base_type<Scalar>::type;
 
-    if constexpr (!syevx_direct_subset_supported<T, MFormat>()) {
+    if constexpr (!syevx_direct_subset_supported<Scalar, MFormat>()) {
         (void)mask;
         (void)ctx; (void)A; (void)W; (void)m; (void)neigs; (void)workspace;
         (void)jobz; (void)V; (void)params; (void)info;
@@ -146,37 +146,37 @@ Event syevx_direct_subset(Queue& ctx,
         BumpAllocator pool(workspace);
 
         // syevx must not modify A, and sy2sb overwrites its input.
-        auto a_copy_span = pool.allocate<T>(ctx, static_cast<size_t>(n) * n * batch);
-        auto a_copy_ptrs = pool.allocate<T*>(ctx, static_cast<size_t>(batch));
+        auto a_copy_span = pool.allocate<Scalar>(ctx, static_cast<size_t>(n) * n * batch);
+        auto a_copy_ptrs = pool.allocate<Scalar*>(ctx, static_cast<size_t>(batch));
         // Every workspace view carries the call's mask, so each child skips the same items.
-        const auto a = MatrixView<T, MatrixFormat::Dense>(a_copy_span.data(), n, n, n,
-                                                          static_cast<int64_t>(n) * n, batch,
-                                                          a_copy_ptrs.data())
+        const auto a = MatrixView<Scalar, MatrixFormat::Dense>(a_copy_span.data(), n, n, n,
+                                                               static_cast<int64_t>(n) * n, batch,
+                                                               a_copy_ptrs.data())
                            .with_batch_mask(mask);
-        (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, a, A);
+        (void)MatrixView<Scalar, MatrixFormat::Dense>::copy(ctx, a, A);
 
         // Stage 1: dense -> band.
-        auto ab_span = pool.allocate<T>(ctx, static_cast<size_t>(kd + 1) * n * batch);
-        const auto ab_view = MatrixView<T, MatrixFormat::Dense>(ab_span.data(), kd + 1, n, kd + 1,
-                                                                static_cast<int64_t>(kd + 1) * n, batch)
+        auto ab_span = pool.allocate<Scalar>(ctx, static_cast<size_t>(kd + 1) * n * batch);
+        const auto ab_view = MatrixView<Scalar, MatrixFormat::Dense>(ab_span.data(), kd + 1, n, kd + 1,
+                                                                     static_cast<int64_t>(kd + 1) * n, batch)
                                  .with_batch_mask(mask);
-        auto tau_sy2sb_span = pool.allocate<T>(ctx, static_cast<size_t>(tau_sy2sb_n) * batch);
+        auto tau_sy2sb_span = pool.allocate<Scalar>(ctx, static_cast<size_t>(tau_sy2sb_n) * batch);
         const auto tau_sy2sb_view =
-            VectorView<T>(tau_sy2sb_span, tau_sy2sb_n, batch, 1, tau_sy2sb_n).with_batch_mask(mask);
+            VectorView<Scalar>(tau_sy2sb_span, tau_sy2sb_n, batch, 1, tau_sy2sb_n).with_batch_mask(mask);
 
-        Span<T> phase_span;
-        VectorView<T> phase_view;
+        Span<Scalar> phase_span;
+        VectorView<Scalar> phase_view;
         if (want_eigenvectors) {
-            phase_span = pool.allocate<T>(ctx, static_cast<size_t>(n) * batch);
-            phase_view = VectorView<T>(phase_span, n, batch, 1, n).with_batch_mask(mask);
+            phase_span = pool.allocate<Scalar>(ctx, static_cast<size_t>(n) * batch);
+            phase_view = VectorView<Scalar>(phase_span, n, batch, 1, n).with_batch_mask(mask);
         }
 
         {
-            const size_t bytes = sytrd_sy2sb_buffer_size<B, T>(ctx, a, ab_view, tau_sy2sb_view, Uplo::Lower, kd);
+            const size_t bytes = sytrd_sy2sb_buffer_size<B, Scalar>(ctx, a, ab_view, tau_sy2sb_view, Uplo::Lower, kd);
             auto sy2sb_ws = pool.allocate<std::byte>(ctx, bytes);
             // (void) on an Event: deliberate. This Queue is in-order, so the next submission
             // is already ordered after this one and the Event carries nothing the caller needs.
-            (void)sytrd_sy2sb<B, T>(ctx, a, ab_view, tau_sy2sb_view, Uplo::Lower, kd, sy2sb_ws);
+            (void)sytrd_sy2sb<B, Scalar>(ctx, a, ab_view, tau_sy2sb_view, Uplo::Lower, kd, sy2sb_ws);
         }
 
         // Stage 2: band -> tridiagonal. Both modes run the Householder chase;
@@ -188,25 +188,25 @@ Event syevx_direct_subset(Queue& ctx,
             VectorView<Real>(e_span, std::max(0, n - 1), batch, 1, std::max(0, n - 1)).with_batch_mask(mask);
 
         const int32_t nr = std::max<int32_t>(1, nrefl);
-        auto v_sb2st_span = pool.allocate<T>(ctx, static_cast<size_t>(kd) * nr * batch);
-        auto tau_sb2st_hh_span = pool.allocate<T>(ctx, static_cast<size_t>(nr) * batch);
-        auto ab_tri_span = pool.allocate<T>(ctx, static_cast<size_t>(2) * n * batch);
-        const auto v_sb2st_view = MatrixView<T, MatrixFormat::Dense>(
+        auto v_sb2st_span = pool.allocate<Scalar>(ctx, static_cast<size_t>(kd) * nr * batch);
+        auto tau_sb2st_hh_span = pool.allocate<Scalar>(ctx, static_cast<size_t>(nr) * batch);
+        auto ab_tri_span = pool.allocate<Scalar>(ctx, static_cast<size_t>(2) * n * batch);
+        const auto v_sb2st_view = MatrixView<Scalar, MatrixFormat::Dense>(
             v_sb2st_span.data(), kd, nr, kd, static_cast<int64_t>(kd) * nr, batch).with_batch_mask(mask);
-        const auto tau_sb2st_hh_view = VectorView<T>(tau_sb2st_hh_span, nr, batch, 1, nr).with_batch_mask(mask);
-        const auto ab_tri_view = MatrixView<T, MatrixFormat::Dense>(
+        const auto tau_sb2st_hh_view = VectorView<Scalar>(tau_sb2st_hh_span, nr, batch, 1, nr).with_batch_mask(mask);
+        const auto ab_tri_view = MatrixView<Scalar, MatrixFormat::Dense>(
             ab_tri_span.data(), 2, n, 2, static_cast<int64_t>(2) * n, batch).with_batch_mask(mask);
         {
-            const size_t bytes = detail::sytrd_sb2st_hh_buffer_size<B, T>(ctx, n, kd, batch);
+            const size_t bytes = detail::sytrd_sb2st_hh_buffer_size<B, Scalar>(ctx, n, kd, batch);
             auto hh_ws = pool.allocate<std::byte>(ctx, bytes);
-            (void)detail::sytrd_sb2st_hh<B, T>(ctx, ab_view, ab_tri_view, d_view, e_view,
-                                               v_sb2st_view, tau_sb2st_hh_view, Uplo::Lower, kd, hh_ws);
+            (void)detail::sytrd_sb2st_hh<B, Scalar>(ctx, ab_view, ab_tri_view, d_view, e_view,
+                                                    v_sb2st_view, tau_sb2st_hh_view, Uplo::Lower, kd, hh_ws);
         }
 
         // The phase from stage 2's output tridiagonal maps eigenvectors of the |e| tridiagonal (a +-1
         // similarity, same eigenvalues) back to the signed one; eigenvalues-only skips it.
         if (want_eigenvectors) {
-            build_phase_from_kd1_band<T>(ctx, ab_tri_view, phase_view);
+            build_phase_from_kd1_band<Scalar>(ctx, ab_tri_view, phase_view);
         }
 
         // Subset tridiagonal solve, internally always ascending: stein's cluster
@@ -254,7 +254,7 @@ Event syevx_direct_subset(Queue& ctx,
                 // columns hold stein's zeros and an orthogonal transform maps zero to
                 // zero. Shaping the call per item would cost a device->host sync.
                 if (nrefl > 0) {
-                    (void)detail::unmqr_hb2st<B, T>(
+                    (void)detail::unmqr_hb2st<B, Scalar>(
                         ctx, v_sb2st_view, tau_sb2st_hh_view, V_sub, n, kd,
                         Span<const int32_t>(sb2st_starts.data(), sb2st_starts.size()),
                         Span<const int32_t>(sb2st_lens.data(), sb2st_lens.size()),
@@ -268,24 +268,24 @@ Event syevx_direct_subset(Queue& ctx,
                     auto v1_view = a({kd, SliceEnd()}, {0, tau_sy2sb_n});
                     auto v_sub_rows = V_sub({kd, SliceEnd()}, Slice{});
                     // Flat per-item tau: follows the call mask carried by v1_view.
-                    Span<T> tau1_flat(tau_sy2sb_span.data(),
-                                      static_cast<size_t>(tau_sy2sb_n) * batch);
+                    Span<Scalar> tau1_flat(tau_sy2sb_span.data(),
+                                           static_cast<size_t>(tau_sy2sb_n) * batch);
 
                     size_t bytes_ormqr = 0;
                     if constexpr (B == Backend::NETLIB) {
-                        bytes_ormqr = ops::ormqr::detail::ormqr_vendor_buffer_size_or_throw<B, T>(
+                        bytes_ormqr = ops::ormqr::detail::ormqr_vendor_buffer_size_or_throw<B, Scalar>(
                             ctx, v1_view, v_sub_rows, Side::Left, Transpose::NoTrans, tau1_flat);
                     } else {
-                        bytes_ormqr = ormqr_blocked_buffer_size<B, T>(
+                        bytes_ormqr = ormqr_blocked_buffer_size<B, Scalar>(
                             ctx, v1_view, v_sub_rows, Side::Left, Transpose::NoTrans, tau1_flat,
                             ormqr_block_size);
                     }
                     auto ormqr_ws = pool.allocate<std::byte>(ctx, bytes_ormqr);
                     if constexpr (B == Backend::NETLIB) {
-                        (void)ops::ormqr::detail::ormqr_vendor_or_throw<B, T>(ctx, v1_view, v_sub_rows, Side::Left,
+                        (void)ops::ormqr::detail::ormqr_vendor_or_throw<B, Scalar>(ctx, v1_view, v_sub_rows, Side::Left,
                                                     Transpose::NoTrans, tau1_flat, ormqr_ws);
                     } else {
-                        (void)ormqr_blocked<B, T>(ctx, v1_view, v_sub_rows, Side::Left,
+                        (void)ormqr_blocked<B, Scalar>(ctx, v1_view, v_sub_rows, Side::Left,
                                             Transpose::NoTrans, tau1_flat, ormqr_ws,
                                             ormqr_block_size);
                     }
@@ -300,7 +300,7 @@ Event syevx_direct_subset(Queue& ctx,
         const bool reverse = rr.reverse;
         auto* w_out = W.data();
         const auto* w_in = w_sub_span.data();
-        T* v_ptr = want_eigenvectors ? V.data_ptr() : nullptr;
+        Scalar* v_ptr = want_eigenvectors ? V.data_ptr() : nullptr;
         const int64_t v_ld = want_eigenvectors ? V.ld() : 0;
         const int64_t v_stride = want_eigenvectors ? V.stride() : 0;
         // Two strides that must not be merged: the output side keeps the caller's
@@ -313,7 +313,7 @@ Event syevx_direct_subset(Queue& ctx,
 
         const size_t wg = std::min<size_t>(256, static_cast<size_t>(std::max<int64_t>(n, 1)));
         ctx->submit([&](sycl::handler& h) {
-            batchlas::impl::parallel_for<SyevxSubsetFinalizeKernel<B, T, MFormat>>(h,
+            batchlas::impl::parallel_for<SyevxSubsetFinalizeKernel<B, Scalar, MFormat>>(h,
                 sycl::nd_range<1>(sycl::range<1>{static_cast<size_t>(batch) * wg}, sycl::range<1>{wg}),
                 [=](sycl::nd_item<1> it) {
                     const device::RtGroup<> ex{it};
@@ -339,7 +339,7 @@ Event syevx_direct_subset(Queue& ctx,
                         const int half = write / 2;
                         const auto Vb = device::mat(v_ptr + bid * v_stride, nn, write, static_cast<int>(v_ld));
                         device::for_each_owned_2d<device::alg::Flat>(ex, nn, half, [&](int r, int c) {
-                            const T t = Vb(r, c);
+                            const Scalar t = Vb(r, c);
                             Vb(r, c) = Vb(r, write - 1 - c);
                             Vb(r, write - 1 - c) = t;
                         });
@@ -360,17 +360,17 @@ Event syevx_direct_subset(Queue& ctx,
     }
 }
 
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 size_t syevx_direct_subset_buffer_size(Queue& ctx,
-                                       const MatrixView<T, MFormat>& A,
-                                       Span<typename base_type<T>::type> W,
+                                       const MatrixView<Scalar, MFormat>& A,
+                                       Span<typename base_type<Scalar>::type> W,
                                        size_t neigs,
                                        JobType jobz,
-                                       const MatrixView<T, MatrixFormat::Dense>& V,
-                                       const SyevxParams<T>& params) {
-    using Real = typename base_type<T>::type;
+                                       const MatrixView<Scalar, MatrixFormat::Dense>& V,
+                                       const SyevxParams<Scalar>& params) {
+    using Real = typename base_type<Scalar>::type;
 
-    if constexpr (!syevx_direct_subset_supported<T, MFormat>()) {
+    if constexpr (!syevx_direct_subset_supported<Scalar, MFormat>()) {
         (void)ctx; (void)A; (void)W; (void)neigs; (void)jobz; (void)V; (void)params;
         return 0;
     } else {
@@ -397,35 +397,36 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
         const int32_t nrefl = detail::sb2st_hh_num_reflectors(n, kd);
 
         size_t bytes = 0;
-        bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(n) * n * batch);
-        bytes += BumpAllocator::allocation_size<T*>(ctx, static_cast<size_t>(batch));
-        bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(kd + 1) * n * batch);
-        bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(tau_sy2sb_n) * batch);
+        bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(n) * n * batch);
+        bytes += BumpAllocator::allocation_size<Scalar*>(ctx, static_cast<size_t>(batch));
+        bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(kd + 1) * n * batch);
+        bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(tau_sy2sb_n) * batch);
         if (want_eigenvectors) {
-            bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(n) * batch);
+            bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(n) * batch);
         }
 
         // Shapes must match the runtime views exactly so the provider choices agree.
         // Masked like the runtime views, so each size query picks the masked family.
-        using MV = MatrixView<T, MatrixFormat::Dense>;
+        using MV = MatrixView<Scalar, MatrixFormat::Dense>;
         const auto a_dummy = MV(nullptr, n, n, n, static_cast<int64_t>(n) * n, batch).with_batch_mask(mask);
         const auto ab_dummy =
             MV(nullptr, kd + 1, n, kd + 1, static_cast<int64_t>(kd + 1) * n, batch).with_batch_mask(mask);
-        const auto tau_sy2sb_dummy = VectorView<T>(nullptr, tau_sy2sb_n, batch, 1, tau_sy2sb_n).with_batch_mask(mask);
+        const auto tau_sy2sb_dummy = VectorView<Scalar>(nullptr, tau_sy2sb_n, batch, 1,
+                                                        tau_sy2sb_n).with_batch_mask(mask);
 
         bytes += BumpAllocator::allocation_size<std::byte>(
-            ctx, sytrd_sy2sb_buffer_size<B, T>(ctx, a_dummy, ab_dummy, tau_sy2sb_dummy, Uplo::Lower, kd));
+            ctx, sytrd_sy2sb_buffer_size<B, Scalar>(ctx, a_dummy, ab_dummy, tau_sy2sb_dummy, Uplo::Lower, kd));
 
         bytes += BumpAllocator::allocation_size<Real>(ctx, static_cast<size_t>(n) * batch);
         bytes += BumpAllocator::allocation_size<Real>(ctx, static_cast<size_t>(std::max(0, n - 1)) * batch);
 
         // Householder chase: reflectors, taus and the 2 x n tridiagonal band.
         const int32_t nr = std::max<int32_t>(1, nrefl);
-        bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(kd) * nr * batch);
-        bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(nr) * batch);
-        bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(2) * n * batch);
+        bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(kd) * nr * batch);
+        bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(nr) * batch);
+        bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(2) * n * batch);
         bytes += BumpAllocator::allocation_size<std::byte>(
-            ctx, detail::sytrd_sb2st_hh_buffer_size<B, T>(ctx, n, kd, batch));
+            ctx, detail::sytrd_sb2st_hh_buffer_size<B, Scalar>(ctx, n, kd, batch));
 
         // w_sub, then m. Mirrors the runtime allocation order exactly.
         bytes += BumpAllocator::allocation_size<Real>(ctx, w_sub_len * batch);
@@ -450,13 +451,13 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
                 const auto c_dummy = MV(nullptr, rows_below_kd, static_cast<int>(capacity), n,
                                         static_cast<int64_t>(n) * capacity, batch)
                                          .with_batch_mask(mask);
-                Span<T> tau1_flat(nullptr, static_cast<size_t>(tau_sy2sb_n) * batch);
+                Span<Scalar> tau1_flat(nullptr, static_cast<size_t>(tau_sy2sb_n) * batch);
                 size_t bytes_ormqr = 0;
                 if constexpr (B == Backend::NETLIB) {
-                    bytes_ormqr = ops::ormqr::detail::ormqr_vendor_buffer_size_or_throw<B, T>(
+                    bytes_ormqr = ops::ormqr::detail::ormqr_vendor_buffer_size_or_throw<B, Scalar>(
                         ctx, v1_dummy, c_dummy, Side::Left, Transpose::NoTrans, tau1_flat);
                 } else {
-                    bytes_ormqr = ormqr_blocked_buffer_size<B, T>(
+                    bytes_ormqr = ormqr_blocked_buffer_size<B, Scalar>(
                         ctx, v1_dummy, c_dummy, Side::Left, Transpose::NoTrans, tau1_flat,
                         ormqr_block_size);
                 }

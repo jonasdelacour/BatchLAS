@@ -89,10 +89,10 @@ template <class Ex, class VS, class IS> struct PivotRowsGroup {
     int lanes;
     IpivSink ipiv;
     int& info;
-    template <class R> BATCHLAS_DEVICE_INLINE PivotWinner argmax(int j, R mag, int rowid) const {
+    template <class Real> BATCHLAS_DEVICE_INLINE PivotWinner argmax(int j, Real mag, int rowid) const {
         const bool cand = (rowid >= j);
-        const ArgMax<R> a = argmax_allreduce(ex, ArgMax<R>{cand ? rowid : m, (cand && (mag == mag)) ? mag : R(-1)}, alg::TieLowest{},
-                                             argmax_slots(vs, is), m, R(-1), lanes);
+        const ArgMax<Real> a = argmax_allreduce(ex, ArgMax<Real>{cand ? rowid : m, (cand && (mag == mag)) ? mag : Real(-1)}, alg::TieLowest{},
+                                                argmax_slots(vs, is), m, Real(-1), lanes);
         return {a.index >= m ? j : a.index, 0};  // >= m: unreachable, logical row j exists
     }
     BATCHLAS_DEVICE_INLINE void record(int j, PivotWinner w) const {
@@ -119,10 +119,10 @@ template <int N, class Px> struct PivotPartition {
     int lane;
     int& my_piv;
     int& linfo;
-    template <class R> BATCHLAS_DEVICE_INLINE PivotWinner argmax(int j, R mag, int rowid) const {
+    template <class Real> BATCHLAS_DEVICE_INLINE PivotWinner argmax(int j, Real mag, int rowid) const {
         const bool cand = (rowid >= j) && (rowid < n);
-        const ArgMax<R> a = argmax_allreduce(px, ArgMax<R>{pivot_key(cand ? rowid : (rowid + N), lane), (cand && (mag == mag)) ? mag : R(-1)},
-                                             alg::TieLowest{}, None{}, 0, R(-1));
+        const ArgMax<Real> a = argmax_allreduce(px, ArgMax<Real>{pivot_key(cand ? rowid : (rowid + N), lane), (cand && (mag == mag)) ? mag : Real(-1)},
+                                                alg::TieLowest{}, None{}, 0, Real(-1));
         return {pivot_key_order(a.index), static_cast<int>(pivot_key_lane(a.index))};
     }
     BATCHLAS_DEVICE_INLINE void record(int j, PivotWinner w) const {
@@ -138,22 +138,23 @@ template <int N, class Px> struct PivotPartition {
 template <class Ex, class SX> struct BcastRowLocal {
     const Ex& ex;
     SX sx;
-    template <int NC, class T> BATCHLAS_DEVICE_INLINE void publish(int j, const Frag<T, NC>& rA, int rowid, PivotWinner) const {
+    template <int NC, class Scalar> BATCHLAS_DEVICE_INLINE void publish(int j, const Frag<Scalar, NC>& rA, int rowid, PivotWinner) const {
         if (rowid == j) {
 BATCHLAS_UNROLL_FULL
             for (int k = j; k < NC; ++k) sx[static_cast<std::size_t>(k)] = rA[k];
         }
         ex.barrier(Mem::Local);  // B2
     }
-    template <int NC, class T> BATCHLAS_DEVICE_INLINE T pivot(int j, const Frag<T, NC>&, PivotWinner) const {
+    template <int NC, class Scalar> BATCHLAS_DEVICE_INLINE Scalar pivot(int j, const Frag<Scalar, NC>&,
+                                                                        PivotWinner) const {
         return sx[static_cast<std::size_t>(j)];
     }
-    template <int NC, class T, class F>
-    BATCHLAS_DEVICE_INLINE void for_right(int j, int ncols, const Frag<T, NC>&, PivotWinner, F&& f) const {
+    template <int NC, class Scalar, class F>
+    BATCHLAS_DEVICE_INLINE void for_right(int j, int ncols, const Frag<Scalar, NC>&, PivotWinner, F&& f) const {
 BATCHLAS_UNROLL_FULL
         for (int k = j + 1; k < NC; ++k) {
             if (k >= ncols) continue;
-            f(k, static_cast<T>(sx[static_cast<std::size_t>(k)]));
+            f(k, static_cast<Scalar>(sx[static_cast<std::size_t>(k)]));
         }
     }
 };
@@ -165,12 +166,14 @@ template <class Ex, class SX> BATCHLAS_DEVICE_INLINE BcastRowLocal<Ex, SX> bcast
 // select per element (two per complex).
 template <class Px> struct BcastShuffle {
     const Px& px;
-    template <int NC, class T> BATCHLAS_DEVICE_INLINE void publish(int, const Frag<T, NC>&, int, PivotWinner) const {}
-    template <int NC, class T> BATCHLAS_DEVICE_INLINE T pivot(int j, const Frag<T, NC>& rA, PivotWinner w) const {
+    template <int NC, class Scalar> BATCHLAS_DEVICE_INLINE void publish(int, const Frag<Scalar, NC>&, int,
+                                                                        PivotWinner) const {}
+    template <int NC, class Scalar> BATCHLAS_DEVICE_INLINE Scalar pivot(int j, const Frag<Scalar, NC>& rA,
+                                                                        PivotWinner w) const {
         return px.bcast(rA[j], static_cast<std::uint32_t>(w.src));
     }
-    template <int NC, class T, class F>
-    BATCHLAS_DEVICE_INLINE void for_right(int j, int ncols, const Frag<T, NC>& rA, PivotWinner w, F&& f) const {
+    template <int NC, class Scalar, class F>
+    BATCHLAS_DEVICE_INLINE void for_right(int j, int ncols, const Frag<Scalar, NC>& rA, PivotWinner w, F&& f) const {
 BATCHLAS_UNROLL_FULL
         for (int k = j + 1; k < NC; ++k) {
             if (k >= ncols) continue;
@@ -232,24 +235,24 @@ inline void getf2_panel_device(const Ex& ex, const MA& A, int kmax, int* piv_ite
 // rowid == j, so `act = rowid > j` keeps it from writing rA while others read its row. Policies:
 //   Piv: argmax(j, mag, rowid) -> PivotWinner (NaN mapped by the policy), record(j, w) (ipiv),
 //        on_zero(zero, j) (info)
-//   Bc:  publish(j, rA, rowid, w) (make the pivot row readable), pivot(j, rA, w) -> T,
+//   Bc:  publish(j, rA, rowid, w) (make the pivot row readable), pivot(j, rA, w) -> Scalar,
 //        for_right(j, ncols, rA, w, f) calling f(k, u_k) for the pivot row's j < k < ncols
 // THREE SPELLINGS ARE SILENT WRONG ANSWERS OR SILENT SPILLS: the j loop's COMPILE-TIME bound with
 // `continue` (never `break`; kmax must be uniform, collectives are skipped), publishing the pivot
 // row AFTER the relabel, and selecting a complex scalar by if/else, never `?:`.
 // evidence: docs/perf/lu.md#the-register-panel-leaf
-template <int NC, class T, class Piv, class Bc>
-BATCHLAS_DEVICE_INLINE void getf2_relabel(Frag<T, NC>& rA, int& rowid, int kmax, int ncols, Piv& piv, Bc& bc) {
-    using Ar = arith_t<arith::Fma, T>;
+template <int NC, class Scalar, class Piv, class Bc>
+BATCHLAS_DEVICE_INLINE void getf2_relabel(Frag<Scalar, NC>& rA, int& rowid, int kmax, int ncols, Piv& piv, Bc& bc) {
+    using Ar = arith_t<arith::Fma, Scalar>;
 BATCHLAS_UNROLL_FULL
     for (int j = 0; j < NC; ++j) {
         if (j >= kmax) continue;
-        const detail::PivotWinner w = piv.argmax(j, abs1<T>(rA[j]), rowid);  // ?IAMAX
+        const detail::PivotWinner w = piv.argmax(j, abs1<Scalar>(rA[j]), rowid);  // ?IAMAX
         piv.record(j, w);
         if (rowid == w.row) rowid = j;  // ?SWAP as two labels
         else if (rowid == j) rowid = w.row;
         bc.publish(j, rA, rowid, w);
-        const auto sr = SafeRecip<T>::make(bc.pivot(j, rA, w));  // zero: EXACT, no epsilon
+        const auto sr = SafeRecip<Scalar>::make(bc.pivot(j, rA, w));  // zero: EXACT, no epsilon
         piv.on_zero(sr.zero, j);
         const bool act = (rowid > j);
         if (act) {  // the arms written out: apply()'s value form adds a spill (cfloat n = 24)
@@ -258,7 +261,7 @@ BATCHLAS_UNROLL_FULL
         }
         // `k = j + 1` is a COMPILE-TIME lower bound once j is unrolled; unguarded by `zero`: a
         // zero pivot WAS the argmax, so every multiplier is 0 (?GER as a no-op).
-        bc.for_right(j, ncols, rA, w, [&](int k, T u) {
+        bc.for_right(j, ncols, rA, w, [&](int k, Scalar u) {
             if (act) rA[k] = Ar::sub(rA[k], Ar::mul(rA[j], u));
         });
     }
@@ -277,7 +280,7 @@ inline constexpr int kRedSlots = 32;  // pivot-search slots: one per sub-group, 
 
 // The Reg tier's ceiling: complex<double> stops at 16 (32 rows of a 16-byte scalar is 128
 // registers before anything else). evidence: docs/perf/lu.md#d3-why-cdouble-stops-at-n16
-template <class T> constexpr int reg_cap() { return (Arith<T>::is_complex && std::is_same_v<real_t<T>, double>) ? 16 : 32; }
+template <class Scalar> constexpr int reg_cap() { return (Arith<Scalar>::is_complex && std::is_same_v<real_t<Scalar>, double>) ? 16 : 32; }
 constexpr int reg_lanes(int n) { return n <= 4 ? 4 : n <= 8 ? 8 : n <= 16 ? 16 : 32; }
 
 // The Cta tier's work-group: about four columns' worth of rows in [64, 512] (getrf_cta.cc's
@@ -292,18 +295,18 @@ constexpr int leaf_wg(int n) {
 
 // The Cta tier's local memory: the tile at an ODD ld (the row interchange walks a row at
 // stride ld; an even ld puts the whole walk in one bank), then the pivot-search slots.
-template <class T> struct GetrfCtaPlan {
-    WsSlot<T> tile;
-    WsSlot<real_t<T>> vs;
+template <class Scalar> struct GetrfCtaPlan {
+    WsSlot<Scalar> tile;
+    WsSlot<real_t<Scalar>> vs;
     WsSlot<int> is;
     int ld;
     WorkspaceSize size;
 };
-template <class T> constexpr GetrfCtaPlan<T> getrf_cta_plan(int m, int n) {
+template <class Scalar> constexpr GetrfCtaPlan<Scalar> getrf_cta_plan(int m, int n) {
     Plan p;
     const int ld = m | 1;
-    const auto tile = p.take<T>(WsSpace::Local, static_cast<std::size_t>(ld) * static_cast<std::size_t>(n));
-    const auto vs = p.take<real_t<T>>(WsSpace::Local, kRedSlots);
+    const auto tile = p.take<Scalar>(WsSpace::Local, static_cast<std::size_t>(ld) * static_cast<std::size_t>(n));
+    const auto vs = p.take<real_t<Scalar>>(WsSpace::Local, kRedSlots);
     const auto is = p.take<int>(WsSpace::Local, kRedSlots);
     return {tile, vs, is, ld, p.size()};
 }
@@ -321,27 +324,27 @@ template <class M> using lu_value_t = typename lu_value<M>::type;
 
 // The LU family's Blocked Level 3 configuration: the tier's Alg when it is an l3 preset, else
 // 32 x 32 tiles of 2 x 2 per item (256 items, device_lapack_l3_tests' shape).
-template <class T, class Tier>
+template <class Scalar, class Tier>
 using lu_blocked_cfg_t = std::conditional_t<l3::Config<typename Tier::alg_type>, typename Tier::alg_type,
-                                            l3::cfg::RegTiled<T, 32, 32, 8, 2, 2>>;
+                                            l3::cfg::RegTiled<Scalar, 32, 32, 8, 2, 2>>;
 
 // The LU family's Blocked local memory: the L3 stages, then getf2's pivot-search slots. No
 // global workspace (A is factored in place). lu_blocked_take extends a caller's plan (inv's).
-template <class T> struct LuBlockedPlan {
-    WsSlot<T> smem;
-    WsSlot<real_t<T>> vs;
+template <class Scalar> struct LuBlockedPlan {
+    WsSlot<Scalar> smem;
+    WsSlot<real_t<Scalar>> vs;
     WsSlot<int> is;
     WorkspaceSize size;
 };
-template <class T, class Cfg> constexpr LuBlockedPlan<T> lu_blocked_take(Plan& p) {
-    const auto smem = p.take<T>(WsSpace::Local, static_cast<std::size_t>(Cfg::smem_elems));
-    const auto vs = p.take<real_t<T>>(WsSpace::Local, kRedSlots);
+template <class Scalar, class Cfg> constexpr LuBlockedPlan<Scalar> lu_blocked_take(Plan& p) {
+    const auto smem = p.take<Scalar>(WsSpace::Local, static_cast<std::size_t>(Cfg::smem_elems));
+    const auto vs = p.take<real_t<Scalar>>(WsSpace::Local, kRedSlots);
     const auto is = p.take<int>(WsSpace::Local, kRedSlots);
     return {smem, vs, is, p.size()};
 }
-template <class T, class Cfg> constexpr LuBlockedPlan<T> lu_blocked_plan() {
+template <class Scalar, class Cfg> constexpr LuBlockedPlan<Scalar> lu_blocked_plan() {
     Plan p;
-    return lu_blocked_take<T, Cfg>(p);
+    return lu_blocked_take<Scalar, Cfg>(p);
 }
 
 // Where the Reg tier's info goes besides the return value: nowhere (the public op), or the
@@ -438,9 +441,9 @@ BATCHLAS_DEVICE_INLINE int factor_blocked(const Ex& ex, const MA& a_in, const PV
 }  // namespace detail
 
 /// getrf's Reg<N>: an N-lane (or wider) Partition, n <= N (complex<double>: N <= 16), no workspace.
-template <int N, bool Exact, class T>
-    requires(N <= detail::reg_cap<T>())
-struct tier_info<routine::getrf, tier::Reg<N, Exact>, T> {
+template <int N, bool Exact, class Scalar>
+    requires(N <= detail::reg_cap<Scalar>())
+struct tier_info<routine::getrf, tier::Reg<N, Exact>, Scalar> {
     static constexpr int part_size = detail::reg_lanes(N);
     static constexpr int wg_size = 32, sg_size = 32;
     using executor = Partition<part_size>;
@@ -449,27 +452,27 @@ struct tier_info<routine::getrf, tier::Reg<N, Exact>, T> {
     static constexpr WorkspaceSize buffer_size(int) { return {}; }
 };
 /// getrf's Cta<N>: one WorkGroup (or RtGroup) per matrix; the tile and 32 slots in local memory.
-template <int N, class T> struct tier_info<routine::getrf, tier::Cta<N>, T> {
+template <int N, class Scalar> struct tier_info<routine::getrf, tier::Cta<N>, Scalar> {
     static constexpr int wg_size = detail::leaf_wg(N), sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 1 && n <= N; }
-    static constexpr WorkspaceSize buffer_size(int n) { return detail::getrf_cta_plan<T>(n, n).size; }
+    static constexpr WorkspaceSize buffer_size(int n) { return detail::getrf_cta_plan<Scalar>(n, n).size; }
 };
 /// getrf's Blocked<NB>: any m x n; one WorkGroup of the L3 configuration's items (256 by
 /// default); A in global memory, the L3 stages and 32 slots in local memory, no global workspace.
-template <int NB, class Alg, class T> struct tier_info<routine::getrf, tier::Blocked<NB, Alg>, T> {
-    using cfg = detail::lu_blocked_cfg_t<T, tier::Blocked<NB, Alg>>;
-    static_assert(std::is_same_v<typename cfg::value_type, T>, "getrf: tier::Blocked's l3 configuration is for another scalar type");
+template <int NB, class Alg, class Scalar> struct tier_info<routine::getrf, tier::Blocked<NB, Alg>, Scalar> {
+    using cfg = detail::lu_blocked_cfg_t<Scalar, tier::Blocked<NB, Alg>>;
+    static_assert(std::is_same_v<typename cfg::value_type, Scalar>, "getrf: tier::Blocked's l3 configuration is for another scalar type");
     static constexpr int wg_size = cfg::threads, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 1; }
-    static constexpr WorkspaceSize buffer_size(int) { return detail::lu_blocked_plan<T, cfg>().size; }
+    static constexpr WorkspaceSize buffer_size(int) { return detail::lu_blocked_plan<Scalar, cfg>().size; }
 };
-template <class T> struct tiers<routine::getrf, T> {
+template <class Scalar> struct tiers<routine::getrf, Scalar> {
     using type = std::conditional_t<
-        (detail::reg_cap<T>() >= 32),
+        (detail::reg_cap<Scalar>() >= 32),
         tier::list<tier::Reg<8>, tier::Reg<16>, tier::Reg<32>, tier::Cta<64>, tier::Cta<96>, tier::Cta<128>, tier::Blocked<32>>,
         tier::list<tier::Reg<8>, tier::Reg<16>, tier::Cta<64>, tier::Cta<96>, tier::Cta<128>, tier::Blocked<32>>>;
 };

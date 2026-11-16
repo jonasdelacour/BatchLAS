@@ -30,14 +30,15 @@ namespace detail {
 
 // One plan for every op here: the L3 stage slot (local) and the n x NB panel W (global). Each
 // use of W takes its own leading dimension, inside the n * NB elements.
-template <class T> struct BlockedPanelPlan {
-    WsSlot<T> smem;
-    WsSlot<T> w;
+template <class Scalar> struct BlockedPanelPlan {
+    WsSlot<Scalar> smem;
+    WsSlot<Scalar> w;
     WorkspaceSize size;
     static constexpr BlockedPanelPlan make(int n, int nb) {
         Plan p;
-        const auto s = p.take<T>(WsSpace::Local, static_cast<std::size_t>(detail::PotrfBlockedCfg<T>::smem_elems));
-        const auto g = p.take<T>(WsSpace::Global, static_cast<std::size_t>(n) * static_cast<std::size_t>(nb));
+        const auto s = p.take<Scalar>(WsSpace::Local,
+                                      static_cast<std::size_t>(detail::PotrfBlockedCfg<Scalar>::smem_elems));
+        const auto g = p.take<Scalar>(WsSpace::Global, static_cast<std::size_t>(n) * static_cast<std::size_t>(nb));
         return {s, g, p.size()};
     }
 };
@@ -47,8 +48,8 @@ template <class T> struct BlockedPanelPlan {
 // A12 := -A11^-1 A12 A22^-1. The trsm applies the not yet inverted diagonal block in place, the
 // trmm writes W, W is copied back. The diagonal block is inverted as A11^-1 I (W := I, trsm),
 // then its triangle copied into A. Ends on a global barrier.
-template <Uplo UL, Diag DG, int NB, class Cfg, class Ex, class MA, class T>
-BATCHLAS_DEVICE_INLINE void trtri_blocked_body(const Ex& ex, const MA& A, T* w, const Workspace& sm) {
+template <Uplo UL, Diag DG, int NB, class Cfg, class Ex, class MA, class Scalar>
+BATCHLAS_DEVICE_INLINE void trtri_blocked_body(const Ex& ex, const MA& A, Scalar* w, const Workspace& sm) {
     constexpr bool unit = DG == Diag::Unit;
     constexpr Part kTri = UL == Uplo::Lower ? (unit ? Part::StrictLower : Part::Lower) : (unit ? Part::StrictUpper : Part::Upper);
     const int n = A.rows();
@@ -95,8 +96,8 @@ BATCHLAS_DEVICE_INLINE void trtri_blocked_body(const Ex& ex, const MA& A, T* w, 
 // the off-diagonal block row (column) := its trmm by the diagonal block plus the gemm with the
 // blocks below (right), through W; the diagonal block := its own herk (a zero-padded copy in W,
 // beta 0: xLAUU2) plus the herk of the blocks below (right). Ends on a global barrier.
-template <Uplo UL, int NB, class Cfg, class Ex, class MA, class T>
-BATCHLAS_DEVICE_INLINE void lauum_blocked_body(const Ex& ex, const MA& A, T* w, const Workspace& sm) {
+template <Uplo UL, int NB, class Cfg, class Ex, class MA, class Scalar>
+BATCHLAS_DEVICE_INLINE void lauum_blocked_body(const Ex& ex, const MA& A, Scalar* w, const Workspace& sm) {
     constexpr Transpose kCT = Transpose::ConjTrans, kN = Transpose::NoTrans;
     const int n = A.rows();
     for (int i = 0; i < n; i += NB) {
@@ -188,37 +189,37 @@ template <Uplo UL> struct lauum {
 };
 }  // namespace routine
 
-template <Uplo UL, int NB, class Alg, class T> struct tier_info<routine::potri<UL>, tier::Blocked<NB, Alg>, T> {
+template <Uplo UL, int NB, class Alg, class Scalar> struct tier_info<routine::potri<UL>, tier::Blocked<NB, Alg>, Scalar> {
     static constexpr int wg_size = detail::kBlockedWg;
     static constexpr int sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
-    static constexpr WorkspaceSize buffer_size(int n) { return detail::BlockedPanelPlan<T>::make(n, NB).size; }
+    static constexpr WorkspaceSize buffer_size(int n) { return detail::BlockedPanelPlan<Scalar>::make(n, NB).size; }
 };
-template <Uplo UL, Diag DG, int NB, class Alg, class T> struct tier_info<routine::trtri<UL, DG>, tier::Blocked<NB, Alg>, T> {
+template <Uplo UL, Diag DG, int NB, class Alg, class Scalar> struct tier_info<routine::trtri<UL, DG>, tier::Blocked<NB, Alg>, Scalar> {
     static constexpr int wg_size = detail::kBlockedWg;
     static constexpr int sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
-    static constexpr WorkspaceSize buffer_size(int n) { return detail::BlockedPanelPlan<T>::make(n, NB).size; }
+    static constexpr WorkspaceSize buffer_size(int n) { return detail::BlockedPanelPlan<Scalar>::make(n, NB).size; }
 };
-template <Uplo UL, int NB, class Alg, class T> struct tier_info<routine::lauum<UL>, tier::Blocked<NB, Alg>, T> {
+template <Uplo UL, int NB, class Alg, class Scalar> struct tier_info<routine::lauum<UL>, tier::Blocked<NB, Alg>, Scalar> {
     static constexpr int wg_size = detail::kBlockedWg;
     static constexpr int sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
     static constexpr int per_group = 1;
     static constexpr bool admits(int n) { return n >= 0; }
-    static constexpr WorkspaceSize buffer_size(int n) { return detail::BlockedPanelPlan<T>::make(n, NB).size; }
+    static constexpr WorkspaceSize buffer_size(int n) { return detail::BlockedPanelPlan<Scalar>::make(n, NB).size; }
 };
-template <Uplo UL, class T> struct tiers<routine::potri<UL>, T> {
+template <Uplo UL, class Scalar> struct tiers<routine::potri<UL>, Scalar> {
     using type = tier::list<tier::Blocked<32>>;
 };
-template <Uplo UL, Diag DG, class T> struct tiers<routine::trtri<UL, DG>, T> {
+template <Uplo UL, Diag DG, class Scalar> struct tiers<routine::trtri<UL, DG>, Scalar> {
     using type = tier::list<tier::Blocked<32>>;
 };
-template <Uplo UL, class T> struct tiers<routine::lauum<UL>, T> {
+template <Uplo UL, class Scalar> struct tiers<routine::lauum<UL>, Scalar> {
     using type = tier::list<tier::Blocked<32>>;
 };
 

@@ -51,32 +51,33 @@ constexpr int kNs[] = {1, 4, 5, 8, 9, 16, 17, 31, 32};
 
 template <Uplo UL> using Rt = batchlas::device::routine::sytrd<UL>;
 
-template <class T> T nan_v() { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }
+template <class Scalar> Scalar nan_v() { return Scalar(std::numeric_limits<real_of<Scalar>>::quiet_NaN()); }
 
 // Item b repeats representative b % kPeriod. UL's triangle holds data (complex Im(diag) != 0),
 // the other triangle and the pad rows hold NaN.
-template <class T> std::vector<T> input(int n, int ld, Uplo ul) {
-    std::vector<T> a(std::size_t(ld) * n * kBatch, nan_v<T>());
+template <class Scalar> std::vector<Scalar> input(int n, int ld, Uplo ul) {
+    std::vector<Scalar> a(std::size_t(ld) * n * kBatch, nan_v<Scalar>());
     for (int b = 0; b < kBatch; ++b)
         for (int c = 0; c < n; ++c)
             for (int r = 0; r < n; ++r)
                 if (ul == Uplo::Upper ? r <= c : r >= c)
-                    a[std::size_t(b) * ld * n + r + std::size_t(c) * ld] = val<T>(std::uint64_t(b % kPeriod) * 1000003u + r + 97u * c);
+                    a[std::size_t(b) * ld * n + r + std::size_t(c) * ld] = val<Scalar>(std::uint64_t(b % kPeriod) * 1000003u + r + 97u * c);
     return a;
 }
 
-template <Uplo UL, class Tier, class T> class ApiSytrdKernel;
+template <Uplo UL, class Tier, class Scalar> class ApiSytrdKernel;
 
 // The user's kernel: one problem per partition of N lanes, the tile in the work-group's local
 // memory at this partition's slice, the tier fixed at compile time. Slots b >= live run dead.
-template <Uplo UL, class Tier, class T>
-void launch_device(Dev& dev, T* A, int n, int ld, T* d, T* e, T* tau, int* info, int live = kBatch) {
+template <Uplo UL, class Tier, class Scalar>
+void launch_device(Dev& dev, Scalar* A, int n, int ld, Scalar* d, Scalar* e, Scalar* tau, int* info,
+                   int live = kBatch) {
     constexpr int N = Tier::n_max;
     constexpr int ppw = 32 / N;
-    constexpr std::size_t lbytes = batchlas::device::buffer_size<batchlas::device::routine::sytrd<UL>, Tier, T>(N).local_bytes;
+    constexpr std::size_t lbytes = batchlas::device::buffer_size<batchlas::device::routine::sytrd<UL>, Tier, Scalar>(N).local_bytes;
     dev.q().submit([&](sycl::handler& h) {
            sycl::local_accessor<sycl::uint4, 1> slm(sycl::range<1>((lbytes * ppw + 15) / 16), h);
-           h.parallel_for<ApiSytrdKernel<UL, Tier, T>>(
+           h.parallel_for<ApiSytrdKernel<UL, Tier, Scalar>>(
                sycl::nd_range<1>(std::size_t(kBatch / ppw) * 32, 32), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                    const auto part = make_partition<N>(it.get_sub_group());
                    const auto ex = batchlas::device::wrap(part);
@@ -95,10 +96,10 @@ void launch_device(Dev& dev, T* A, int n, int ld, T* d, T* e, T* tau, int* info,
        }).wait_and_throw();
 }
 
-template <class T> class DeviceApiSytrdTest : public DeviceCoreTest<T> {
+template <class Scalar> class DeviceApiSytrdTest : public DeviceCoreTest<Scalar> {
 protected:
     void SetUp() override {
-        DeviceCoreTest<T>::SetUp();
+        DeviceCoreTest<Scalar>::SetUp();
         if (this->IsSkipped()) return;
         // The CTA routes build without CPU targets (NO_CPU_TARGETS): only a GPU reaches them.
         if (!this->dev.q().get_device().has(sycl::aspect::gpu)) GTEST_SKIP() << "sytrd_cta runs on GPUs only";
@@ -106,38 +107,38 @@ protected:
 
 public:
     struct Result {
-        std::vector<T> a, d, e, tau;
+        std::vector<Scalar> a, d, e, tau;
         std::vector<int> info;
     };
 
-    Result host(int n, Uplo ul, const std::vector<T>& a0, int ld) {
+    Result host(int n, Uplo ul, const std::vector<Scalar>& a0, int ld) {
         Dev& dev = this->dev;
         const int nm1 = n > 1 ? n - 1 : 0;
-        T* A = dev.up(a0);
-        T* d = dev.alloc<T>(std::size_t(n) * kBatch, nan_v<T>());
-        T* e = dev.alloc<T>(std::size_t(nm1) * kBatch + 1, nan_v<T>());
-        T* tau = dev.alloc<T>(std::size_t(nm1) * kBatch + 1, nan_v<T>());
-        MatrixView<T, MatrixFormat::Dense> Av(A, n, n, ld, ld * n, kBatch);
-        VectorView<T> dv_(d, n, kBatch, 1, n), ev(e, nm1, kBatch, 1, nm1), tv(tau, nm1, kBatch, 1, nm1);
+        Scalar* A = dev.up(a0);
+        Scalar* d = dev.alloc<Scalar>(std::size_t(n) * kBatch, nan_v<Scalar>());
+        Scalar* e = dev.alloc<Scalar>(std::size_t(nm1) * kBatch + 1, nan_v<Scalar>());
+        Scalar* tau = dev.alloc<Scalar>(std::size_t(nm1) * kBatch + 1, nan_v<Scalar>());
+        MatrixView<Scalar, MatrixFormat::Dense> Av(A, n, n, ld, ld * n, kBatch);
+        VectorView<Scalar> dv_(d, n, kBatch, 1, n), ev(e, nm1, kBatch, 1, nm1), tv(tau, nm1, kBatch, 1, nm1);
         std::vector<std::byte> none(1);
-        (void)sytrd_cta<kB, T>(*dev.ctx, Av, dv_, ev, tv, ul, Span<std::byte>(none.data(), 1), 1);
+        (void)sytrd_cta<kB, Scalar>(*dev.ctx, Av, dv_, ev, tv, ul, Span<std::byte>(none.data(), 1), 1);
         dev.ctx->wait();
         // e and tau come back with their NaN end pad: n = 1 would be a zero-byte copy, which Metal rejects.
         return {dev.down(A, a0.size()), dev.down(d, std::size_t(n) * kBatch), dev.down(e, std::size_t(nm1) * kBatch + 1),
                 dev.down(tau, std::size_t(nm1) * kBatch + 1), std::vector<int>(kBatch, 0)};
     }
 
-    template <Uplo UL> Result device(int n, const std::vector<T>& a0, int ld) {
+    template <Uplo UL> Result device(int n, const std::vector<Scalar>& a0, int ld) {
         Dev& dev = this->dev;
         const int nm1 = n > 1 ? n - 1 : 0;
-        T* A = dev.up(a0);
-        T* d = dev.alloc<T>(std::size_t(n) * kBatch, nan_v<T>());
-        T* e = dev.alloc<T>(std::size_t(nm1) * kBatch + 1, nan_v<T>());
-        T* tau = dev.alloc<T>(std::size_t(nm1) * kBatch + 1, nan_v<T>());
+        Scalar* A = dev.up(a0);
+        Scalar* d = dev.alloc<Scalar>(std::size_t(n) * kBatch, nan_v<Scalar>());
+        Scalar* e = dev.alloc<Scalar>(std::size_t(nm1) * kBatch + 1, nan_v<Scalar>());
+        Scalar* tau = dev.alloc<Scalar>(std::size_t(nm1) * kBatch + 1, nan_v<Scalar>());
         int* info = dev.alloc<int>(kBatch, 7);
         // Every listed tier is instantiated; n <= 32 must reach a Cta one (Blocked is tested below).
-        batchlas::device::with_tier<Rt<UL>, T>(dev.q().get_device(), n, [&]<class Tier>(Tier) {
-            if constexpr (Tier::n_max > 0) launch_device<UL, Tier, T>(dev, A, n, ld, d, e, tau, info);
+        batchlas::device::with_tier<Rt<UL>, Scalar>(dev.q().get_device(), n, [&]<class Tier>(Tier) {
+            if constexpr (Tier::n_max > 0) launch_device<UL, Tier, Scalar>(dev, A, n, ld, d, e, tau, info);
             else ADD_FAILURE() << "with_tier picked tier::Blocked for n = " << n;
         });
         return {dev.down(A, a0.size()), dev.down(d, std::size_t(n) * kBatch), dev.down(e, std::size_t(nm1) * kBatch + 1),
@@ -160,11 +161,11 @@ template <class T> int period_diff(const std::vector<T>& g, std::size_t per) {
     return k;
 }
 
-template <class T, Uplo UL, class TF> void bit_identity(TF& t) {
+template <class Scalar, Uplo UL, class TF> void bit_identity(TF& t) {
     for (int n : kNs) {
         SCOPED_TRACE("n=" + std::to_string(n));
         const int ld = n + 3;
-        const auto a0 = input<T>(n, ld, UL);
+        const auto a0 = input<Scalar>(n, ld, UL);
         const auto h = t.host(n, UL, a0, ld);
         const auto g = t.template device<UL>(n, a0, ld);
         EXPECT_EQ(bitdiff(g.a, h.a), 0);
@@ -181,7 +182,7 @@ template <class T, Uplo UL, class TF> void bit_identity(TF& t) {
                     const std::size_t k = std::size_t(b) * ld * n + r + std::size_t(c) * ld;
                     pad += !same_bits(g.a[k], a0[k]);
                 }
-        for (const T& x : g.d) nonfinite += !std::isfinite(std::abs(x));
+        for (const Scalar& x : g.d) nonfinite += !std::isfinite(std::abs(x));
         EXPECT_EQ(pad, 0);
         EXPECT_EQ(nonfinite, 0);
     }
@@ -218,24 +219,25 @@ TYPED_TEST(DeviceApiSytrdTest, ArgumentCheckReturnsMinus2AndWritesNothing) {
 
 // C9: the last three slots of the last sub-group (Cta<8>: four per sub-group) run with live =
 // false. Their A, d, e and tau stay as given; every live slot keeps the all-live run's bits.
-template <class T, Uplo UL> void dead_slots(Dev& dev) {
+template <class Scalar, Uplo UL> void dead_slots(Dev& dev) {
     const int n = 7, ld = n + 3, nm1 = n - 1, live = kBatch - 3;
-    const auto a0 = input<T>(n, ld, UL);
-    const std::vector<T> d0(std::size_t(n) * kBatch, nan_v<T>()), e0(std::size_t(nm1) * kBatch, nan_v<T>());
+    const auto a0 = input<Scalar>(n, ld, UL);
+    const std::vector<Scalar> d0(std::size_t(n) * kBatch, nan_v<Scalar>()), e0(std::size_t(nm1) * kBatch,
+                                                                               nan_v<Scalar>());
     struct Got {
-        std::vector<T> a, d, e, tau;
+        std::vector<Scalar> a, d, e, tau;
     };
     const auto run = [&](int nlive) {
-        T* A = dev.up(a0);
-        T* d = dev.up(d0);
-        T* e = dev.up(e0);
-        T* tau = dev.up(e0);
+        Scalar* A = dev.up(a0);
+        Scalar* d = dev.up(d0);
+        Scalar* e = dev.up(e0);
+        Scalar* tau = dev.up(e0);
         int* info = dev.alloc<int>(kBatch, 7);
-        launch_device<UL, batchlas::device::tier::Cta<8>, T>(dev, A, n, ld, d, e, tau, info, nlive);
+        launch_device<UL, batchlas::device::tier::Cta<8>, Scalar>(dev, A, n, ld, d, e, tau, info, nlive);
         return Got{dev.down(A, a0.size()), dev.down(d, d0.size()), dev.down(e, e0.size()), dev.down(tau, e0.size())};
     };
     const Got all = run(kBatch), part = run(live);
-    const auto split = [&](const std::vector<T>& g, const std::vector<T>& ref, const std::vector<T>& in, std::size_t per) {
+    const auto split = [&](const std::vector<Scalar>& g, const std::vector<Scalar>& ref, const std::vector<Scalar>& in, std::size_t per) {
         int live_diff = 0, dead_diff = 0;
         for (std::size_t i = 0; i < g.size(); ++i) {
             if (i < std::size_t(live) * per) live_diff += !same_bits(g[i], ref[i]);
@@ -303,49 +305,50 @@ TEST(DeviceApiSytrdTier, BufferSizeIsTileVW) {
 //   - with_tier picks Blocked<32> past 32 for Lower; buffer_size equals the independent count.
 // Deliberate break (runs every time): the residual of the device output against A0 with one
 // element moved by 1e-2 must exceed the tolerance, so the residual check can see a wrong matrix.
-template <class T> using LDm = std::vector<LD<T>>;
+template <class Scalar> using LDm = std::vector<LD<Scalar>>;
 
 constexpr int kNB = 32;
 using BlockedTier = batchlas::device::tier::Blocked<kNB>;
 constexpr int kBlockedNs[] = {33, 63, 64, 65, 97, 160};
 int blocked_batch(int n) { return n <= 65 ? kBatch : 96; }
 
-template <class T> T conj_of(T x) {
-    if constexpr (is_cplx<T>) return std::conj(x);
+template <class Scalar> Scalar conj_of(Scalar x) {
+    if constexpr (is_cplx<Scalar>) return std::conj(x);
     else return x;
 }
 
 // Item b repeats representative b % kPeriod; the lower triangle holds data (Im(diag) = im_diag
 // times a value), the rest and the pad rows NaN.
-template <class T> std::vector<T> input_lower(int n, int ld, int batch, bool im_diag) {
-    std::vector<T> a(std::size_t(ld) * n * batch, nan_v<T>());
+template <class Scalar> std::vector<Scalar> input_lower(int n, int ld, int batch, bool im_diag) {
+    std::vector<Scalar> a(std::size_t(ld) * n * batch, nan_v<Scalar>());
     for (int b = 0; b < batch; ++b)
         for (int c = 0; c < n; ++c)
             for (int r = c; r < n; ++r) {
-                T v = val<T>(std::uint64_t(b % kPeriod) * 1000003u + r + 97u * c);
+                Scalar v = val<Scalar>(std::uint64_t(b % kPeriod) * 1000003u + r + 97u * c);
                 if (r == c) {
-                    if constexpr (is_cplx<T>) v = T(v.real(), im_diag ? v.imag() : real_of<T>(0));
+                    if constexpr (is_cplx<Scalar>) v = Scalar(v.real(), im_diag ? v.imag() : real_of<Scalar>(0));
                 }
                 a[std::size_t(b) * ld * n + r + std::size_t(c) * ld] = v;
             }
     return a;
 }
 
-template <class T> struct BlockedOut {
-    std::vector<T> a, d, e, tau;
+template <class Scalar> struct BlockedOut {
+    std::vector<Scalar> a, d, e, tau;
     std::vector<int> info;
 };
 
-template <class T> BlockedOut<T> blocked_device(Dev& dev, int n, int ld, int batch, const std::vector<T>& a0) {
+template <class Scalar> BlockedOut<Scalar> blocked_device(Dev& dev, int n, int ld, int batch,
+                                                          const std::vector<Scalar>& a0) {
     using R = Rt<Uplo::Lower>;
-    constexpr int WG = batchlas::device::tier_info<R, BlockedTier, T>::wg_size;
+    constexpr int WG = batchlas::device::tier_info<R, BlockedTier, Scalar>::wg_size;
     const int nm1 = n - 1;
-    T* A = dev.up(a0);
-    T* d = dev.alloc<T>(std::size_t(n) * batch, nan_v<T>());
-    T* e = dev.alloc<T>(std::size_t(nm1) * batch + 1, nan_v<T>());
-    T* tau = dev.alloc<T>(std::size_t(nm1) * batch + 1, nan_v<T>());
+    Scalar* A = dev.up(a0);
+    Scalar* d = dev.alloc<Scalar>(std::size_t(n) * batch, nan_v<Scalar>());
+    Scalar* e = dev.alloc<Scalar>(std::size_t(nm1) * batch + 1, nan_v<Scalar>());
+    Scalar* tau = dev.alloc<Scalar>(std::size_t(nm1) * batch + 1, nan_v<Scalar>());
     int* info = dev.alloc<int>(batch, 7);
-    const batchlas::device::WorkspaceSize sz = batchlas::device::buffer_size<batchlas::device::routine::sytrd<Uplo::Lower>, BlockedTier, T>(n);
+    const batchlas::device::WorkspaceSize sz = batchlas::device::buffer_size<batchlas::device::routine::sytrd<Uplo::Lower>, BlockedTier, Scalar>(n);
     std::byte* g = dev.alloc<std::byte>(sz.global_bytes * std::size_t(batch) + sz.align, std::byte{0});
     dev.run<WG>(batch, sz.local_bytes, [=](sycl::nd_item<1> it, unsigned char* lm) {
         const batchlas::device::WorkGroup<WG> ex{it};
@@ -361,29 +364,30 @@ template <class T> BlockedOut<T> blocked_device(Dev& dev, int n, int ld, int bat
             dev.down(tau, std::size_t(nm1) * batch + 1), dev.down(info, batch)};
 }
 
-template <class T> BlockedOut<T> blocked_host(Dev& dev, int n, int ld, int batch, const std::vector<T>& a0) {
+template <class Scalar> BlockedOut<Scalar> blocked_host(Dev& dev, int n, int ld, int batch,
+                                                        const std::vector<Scalar>& a0) {
     const int nm1 = n - 1;
-    T* A = dev.up(a0);
-    T* d = dev.alloc<T>(std::size_t(n) * batch, nan_v<T>());
-    T* e = dev.alloc<T>(std::size_t(nm1) * batch + 1, nan_v<T>());
-    T* tau = dev.alloc<T>(std::size_t(nm1) * batch + 1, nan_v<T>());
-    MatrixView<T, MatrixFormat::Dense> Av(A, n, n, ld, ld * n, batch);
-    VectorView<T> dv_(d, n, batch, 1, n), ev(e, nm1, batch, 1, nm1), tv(tau, nm1, batch, 1, nm1);
-    const std::size_t bytes = sytrd_blocked_buffer_size<kB, T>(*dev.ctx, Av, dv_, ev, tv, Uplo::Lower, kNB);
+    Scalar* A = dev.up(a0);
+    Scalar* d = dev.alloc<Scalar>(std::size_t(n) * batch, nan_v<Scalar>());
+    Scalar* e = dev.alloc<Scalar>(std::size_t(nm1) * batch + 1, nan_v<Scalar>());
+    Scalar* tau = dev.alloc<Scalar>(std::size_t(nm1) * batch + 1, nan_v<Scalar>());
+    MatrixView<Scalar, MatrixFormat::Dense> Av(A, n, n, ld, ld * n, batch);
+    VectorView<Scalar> dv_(d, n, batch, 1, n), ev(e, nm1, batch, 1, nm1), tv(tau, nm1, batch, 1, nm1);
+    const std::size_t bytes = sytrd_blocked_buffer_size<kB, Scalar>(*dev.ctx, Av, dv_, ev, tv, Uplo::Lower, kNB);
     std::byte* ws = dev.alloc<std::byte>(std::max<std::size_t>(bytes, 1), std::byte{0});
-    (void)sytrd_blocked<kB, T>(*dev.ctx, Av, dv_, ev, tv, Uplo::Lower, Span<std::byte>(ws, bytes), kNB);
+    (void)sytrd_blocked<kB, Scalar>(*dev.ctx, Av, dv_, ev, tv, Uplo::Lower, Span<std::byte>(ws, bytes), kNB);
     dev.ctx->wait();
     return {dev.down(A, a0.size()), dev.down(d, std::size_t(n) * batch), dev.down(e, std::size_t(nm1) * batch + 1),
             dev.down(tau, std::size_t(nm1) * batch + 1), std::vector<int>(batch, 0)};
 }
 
 // The Hermitian A0 of item q (full, from its lower triangle, Im(diag) dropped) in long double.
-template <class T> LDm<T> herm_of(const std::vector<T>& a0, int n, int ld, int q) {
-    LDm<T> h(std::size_t(n) * n);
+template <class Scalar> LDm<Scalar> herm_of(const std::vector<Scalar>& a0, int n, int ld, int q) {
+    LDm<Scalar> h(std::size_t(n) * n);
     for (int c = 0; c < n; ++c)
         for (int r = c; r < n; ++r) {
-            LD<T> v = wide(a0[std::size_t(q) * ld * n + r + std::size_t(c) * ld]);
-            if (r == c) v = LD<T>(std::real(v));
+            LD<Scalar> v = wide(a0[std::size_t(q) * ld * n + r + std::size_t(c) * ld]);
+            if (r == c) v = LD<Scalar>(std::real(v));
             h[r + std::size_t(c) * n] = v;
             h[c + std::size_t(r) * n] = conj_of(v);
         }
@@ -391,10 +395,11 @@ template <class T> LDm<T> herm_of(const std::vector<T>& a0, int n, int ld, int q
 }
 
 // max |Q^H A0 Q - T| / ||A0||_F and max |Q^H Q - I| for item q of a device output.
-template <class T> std::pair<double, double> residual(const BlockedOut<T>& o, const LDm<T>& a0, int n, int ld, int q) {
-    using W = LD<T>;
+template <class Scalar> std::pair<double, double> residual(const BlockedOut<Scalar>& o, const LDm<Scalar>& a0, int n,
+                                                           int ld, int q) {
+    using W = LD<Scalar>;
     const std::size_t nn = std::size_t(n) * n;
-    LDm<T> Q(nn, W(0));
+    LDm<Scalar> Q(nn, W(0));
     for (int i = 0; i < n; ++i) Q[i + std::size_t(i) * n] = W(1);
     // Q := H(i) Q for i = n-2 .. 0: H(i) = I - tau(i) v v^H, v(i+1) = 1, v(r > i+1) = A(r, i).
     for (int i = n - 2; i >= 0; --i) {
@@ -408,7 +413,7 @@ template <class T> std::pair<double, double> residual(const BlockedOut<T>& o, co
             for (int r = i + 1; r < n; ++r) Q[r + std::size_t(c) * n] -= t * v[r] * s;
         }
     }
-    LDm<T> AQ(nn, W(0));
+    LDm<Scalar> AQ(nn, W(0));
     for (int c = 0; c < n; ++c)
         for (int k = 0; k < n; ++k)
             for (int r = 0; r < n; ++r) AQ[r + std::size_t(c) * n] += a0[r + std::size_t(k) * n] * Q[k + std::size_t(c) * n];
@@ -432,7 +437,7 @@ template <class T> std::pair<double, double> residual(const BlockedOut<T>& o, co
     return {static_cast<double>(worst / fro), static_cast<double>(orth)};
 }
 
-template <class T> class DeviceApiSytrdBlockedTest : public DeviceApiSytrdTest<T> {};
+template <class Scalar> class DeviceApiSytrdBlockedTest : public DeviceApiSytrdTest<Scalar> {};
 TYPED_TEST_SUITE(DeviceApiSytrdBlockedTest, Types);
 
 TYPED_TEST(DeviceApiSytrdBlockedTest, BlockedMatchesHostBlockedRouteWithinTolerance) {
@@ -590,14 +595,14 @@ TEST(DeviceApiSytrdTier, WithTierPicksBlockedPast32ForLower) {
     static_assert(std::is_same_v<batchlas::device::resolve_tier_t<Rt<Uplo::Lower>, float, batchlas::device::tier::upto<4096>>, BlockedTier>);
 }
 
-template <class T> void expect_blocked_size(int n) {
+template <class Scalar> void expect_blocked_size(int n) {
     const auto r16 = [](std::size_t b) { return (b + 15) / 16 * 16; };
-    const std::size_t s = sizeof(T);
+    const std::size_t s = sizeof(Scalar);
     const std::size_t wc = r16(r16(std::size_t(n) * kNB * s) + n * s);  // W, then v, then wcol
     const std::size_t wip = r16(kNB * s);
     const std::size_t stage = r16(wip + kNB * s);
     const std::size_t elems = 1 * ((32 + 1) * 8 + (8 + 1) * 32);  // RegTiled<32, 32, 8>: A and B slabs
-    const auto got = batchlas::device::buffer_size<batchlas::device::routine::sytrd<Uplo::Lower>, BlockedTier, T>(n);
+    const auto got = batchlas::device::buffer_size<batchlas::device::routine::sytrd<Uplo::Lower>, BlockedTier, Scalar>(n);
     EXPECT_EQ(got.global_bytes, r16(wc + n * s)) << "n=" << n;
     EXPECT_EQ(got.local_bytes, r16(stage + elems * s)) << "n=" << n;
 }

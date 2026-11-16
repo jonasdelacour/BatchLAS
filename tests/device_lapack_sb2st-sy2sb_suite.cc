@@ -33,8 +33,8 @@ using batchlas::verify::Check;
 
 namespace {
 
-template <class T> using real_of = typename device::Arith<T>::real_t;
-template <class T> constexpr bool is_cplx = device::Arith<T>::is_complex;
+template <class Scalar> using real_of = typename device::Arith<Scalar>::real_t;
+template <class Scalar> constexpr bool is_cplx = device::Arith<Scalar>::is_complex;
 
 constexpr int kBatch = 1024;  // saturating batch: items repeat with period kPeriod
 constexpr int kPeriod = 3;
@@ -45,25 +45,25 @@ std::uint64_t mix(std::uint64_t x) {
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
     return x ^ (x >> 31);
 }
-template <class R> R uval(std::uint64_t i) { return static_cast<R>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
-template <class T> T val(std::uint64_t i) {
-    if constexpr (is_cplx<T>) return T(uval<real_of<T>>(2 * i), uval<real_of<T>>(2 * i + 1));
-    else return uval<T>(i);
+template <class Real> Real uval(std::uint64_t i) { return static_cast<Real>(static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0); }
+template <class Scalar> Scalar val(std::uint64_t i) {
+    if constexpr (is_cplx<Scalar>) return Scalar(uval<real_of<Scalar>>(2 * i), uval<real_of<Scalar>>(2 * i + 1));
+    else return uval<Scalar>(i);
 }
 
 // kPeriod representatives (edited by fix(item pointer, item)) copied to every item b from b % kPeriod.
-template <class T, class Fix> std::vector<T> batched(int per_item, std::uint64_t seed, Fix fix) {
-    std::vector<T> h(static_cast<std::size_t>(kBatch) * per_item);
+template <class Scalar, class Fix> std::vector<Scalar> batched(int per_item, std::uint64_t seed, Fix fix) {
+    std::vector<Scalar> h(static_cast<std::size_t>(kBatch) * per_item);
     for (int b = 0; b < kPeriod; ++b) {
-        for (int i = 0; i < per_item; ++i) h[std::size_t(b) * per_item + i] = val<T>(seed + std::uint64_t(b) * 1000003u + i);
+        for (int i = 0; i < per_item; ++i) h[std::size_t(b) * per_item + i] = val<Scalar>(seed + std::uint64_t(b) * 1000003u + i);
         fix(h.data() + std::size_t(b) * per_item, b);
     }
     for (int b = kPeriod; b < kBatch; ++b)
         std::copy_n(h.data() + std::size_t(b % kPeriod) * per_item, per_item, h.data() + std::size_t(b) * per_item);
     return h;
 }
-template <class T> std::vector<T> batched(int per_item, std::uint64_t seed) {
-    return batched<T>(per_item, seed, [](T*, int) {});
+template <class Scalar> std::vector<Scalar> batched(int per_item, std::uint64_t seed) {
+    return batched<Scalar>(per_item, seed, [](Scalar*, int) {});
 }
 
 template <class T> bool same_bits(const T& a, const T& b) { return std::memcmp(&a, &b, sizeof(T)) == 0; }
@@ -102,11 +102,11 @@ struct Dev {
     std::vector<void*> ptrs;
 };
 
-template <class T> class DeviceLapackBandTest : public ::testing::Test {
+template <class Scalar> class DeviceLapackBandTest : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx.device().supports_sub_group_size(32)) GTEST_SKIP() << "device tests launch sub-group size 32";
-        if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
+        if (test_utils::lacks_fp64<Scalar>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
     }
     Dev dev;
 };
@@ -114,8 +114,8 @@ protected:
 using Types = ::testing::Types<float, double, std::complex<float>, std::complex<double>>;
 TYPED_TEST_SUITE(DeviceLapackBandTest, Types);
 
-template <class T> using LD = std::conditional_t<is_cplx<T>, std::complex<long double>, long double>;
-template <class T> LD<T> wide(T v) { return LD<T>(v); }
+template <class Scalar> using LD = std::conditional_t<is_cplx<Scalar>, std::complex<long double>, long double>;
+template <class Scalar> LD<Scalar> wide(Scalar v) { return LD<Scalar>(v); }
 template <class V> V cj(V v) {
     if constexpr (std::is_arithmetic_v<V>) return v;
     else return std::conj(v);
@@ -124,20 +124,20 @@ template <class V> V re_only(V v) {
     if constexpr (std::is_arithmetic_v<V>) return v;
     else return V(v.real(), 0);
 }
-template <class T> double rel(T got, LD<T> ref, long double scale) {
-    const long double d = std::abs(LD<T>(got) - ref);
+template <class Scalar> double rel(Scalar got, LD<Scalar> ref, long double scale) {
+    const long double d = std::abs(LD<Scalar>(got) - ref);
     if (std::isnan(d)) return std::numeric_limits<double>::infinity();
-    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<T>>::min()));
+    return static_cast<double>(d / std::max<long double>(scale, std::numeric_limits<real_of<Scalar>>::min()));
 }
-template <class T> T nan_t() { return T(std::numeric_limits<real_of<T>>::quiet_NaN()); }
+template <class Scalar> Scalar nan_t() { return Scalar(std::numeric_limits<real_of<Scalar>>::quiet_NaN()); }
 
 // Host view of lower band storage s (ld, kd): the same mirror / zero rule as device::detail::HermBandLower.
-template <class T> struct HostBand {
-    const T* s;
+template <class Scalar> struct HostBand {
+    const Scalar* s;
     int ld, kd;
-    LD<T> get(int i, int j) const {
-        if (i >= j) return (i - j <= kd) ? wide(s[(i - j) + std::size_t(j) * ld]) : LD<T>(0);
-        return (j - i <= kd) ? cj(wide(s[(j - i) + std::size_t(i) * ld])) : LD<T>(0);
+    LD<Scalar> get(int i, int j) const {
+        if (i >= j) return (i - j <= kd) ? wide(s[(i - j) + std::size_t(j) * ld]) : LD<Scalar>(0);
+        return (j - i <= kd) ? cj(wide(s[(j - i) + std::size_t(i) * ld])) : LD<Scalar>(0);
     }
     // Storage index of (i, j) when it is inside the band, else -1.
     long idx(int i, int j) const {
@@ -146,10 +146,10 @@ template <class T> struct HostBand {
     }
 };
 // Band storage with padding rows kd + 1 .. ld - 1 set to a sentinel that no op may touch.
-template <class T> std::vector<T> make_band(int ld, int kd, int n, std::uint64_t seed) {
-    return batched<T>(ld * n, seed, [=](T* p, int) {
+template <class Scalar> std::vector<Scalar> make_band(int ld, int kd, int n, std::uint64_t seed) {
+    return batched<Scalar>(ld * n, seed, [=](Scalar* p, int) {
         for (int j = 0; j < n; ++j)
-            for (int r = kd + 1; r < ld; ++r) p[r + std::size_t(j) * ld] = T(7);
+            for (int r = kd + 1; r < ld; ++r) p[r + std::size_t(j) * ld] = Scalar(7);
     });
 }
 
@@ -230,22 +230,22 @@ TYPED_TEST(DeviceLapackBandTest, HemvHer2OnBandWindowCeilingLaunch) { run_band_h
 
 // Host larf on an accessor pair: Left C := C - tau v (v^H C) (fold = ScaleV / ScaleW irrelevant in
 // exact arithmetic), Right C := C - tau (C v) v^H. get(i, j) / put(i, j, value) / mag(i, j).
-template <class T, class Get, class Put> void ref_larf(bool left, int mr, int nc, const std::vector<LD<T>>& v, LD<T> tau, Get get,
-                                                       Put put, std::vector<long double>& scale) {
+template <class Scalar, class Get, class Put> void ref_larf(bool left, int mr, int nc, const std::vector<LD<Scalar>>& v, LD<Scalar> tau, Get get,
+                                                            Put put, std::vector<long double>& scale) {
     const int nout = left ? nc : mr, len = left ? mr : nc;
-    std::vector<LD<T>> res(std::size_t(mr) * nc);
+    std::vector<LD<Scalar>> res(std::size_t(mr) * nc);
     scale.assign(std::size_t(mr) * nc, 0);
     for (int o = 0; o < nout; ++o) {
-        LD<T> w = 0;
+        LD<Scalar> w = 0;
         long double sw = 0;
         for (int k = 0; k < len; ++k) {
-            const LD<T> c = left ? get(k, o) : get(o, k);
+            const LD<Scalar> c = left ? get(k, o) : get(o, k);
             w += left ? cj(v[k]) * c : c * v[k];
             sw += std::abs(v[k]) * std::abs(c);
         }
         for (int k = 0; k < len; ++k) {
             const int i = left ? k : o, j = left ? o : k;
-            const LD<T> nv = left ? get(i, j) - tau * v[k] * w : get(i, j) - tau * w * cj(v[k]);
+            const LD<Scalar> nv = left ? get(i, j) - tau * v[k] * w : get(i, j) - tau * w * cj(v[k]);
             res[std::size_t(i) * nc + j] = nv;
             scale[std::size_t(i) * nc + j] = std::abs(get(i, j)) + std::abs(tau) * std::abs(v[k]) * sw;
         }

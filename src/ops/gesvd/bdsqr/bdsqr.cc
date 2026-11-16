@@ -76,39 +76,39 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
 
 // Single description of bdsqr's workspace; see workspace_bytes() in
 // util/mempool.hh.
-template <typename T>
+template <typename Real>
 Span<int32_t> bdsqr_layout(Queue& ctx, BumpAllocator& pool, int32_t batch) {
     return pool.allocate<int32_t>(ctx, static_cast<size_t>(batch));
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Real>
 Event bdsqr(Queue& ctx,
-            const VectorView<T>& d,
-            const VectorView<T>& e,
-            Span<T> singular_values_out,
+            const VectorView<Real>& d,
+            const VectorView<Real>& e,
+            Span<Real> singular_values_out,
             const Span<std::byte>& ws,
             bool sort_desc,
             Span<int32_t> info) {
-    const auto empty = MatrixView<T, MatrixFormat::Dense>(nullptr, 0, 0, 1, 1, d.batch_size());
-    return bdsqr<B, T>(ctx,
-                       d,
-                       e,
-                       singular_values_out,
-                       ws,
-                       empty,
-                       empty,
-                       sort_desc,
-                       info);
+    const auto empty = MatrixView<Real, MatrixFormat::Dense>(nullptr, 0, 0, 1, 1, d.batch_size());
+    return bdsqr<B, Real>(ctx,
+                          d,
+                          e,
+                          singular_values_out,
+                          ws,
+                          empty,
+                          empty,
+                          sort_desc,
+                          info);
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Real>
 Event bdsqr(Queue& ctx,
-            const VectorView<T>& d,
-            const VectorView<T>& e,
-            Span<T> singular_values_out,
+            const VectorView<Real>& d,
+            const VectorView<Real>& e,
+            Span<Real> singular_values_out,
             const Span<std::byte>& ws,
-            const MatrixView<T, MatrixFormat::Dense>& u,
-            const MatrixView<T, MatrixFormat::Dense>& vh,
+            const MatrixView<Real, MatrixFormat::Dense>& u,
+            const MatrixView<Real, MatrixFormat::Dense>& vh,
             bool sort_desc,
             Span<int32_t> info) {
     const auto mask = ::batchlas::detail::call_mask("bdsqr", d, e, u, vh);
@@ -138,7 +138,7 @@ Event bdsqr(Queue& ctx,
         }
     }
 
-    if constexpr (detail::is_complex<T>::value) {
+    if constexpr (detail::is_complex<Real>::value) {
         throw batchlas::unsupported("bdsqr: complex types are not implemented yet");
     } else {
         Span<std::byte> ws_mut(const_cast<std::byte*>(ws.data()), ws.size());
@@ -148,18 +148,18 @@ Event bdsqr(Queue& ctx,
         // STORES into it rather than raising, and `info` is an accumulator that
         // several producers may share. Folding afterwards keeps both contracts and
         // leaves bdsqr_buffer_size untouched.
-        auto fail_flags = bdsqr_layout<T>(ctx, pool, batch);
-        const bool ok = bdsqr_implicit_qr_attempt<T>(ctx,
-                                                     d,
-                                                     e,
-                                                     singular_values_out,
-                                                     u,
-                                                     vh,
-                                                     n,
-                                                     batch,
-                                                     sort_desc,
-                                                     fail_flags,
-                                                     ::batchlas::detail::mask_ptr(mask));
+        auto fail_flags = bdsqr_layout<Real>(ctx, pool, batch);
+        const bool ok = bdsqr_implicit_qr_attempt<Real>(ctx,
+                                                        d,
+                                                        e,
+                                                        singular_values_out,
+                                                        u,
+                                                        vh,
+                                                        n,
+                                                        batch,
+                                                        sort_desc,
+                                                        fail_flags,
+                                                        ::batchlas::detail::mask_ptr(mask));
         // 0 already means converged here, so no polarity flip -- unlike
         // syevx_lobpcg / syevx_filtered, whose flags mean the opposite.
         detail::info_from_flags(ctx, info, fail_flags.data(), batch, /*one_means_converged=*/false, mask);
@@ -178,15 +178,15 @@ Event bdsqr(Queue& ctx,
     }
 }
 
-template <typename T>
+template <typename Real>
 size_t bdsqr_buffer_size(Queue& ctx,
-                         const VectorView<T>& d,
-                         const VectorView<T>& e,
-                         Span<T> singular_values_out) {
+                         const VectorView<Real>& d,
+                         const VectorView<Real>& e,
+                         Span<Real> singular_values_out) {
     static_cast<void>(e);
     static_cast<void>(singular_values_out);
     return workspace_bytes([&](BumpAllocator& pool) {
-        return bdsqr_layout<T>(ctx, pool, static_cast<int32_t>(d.batch_size()));
+        return bdsqr_layout<Real>(ctx, pool, static_cast<int32_t>(d.batch_size()));
     });
 }
 

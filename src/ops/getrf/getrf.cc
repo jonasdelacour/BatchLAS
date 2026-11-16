@@ -29,11 +29,11 @@ namespace ops::getrf {
 
 using select::overloaded;
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
-template <typename T>
-select::Key key_of(const MV<T>& A) {
+template <typename Scalar>
+select::Key key_of(const MV<Scalar>& A) {
     return {{"n", A.rows()}, {"batch", A.batch_size()}};
 }
 
@@ -42,8 +42,8 @@ select::Key key_of(const MV<T>& A) {
 // (n, ld, stride), so no family takes a heterogeneous batch: every vendor runs each item at the
 // top-level order (known-defects #12). Masked: tiny, cta, blocked and NETLIB's host loop skip an
 // inactive item; the strided vendor calls cannot.
-template <Backend B, typename T>
-bool can_run(const GetrfChoice& c, const select::Device& d, const MV<T>& A) {
+template <Backend B, typename Scalar>
+bool can_run(const GetrfChoice& c, const select::Device& d, const MV<Scalar>& A) {
     const bool masked = detail::any_batch_mask(A);
     const std::int64_t m = A.rows(), n = A.cols();
     const bool native = B != Backend::NETLIB && d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && m >= 1 &&
@@ -51,18 +51,18 @@ bool can_run(const GetrfChoice& c, const select::Device& d, const MV<T>& A) {
     const auto budget = static_cast<std::size_t>(d.slm_budget);
     return std::visit(overloaded{
         [&](Tiny) {
-            return native && m == n && n <= ops::getrf::getrf_tiny_max_n<T>() &&
+            return native && m == n && n <= ops::getrf::getrf_tiny_max_n<Scalar>() &&
                    d.max_wg >= resident::kTinyWgSize;
         },
         [&](Cta) {
-            return native && (m == n ? n <= ops::getrf::getrf_cta_max_n_for_slm<T>(budget)
-                                     : ops::getrf::getrf_cta_fits_rect<T>(static_cast<int>(m), static_cast<int>(n),
-                                                                          budget));
+            return native && (m == n ? n <= ops::getrf::getrf_cta_max_n_for_slm<Scalar>(budget)
+                                     : ops::getrf::getrf_cta_fits_rect<Scalar>(static_cast<int>(m), static_cast<int>(n),
+                                                                               budget));
         },
         [&](Blocked) {
             // min_blocks 1: the driver asks whether the panel leaf's argmax slots fit at all.
             return native &&
-                   ops::getrf::getrf_cta_max_n_for_slm<T>(budget, 1) >= 1;
+                   ops::getrf::getrf_cta_max_n_for_slm<Scalar>(budget, 1) >= 1;
         },
         // cuBLAS getrfBatched is square-only (it would factor rows() x rows()); LAPACKE and rocSOLVER take m x n.
         [&](Vendor) {
@@ -72,76 +72,78 @@ bool can_run(const GetrfChoice& c, const select::Device& d, const MV<T>& A) {
     }, c);
 }
 
-template <Backend B, typename T>
-Event launch(Queue& q, const GetrfChoice& c, const MV<T>& A, Span<int64_t> pivots, Span<std::byte> ws,
+template <Backend B, typename Scalar>
+Event launch(Queue& q, const GetrfChoice& c, const MV<Scalar>& A, Span<int64_t> pivots, Span<std::byte> ws,
              Span<int32_t> info) {
     return std::visit(overloaded{
-        [&](Tiny) { return ops::getrf::getrf_tiny_dispatch<T>(q, A, pivots, ws, info); },
-        [&](Cta) { return ops::getrf::getrf_cta_dispatch<T>(q, A, pivots, ws, info); },
+        [&](Tiny) { return ops::getrf::getrf_tiny_dispatch<Scalar>(q, A, pivots, ws, info); },
+        [&](Cta) { return ops::getrf::getrf_cta_dispatch<Scalar>(q, A, pivots, ws, info); },
         [&](Blocked) {
             // The public gemm and trsm (table-routed): the operands are sub-views carrying the
             // parent's ld, where the native GEMM collapses.
             // evidence: docs/perf/gemm.md#the-strided-ld-defect-and-the-routing-fix
-            return ops::getrf::getrf_blocked_dispatch<T>(
+            return ops::getrf::getrf_blocked_dispatch<Scalar>(
                 q, A, pivots, ws, info,
-                [](Queue& c2, const MV<T>& ga, const MV<T>& gb, const MV<T>& gc, T galpha, T gbeta, Transpose gta,
+                [](Queue& c2, const MV<Scalar>& ga, const MV<Scalar>& gb, const MV<Scalar>& gc, Scalar galpha,
+                   Scalar gbeta, Transpose gta,
                    Transpose gtb, ComputePrecision gp) {
-                    return gemm<B, T>(c2, ga, gb, gc, galpha, gbeta, gta, gtb, gp);
+                    return gemm<B, Scalar>(c2, ga, gb, gc, galpha, gbeta, gta, gtb, gp);
                 },
-                [](Queue& c2, const MV<T>& ta, const MV<T>& tb, T talpha, Side tside, Uplo tuplo, Transpose ttrans,
-                   Diag tdiag) { return trsm<B, T>(c2, ta, tb, talpha, tside, tuplo, ttrans, tdiag); });
+                [](Queue& c2, const MV<Scalar>& ta, const MV<Scalar>& tb, Scalar talpha, Side tside, Uplo tuplo,
+                   Transpose ttrans,
+                   Diag tdiag) { return trsm<B, Scalar>(c2, ta, tb, talpha, tside, tuplo, ttrans, tdiag); });
         },
         [&](Vendor) -> Event {
             if constexpr (select::has_library<B>(spec.vendor))
-                return backend::getrf_vendor<B, T>(q, A, pivots, ws, info);
-            else select::no_vendor<B, T>(spec);
+                return backend::getrf_vendor<B, Scalar>(q, A, pivots, ws, info);
+            else select::no_vendor<B, Scalar>(spec);
         },
     }, c);
 }
 
 // Exactly the chosen family's need (R5); Blocked's gemm and trsm take no workspace. None of these
 // may read A.data_ptr(): inv.cc sizes getrf from a layout pass with a null data pointer.
-template <Backend B, typename T>
-std::size_t workspace(Queue& q, const GetrfChoice& c, const MV<T>& A) {
+template <Backend B, typename Scalar>
+std::size_t workspace(Queue& q, const GetrfChoice& c, const MV<Scalar>& A) {
     return std::visit(overloaded{
-        [&](Tiny) { return ops::getrf::getrf_tiny_buffer_size<T>(q, A); },
-        [&](Cta) { return ops::getrf::getrf_cta_buffer_size<T>(q, A); },
-        [&](Blocked) { return ops::getrf::getrf_blocked_buffer_size<T>(q, A); },
+        [&](Tiny) { return ops::getrf::getrf_tiny_buffer_size<Scalar>(q, A); },
+        [&](Cta) { return ops::getrf::getrf_cta_buffer_size<Scalar>(q, A); },
+        [&](Blocked) { return ops::getrf::getrf_blocked_buffer_size<Scalar>(q, A); },
         [&](Vendor) -> std::size_t {
             if constexpr (select::has_library<B>(spec.vendor))
-                return backend::getrf_vendor_buffer_size<B, T>(q, A);
-            else select::no_vendor<B, T>(spec);
+                return backend::getrf_vendor_buffer_size<B, Scalar>(q, A);
+            else select::no_vendor<B, Scalar>(spec);
         },
     }, c);
 }
 
 }  // namespace ops::getrf
 
-template <Backend B, typename T>
-Event getrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<int64_t> pivots,
+template <Backend B, typename Scalar>
+Event getrf(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, Span<int64_t> pivots,
             Span<std::byte> workspace, Span<int32_t> info) {
-    getrf_validate_params<T>(A);
+    getrf_validate_params<Scalar>(A);
     (void)detail::call_mask("getrf", A);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key: m, n are A's extents, k = m.
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = A.rows(), .batch = A.batch_size()};
-    const select::Key key = ops::getrf::key_of<T>(A);
-    return select::run<B, T>(
-        ops::getrf::spec, ctx, key, ops::getrf::candidates<T>(),
-        [&](const auto& c, const auto& d) { return ops::getrf::can_run<B, T>(c, d, A); }, shape, key,
-        [&](const auto& c) { return ops::getrf::launch<B, T>(ctx, c, A, pivots, workspace, info); });
+    const select::Key key = ops::getrf::key_of<Scalar>(A);
+    return select::run<B, Scalar>(
+        ops::getrf::spec, ctx, key, ops::getrf::candidates<Scalar>(),
+        [&](const auto& c, const auto& d) { return ops::getrf::can_run<B, Scalar>(c, d, A); }, shape, key,
+        [&](const auto& c) { return ops::getrf::launch<B, Scalar>(ctx, c, A, pivots, workspace, info); });
 }
 
-template <Backend B, typename T>
-size_t getrf_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
-    getrf_validate_params<T>(A);
+template <Backend B, typename Scalar>
+size_t getrf_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A) {
+    getrf_validate_params<Scalar>(A);
     (void)detail::call_mask("getrf_buffer_size", A);
     if (A.batch_size() == 0) return 0;
-    const auto c = select::pick<B, T>(
-        ops::getrf::spec, ctx, ops::getrf::key_of<T>(A), ops::getrf::candidates<T>(),
-        [&](const auto& k, const auto& d) { return ops::getrf::can_run<B, T>(k, d, A); });
-    return ops::getrf::workspace<B, T>(ctx, c, A);
+    const auto c = select::pick<B, Scalar>(
+        ops::getrf::spec, ctx, ops::getrf::key_of<Scalar>(A), ops::getrf::candidates<Scalar>(),
+        [&](const auto& k, const auto& d) { return ops::getrf::can_run<B, Scalar>(k, d, A); });
+    return ops::getrf::workspace<B, Scalar>(ctx, c, A);
 }
 
 #define GETRF_INSTANTIATE(B_, fp) \

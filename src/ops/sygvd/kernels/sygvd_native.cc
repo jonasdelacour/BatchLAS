@@ -17,17 +17,17 @@ namespace batchlas::ops::sygvd {
 
 namespace {
 
-template <typename T> class SygvdIdentityFailedKernel;
+template <typename Scalar> class SygvdIdentityFailedKernel;
 class SygvdMergeInfoKernel;
 
 }  // namespace
 
-template <typename T>
-Event sygvd_identity_failed(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& B, Uplo uplo,
+template <typename Scalar>
+Event sygvd_identity_failed(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& B, Uplo uplo,
                             Span<const int32_t> potrf_info, const std::uint8_t* mask) {
-    using D = typename sycl_device::DevMap<T>::type;
-    using R = typename base_type<T>::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    using D = typename sycl_device::DevMap<Scalar>::type;
+    using R = typename base_type<Scalar>::type;
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
     D* const bp = reinterpret_cast<D*>(B.data_ptr());
     const int n = B.rows();
     const std::ptrdiff_t ldb = B.ld(), stride = B.stride();
@@ -37,7 +37,7 @@ Event sygvd_identity_failed(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>
     const std::size_t elems = static_cast<std::size_t>(n) * static_cast<std::size_t>(n);
 
     ctx->submit([&](sycl::handler& h) {
-        batchlas::impl::parallel_for<SygvdIdentityFailedKernel<T>>(h, sycl::range<2>(batch, elems), [=](sycl::item<2> it) {
+        batchlas::impl::parallel_for<SygvdIdentityFailedKernel<Scalar>>(h, sycl::range<2>(batch, elems), [=](sycl::item<2> it) {
             const std::size_t b = it.get_id(0);
             if (mask && !mask[b]) return;  // I3
             if (fail[b] == 0) return;

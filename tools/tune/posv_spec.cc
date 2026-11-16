@@ -21,15 +21,15 @@ namespace {
 
 namespace S = ops::posv;
 
-template <typename T>
+template <typename Scalar>
 struct PosvProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     int n, nrhs, batch, lda, ldb;
     std::size_t sa, sb;
     Uplo uplo;
-    UnifiedVector<T> A0, A, B0, X;
-    UnifiedVector<T*> pA0, pA, pB0, pX;
+    UnifiedVector<Scalar> A0, A, B0, X;
+    UnifiedVector<Scalar*> pA0, pA, pB0, pX;
     MV A0v, Av, B0v, Xv;
     UnifiedVector<std::int32_t> info;
 
@@ -45,7 +45,7 @@ struct PosvProblem {
         (void)B0v.fill_random(q, false, 777);
         q.wait();
     }
-    std::size_t workspace() { return posv_buffer_size<kBackend, T>(q, Av, Xv, uplo); }
+    std::size_t workspace() { return posv_buffer_size<kBackend, Scalar>(q, Av, Xv, uplo); }
     void reset() {  // the solve overwrites A with the factor and B with X
         (void)MV::copy(q, Av, A0v);
         (void)MV::copy(q, Xv, B0v);
@@ -55,7 +55,7 @@ struct PosvProblem {
         for (int b = 0; b < batch; ++b) info[std::size_t(b)] = 0;
     }
     void run(Span<std::byte> ws) {
-        (void)posv<kBackend, T>(q, Av, Xv, uplo, ws, info.to_span());
+        (void)posv<kBackend, Scalar>(q, Av, Xv, uplo, ws, info.to_span());
         q.wait();
     }
     std::pair<double, int> verify() {

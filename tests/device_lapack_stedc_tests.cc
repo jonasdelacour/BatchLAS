@@ -49,7 +49,7 @@ using namespace batchlas;
 using batchlas::verify::Check;
 using Tier = device::tier::Blocked<1>;
 
-template <class T, JobType J> struct UserStedc;
+template <class Real, JobType J> struct UserStedc;
 
 namespace {
 
@@ -66,7 +66,7 @@ std::uint64_t mix(std::uint64_t x) {
 }
 double uval(std::uint64_t i) { return static_cast<double>(mix(i) >> 11) * 0x1.0p-53 * 2.0 - 1.0; }
 template <class T> bool same_bits(const T& a, const T& b) { return std::memcmp(&a, &b, sizeof(T)) == 0; }
-template <class T> T poison() { return std::numeric_limits<T>::max() / T(4); }  // large and finite
+template <class Real> Real poison() { return std::numeric_limits<Real>::max() / Real(4); }  // large and finite
 
 // Representative r of order n: 0 the 1-D Laplacian (2, -1); 1 graded (d_i and e_i fall by 10
 // every 4 rows); 2 split (e_i = 0 every fifth row) with d repeating in pairs.
@@ -122,53 +122,53 @@ struct Dev {
 
 // The batch of one n. Device layout: d, e at inc 2 and stride n * 2 + 3, pads poisoned; host
 // layout: natural (inc 1, stride n), the route's own copies (it tears d in place).
-template <class T> struct Problem {
+template <class Real> struct Problem {
     int n, sd, se;
-    std::vector<T> d, e, dn, en;
+    std::vector<Real> d, e, dn, en;
     std::vector<std::vector<double>> rd, re;
     explicit Problem(int n_) : n(n_), sd(n_ * kInc + 3), se(std::max(n_ - 1, 1) * kInc + 3) {
-        d.assign(std::size_t(kBatch) * sd, poison<T>());
-        e.assign(std::size_t(kBatch) * se, poison<T>());
-        dn.assign(std::size_t(kBatch) * n, T(0));
-        en.assign(std::size_t(kBatch) * std::max(n - 1, 1), T(0));
+        d.assign(std::size_t(kBatch) * sd, poison<Real>());
+        e.assign(std::size_t(kBatch) * se, poison<Real>());
+        dn.assign(std::size_t(kBatch) * n, Real(0));
+        en.assign(std::size_t(kBatch) * std::max(n - 1, 1), Real(0));
         rd.resize(kPeriod);
         re.resize(kPeriod);
         for (int r = 0; r < kPeriod; ++r) rep(r, n, rd[r], re[r]);
         for (int b = 0; b < kBatch; ++b) {
             const int r = b % kPeriod;
             for (int i = 0; i < n; ++i) {
-                d[std::size_t(b) * sd + i * kInc] = static_cast<T>(rd[r][i]);
-                dn[std::size_t(b) * n + i] = static_cast<T>(rd[r][i]);
+                d[std::size_t(b) * sd + i * kInc] = static_cast<Real>(rd[r][i]);
+                dn[std::size_t(b) * n + i] = static_cast<Real>(rd[r][i]);
             }
             for (int i = 0; i + 1 < n; ++i) {
-                e[std::size_t(b) * se + i * kInc] = static_cast<T>(re[r][i]);
-                en[std::size_t(b) * std::max(n - 1, 1) + i] = static_cast<T>(re[r][i]);
+                e[std::size_t(b) * se + i * kInc] = static_cast<Real>(re[r][i]);
+                en[std::size_t(b) * std::max(n - 1, 1) + i] = static_cast<Real>(re[r][i]);
             }
         }
     }
     // The kPeriod representatives as dense n x n tridiagonals (ld n).
-    std::vector<T> dense() const {
-        std::vector<T> a(std::size_t(kPeriod) * n * n, T(0));
+    std::vector<Real> dense() const {
+        std::vector<Real> a(std::size_t(kPeriod) * n * n, Real(0));
         for (int r = 0; r < kPeriod; ++r)
             for (int i = 0; i < n; ++i) {
-                a[std::size_t(r) * n * n + i + std::size_t(i) * n] = static_cast<T>(rd[r][i]);
+                a[std::size_t(r) * n * n + i + std::size_t(i) * n] = static_cast<Real>(rd[r][i]);
                 if (i + 1 < n) {
-                    a[std::size_t(r) * n * n + (i + 1) + std::size_t(i) * n] = static_cast<T>(re[r][i]);
-                    a[std::size_t(r) * n * n + i + std::size_t(i + 1) * n] = static_cast<T>(re[r][i]);
+                    a[std::size_t(r) * n * n + (i + 1) + std::size_t(i) * n] = static_cast<Real>(re[r][i]);
+                    a[std::size_t(r) * n * n + i + std::size_t(i + 1) * n] = static_cast<Real>(re[r][i]);
                 }
             }
         return a;
     }
 };
 
-template <class T> class DeviceApiStedc : public ::testing::Test {
+template <class Real> class DeviceApiStedc : public ::testing::Test {
 protected:
     void SetUp() override {
         if (!dev.ctx) GTEST_SKIP() << "no SYCL device visible";
-        if (test_utils::lacks_fp64<T>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
+        if (test_utils::lacks_fp64<Real>(dev.q().get_device())) GTEST_SKIP() << "device has no fp64";
         bool fits = false;
         try {
-            device::with_tier<device::routine::stedc<JobType::EigenVectors>, T>(dev.q().get_device(), 1, [&](auto) { fits = true; });
+            device::with_tier<device::routine::stedc<JobType::EigenVectors>, Real>(dev.q().get_device(), 1, [&](auto) { fits = true; });
         } catch (const batchlas::invalid_argument&) {
         }
         if (!fits) GTEST_SKIP() << "no stedc tier fits this device (work-group 256, sub-group 32)";
@@ -180,76 +180,77 @@ TYPED_TEST_SUITE(DeviceApiStedc, RealTypes);
 
 // The device op from a user kernel: WorkGroup<256, 32>, one matrix per work-group; Z may be empty
 // (J = NoEigenVectors).
-template <class T, JobType J>
-void user_stedc(Dev& dev, const VectorView<T>& d, const VectorView<T>& e, const VectorView<T>& w, const MatrixView<T, MatrixFormat::Dense>& Z,
+template <class Real, JobType J>
+void user_stedc(Dev& dev, const VectorView<Real>& d, const VectorView<Real>& e, const VectorView<Real>& w, const MatrixView<Real, MatrixFormat::Dense>& Z,
                 std::byte* gws, std::int32_t* info, std::int32_t max_sec_iter, int n) {
-    const device::WorkspaceSize sz = device::buffer_size<device::routine::stedc<J>, Tier, T>(n);
+    const device::WorkspaceSize sz = device::buffer_size<device::routine::stedc<J>, Tier, Real>(n);
     const auto Zk = Z.kernel_view();
-    device::StedcOptions<T> p;
+    device::StedcOptions<Real> p;
     p.max_sec_iter = max_sec_iter;
     dev.q().submit([&](sycl::handler& h) {
            sycl::local_accessor<std::byte, 1> slm(sycl::range<1>(sz.local_bytes), h);
-           h.parallel_for<UserStedc<T, J>>(sycl::nd_range<1>(std::size_t(kBatch) * kWg, kWg),
-                                           [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-                                               const device::WorkGroup<kWg, 32> ex{it};
-                                               const int b = static_cast<int>(it.get_group_linear_id());
-                                               const device::Workspace ws{slm.template get_multi_ptr<sycl::access::decorated::yes>(),
-                                                                      device::global_slice(gws, sz, b)};
-                                               int ib = 0;
-                                               if constexpr (J == JobType::EigenVectors)
-                                                   ib = device::stedc<J, Tier>(ex, device::item(d, b), device::item(e, b), device::item(w, b),
-                                                                           device::item(Zk, b, n, n), ws, p);
-                                               else ib = device::stedc<J, Tier>(ex, device::item(d, b), device::item(e, b), device::item(w, b), ws, p);
-                                               if (ex.leader()) info[b] = ib;
-                                           });
+           h.parallel_for<UserStedc<Real, J>>(sycl::nd_range<1>(std::size_t(kBatch) * kWg, kWg),
+                                              [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
+                                                  const device::WorkGroup<kWg, 32> ex{it};
+                                                  const int b = static_cast<int>(it.get_group_linear_id());
+                                                  const device::Workspace ws{slm.template get_multi_ptr<sycl::access::decorated::yes>(),
+                                                                         device::global_slice(gws, sz, b)};
+                                                  int ib = 0;
+                                                  if constexpr (J == JobType::EigenVectors)
+                                                      ib = device::stedc<J, Tier>(ex, device::item(d, b), device::item(e, b), device::item(w, b),
+                                                                              device::item(Zk, b, n, n), ws, p);
+                                                  else ib = device::stedc<J, Tier>(ex, device::item(d, b), device::item(e, b), device::item(w, b), ws, p);
+                                                  if (ex.leader()) info[b] = ib;
+                                              });
        }).wait_and_throw();
 }
 
 // One device run on the problem's layouts: w (stride n + 3) and Z (ld n + 3) poisoned first.
-template <class T> struct DeviceRun {
+template <class Real> struct DeviceRun {
     int sw, ld, sz;
-    T *w, *z;
+    Real *w, *z;
     std::int32_t* info;
 };
-template <class T, JobType J> DeviceRun<T> run_device(Dev& dev, const Problem<T>& P, T* d, T* e, std::int32_t max_sec_iter) {
+template <class Real, JobType J> DeviceRun<Real> run_device(Dev& dev, const Problem<Real>& P, Real* d, Real* e, std::int32_t max_sec_iter) {
     const int n = P.n;
-    DeviceRun<T> r{n + 3, n + 3, (n + 3) * n + 5, nullptr, nullptr, nullptr};
-    r.w = dev.up(std::vector<T>(std::size_t(kBatch) * r.sw, poison<T>()));
-    r.z = dev.up(std::vector<T>(std::size_t(kBatch) * r.sz, poison<T>()));
+    DeviceRun<Real> r{n + 3, n + 3, (n + 3) * n + 5, nullptr, nullptr, nullptr};
+    r.w = dev.up(std::vector<Real>(std::size_t(kBatch) * r.sw, poison<Real>()));
+    r.z = dev.up(std::vector<Real>(std::size_t(kBatch) * r.sz, poison<Real>()));
     r.info = dev.up(std::vector<std::int32_t>(kBatch, -7));
-    const auto gsz = device::buffer_size<device::routine::stedc<J>, Tier, T>(n);
+    const auto gsz = device::buffer_size<device::routine::stedc<J>, Tier, Real>(n);
     std::byte* gws = dev.up(std::vector<std::byte>(gsz.global_bytes * kBatch, std::byte{0xff}));
-    const VectorView<T> dview(d, n, kBatch, kInc, P.sd);
-    const VectorView<T> eview(e, std::max(n - 1, 0), kBatch, kInc, P.se);
-    user_stedc<T, J>(dev, dview, eview, VectorView<T>(r.w, n, kBatch, 1, r.sw), MatrixView<T, MatrixFormat::Dense>(r.z, n, n, r.ld, r.sz, kBatch),
-                     gws, r.info, max_sec_iter, n);
+    const VectorView<Real> dview(d, n, kBatch, kInc, P.sd);
+    const VectorView<Real> eview(e, std::max(n - 1, 0), kBatch, kInc, P.se);
+    user_stedc<Real, J>(dev, dview, eview, VectorView<Real>(r.w, n, kBatch, 1, r.sw), MatrixView<Real, MatrixFormat::Dense>(r.z, n, n, r.ld, r.sz, kBatch),
+                        gws, r.info, max_sec_iter, n);
     return r;
 }
 
 // The host route on its natural layouts (FusedCta when max_sec_iter must reach the merge).
-template <class T> struct HostRun {
-    T *w, *z;
+template <class Real> struct HostRun {
+    Real *w, *z;
     std::int32_t* info;
 };
-template <class T> HostRun<T> run_host(Dev& dev, const Problem<T>& P, std::int32_t max_sec_iter, bool fused_cta) {
+template <class Real> HostRun<Real> run_host(Dev& dev, const Problem<Real>& P, std::int32_t max_sec_iter,
+                                             bool fused_cta) {
     const int n = P.n, ne = std::max(n - 1, 1);
-    HostRun<T> r{};
-    T* d = dev.up(P.dn);
-    T* e = dev.up(P.en);
-    r.w = dev.up(std::vector<T>(std::size_t(kBatch) * n, T(0)));
-    std::vector<T> eye(std::size_t(kBatch) * n * n, T(0));
+    HostRun<Real> r{};
+    Real* d = dev.up(P.dn);
+    Real* e = dev.up(P.en);
+    r.w = dev.up(std::vector<Real>(std::size_t(kBatch) * n, Real(0)));
+    std::vector<Real> eye(std::size_t(kBatch) * n * n, Real(0));
     for (int b = 0; b < kBatch; ++b)
-        for (int i = 0; i < n; ++i) eye[std::size_t(b) * n * n + i + std::size_t(i) * n] = T(1);
+        for (int i = 0; i < n; ++i) eye[std::size_t(b) * n * n + i + std::size_t(i) * n] = Real(1);
     r.z = dev.up(eye);
     r.info = dev.up(std::vector<std::int32_t>(kBatch, -7));
-    StedcParams<T> sp;
+    StedcParams<Real> sp;
     sp.max_sec_iter = max_sec_iter;
     if (fused_cta) sp.merge_variant = StedcMergeVariant::FusedCta;
     const std::size_t bytes = stedc_buffer_size(*dev.ctx, std::size_t(n), std::size_t(kBatch), JobType::EigenVectors, sp);
     std::byte* hws = dev.up(std::vector<std::byte>(std::max<std::size_t>(bytes, 1)));
-    (void)stedc(*dev.ctx, VectorView<T>(d, n, kBatch, 1, n), VectorView<T>(e, std::max(n - 1, 0), kBatch, 1, ne),
-                VectorView<T>(r.w, n, kBatch, 1, n), Span<std::byte>(hws, bytes), JobType::EigenVectors, sp,
-                MatrixView<T, MatrixFormat::Dense>(r.z, n, n, n, n * n, kBatch), Span<std::int32_t>(r.info, kBatch));
+    (void)stedc(*dev.ctx, VectorView<Real>(d, n, kBatch, 1, n), VectorView<Real>(e, std::max(n - 1, 0), kBatch, 1, ne),
+                VectorView<Real>(r.w, n, kBatch, 1, n), Span<std::byte>(hws, bytes), JobType::EigenVectors, sp,
+                MatrixView<Real, MatrixFormat::Dense>(r.z, n, n, n, n * n, kBatch), Span<std::int32_t>(r.info, kBatch));
     dev.ctx->wait();
     return r;
 }

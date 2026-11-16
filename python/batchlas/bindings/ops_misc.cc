@@ -18,72 +18,72 @@ DenseMatrix transpose_dense_like(const Matrix<T, MF>& input) {
     }
 }
 
-template <typename T>
-DenseMatrix dense_lascl_impl(const DenseMatrix& matrix_wrapper, T cfrom, T cto) {
-    DenseMatrixT<T> out = std::get<DenseMatrixT<T>>(matrix_wrapper.storage).clone();
+template <typename Real>
+DenseMatrix dense_lascl_impl(const DenseMatrix& matrix_wrapper, Real cfrom, Real cto) {
+    DenseMatrixT<Real> out = std::get<DenseMatrixT<Real>>(matrix_wrapper.storage).clone();
     Queue& queue = acquire_queue(std::nullopt, Backend::Auto);
     batchlas::lascl(queue, out.view(), cfrom, cto);
     queue.wait();
     return wrap_dense(std::move(out));
 }
 
-template <typename T>
+template <typename Scalar>
 DenseVector dense_norm_impl(const DenseMatrix& matrix_wrapper, NormType norm_type) {
-    const auto& matrix = std::get<DenseMatrixT<T>>(matrix_wrapper.storage);
+    const auto& matrix = std::get<DenseMatrixT<Scalar>>(matrix_wrapper.storage);
     Queue& queue = acquire_queue(std::nullopt, Backend::Auto);
-    auto values = batchlas::norm<T, MatrixFormat::Dense>(queue, matrix.view(), norm_type);
+    auto values = batchlas::norm<Scalar, MatrixFormat::Dense>(queue, matrix.view(), norm_type);
     queue.wait();
     return wrap_vector_copy(values, matrix.batch_size(), 1);
 }
 
-template <typename T, MatrixFormat MF>
-DenseVector cond_impl(const Matrix<T, MF>& matrix, NormType norm_type, Backend backend,
+template <typename Real, MatrixFormat MF>
+DenseVector cond_impl(const Matrix<Real, MF>& matrix, NormType norm_type, Backend backend,
                       const std::optional<std::string>& device_name) {
     Queue& queue = acquire_queue(device_name, backend);
-    DenseVector result = visit_backend<T>(queue, [&](auto backend_tag) {
+    DenseVector result = visit_backend<Real>(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
-        auto values = batchlas::cond<B, T, MF>(queue, matrix.view(), norm_type);
+        auto values = batchlas::cond<B, Real, MF>(queue, matrix.view(), norm_type);
         queue.wait();
         return wrap_vector_copy(values, matrix.batch_size(), 1);
     });
     return result;
 }
 
-template <typename T>
+template <typename Scalar>
 DenseMatrix ortho_impl(const DenseMatrix& a_wrapper,
                        const py::dict& options,
                        Backend backend,
                        const std::optional<std::string>& device_name) {
-    DenseMatrixT<T> out = std::get<DenseMatrixT<T>>(a_wrapper.storage).clone();
+    DenseMatrixT<Scalar> out = std::get<DenseMatrixT<Scalar>>(a_wrapper.storage).clone();
     const Transpose trans_a =
         options.contains("trans_a") ? parse_transpose(py::cast<std::string>(options["trans_a"])) : Transpose::NoTrans;
     const OrthoAlgorithm algorithm =
         options.contains("algorithm") ? parse_ortho_algorithm(py::cast<std::string>(options["algorithm"]))
                                       : OrthoAlgorithm::Chol2;
     Queue& queue = acquire_queue(device_name, backend);
-    run_backend_with_workspace<T>(
+    run_backend_with_workspace<Scalar>(
         queue,
         [&](auto backend_tag) {
             constexpr Backend B = decltype(backend_tag)::value;
-            return batchlas::ortho_buffer_size<B, T>(queue, out.view(), trans_a, algorithm);
+            return batchlas::ortho_buffer_size<B, Scalar>(queue, out.view(), trans_a, algorithm);
         },
         [&](auto backend_tag, Span<std::byte> workspace) {
             constexpr Backend B = decltype(backend_tag)::value;
-            batchlas::ortho<B, T>(queue, out.view(), trans_a, workspace, algorithm);
+            batchlas::ortho<B, Scalar>(queue, out.view(), trans_a, workspace, algorithm);
         });
     queue.wait();
     return wrap_dense(std::move(out));
 }
 
-template <typename T>
+template <typename Scalar>
 DenseMatrix ortho_metric_impl(const DenseMatrix& a_wrapper,
                               const DenseMatrix& m_wrapper,
                               const py::dict& options,
                               Backend backend,
                               const std::optional<std::string>& device_name) {
     ensure_same_dtype(a_wrapper, m_wrapper, "matrix and metric dtypes must match");
-    DenseMatrixT<T> out = std::get<DenseMatrixT<T>>(a_wrapper.storage).clone();
-    const auto& metric = std::get<DenseMatrixT<T>>(m_wrapper.storage);
+    DenseMatrixT<Scalar> out = std::get<DenseMatrixT<Scalar>>(a_wrapper.storage).clone();
+    const auto& metric = std::get<DenseMatrixT<Scalar>>(m_wrapper.storage);
     const Transpose trans_a =
         options.contains("trans_a") ? parse_transpose(py::cast<std::string>(options["trans_a"])) : Transpose::NoTrans;
     const Transpose trans_m =
@@ -93,67 +93,67 @@ DenseMatrix ortho_metric_impl(const DenseMatrix& a_wrapper,
                                       : OrthoAlgorithm::Chol2;
     const std::size_t iterations = py_scalar_or_default<std::size_t>(options, "iterations", 2);
     Queue& queue = acquire_queue(device_name, backend);
-    run_backend_with_workspace<T>(
+    run_backend_with_workspace<Scalar>(
         queue,
         [&](auto backend_tag) {
             constexpr Backend B = decltype(backend_tag)::value;
-            return batchlas::ortho_buffer_size<B, T>(queue, out.view(), metric.view(), trans_a, trans_m, algorithm,
-                                                     iterations);
+            return batchlas::ortho_buffer_size<B, Scalar>(queue, out.view(), metric.view(), trans_a, trans_m, algorithm,
+                                                          iterations);
         },
         [&](auto backend_tag, Span<std::byte> workspace) {
             constexpr Backend B = decltype(backend_tag)::value;
-            batchlas::ortho<B, T>(queue, out.view(), metric.view(), trans_a, trans_m, workspace, algorithm,
-                                  iterations);
+            batchlas::ortho<B, Scalar>(queue, out.view(), metric.view(), trans_a, trans_m, workspace, algorithm,
+                                       iterations);
         });
     queue.wait();
     return wrap_dense(std::move(out));
 }
 
-template <typename T>
+template <typename Scalar>
 ILUKHandle iluk_factorize_impl(const SparseMatrix& matrix_wrapper,
                                const py::dict& options,
                                Backend backend,
                                const std::optional<std::string>& device_name) {
-    const auto& matrix = std::get<SparseMatrixT<T>>(matrix_wrapper.storage);
-    const ILUKParams<T> params = parse_iluk_params<T>(options);
+    const auto& matrix = std::get<SparseMatrixT<Scalar>>(matrix_wrapper.storage);
+    const ILUKParams<Scalar> params = parse_iluk_params<Scalar>(options);
     Queue& queue = acquire_queue(device_name, backend);
-    ILUKPreconditioner<T> handle{};
-    visit_backend<T>(queue, [&](auto backend_tag) {
+    ILUKPreconditioner<Scalar> handle{};
+    visit_backend<Scalar>(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
-        handle = batchlas::iluk_factorize<B, T>(queue, matrix.view(), params);
+        handle = batchlas::iluk_factorize<B, Scalar>(queue, matrix.view(), params);
     });
     queue.wait();
     return wrap_iluk(std::move(handle));
 }
 
-template <typename T>
+template <typename Scalar>
 DenseMatrix iluk_apply_impl(const ILUKHandle& handle_wrapper,
                             const DenseMatrix& rhs_wrapper,
                             Backend backend,
                             const std::optional<std::string>& device_name) {
     ensure_same_dtype(handle_wrapper, rhs_wrapper, "ILUK preconditioner and RHS dtypes must match");
-    const auto& handle = std::get<ILUKPreconditioner<T>>(handle_wrapper.storage);
-    DenseMatrixT<T> out = std::get<DenseMatrixT<T>>(rhs_wrapper.storage).clone();
+    const auto& handle = std::get<ILUKPreconditioner<Scalar>>(handle_wrapper.storage);
+    DenseMatrixT<Scalar> out = std::get<DenseMatrixT<Scalar>>(rhs_wrapper.storage).clone();
     Queue& queue = acquire_queue(device_name, backend);
-    run_backend_with_workspace<T>(
+    run_backend_with_workspace<Scalar>(
         queue,
         [&](auto backend_tag) {
             constexpr Backend B = decltype(backend_tag)::value;
-            return batchlas::iluk_apply_buffer_size<B, T>(queue, handle, out.view(), out.view());
+            return batchlas::iluk_apply_buffer_size<B, Scalar>(queue, handle, out.view(), out.view());
         },
         [&](auto backend_tag, Span<std::byte> workspace) {
             constexpr Backend B = decltype(backend_tag)::value;
-            batchlas::iluk_apply<B, T>(queue, handle, std::get<DenseMatrixT<T>>(rhs_wrapper.storage).view(),
-                                       out.view(), workspace);
+            batchlas::iluk_apply<B, Scalar>(queue, handle, std::get<DenseMatrixT<Scalar>>(rhs_wrapper.storage).view(),
+                                            out.view(), workspace);
         });
     queue.wait();
     return wrap_dense(std::move(out));
 }
 
-template <typename T>
+template <typename Scalar>
 DenseMatrix conditioned_random_impl(const std::string& which,
                                     int n,
-                                    typename base_type<T>::type log10_kappa,
+                                    typename base_type<Scalar>::type log10_kappa,
                                     NormType metric,
                                     int batch_size,
                                     unsigned seed,
@@ -162,30 +162,35 @@ DenseMatrix conditioned_random_impl(const std::string& which,
                                     Backend backend,
                                     const std::optional<std::string>& device_name) {
     Queue& queue = acquire_queue(device_name, backend);
-    return visit_backend<T>(queue, [&](auto backend_tag) {
+    return visit_backend<Scalar>(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
         if (which == "random_with_log10_cond_metric") {
-            return wrap_dense(batchlas::random_with_log10_cond_metric<B, T>(queue, n, log10_kappa, metric, batch_size,
-                                                                            seed, algorithm));
+            return wrap_dense(batchlas::random_with_log10_cond_metric<B,
+                              Scalar>(queue, n, log10_kappa, metric, batch_size,
+                                                                                 seed, algorithm));
         }
         if (which == "random_hermitian_with_log10_cond_metric") {
-            return wrap_dense(batchlas::random_hermitian_with_log10_cond_metric<B, T>(queue, n, log10_kappa, metric,
-                                                                                      batch_size, seed, algorithm));
+            return wrap_dense(batchlas::random_hermitian_with_log10_cond_metric<B,
+                              Scalar>(queue, n, log10_kappa, metric,
+                                                                                           batch_size, seed,
+                                                                                           algorithm));
         }
         if (which == "random_banded_with_log10_cond_metric") {
-            return wrap_dense(batchlas::random_banded_with_log10_cond_metric<B, T>(queue, n, kd, log10_kappa, metric,
-                                                                                   batch_size, seed));
+            return wrap_dense(batchlas::random_banded_with_log10_cond_metric<B,
+                              Scalar>(queue, n, kd, log10_kappa, metric,
+                                                                                        batch_size, seed));
         }
         if (which == "random_hermitian_banded_with_log10_cond_metric") {
-            return wrap_dense(batchlas::random_hermitian_banded_with_log10_cond_metric<B, T>(
+            return wrap_dense(batchlas::random_hermitian_banded_with_log10_cond_metric<B, Scalar>(
                 queue, n, kd, log10_kappa, metric, batch_size, seed));
         }
         if (which == "random_tridiagonal_with_log10_cond_metric") {
-            return wrap_dense(batchlas::random_tridiagonal_with_log10_cond_metric<B, T>(queue, n, log10_kappa, metric,
-                                                                                        batch_size, seed));
+            return wrap_dense(batchlas::random_tridiagonal_with_log10_cond_metric<B,
+                              Scalar>(queue, n, log10_kappa, metric,
+                                                                                             batch_size, seed));
         }
         if (which == "random_hermitian_tridiagonal_with_log10_cond_metric") {
-            return wrap_dense(batchlas::random_hermitian_tridiagonal_with_log10_cond_metric<B, T>(
+            return wrap_dense(batchlas::random_hermitian_tridiagonal_with_log10_cond_metric<B, Scalar>(
                 queue, n, log10_kappa, metric, batch_size, seed));
         }
         throw py::value_error("unknown conditioned random helper");

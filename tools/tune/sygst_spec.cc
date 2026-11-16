@@ -27,15 +27,15 @@ namespace {
 
 namespace I = ops::sygst;
 
-template <typename T>
+template <typename Scalar>
 struct SygstProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     int n, batch, ld, itype;
     Uplo uplo;
     std::size_t stride;
-    UnifiedVector<T> A0, L, A, X;
-    UnifiedVector<T*> pA0, pL, pA, pX;
+    UnifiedVector<Scalar> A0, L, A, X;
+    UnifiedVector<Scalar*> pA0, pL, pA, pX;
     MV A0v, Lv, Av, Xv;
     UnifiedVector<std::int32_t> info;
 
@@ -49,8 +49,8 @@ struct SygstProblem {
           info(std::size_t(batch_), 0) {
         (void)A0v.fill_random(q, true, 4242);
         (void)Lv.fill_random_spd(q, 12345);
-        UnifiedVector<std::byte> fws(std::max<std::size_t>(1, potrf_buffer_size<kBackend, T>(q, Lv, uplo)));
-        (void)potrf<kBackend, T>(q, Lv, uplo, fws.to_span(), info.to_span());
+        UnifiedVector<std::byte> fws(std::max<std::size_t>(1, potrf_buffer_size<kBackend, Scalar>(q, Lv, uplo)));
+        (void)potrf<kBackend, Scalar>(q, Lv, uplo, fws.to_span(), info.to_span());
         (void)Lv.triangularize(q, uplo, Diag::NonUnit);
         q.wait();
         for (int b = 0; b < batch; ++b)
@@ -63,20 +63,20 @@ struct SygstProblem {
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < n; ++i) {
                     const std::size_t o = std::size_t(b) * stride;
-                    const T v = L[o + std::size_t(i) * ld + j];
-                    if constexpr (is_std_complex_v<T>) A[o + std::size_t(j) * ld + i] = std::conj(v);
+                    const Scalar v = L[o + std::size_t(i) * ld + j];
+                    if constexpr (is_std_complex_v<Scalar>) A[o + std::size_t(j) * ld + i] = std::conj(v);
                     else A[o + std::size_t(j) * ld + i] = v;
                 }
         return Av;
     }
-    std::size_t workspace() { return sygst_buffer_size<kBackend, T>(q, Av, Lv, itype, uplo); }
+    std::size_t workspace() { return sygst_buffer_size<kBackend, Scalar>(q, Av, Lv, itype, uplo); }
     void reset() {
         (void)MV::copy(q, Av, A0v);
         q.wait();
     }
     void clear_info() {}
     void run(Span<std::byte> ws) {
-        (void)sygst<kBackend, T>(q, Av, Lv, itype, uplo, ws);
+        (void)sygst<kBackend, Scalar>(q, Av, Lv, itype, uplo, ws);
         q.wait();
     }
     std::pair<double, int> verify() {

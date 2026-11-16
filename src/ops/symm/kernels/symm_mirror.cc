@@ -33,8 +33,8 @@ using batchlas::device::l3::Vec4;
 namespace wide_scalar = ops::gemm::wide_scalar;
 namespace wide_v2 = ops::gemm::wide_v2;
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
 #if !BATCHLAS_SYCL_IMPL_ACPP && BATCHLAS_NVPTX_REQD_WG_OK && defined(__SYCL_DEVICE_ONLY__) && \
     defined(__NVPTX__)
@@ -46,9 +46,9 @@ using MV = MatrixView<T, MatrixFormat::Dense>;
 // Right: the symmetric matrix is the gemm's B operand (C = B A). Lower: the named triangle in the
 // operand's own (i, kk) coordinates is i >= kk (Left Lower, Right Upper), else i <= kk. The gemm
 // body G is NN for Left; for Right its B operand is the NT instance's, whose rows are unpadded.
-template <typename T, bool Right, bool Herm, bool VecLoads, int TileK>
+template <typename Scalar, bool Right, bool Herm, bool VecLoads, int TileK>
 struct SymmMirrorBody {
-    using G = GemmWide64Body<T, Transpose::NoTrans, Right ? Transpose::Trans : Transpose::NoTrans, VecLoads, TileK>;
+    using G = GemmWide64Body<Scalar, Transpose::NoTrans, Right ? Transpose::Trans : Transpose::NoTrans, VecLoads, TileK>;
     using D = typename G::D;
     static constexpr int CF = G::CF, VecN = G::VecN, Threads = G::Threads, TTM = G::TTM, TTN = G::TTN;
     static constexpr int NBM = G::NBM, NBN = G::NBN, MSep = G::MSep, NSep = G::NSep;
@@ -62,8 +62,9 @@ struct SymmMirrorBody {
     static_assert(G::TileM == 64 && G::TileN == 64 && !G::kPipe, "one 64-wide half per operand, register prefetch");
     static_assert(!(Right ? PB : PA), "both lane maps of the symmetric operand store one unpadded, swizzled row");
     static_assert(!G::CA && !G::CB, "no transpose-conjugate form: hemm conjugates at staging");
-    static_assert(std::int64_t(2) * (BufA + BufB) * 4 <= ops::mirror::slm_bytes<T>(), "can_run's slm_bytes bound");
-    static_assert(TileK == ops::mirror::tile_k<T>() && ops::mirror::tile<T>() == 64, "mirror_tile.hh's limits");
+    static_assert(std::int64_t(2) * (BufA + BufB) * 4 <= ops::mirror::slm_bytes<Scalar>(), "can_run's slm_bytes bound");
+    static_assert(TileK == ops::mirror::tile_k<Scalar>() && ops::mirror::tile<Scalar>() == 64,
+                  "mirror_tile.hh's limits");
 
     const float* a_ptr;
     const float* b_ptr;
@@ -288,15 +289,16 @@ BATCHLAS_UNROLL_FULL
 };
 #undef BATCHLAS_SYMM_MIRROR_REQD_WG
 
-template <typename T, bool Right, bool Herm, bool VecLoads>
+template <typename Scalar, bool Right, bool Herm, bool VecLoads>
 class SymmMirrorKernel;
 
-template <typename T, bool Right, bool Herm, bool VecLoads>
-Event launch_wide(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta, bool lower) {
-    using Body = SymmMirrorBody<T, Right, Herm, VecLoads, ops::mirror::tile_k<T>()>;
+template <typename Scalar, bool Right, bool Herm, bool VecLoads>
+Event launch_wide(Queue& q, const MV<Scalar>& A, const MV<Scalar>& Bm, const MV<Scalar>& C, Scalar alpha, Scalar beta,
+                  bool lower) {
+    using Body = SymmMirrorBody<Scalar, Right, Herm, VecLoads, ops::mirror::tile_k<Scalar>()>;
     using D = typename Body::D;
-    const MV<T>& Ag = Right ? Bm : A;
-    const MV<T>& Bg = Right ? A : Bm;
+    const MV<Scalar>& Ag = Right ? Bm : A;
+    const MV<Scalar>& Bg = Right ? A : Bm;
     const int m = C.rows(), n = C.cols(), k = A.rows();
     const sycl::range<3> local(1, 1, Body::Threads);
     const sycl::range<3> global(static_cast<size_t>(C.batch_size()), static_cast<size_t>((m + 63) / 64),
@@ -312,61 +314,63 @@ Event launch_wide(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T a
                   static_cast<int>(C.ld()), Ag.stride(), Bg.stride(), C.stride(), static_cast<int>(C.batch_size()),
                   lower, alpha_d, beta_d, tile_a, tile_b,
                   batchlas::detail::mask_ptr(batchlas::detail::call_mask("symm", A, Bm, C))};
-        batchlas::impl::parallel_for<SymmMirrorKernel<T, Right, Herm, VecLoads>>(h, sycl::nd_range<3>(global, local),
-                                                                                body);
+        batchlas::impl::parallel_for<SymmMirrorKernel<Scalar, Right, Herm, VecLoads>>(h,
+                                                                                      sycl::nd_range<3>(global, local),
+                                                                                      body);
     });
     return q.get_event();
 }
 
-template <typename T, bool Right>
+template <typename Real, bool Right>
 class SymmMirrorTiledKernel;
 
 // double: gemm's tiled kernel (tiled_general.hh) with the symmetric operand read element by element
 // from its named triangle (storage coordinates: lower means row >= col is stored).
-template <typename T, bool Right>
-Event launch_tiled(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta, bool lower) {
-    constexpr int Tile = ops::mirror::tile<T>();
-    static_assert(std::int64_t(2) * Tile * Tile * sizeof(T) <= ops::mirror::slm_bytes<T>() && Tile * Tile == 256,
+template <typename Real, bool Right>
+Event launch_tiled(Queue& q, const MV<Real>& A, const MV<Real>& Bm, const MV<Real>& C, Real alpha, Real beta,
+                   bool lower) {
+    constexpr int Tile = ops::mirror::tile<Real>();
+    static_assert(std::int64_t(2) * Tile * Tile * sizeof(Real) <= ops::mirror::slm_bytes<Real>() && Tile * Tile == 256,
                   "mirror_tile.hh's limits");
     const int m = C.rows(), n = C.cols(), k = A.rows();
     const sycl::range<3> local(1, Tile, Tile);
     const sycl::range<3> global(static_cast<size_t>(C.batch_size()), static_cast<size_t>((m + Tile - 1) / Tile * Tile),
                                 static_cast<size_t>((n + Tile - 1) / Tile * Tile));
     q->submit([&](sycl::handler& h) {
-        sycl::local_accessor<T, 1> tile_a(sycl::range<1>(Tile * Tile), h);
-        sycl::local_accessor<T, 1> tile_b(sycl::range<1>(Tile * Tile), h);
-        const T* a_ptr = A.data_ptr();
-        const T* b_ptr = Bm.data_ptr();
-        T* c_ptr = C.data_ptr();
+        sycl::local_accessor<Real, 1> tile_a(sycl::range<1>(Tile * Tile), h);
+        sycl::local_accessor<Real, 1> tile_b(sycl::range<1>(Tile * Tile), h);
+        const Real* a_ptr = A.data_ptr();
+        const Real* b_ptr = Bm.data_ptr();
+        Real* c_ptr = C.data_ptr();
         const int lda = A.ld(), ldb = Bm.ld(), ldc = C.ld(), batch = C.batch_size();
         const std::ptrdiff_t stride_a = A.stride(), stride_b = Bm.stride(), stride_c = C.stride();
         const std::uint8_t* mask = batchlas::detail::mask_ptr(batchlas::detail::call_mask("symm", A, Bm, C));
-        batchlas::impl::parallel_for<SymmMirrorTiledKernel<T, Right>>(
+        batchlas::impl::parallel_for<SymmMirrorTiledKernel<Real, Right>>(
             h, sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
                 const int bid = static_cast<int>(item.get_group(0));
                 if (bid >= batch || (mask != nullptr && mask[bid] == 0)) return;  // I1: before any barrier
                 const int lr = static_cast<int>(item.get_local_id(1)), lc = static_cast<int>(item.get_local_id(2));
                 const int row = static_cast<int>(item.get_group(1)) * Tile + lr;
                 const int col = static_cast<int>(item.get_group(2)) * Tile + lc;
-                const T* a_item = a_ptr + static_cast<std::ptrdiff_t>(bid) * stride_a;
-                const T* b_item = b_ptr + static_cast<std::ptrdiff_t>(bid) * stride_b;
+                const Real* a_item = a_ptr + static_cast<std::ptrdiff_t>(bid) * stride_a;
+                const Real* b_item = b_ptr + static_cast<std::ptrdiff_t>(bid) * stride_b;
                 auto sym = [&](int r, int c) {
                     const bool named = lower ? r >= c : r <= c;
                     return named ? a_item[r + static_cast<std::ptrdiff_t>(c) * lda]
                                  : a_item[c + static_cast<std::ptrdiff_t>(r) * lda];
                 };
                 auto dense = [&](int r, int c) { return b_item[r + static_cast<std::ptrdiff_t>(c) * ldb]; };
-                T sum = T(0);
+                Real sum = Real(0);
                 for (int kk0 = 0; kk0 < k; kk0 += Tile) {
                     const int ka = kk0 + lc, kb = kk0 + lr;
-                    tile_a[lr * Tile + lc] = row < m && ka < k ? (Right ? dense(row, ka) : sym(row, ka)) : T(0);
-                    tile_b[lr * Tile + lc] = col < n && kb < k ? (Right ? sym(kb, col) : dense(kb, col)) : T(0);
+                    tile_a[lr * Tile + lc] = row < m && ka < k ? (Right ? dense(row, ka) : sym(row, ka)) : Real(0);
+                    tile_b[lr * Tile + lc] = col < n && kb < k ? (Right ? sym(kb, col) : dense(kb, col)) : Real(0);
                     item.barrier(sycl::access::fence_space::local_space);
                     for (int t = 0; t < Tile && kk0 + t < k; ++t) sum += tile_a[lr * Tile + t] * tile_b[t * Tile + lc];
                     item.barrier(sycl::access::fence_space::local_space);
                 }
                 if (row < m && col < n)
-                    batchlas::device::l3::LinearEpilogue<T>::store(
+                    batchlas::device::l3::LinearEpilogue<Real>::store(
                         c_ptr + static_cast<std::ptrdiff_t>(bid) * stride_c + row + static_cast<std::ptrdiff_t>(col) * ldc,
                         alpha, beta, sum);
             });
@@ -375,33 +379,34 @@ Event launch_tiled(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T 
 }
 
 // The chunk's items with its slice of the batch mask.
-template <typename T>
-MV<T> items(const MV<T>& v, int first, int count) {
+template <typename Scalar>
+MV<Scalar> items(const MV<Scalar>& v, int first, int count) {
     return v.batch_range(first, count);
 }
 
 }  // namespace
 
-template <typename T, bool Herm>
-Event symm_mirror(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta, Side side, Uplo uplo,
+template <typename Scalar, bool Herm>
+Event symm_mirror(Queue& q, const MV<Scalar>& A, const MV<Scalar>& Bm, const MV<Scalar>& C, Scalar alpha, Scalar beta,
+                  Side side, Uplo uplo,
                   int chunk) {
     const bool right = side == Side::Right, lower = uplo == Uplo::Lower;
-    auto one = [&](const MV<T>& a, const MV<T>& b, const MV<T>& c) -> Event {
-        if constexpr (std::is_same_v<T, double>) {
+    auto one = [&](const MV<Scalar>& a, const MV<Scalar>& b, const MV<Scalar>& c) -> Event {
+        if constexpr (std::is_same_v<Scalar, double>) {
             BATCHLAS_KERNEL_TRACE_SCOPE("symm.mirror.tiled");
-            return right ? launch_tiled<T, true>(q, a, b, c, alpha, beta, lower)
-                         : launch_tiled<T, false>(q, a, b, c, alpha, beta, lower);
+            return right ? launch_tiled<Scalar, true>(q, a, b, c, alpha, beta, lower)
+                         : launch_tiled<Scalar, false>(q, a, b, c, alpha, beta, lower);
         } else {
             // The operand's own (i, kk) triangle: transposed on the Right (the gemm's B is A(kk, i)).
             const bool lower_ik = lower != right;
-            const bool vec = right ? ops::gemm::wide64_v2_vec_loads<T>(b, a) : ops::gemm::wide64_v2_vec_loads<T>(a, b);
+            const bool vec = right ? ops::gemm::wide64_v2_vec_loads<Scalar>(b, a) : ops::gemm::wide64_v2_vec_loads<Scalar>(a, b);
             BATCHLAS_KERNEL_TRACE_SCOPE(Herm ? (vec ? "hemm.mirror.vec" : "hemm.mirror.elem")
                                              : (vec ? "symm.mirror.vec" : "symm.mirror.elem"));
             if (right)
-                return vec ? launch_wide<T, true, Herm, true>(q, a, b, c, alpha, beta, lower_ik)
-                           : launch_wide<T, true, Herm, false>(q, a, b, c, alpha, beta, lower_ik);
-            return vec ? launch_wide<T, false, Herm, true>(q, a, b, c, alpha, beta, lower_ik)
-                       : launch_wide<T, false, Herm, false>(q, a, b, c, alpha, beta, lower_ik);
+                return vec ? launch_wide<Scalar, true, Herm, true>(q, a, b, c, alpha, beta, lower_ik)
+                           : launch_wide<Scalar, true, Herm, false>(q, a, b, c, alpha, beta, lower_ik);
+            return vec ? launch_wide<Scalar, false, Herm, true>(q, a, b, c, alpha, beta, lower_ik)
+                       : launch_wide<Scalar, false, Herm, false>(q, a, b, c, alpha, beta, lower_ik);
         }
     };
     const int batch = C.batch_size();

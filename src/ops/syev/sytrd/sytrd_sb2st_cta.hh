@@ -17,16 +17,16 @@ namespace batchlas {
 
 namespace detail {
 
-template <typename T>
+template <typename Scalar>
 Event btrd_lower_inplace_subgroup_dispatch(Queue& q,
-                                          KernelMatrixView<T, MatrixFormat::Dense> ab,
+                                          KernelMatrixView<Scalar, MatrixFormat::Dense> ab,
                                           int n,
                                           int kd,
-                                          VectorView<typename base_type<T>::type> c,
-                                          VectorView<T> work,
-                                          VectorView<typename base_type<T>::type> d,
-                                          VectorView<typename base_type<T>::type> e,
-                                          VectorView<T> tau,
+                                          VectorView<typename base_type<Scalar>::type> c,
+                                          VectorView<Scalar> work,
+                                          VectorView<typename base_type<Scalar>::type> d,
+                                          VectorView<typename base_type<Scalar>::type> e,
+                                          VectorView<Scalar> tau,
                                           const std::uint8_t* mask);
 
 // Explicit instantiations live in sytrd_sb2st_cta.cc.

@@ -32,18 +32,18 @@ namespace ops::trmm {
 
 using select::overloaded;
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
 // The extent of B the triangular order does not occupy.
-template <typename T>
-std::int64_t rhs_count(const MV<T>& B, Side side) {
+template <typename Scalar>
+std::int64_t rhs_count(const MV<Scalar>& B, Side side) {
     return side == Side::Left ? B.cols() : B.rows();
 }
 
-template <typename T>
-select::Key key_of(const MV<T>& A, const MV<T>& B, Side side) {
-    return {{"side", side == Side::Left ? "L" : "R"}, {"order", A.rows()}, {"q", rhs_count<T>(B, side)},
+template <typename Scalar>
+select::Key key_of(const MV<Scalar>& A, const MV<Scalar>& B, Side side) {
+    return {{"side", side == Side::Left ? "L" : "R"}, {"order", A.rows()}, {"q", rhs_count<Scalar>(B, side)},
             {"batch", A.batch_size()}};
 }
 
@@ -53,9 +53,9 @@ select::Key key_of(const MV<T>& A, const MV<T>& B, Side side) {
 // budget; triangular puts its tile list in grid y, which no chunking shrinks.
 // Every vendor loop (cuBLAS, rocBLAS, netlib) runs each item at the top-level (m, n), a wrong
 // answer for a heterogeneous batch, so the vendor is refused one on every backend too.
-template <Backend B, typename T>
-bool can_run(const TrmmChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
-             const MV<T>& C, Side side) {
+template <Backend B, typename Scalar>
+bool can_run(const TrmmChoice& c, const select::Device& d, Queue& q, const MV<Scalar>& A, const MV<Scalar>& Bm,
+             const MV<Scalar>& C, Side side) {
     // Both natives honour a batch mask; the vendor's per-item loop cannot skip an item.
     const bool masked = batchlas::detail::any_batch_mask(A, Bm, C);
     constexpr bool kWired = select::native_gpu_backend<B>;  // D6: portable kernels, wired for CUDA and SYCL
@@ -65,9 +65,10 @@ bool can_run(const TrmmChoice& c, const select::Device& d, Queue& q, const MV<T>
     return std::visit(overloaded{
         [&](Triangular) {
             return native && backend::detail::trmm_tiles_supported(A, Bm, C, side) &&
-                   backend::detail::trmm_tile_groups<T>(C.rows(), C.cols()) <= d.max_groups_yz;
+                   backend::detail::trmm_tile_groups<Scalar>(C.rows(), C.cols()) <= d.max_groups_yz;
         },
-        [&](Expand) { return native && backend::detail::expansion_chunk<T>(q, A.rows(), 1, d.max_groups_yz) >= 1; },
+        [&](Expand) { return native && backend::detail::expansion_chunk<Scalar>(q, A.rows(), 1,
+                                                                                d.max_groups_yz) >= 1; },
         [&](Vendor) { return d.has_vendor && homogeneous && !masked; },
     }, c);
 }
@@ -75,58 +76,61 @@ bool can_run(const TrmmChoice& c, const select::Device& d, Queue& q, const MV<T>
 // op(A)'s triangle written densely into a workspace lease (zeros opposite it, ones on a Unit
 // diagonal), then one strided-batched gemm at beta = 0: the caller's A may hold anything in the
 // storage TRMM must not read, so the gemm cannot be pointed at it.
-template <Backend B, typename T>
-Event launch_expand(Queue& ctx, const MV<T>& A, const MV<T>& Bm_, const MV<T>& C_, T alpha, Side side, Uplo uplo,
+template <Backend B, typename Scalar>
+Event launch_expand(Queue& ctx, const MV<Scalar>& A, const MV<Scalar>& Bm_, const MV<Scalar>& C_, Scalar alpha,
+                    Side side, Uplo uplo,
                     Transpose transA, Diag diag) {
     // The gemm sees scratch in place of A, so B and C carry the mask whichever operand brought it.
     const auto mask = batchlas::detail::call_mask("trmm", A, Bm_, C_);
-    const MV<T> Bm = level3::adopt_mask(Bm_, mask), C = level3::adopt_mask(C_, mask);
+    const MV<Scalar> Bm = level3::adopt_mask(Bm_, mask), C = level3::adopt_mask(C_, mask);
     const int k = A.rows(), batch = A.batch_size();
-    const int ld = backend::detail::expanded_ld<T>(k);
-    const int chunk = backend::detail::expansion_chunk<T>(ctx, k, batch, level3::grid_chunk<B>(ctx));
-    auto ws = ctx.workspace(backend::detail::expanded_workspace_bytes<T>(ctx, k, chunk));
+    const int ld = backend::detail::expanded_ld<Scalar>(k);
+    const int chunk = backend::detail::expansion_chunk<Scalar>(ctx, k, batch, level3::grid_chunk<B>(ctx));
+    auto ws = ctx.workspace(backend::detail::expanded_workspace_bytes<Scalar>(ctx, k, chunk));
     BumpAllocator pool(ws.span());
-    auto storage = pool.allocate<T>(ctx, static_cast<std::size_t>(ld) * static_cast<std::size_t>(k) *
-                                             static_cast<std::size_t>(chunk));
+    auto storage = pool.allocate<Scalar>(ctx, static_cast<std::size_t>(ld) * static_cast<std::size_t>(k) *
+                                                  static_cast<std::size_t>(chunk));
     return level3::for_each_chunk(ctx, batch, chunk, [&](int first, int count) {
-        const MV<T> expanded(storage.data(), k, k, ld, ld * k, count);
+        const MV<Scalar> expanded(storage.data(), k, k, ld, ld * k, count);
         Event expansion =
-            backend::detail::expand_triangular<T>(ctx, expanded, level3::batch_range(A, first, count), uplo, diag);
+            backend::detail::expand_triangular<Scalar>(ctx, expanded, level3::batch_range(A, first, count), uplo, diag);
         // An out-of-order queue orders nothing across the SYCL / vendor-stream boundary.
         if (!ctx.in_order()) expansion.wait();
-        const MV<T> Bc = level3::batch_range(Bm, first, count), Cc = level3::batch_range(C, first, count);
+        const MV<Scalar> Bc = level3::batch_range(Bm, first, count), Cc = level3::batch_range(C, first, count);
         if (side == Side::Left)
-            return gemm<B, T>(ctx, expanded, Bc, Cc, alpha, T(0), transA, Transpose::NoTrans,
-                              ComputePrecision::Default);
-        return gemm<B, T>(ctx, Bc, expanded, Cc, alpha, T(0), Transpose::NoTrans, transA, ComputePrecision::Default);
+            return gemm<B, Scalar>(ctx, expanded, Bc, Cc, alpha, Scalar(0), transA, Transpose::NoTrans,
+                                   ComputePrecision::Default);
+        return gemm<B, Scalar>(ctx, Bc, expanded, Cc, alpha, Scalar(0), Transpose::NoTrans, transA,
+                               ComputePrecision::Default);
     });
 }
 
-template <Backend B, typename T>
-Event launch(Queue& q, const TrmmChoice& c, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, Side side,
+template <Backend B, typename Scalar>
+Event launch(Queue& q, const TrmmChoice& c, const MV<Scalar>& A, const MV<Scalar>& Bm, const MV<Scalar>& C,
+             Scalar alpha, Side side,
              Uplo uplo, Transpose transA, Diag diag) {
     return std::visit(overloaded{
         [&](Triangular) -> Event {
             if constexpr (select::native_gpu_backend<B>)
                 return level3::for_each_chunk(q, A.batch_size(), level3::grid_chunk<B>(q), [&](int f, int n) {
-                    return backend::detail::trmm_triangular_tiles<T>(q, level3::batch_range(A, f, n),
-                                                                     level3::batch_range(Bm, f, n),
-                                                                     level3::batch_range(C, f, n), alpha, uplo,
-                                                                     transA, diag);
+                    return backend::detail::trmm_triangular_tiles<Scalar>(q, level3::batch_range(A, f, n),
+                                                                          level3::batch_range(Bm, f, n),
+                                                                          level3::batch_range(C, f, n), alpha, uplo,
+                                                                          transA, diag);
                 });
             else
                 throw batchlas::internal_error("trmm: triangular is wired for native GPU backends only");  // can_run refuses it
         },
         [&](Expand) -> Event {
             if constexpr (select::native_gpu_backend<B>)
-                return launch_expand<B, T>(q, A, Bm, C, alpha, side, uplo, transA, diag);
+                return launch_expand<B, Scalar>(q, A, Bm, C, alpha, side, uplo, transA, diag);
             else
                 throw batchlas::internal_error("trmm: expand is wired for native GPU backends only");  // can_run refuses it
         },
         [&](Vendor) -> Event {
             if constexpr (select::has_library<B>(spec.vendor))
-                return backend::trmm_vendor<B, T>(q, A, Bm, C, alpha, side, uplo, transA, diag);
-            else select::no_vendor<B, T>(spec);
+                return backend::trmm_vendor<B, Scalar>(q, A, Bm, C, alpha, side, uplo, transA, diag);
+            else select::no_vendor<B, Scalar>(spec);
         },
     }, c);
 }
@@ -135,9 +139,11 @@ Event launch(Queue& q, const TrmmChoice& c, const MV<T>& A, const MV<T>& Bm, con
 
 // trmm takes no caller workspace (no trmm_buffer_size); Expand leases its scratch from the
 // Queue's arena, so R5 has nothing to size.
-template <Backend Back, typename T>
-Event trmm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
-           const MatrixView<T, MatrixFormat::Dense>& C, T alpha, Side side, Uplo uplo, Transpose transA, Diag diag) {
+template <Backend Back, typename Scalar>
+Event trmm(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, const MatrixView<Scalar,
+           MatrixFormat::Dense>& B,
+           const MatrixView<Scalar, MatrixFormat::Dense>& C, Scalar alpha, Side side, Uplo uplo, Transpose transA,
+           Diag diag) {
     (void)batchlas::detail::call_mask("trmm", A, B, C);
     (void)backend::shape::validate_product<batchlas::invalid_argument>("trmm", A, B, C, side);
     // An empty problem is a no-op under any pin: both native launches throw on an empty batch,
@@ -146,13 +152,13 @@ Event trmm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matrix
     // The coverage row's key: C's extents and A's order.
     const coverage::Shape shape{.m = C.rows(), .n = C.cols(), .k = A.rows(), .batch = A.batch_size(),
                                 .transA = transA, .uplo = uplo, .side = side, .diag = diag};
-    const select::Key key = ops::trmm::key_of<T>(A, B, side);
-    return select::run<Back, T>(
-        ops::trmm::spec, ctx, key, ops::trmm::candidates<T>(),
-        [&](const auto& c, const auto& d) { return ops::trmm::can_run<Back, T>(c, d, ctx, A, B, C, side); },
+    const select::Key key = ops::trmm::key_of<Scalar>(A, B, side);
+    return select::run<Back, Scalar>(
+        ops::trmm::spec, ctx, key, ops::trmm::candidates<Scalar>(),
+        [&](const auto& c, const auto& d) { return ops::trmm::can_run<Back, Scalar>(c, d, ctx, A, B, C, side); },
         shape, key,
         [&](const auto& c) {
-            return ops::trmm::launch<Back, T>(ctx, c, A, B, C, alpha, side, uplo, transA, diag);
+            return ops::trmm::launch<Back, Scalar>(ctx, c, A, B, C, alpha, side, uplo, transA, diag);
         });
 }
 

@@ -18,20 +18,20 @@
 
 namespace batchlas {
 
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 struct RitzValuesKernel {};
 
 // ritz_vals[j] = (v_j^H A v_j) / (v_j^H v_j); contract in blas/extensions.hh.
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 Event ritz_values(Queue& ctx,
-                  const MatrixView<T, MFormat>& A,
-                  const MatrixView<T, MatrixFormat::Dense>& V,
-                  const VectorView<typename base_type<T>::type>& ritz_vals,
+                  const MatrixView<Scalar, MFormat>& A,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& V,
+                  const VectorView<typename base_type<Scalar>::type>& ritz_vals,
                   Span<std::byte> workspace) {
     const auto mask = detail::call_mask("ritz_values", A, V, ritz_vals);
     const std::uint8_t* mk = detail::mask_ptr(mask);
     const bool masked = mk != nullptr;  // a captured null pointer can read as non-null on AdaptiveCpp Metal
-    using real_t = typename base_type<T>::type;
+    using real_t = typename base_type<Scalar>::type;
 
     auto pool = BumpAllocator(workspace);
     auto batch_size = A.batch_size();
@@ -45,18 +45,18 @@ Event ritz_values(Queue& ctx,
     assert(ritz_vals.batch_size() == batch_size && "ritz_vals must have same batch size as A");
 
     // Allocate workspace for A*V computation
-    auto AV_mem = pool.allocate<T>(ctx, n * k * batch_size);
-    auto AV = MatrixView<T, MatrixFormat::Dense>(AV_mem.data(), n, k, n, n * k, batch_size, pool.allocate<T*>(ctx, batch_size).data())
+    auto AV_mem = pool.allocate<Scalar>(ctx, n * k * batch_size);
+    auto AV = MatrixView<Scalar, MatrixFormat::Dense>(AV_mem.data(), n, k, n, n * k, batch_size, pool.allocate<Scalar*>(ctx, batch_size).data())
                   .with_batch_mask(mask);
 
     Event last_event;
 
     // Compute AV = A * V using spmm for sparse or gemm for dense
     if constexpr (MFormat == MatrixFormat::Dense) {
-        last_event = gemm<B>(ctx, A, V, AV, GemmOptions<T>{});
+        last_event = gemm<B>(ctx, A, V, AV, GemmOptions<Scalar>{});
     } else {
-        auto spmm_ws = pool.allocate<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, V, AV, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans));
-        last_event = spmm<B>(ctx, A, V, AV, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans, spmm_ws);
+        auto spmm_ws = pool.allocate<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, V, AV, Scalar(1.0), Scalar(0.0), Transpose::NoTrans, Transpose::NoTrans));
+        last_event = spmm<B>(ctx, A, V, AV, Scalar(1.0), Scalar(0.0), Transpose::NoTrans, Transpose::NoTrans, spmm_ws);
     }
 
     // Ritz values (v_j^H A v_j) / (v_j^H v_j), one work-group per (item, column):
@@ -69,7 +69,7 @@ Event ritz_values(Queue& ctx,
         auto AV_view = AV.kernel_view();
         auto V_view = V.kernel_view();
 
-        batchlas::impl::parallel_for<RitzValuesKernel<B, T, MFormat>>(h,
+        batchlas::impl::parallel_for<RitzValuesKernel<B, Scalar, MFormat>>(h,
             sycl::nd_range<1>(global_size, local_size),
             [=](sycl::nd_item<1> it) {
                 const device::RtGroup<> ex{it};
@@ -93,11 +93,11 @@ Event ritz_values(Queue& ctx,
     return last_event;
 }
 
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 size_t ritz_values_buffer_size(Queue& ctx,
-                             const MatrixView<T, MFormat>& A,
-                             const MatrixView<T, MatrixFormat::Dense>& V,
-                             const VectorView<typename base_type<T>::type>& ritz_vals) {
+                             const MatrixView<Scalar, MFormat>& A,
+                             const MatrixView<Scalar, MatrixFormat::Dense>& V,
+                             const VectorView<typename base_type<Scalar>::type>& ritz_vals) {
     const auto mask = detail::call_mask("ritz_values", A, V, ritz_vals);
     const auto batch_size = A.batch_size();
     const auto n = A.rows();
@@ -105,11 +105,11 @@ size_t ritz_values_buffer_size(Queue& ctx,
     // The run path's allocation sequence, measured: the spmm bytes go through allocate<std::byte>,
     // which rounds, so a hand sum of raw sizes is short.
     return workspace_bytes([&](BumpAllocator& pool) {
-        auto av = pool.allocate<T>(ctx, n * k * batch_size);
-        (void)pool.allocate<T*>(ctx, batch_size);
+        auto av = pool.allocate<Scalar>(ctx, n * k * batch_size);
+        (void)pool.allocate<Scalar*>(ctx, batch_size);
         if constexpr (MFormat != MatrixFormat::Dense) {
-            auto AV = MatrixView<T, MatrixFormat::Dense>(av.data(), n, k, n, n * k, batch_size, nullptr).with_batch_mask(mask);
-            (void)pool.allocate<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, V, AV, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans));
+            auto AV = MatrixView<Scalar, MatrixFormat::Dense>(av.data(), n, k, n, n * k, batch_size, nullptr).with_batch_mask(mask);
+            (void)pool.allocate<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, V, AV, Scalar(1.0), Scalar(0.0), Transpose::NoTrans, Transpose::NoTrans));
         }
         return 0;
     });

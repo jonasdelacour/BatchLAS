@@ -35,13 +35,13 @@ inline constexpr std::int64_t kBlockedMinChunkCus = 4;
 
 // Items per pass: potrf's L2 chunk, at least kBlockedMinChunkCus x CU unless
 // BATCHLAS_TUNE_L2_CHUNK_ITEMS forces it. One diagonal block never splits. Query and call both use it.
-template <class T>
+template <class Scalar>
 int blocked_chunk(Queue& q, int n, int nb, int batch) {
     if (single_block(n, nb)) return batch;
     const auto dev = q.device();
     const std::int64_t cu = std::max<std::int64_t>(1, dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS));
     std::int64_t c = tuning::blocked_chunk_items(
-        batch, static_cast<std::int64_t>(n) * (n + 1) * static_cast<std::int64_t>(sizeof(T)),
+        batch, static_cast<std::int64_t>(n) * (n + 1) * static_cast<std::int64_t>(sizeof(Scalar)),
         static_cast<std::int64_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE)), cu);
     if (tuning::detail::tuning_env_override(settings().geometry.tune.l2_chunk_items, 0) <= 0)
         c = std::max(c, kBlockedMinChunkCus * cu);
@@ -53,94 +53,97 @@ inline int blocked_part(int chunk, int batch) { return batch < 2 * chunk ? batch
 // One pointer array per trsm role (the vendor trsm reads them), the whole Hermitian diagonal block
 // (nb x nb per item) that the gemm updates read, and, for itypes 2 and 3, the n x nb panel product per
 // item that the out-of-place trmm needs. Nothing for a single diagonal block.
-template <class T>
+template <class Scalar>
 struct BlockedLayout {
-    Span<T*> pf, pa;
-    Span<T> h, w;
+    Span<Scalar*> pf, pa;
+    Span<Scalar> h, w;
 };
 
-template <class T>
-BlockedLayout<T> blocked_layout(Queue& q, BumpAllocator& pool, int n, int nb, int itype, int part) {
-    BlockedLayout<T> l;
+template <class Scalar>
+BlockedLayout<Scalar> blocked_layout(Queue& q, BumpAllocator& pool, int n, int nb, int itype, int part) {
+    BlockedLayout<Scalar> l;
     if (single_block(n, nb)) return l;
     const auto p = static_cast<std::size_t>(part), un = static_cast<std::size_t>(n), unb = static_cast<std::size_t>(nb);
-    l.pf = pool.allocate<T*>(q, p);
-    l.pa = pool.allocate<T*>(q, p);
-    l.h = pool.allocate<T>(q, unb * unb * p);
-    if (itype != 1) l.w = pool.allocate<T>(q, un * unb * p);
+    l.pf = pool.allocate<Scalar*>(q, p);
+    l.pa = pool.allocate<Scalar*>(q, p);
+    l.h = pool.allocate<Scalar>(q, unb * unb * p);
+    if (itype != 1) l.w = pool.allocate<Scalar>(q, un * unb * p);
     return l;
 }
 
-template <class T>
-std::size_t blocked_workspace(Queue& q, const MV<T>& A, int nb, int itype) {
+template <class Scalar>
+std::size_t blocked_workspace(Queue& q, const MV<Scalar>& A, int nb, int itype) {
     const int n = A.rows(), batch = A.batch_size();
-    const int part = blocked_part(blocked_chunk<T>(q, n, nb, batch), batch);
-    return workspace_bytes([&](BumpAllocator& p) { return blocked_layout<T>(q, p, n, nb, itype, part); });
+    const int part = blocked_part(blocked_chunk<Scalar>(q, n, nb, batch), batch);
+    return workspace_bytes([&](BumpAllocator& p) { return blocked_layout<Scalar>(q, p, n, nb, itype, part); });
 }
 
 // One pass over cb items: views at absolute block offsets into A and B, and the workspace blocks, each
 // carrying the pass's slice of the call's mask (bmask is empty for a broadcast B).
-template <class T>
+template <class Scalar>
 struct Pass {
-    T* a;
-    const T* b;
+    Scalar* a;
+    const Scalar* b;
     int lda, ldb, sa, sb, cb, n, nb;
-    BlockedLayout<T> l;
+    BlockedLayout<Scalar> l;
     Span<const std::uint8_t> mask, bmask;
-    MV<T> A(int r0, int nr, int c0, int nc, T** p = nullptr) const {
-        return MV<T>(a + static_cast<std::ptrdiff_t>(c0) * lda + r0, nr, nc, lda, sa, cb, p).with_batch_mask(mask);
+    MV<Scalar> A(int r0, int nr, int c0, int nc, Scalar** p = nullptr) const {
+        return MV<Scalar>(a + static_cast<std::ptrdiff_t>(c0) * lda + r0, nr, nc, lda, sa, cb, p).with_batch_mask(mask);
     }
-    MV<T> Bm(int r0, int nr, int c0, int nc, T** p = nullptr) const {
-        return MV<T>(const_cast<T*>(b) + static_cast<std::ptrdiff_t>(c0) * ldb + r0, nr, nc, ldb, sb, cb, p)
+    MV<Scalar> Bm(int r0, int nr, int c0, int nc, Scalar** p = nullptr) const {
+        return MV<Scalar>(const_cast<Scalar*>(b) + static_cast<std::ptrdiff_t>(c0) * ldb + r0, nr, nc, ldb, sb, cb, p)
             .with_batch_mask(bmask);
     }
-    MV<T> W(int nr, int nc, int ld) const { return MV<T>(l.w.data(), nr, nc, ld, n * nb, cb).with_batch_mask(mask); }
-    MV<T> H(int kb) const { return MV<T>(l.h.data(), kb, kb, nb, nb * nb, cb).with_batch_mask(mask); }
+    MV<Scalar> W(int nr, int nc,
+                 int ld) const { return MV<Scalar>(l.w.data(), nr, nc, ld, n * nb, cb).with_batch_mask(mask); }
+    MV<Scalar> H(int kb) const { return MV<Scalar>(l.h.data(), kb, kb, nb, nb * nb, cb).with_batch_mask(mask); }
     const std::uint8_t* mask_ptr() const { return ::batchlas::detail::mask_ptr(mask); }
-    T* at_a(int o) const { return a + static_cast<std::ptrdiff_t>(o) * lda + o; }
-    const T* at_b(int o) const { return b + static_cast<std::ptrdiff_t>(o) * ldb + o; }
+    Scalar* at_a(int o) const { return a + static_cast<std::ptrdiff_t>(o) * lda + o; }
+    const Scalar* at_b(int o) const { return b + static_cast<std::ptrdiff_t>(o) * ldb + o; }
 };
 
 // C := C + alpha X Y^H + conj(alpha) Y X^H (NoTrans) or alpha X^H Y + conj(alpha) Y^H X, on C's uplo triangle.
-template <Backend B, class T>
-void sym_r2k(Queue& q, const MV<T>& X, const MV<T>& Y, const MV<T>& C, T alpha, Uplo uplo, bool trans) {
-    if constexpr (is_std_complex_v<T>)
-        (void)::batchlas::her2k<B, T>(q, X, Y, C, alpha, float_t<T>(1), uplo, trans ? Transpose::ConjTrans : Transpose::NoTrans);
-    else (void)::batchlas::syr2k<B, T>(q, X, Y, C, alpha, T(1), uplo, trans ? Transpose::Trans : Transpose::NoTrans);
+template <Backend B, class Scalar>
+void sym_r2k(Queue& q, const MV<Scalar>& X, const MV<Scalar>& Y, const MV<Scalar>& C, Scalar alpha, Uplo uplo,
+             bool trans) {
+    if constexpr (is_std_complex_v<Scalar>)
+        (void)::batchlas::her2k<B, Scalar>(q, X, Y, C, alpha, float_t<Scalar>(1), uplo, trans ? Transpose::ConjTrans : Transpose::NoTrans);
+    else (void)::batchlas::syr2k<B, Scalar>(q, X, Y, C, alpha, Scalar(1), uplo,
+                                            trans ? Transpose::Trans : Transpose::NoTrans);
 }
 
 // C := alpha X Y + C. The Hermitian factor is the mirrored block H, so this is LAPACK's hemm / symm as
 // one gemm. evidence: docs/perf/sygvd.md#sygst-the-blocked-family
-template <Backend B, class T>
-void mm(Queue& q, const MV<T>& X, const MV<T>& Y, const MV<T>& C, T alpha) {
-    (void)::batchlas::gemm<B, T>(q, X, Y, C, alpha, T(1), Transpose::NoTrans, Transpose::NoTrans);
+template <Backend B, class Scalar>
+void mm(Queue& q, const MV<Scalar>& X, const MV<Scalar>& Y, const MV<Scalar>& C, Scalar alpha) {
+    (void)::batchlas::gemm<B, Scalar>(q, X, Y, C, alpha, Scalar(1), Transpose::NoTrans, Transpose::NoTrans);
 }
 
-template <class T>
-void mirror(Queue& q, const Pass<T>& p, int at, int kb, Uplo uplo) {
-    (void)ops::sygst::sygst_mirror<T>(q, p.at_a(at), p.lda, p.sa, kb, p.cb, uplo, p.l.h.data(), p.nb,
-                                      std::ptrdiff_t(p.nb) * p.nb, p.mask_ptr());
+template <class Scalar>
+void mirror(Queue& q, const Pass<Scalar>& p, int at, int kb, Uplo uplo) {
+    (void)ops::sygst::sygst_mirror<Scalar>(q, p.at_a(at), p.lda, p.sa, kb, p.cb, uplo, p.l.h.data(), p.nb,
+                                           std::ptrdiff_t(p.nb) * p.nb, p.mask_ptr());
 }
 
 // The order-n block at offset o, nb at a time (dsygst / zhegst). A diagonal block wider than the kernel
 // recurses at a quarter of its order (at least the kernel's): the same reduction with its own factor.
-template <Backend B, class T>
-void blocked_range(Queue& q, const Pass<T>& p, int o, int n, int nb, int itype, Uplo uplo) {
+template <Backend B, class Scalar>
+void blocked_range(Queue& q, const Pass<Scalar>& p, int o, int n, int nb, int itype, Uplo uplo) {
     const bool lower = uplo == Uplo::Lower;
-    const T one(1), half(0.5), mhalf(-0.5), mone(-1);
+    const Scalar one(1), half(0.5), mhalf(-0.5), mone(-1);
     // Reduce the diagonal block at `at`; with `full`, also leave the whole Hermitian result in H.
     auto diag = [&](int at, int kb, bool full) {
         if (kb <= ops::sygst::kDiagMaxOrder) {
-            (void)ops::sygst::sygst_diag<T>(q, p.at_a(at), p.lda, p.sa, p.at_b(at), p.ldb, p.sb, kb, p.cb, itype, uplo,
-                                            full ? p.l.h.data() : nullptr, p.nb, std::ptrdiff_t(p.nb) * p.nb,
-                                            p.mask_ptr());
+            (void)ops::sygst::sygst_diag<Scalar>(q, p.at_a(at), p.lda, p.sa, p.at_b(at), p.ldb, p.sb, kb, p.cb, itype,
+                                                 uplo, full ? p.l.h.data() : nullptr, p.nb, std::ptrdiff_t(p.nb) * p.nb,
+                                                 p.mask_ptr());
             return;
         }
-        blocked_range<B, T>(q, p, at, kb, std::max(ops::sygst::kDiagMaxOrder, kb / 4), itype, uplo);
+        blocked_range<B, Scalar>(q, p, at, kb, std::max(ops::sygst::kDiagMaxOrder, kb / 4), itype, uplo);
         if (full) mirror(q, p, at, kb, uplo);
     };
-    T** const pf = p.l.pf.data();
-    T** const pa = p.l.pa.data();
+    Scalar** const pf = p.l.pf.data();
+    Scalar** const pa = p.l.pa.data();
     for (int k = 0; k < n; k += nb) {
         const int kb = std::min(nb, n - k), at = o + k, m = n - k - kb, r = at + kb;
         const auto H = p.H(kb);
@@ -153,19 +156,19 @@ void blocked_range(Queue& q, const Pass<T>& p, int o, int n, int nb, int itype, 
             if (lower) {  // A21 := L22^-1 (A21 L11^-H - L21 C11), A22 -= P L21^H + L21 P^H
                 const auto P = p.A(r, m, at, kb, pa);
                 const auto L21 = p.Bm(r, m, at, kb);
-                (void)::batchlas::trsm<B, T>(q, F11, P, one, Side::Right, uplo, kH<T>, Diag::NonUnit);
-                mm<B, T>(q, L21, H, P, mhalf);
-                sym_r2k<B, T>(q, P, L21, A22, mone, uplo, false);
-                mm<B, T>(q, L21, H, P, mhalf);
-                (void)::batchlas::trsm<B, T>(q, F22, P, one, Side::Left, uplo, Transpose::NoTrans, Diag::NonUnit);
+                (void)::batchlas::trsm<B, Scalar>(q, F11, P, one, Side::Right, uplo, kH<Scalar>, Diag::NonUnit);
+                mm<B, Scalar>(q, L21, H, P, mhalf);
+                sym_r2k<B, Scalar>(q, P, L21, A22, mone, uplo, false);
+                mm<B, Scalar>(q, L21, H, P, mhalf);
+                (void)::batchlas::trsm<B, Scalar>(q, F22, P, one, Side::Left, uplo, Transpose::NoTrans, Diag::NonUnit);
             } else {  // A12 := (U11^-H A12 - C11 U12) U22^-1, A22 -= P^H U12 + U12^H P
                 const auto P = p.A(at, kb, r, m, pa);
                 const auto U12 = p.Bm(at, kb, r, m);
-                (void)::batchlas::trsm<B, T>(q, F11, P, one, Side::Left, uplo, kH<T>, Diag::NonUnit);
-                mm<B, T>(q, H, U12, P, mhalf);
-                sym_r2k<B, T>(q, P, U12, A22, mone, uplo, true);
-                mm<B, T>(q, H, U12, P, mhalf);
-                (void)::batchlas::trsm<B, T>(q, F22, P, one, Side::Right, uplo, Transpose::NoTrans, Diag::NonUnit);
+                (void)::batchlas::trsm<B, Scalar>(q, F11, P, one, Side::Left, uplo, kH<Scalar>, Diag::NonUnit);
+                mm<B, Scalar>(q, H, U12, P, mhalf);
+                sym_r2k<B, Scalar>(q, P, U12, A22, mone, uplo, true);
+                mm<B, Scalar>(q, H, U12, P, mhalf);
+                (void)::batchlas::trsm<B, Scalar>(q, F22, P, one, Side::Right, uplo, Transpose::NoTrans, Diag::NonUnit);
             }
             continue;
         }
@@ -178,41 +181,43 @@ void blocked_range(Queue& q, const Pass<T>& p, int o, int n, int nb, int itype, 
                 const auto P = p.A(at, kb, o, k);
                 const auto L21 = p.Bm(at, kb, o, k);
                 const auto W = p.W(kb, k, p.nb);
-                (void)::batchlas::trmm<B, T>(q, F11, P, W, one, Side::Right, uplo, Transpose::NoTrans, Diag::NonUnit);
-                mm<B, T>(q, H, L21, W, half);
-                sym_r2k<B, T>(q, W, L21, A11, one, uplo, true);
-                mm<B, T>(q, H, L21, W, half);
-                (void)::batchlas::trmm<B, T>(q, F22, W, P, one, Side::Left, uplo, kH<T>, Diag::NonUnit);
+                (void)::batchlas::trmm<B, Scalar>(q, F11, P, W, one, Side::Right, uplo, Transpose::NoTrans,
+                                                  Diag::NonUnit);
+                mm<B, Scalar>(q, H, L21, W, half);
+                sym_r2k<B, Scalar>(q, W, L21, A11, one, uplo, true);
+                mm<B, Scalar>(q, H, L21, W, half);
+                (void)::batchlas::trmm<B, Scalar>(q, F22, W, P, one, Side::Left, uplo, kH<Scalar>, Diag::NonUnit);
             } else {  // W = U11 A12 + U12 A22 / 2, A11 += W U12^H + U12 W^H, A12 = (W + U12 A22 / 2) U22^H
                 const auto P = p.A(o, k, at, kb);
                 const auto U12 = p.Bm(o, k, at, kb);
                 const auto W = p.W(k, kb, p.n);
-                (void)::batchlas::trmm<B, T>(q, F11, P, W, one, Side::Left, uplo, Transpose::NoTrans, Diag::NonUnit);
-                mm<B, T>(q, U12, H, W, half);
-                sym_r2k<B, T>(q, W, U12, A11, one, uplo, false);
-                mm<B, T>(q, U12, H, W, half);
-                (void)::batchlas::trmm<B, T>(q, F22, W, P, one, Side::Right, uplo, kH<T>, Diag::NonUnit);
+                (void)::batchlas::trmm<B, Scalar>(q, F11, P, W, one, Side::Left, uplo, Transpose::NoTrans,
+                                                  Diag::NonUnit);
+                mm<B, Scalar>(q, U12, H, W, half);
+                sym_r2k<B, Scalar>(q, W, U12, A11, one, uplo, false);
+                mm<B, Scalar>(q, U12, H, W, half);
+                (void)::batchlas::trmm<B, Scalar>(q, F22, W, P, one, Side::Right, uplo, kH<Scalar>, Diag::NonUnit);
             }
         }
         diag(at, kb, false);
     }
 }
 
-template <Backend B, class T>
-Event blocked(Queue& q, const MV<T>& A, const MV<T>& Bf, int nb, int itype, Uplo uplo, Span<std::byte> ws) {
+template <Backend B, class Scalar>
+Event blocked(Queue& q, const MV<Scalar>& A, const MV<Scalar>& Bf, int nb, int itype, Uplo uplo, Span<std::byte> ws) {
     const int n = A.rows(), batch = A.batch_size();
-    const int chunk = blocked_chunk<T>(q, n, nb, batch);
+    const int chunk = blocked_chunk<Scalar>(q, n, nb, batch);
     const Span<const std::uint8_t> mask = ::batchlas::detail::call_mask("sygst", A, Bf);
     BumpAllocator pool(ws);
-    const auto l = blocked_layout<T>(q, pool, n, nb, itype, blocked_part(chunk, batch));
+    const auto l = blocked_layout<Scalar>(q, pool, n, nb, itype, blocked_part(chunk, batch));
     for (int b0 = 0, cb = 0; b0 < batch; b0 += cb) {
         cb = batch - b0 < 2 * chunk ? batch - b0 : chunk;  // the last part takes the remainder
         const Span<const std::uint8_t> m = mask.empty() ? mask : mask.subspan(std::size_t(b0), std::size_t(cb));
-        const Pass<T> p{A.data_ptr() + static_cast<std::ptrdiff_t>(b0) * A.stride(),
+        const Pass<Scalar> p{A.data_ptr() + static_cast<std::ptrdiff_t>(b0) * A.stride(),
                         Bf.data_ptr() + static_cast<std::ptrdiff_t>(b0) * Bf.stride(),
                         A.ld(), Bf.ld(), A.stride(), Bf.stride(), cb, n, nb, l,
                         m, ::batchlas::detail::mask_view_is_broadcast(Bf, batch) ? Span<const std::uint8_t>{} : m};
-        blocked_range<B, T>(q, p, 0, n, nb, itype, uplo);
+        blocked_range<B, Scalar>(q, p, 0, n, nb, itype, uplo);
     }
     return q.get_event();
 }
