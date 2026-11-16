@@ -291,10 +291,10 @@ Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e
     if (jobz == JobType::EigenVectors) {
         // Ensure the eigenvector matrix is square and matches the problem size.
         if (eigvects.rows() != eigvects.cols()) {
-            throw batchlas::invalid_argument("Matrix must be square for eigenvector computation.");
+            throw batchlas::invalid_argument("steqr_legacy: Matrix must be square for eigenvector computation.");
         }
         if (eigvects.rows() != n || eigvects.batch_size() != batch_size) {
-            throw batchlas::invalid_argument("Eigenvector matrix has incompatible dimensions.");
+            throw batchlas::invalid_argument("steqr_legacy: Eigenvector matrix has incompatible dimensions.");
         }
         if (!params.back_transform) {
             (void)eigvects.fill_identity(ctx);

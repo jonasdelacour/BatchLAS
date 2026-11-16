@@ -420,7 +420,7 @@ namespace batchlas {
                 break;
             }
             default:
-                throw batchlas::invalid_argument("Unknown orthogonalization algorithm");
+                throw batchlas::invalid_argument("ortho: Unknown orthogonalization algorithm");
         }
 
         return ctx.get_event();
@@ -467,7 +467,7 @@ namespace batchlas {
 
         // Initialize the matrices if not already done
         if(nA + nM > k){
-            throw batchlas::invalid_argument("The number of vectors in A (" + std::to_string(nA) + ") and M (" + std::to_string(nM) + ") must sum to at most the dimension of these vectors (" + std::to_string(k) + ")");
+            throw batchlas::invalid_argument("ortho: The number of vectors in A (" + std::to_string(nA) + ") and M (" + std::to_string(nM) + ") must sum to at most the dimension of these vectors (" + std::to_string(k) + ")");
         }
         assert(k == (transM == Transpose::NoTrans ? M.rows_ : M.cols_));
         auto trans = device::Arith<T>::is_complex ? Transpose::ConjTrans : Transpose::Trans;

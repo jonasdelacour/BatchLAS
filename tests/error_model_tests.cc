@@ -416,7 +416,7 @@ TEST(ErrorModelSites, BumpAllocatorOverflowIsAWorkspaceError) {
 }
 
 TEST(ErrorModelSites, SizingPoolRejectsRemainingAsApiMisuse) {
-    // include/batchlas/util/mempool.hh:130 -- "BumpAllocator::remaining() is not
+    // include/batchlas/util/mempool.hh:130 -- "BumpAllocator::remaining: not
     // available in sizing mode." Wrong-MODE API misuse, not exhaustion: a sizing
     // pool's extent is fictitious, so a callee that sized itself against
     // remaining().size() would size against a number that means nothing.

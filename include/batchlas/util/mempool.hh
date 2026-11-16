@@ -67,7 +67,7 @@ struct BumpAllocator {
     // with allocate<std::byte>(), which rounds again.
     inline size_t required_bytes() const {
         if (!measuring_) {
-            throw batchlas::api_misuse("BumpAllocator::required_bytes() on a real pool; use BumpAllocator::measuring().");
+            throw batchlas::api_misuse("BumpAllocator::required_bytes: called on a real pool; use BumpAllocator::measuring().");
         }
         if (align_quantum_ == 0) return high_water_;
         // The allocation's own alignment is not trusted: acpp/Metal reports 512 B and hands out 256 B.
@@ -113,13 +113,13 @@ struct BumpAllocator {
         if (size == 0) return {};
         size_t alloc_size = allocation_size<T>(device,size);
         if (alloc_size > byte_size){
-            throw batchlas::workspace_error("Attempted to allocate " + std::to_string(alloc_size) + " bytes from a BumpAllocator with only " + std::to_string(byte_size) + " bytes remaining.");
+            throw batchlas::workspace_error("BumpAllocator::allocate: Attempted to allocate " + std::to_string(alloc_size) + " bytes from a BumpAllocator with only " + std::to_string(byte_size) + " bytes remaining.");
         }
 
         void* aligned = data;
         size_t remaining = byte_size;
         if (std::align(alignment<T>(device), size * sizeof(T), aligned, remaining) == nullptr) {
-            throw batchlas::workspace_error("Failed to align BumpAllocator storage for requested allocation.");
+            throw batchlas::workspace_error("BumpAllocator::allocate: Failed to align BumpAllocator storage for requested allocation.");
         }
 
         if (measuring_) {
@@ -158,7 +158,7 @@ struct BumpAllocator {
         if (measuring_) {
             // Callees sized against remaining().size() must be converted deliberately
             // (see iluk / syevx_lobpcg), never implicitly.
-            throw batchlas::api_misuse("BumpAllocator::remaining() is not available in sizing mode.");
+            throw batchlas::api_misuse("BumpAllocator::remaining: not available in sizing mode.");
         }
         return Span<std::byte>(static_cast<std::byte*>(data), byte_size);
     }
@@ -168,7 +168,7 @@ struct BumpAllocator {
     /// @throws batchlas::workspace_error if fewer than `bytes` remain
     inline void consume(size_t bytes) {
         if (bytes > byte_size) {
-            throw batchlas::workspace_error("BumpAllocator::consume called with more bytes than remain.");
+            throw batchlas::workspace_error("BumpAllocator::consume: called with more bytes than remain.");
         }
         data = static_cast<std::byte*>(data) + bytes;
         byte_size -= bytes;

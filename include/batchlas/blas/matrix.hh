@@ -352,7 +352,7 @@ namespace batchlas {
         inline std::pair<int64_t,int64_t> checked_slice_component(Slice s, int64_t dim) {
             const auto [start, len] = normalize_slice_component(s, dim);
             if (start < 0 || start > dim || start + std::max<int64_t>(len, 0) > dim) {
-                throw batchlas::out_of_range("Slice [" + std::to_string(start) + ", " +
+                throw batchlas::out_of_range("MatrixView::operator(): Slice [" + std::to_string(start) + ", " +
                                              std::to_string(start + len) + ") is outside a dimension of " +
                                              std::to_string(dim));
             }
@@ -370,17 +370,17 @@ namespace batchlas {
 
             if (active_rows.size() != static_cast<std::size_t>(batch_size) ||
                 active_cols.size() != static_cast<std::size_t>(batch_size)) {
-                throw batchlas::invalid_argument("Dense heterogeneous metadata must provide rows and cols for every batch item");
+                throw batchlas::invalid_argument("set_active_dims: Dense heterogeneous metadata must provide rows and cols for every batch item");
             }
 
             for (int batch_index = 0; batch_index < batch_size; ++batch_index) {
                 const int rows = active_rows[batch_index];
                 const int cols = active_cols[batch_index];
                 if (rows < 0 || cols < 0) {
-                    throw batchlas::invalid_argument("Dense heterogeneous metadata cannot contain negative dimensions");
+                    throw batchlas::invalid_argument("set_active_dims: Dense heterogeneous metadata cannot contain negative dimensions");
                 }
                 if (rows > rows_capacity || cols > cols_capacity) {
-                    throw batchlas::invalid_argument("Dense heterogeneous metadata exceeds the matrix storage capacity");
+                    throw batchlas::invalid_argument("set_active_dims: Dense heterogeneous metadata exceeds the matrix storage capacity");
                 }
             }
         }
@@ -1310,7 +1310,7 @@ namespace batchlas {
             auto [r_start, r_len] = detail::checked_slice_component(rows, rows_);
             auto [c_start, c_len] = detail::checked_slice_component(cols, cols_);
             if (r_len <= 0 || c_len <= 0) {
-                throw batchlas::invalid_argument("Invalid slice dimensions: " + std::to_string(r_len) + "x" + std::to_string(c_len));
+                throw batchlas::invalid_argument("MatrixView::operator(): Invalid slice dimensions: " + std::to_string(r_len) + "x" + std::to_string(c_len));
             }
             auto offset = c_start * ld_ + r_start;
             // Trap: the slice keeps the parent's pointer array, which holds *unsliced* base
@@ -1340,7 +1340,7 @@ namespace batchlas {
         VectorView<T> operator()(int32_t row, Slice cols) const {
             auto [c_start, c_len] = detail::checked_slice_component(cols, cols_);
             if (c_len <= 0) {
-                throw batchlas::invalid_argument("Invalid slice dimensions for row vector: " + std::to_string(c_len));
+                throw batchlas::invalid_argument("MatrixView::operator(): Invalid slice dimensions for row vector: " + std::to_string(c_len));
             }
             auto offset = c_start * ld_ + row;
             return VectorView<T>(data_ptr() + offset, static_cast<int>(c_len), batch_size_, ld_, stride_)
@@ -1357,7 +1357,7 @@ namespace batchlas {
         VectorView<T> operator()(Slice rows, int32_t col) const {
             auto [r_start, r_len] = detail::checked_slice_component(rows, rows_);
             if (r_len <= 0) {
-                throw batchlas::invalid_argument("Invalid slice dimensions for column vector: " + std::to_string(r_len));
+                throw batchlas::invalid_argument("MatrixView::operator(): Invalid slice dimensions for column vector: " + std::to_string(r_len));
             }
             auto offset = col * ld_ + r_start;
             return VectorView<T>(data_ptr() + offset, static_cast<int>(r_len), batch_size_, 1, stride_)
@@ -1792,7 +1792,7 @@ namespace batchlas {
             requires DenseMatrixFormat<M>
         MatrixView<T, MType> batch_range(int first, int count) const {
             if (first < 0 || count < 1 || static_cast<int64_t>(first) + count > batch_size_)
-                throw batchlas::out_of_range("batch_range [" + std::to_string(first) + ", " +
+                throw batchlas::out_of_range("MatrixView::batch_range: [" + std::to_string(first) + ", " +
                                              std::to_string(static_cast<int64_t>(first) + count) +
                                              ") is outside [0, " + std::to_string(batch_size_) + ")");
             MatrixView<T, MType> out(data_ptr() + static_cast<int64_t>(first) * stride_, rows_, cols_, ld_,

@@ -244,7 +244,7 @@ TYPED_TEST(StedcTest, DeviceWorkspaceAtTheDeflationScanOrder) {
 TYPED_TEST(StedcTest, LevelsMatchesRecursive) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
-    if constexpr (B == Backend::NETLIB) { GTEST_SKIP() << "Level driver is GPU-only"; }
+    if constexpr (B == Backend::NETLIB) { GTEST_SKIP() << "level driver is GPU-only"; }
     using float_type = typename base_type<T>::type;
     const int batch = 8;
 

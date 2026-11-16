@@ -88,6 +88,6 @@ TEST(MiniBenchCliTest, BackendTypeFiltering) {
     EXPECT_EQ(called_dn, 0);
     EXPECT_GT(called_fc, 0);
 #else
-    GTEST_SKIP() << "No supported backend compiled";
+    GTEST_SKIP() << "no supported backend compiled";
 #endif
 }

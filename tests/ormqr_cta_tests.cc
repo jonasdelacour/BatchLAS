@@ -110,7 +110,7 @@ TYPED_TEST(OrmqrCtaTest, MatchesNetlibOrmqrLeftRightTrans) {
         !run_case(Side::Left, Transpose::Trans) ||
         !run_case(Side::Right, Transpose::NoTrans) ||
         !run_case(Side::Right, Transpose::Trans)) {
-        GTEST_SKIP() << "Skipping ormq_cta due to runtime limitation: " << skip_reason;
+        GTEST_SKIP() << "skipping ormq_cta due to runtime limitation: " << skip_reason;
     }
 }
 

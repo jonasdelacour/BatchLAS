@@ -214,7 +214,7 @@ struct BATCHLAS_API Device{
     Device(std::string type) {
         std::transform(type.begin(), type.end(), type.begin(), ::tolower);
         auto pick = [](std::vector<Device> devs, const std::string& name) -> Device {
-            if (devs.empty()) throw batchlas::device_error("No " + name + " device available");
+            if (devs.empty()) throw batchlas::device_error("Device::Device: No " + name + " device available");
             return devs.at(0);
         };
         if(type == "cpu") {
@@ -224,7 +224,7 @@ struct BATCHLAS_API Device{
         } else if(type == "accelerator") {
             *this = pick(get_devices(DeviceType::ACCELERATOR), "accelerator");
         } else {
-            throw batchlas::invalid_argument("Invalid device type: " + type);
+            throw batchlas::invalid_argument("Device::Device: Invalid device type: " + type);
         }
     }
 

@@ -144,7 +144,7 @@ TYPED_TEST(GesvdTest, ValuesOnlyMatchesLapacke) {
     constexpr Backend B = TestFixture::B;
 
 #if !BATCHLAS_VERIFY_HAVE_LAPACKE
-    GTEST_SKIP() << "Reference LAPACKE backend unavailable.";
+    GTEST_SKIP() << "reference LAPACKE backend unavailable.";
 #else
     const int n = 8;
     const int batch = 3;
@@ -349,7 +349,7 @@ TYPED_TEST(GesvdHermitianComplexTest, ValuesOnlyMatchesLapacke) {
     constexpr Backend B = TestFixture::B;
 
 #if !BATCHLAS_VERIFY_HAVE_LAPACKE
-    GTEST_SKIP() << "Reference LAPACKE backend unavailable.";
+    GTEST_SKIP() << "reference LAPACKE backend unavailable.";
 #else
     const int n = 12;
     const int batch = 2;
@@ -392,7 +392,7 @@ TYPED_TEST(GesvdHermitianComplexTest, BlockedProviderFullVectorsMatchHermitianSv
     constexpr Backend B = TestFixture::B;
 
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Blocked native provider is only dispatched on GPU backends.";
+        GTEST_SKIP() << "blocked native provider is only dispatched on GPU backends.";
     } else {
         const int n = 48;
         const int batch = 2;
@@ -505,7 +505,7 @@ TYPED_TEST(GesvdTest, BlockedProviderCoversAllJobCombinations) {
     constexpr Backend B = TestFixture::B;
 
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Blocked native provider is only dispatched on GPU backends.";
+        GTEST_SKIP() << "blocked native provider is only dispatched on GPU backends.";
     } else {
         const int n = 64;
         const int batch = 2;
@@ -598,7 +598,7 @@ TYPED_TEST(GesvdTest, BlockedProviderHandlesRepeatedAndTinySingularValues) {
     constexpr Backend B = TestFixture::B;
 
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Blocked native provider is only dispatched on GPU backends.";
+        GTEST_SKIP() << "blocked native provider is only dispatched on GPU backends.";
     } else {
         const int n = 64;
         const int batch = 2;
@@ -689,7 +689,7 @@ TYPED_TEST(GesvdTest, BlockedProviderTallRectangularFullVectors) {
     constexpr Backend B = TestFixture::B;
 
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Blocked native provider is only dispatched on GPU backends.";
+        GTEST_SKIP() << "blocked native provider is only dispatched on GPU backends.";
     } else {
         const int m = 24;
         const int n = 16;
@@ -730,7 +730,7 @@ TYPED_TEST(GesvdTest, BlockedUniformlyTinyInput) {
     constexpr Backend B = TestFixture::B;
 
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Blocked native provider is only dispatched on GPU backends.";
+        GTEST_SKIP() << "blocked native provider is only dispatched on GPU backends.";
     } else {
         const int m = 24, n = 16, batch = 2;
         const Real tiny = std::ldexp(Real(1), std::is_same_v<Real, float> ? -30 : -60);
@@ -800,7 +800,7 @@ TYPED_TEST(GesvdTest, BlockedProviderLargeTallRectangularFullVectors) {
     constexpr Backend B = TestFixture::B;
 
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Blocked native provider is only dispatched on GPU backends.";
+        GTEST_SKIP() << "blocked native provider is only dispatched on GPU backends.";
     } else {
         const int m = 192;
         const int n = 128;
@@ -919,7 +919,7 @@ TYPED_TEST(GesvdTest, DefaultProviderKeepsSingularValuesAtHighCondition) {
     constexpr Backend B = TestFixture::B;
 
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Native gesvd providers are only dispatched on GPU backends.";
+        GTEST_SKIP() << "native gesvd providers are only dispatched on GPU backends.";
     } else {
         const int n = 32;
         const int batch = 4;
@@ -1046,7 +1046,7 @@ TYPED_TEST(GesvdTest, ThinWorkspaceIsSmallerThanFull) {
     constexpr Backend B = TestFixture::B;
 
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Native blocked provider is only dispatched on GPU backends.";
+        GTEST_SKIP() << "native blocked provider is only dispatched on GPU backends.";
     } else {
         const int m = 512;
         const int n = 32;
@@ -1131,7 +1131,7 @@ TYPED_TEST(GesvdTest, CtaRejectsGenuinelyThinAndItsPinThrows) {
     constexpr Backend B = TestFixture::B;
 
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Native CTA provider is only dispatched on GPU backends.";
+        GTEST_SKIP() << "native CTA provider is only dispatched on GPU backends.";
     } else {
         const int m = 32, n = 8, k = 8, batch = 2;
         auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(m, n, false, batch, 8104);
@@ -1168,7 +1168,7 @@ TYPED_TEST(GesvdTest, ThinTallUnderNormalEquationsBidiag) {
     constexpr Backend B = TestFixture::B;
 
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Native blocked provider is only dispatched on GPU backends.";
+        GTEST_SKIP() << "native blocked provider is only dispatched on GPU backends.";
     } else {
         ScopedEnvVar bidiag("BATCHLAS_GESVD_BIDIAG", "normal");
 
@@ -1210,7 +1210,7 @@ TYPED_TEST(GesvdTest, TallNarrowBelowCtaCap) {
     constexpr Backend B = TestFixture::B;
 
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Native blocked provider is only dispatched on GPU backends.";
+        GTEST_SKIP() << "native blocked provider is only dispatched on GPU backends.";
     } else {
         struct Shape { int m; int n; };
         const Shape shapes[] = {{256, 8}, {256, 16}, {512, 32}};
@@ -1250,7 +1250,7 @@ TYPED_TEST(GesvdTest, BlockedGebrdMatchesUnblockedAtSmallN) {
     constexpr Backend B = TestFixture::B;
 
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Native blocked provider is only dispatched on GPU backends.";
+        GTEST_SKIP() << "native blocked provider is only dispatched on GPU backends.";
     } else {
         const int m = 192, n = 16, k = 16, batch = 3;
 
@@ -1300,7 +1300,7 @@ TYPED_TEST(GesvdGeneralComplexTest, GeneralComplexAboveThirtyTwo) {
     constexpr Backend B = TestFixture::B;
 
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Native gesvd providers are only dispatched on GPU backends.";
+        GTEST_SKIP() << "native gesvd providers are only dispatched on GPU backends.";
     } else {
         if (this->max_dim_with_vectors() < 64) {
             GTEST_SKIP() << "gesvdj_cta with vectors is capped below 64 here (local memory)";
@@ -1545,7 +1545,7 @@ TYPED_TEST(GesvdGeneralComplexTest, BlockedGradedPaddedShapesAndJobs) {
     using Scalar = typename TestFixture::Scalar;
     constexpr Backend B = TestFixture::B;
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Native gesvd providers are only dispatched on GPU backends.";
+        GTEST_SKIP() << "native gesvd providers are only dispatched on GPU backends.";
     } else {
         const std::pair<int, int> shapes[] = {{48, 48}, {96, 96}, {130, 70}, {70, 130}};
         const SvdVectors jobs[][2] = {{SvdVectors::All, SvdVectors::All},
@@ -1569,7 +1569,7 @@ TYPED_TEST(GesvdGeneralComplexTest, AutoServesComplexGeneralAboveTheJacobiCap) {
     using Scalar = typename TestFixture::Scalar;
     constexpr Backend B = TestFixture::B;
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Native gesvd providers are only dispatched on GPU backends.";
+        GTEST_SKIP() << "native gesvd providers are only dispatched on GPU backends.";
     } else {
         for (auto [m, n] : {std::pair{96, 96}, std::pair{160, 100}, std::pair{100, 160}}) {
             SCOPED_TRACE("m=" + std::to_string(m) + " n=" + std::to_string(n));
@@ -1585,7 +1585,7 @@ TYPED_TEST(GesvdGeneralComplexTest, BlockedSaturatingBatchIsBitIdentical) {
     using Real = typename TestFixture::Real;
     constexpr Backend B = TestFixture::B;
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Native gesvd providers are only dispatched on GPU backends.";
+        GTEST_SKIP() << "native gesvd providers are only dispatched on GPU backends.";
     } else {
         const int n = 72, batch = 1024;
         PaddedBatch<Scalar> A(n, n, batch), U(n, n, batch), Vh(n, n, batch);
@@ -1607,7 +1607,7 @@ TYPED_TEST(GesvdGeneralComplexTest, BlockedSaturatingBatchIsBitIdentical) {
 TYPED_TEST(GesvdHermitianComplexTest, BlockedUpperIgnoresTheLowerTriangle) {
     constexpr Backend B = TestFixture::B;
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Native gesvd providers are only dispatched on GPU backends.";
+        GTEST_SKIP() << "native gesvd providers are only dispatched on GPU backends.";
     } else {
         for (int n : {48, 96}) check_hermitian_upper<typename TestFixture::Scalar, B>(*this->ctx, n, "blocked");
         check_hermitian_upper<typename TestFixture::Scalar, B>(*this->ctx, 96, nullptr);  // Auto
@@ -1617,7 +1617,7 @@ TYPED_TEST(GesvdHermitianComplexTest, BlockedUpperIgnoresTheLowerTriangle) {
 TYPED_TEST(GesvdTest, BlockedUpperIgnoresTheLowerTriangle) {
     constexpr Backend B = TestFixture::B;
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Native gesvd providers are only dispatched on GPU backends.";
+        GTEST_SKIP() << "native gesvd providers are only dispatched on GPU backends.";
     } else {
         for (int n : {48, 96}) check_hermitian_upper<typename TestFixture::Scalar, B>(*this->ctx, n, "blocked");
         check_hermitian_upper<typename TestFixture::Scalar, B>(*this->ctx, 96, nullptr);  // Auto

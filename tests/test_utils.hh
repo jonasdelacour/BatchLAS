@@ -354,12 +354,12 @@ protected:
     void SetUp() override {
         // Runtime filtering
         if (!should_run_backend(BackendType)) {
-            GTEST_SKIP() << "Backend filtered by BATCHLAS_TEST_BACKEND environment variable";
+            GTEST_SKIP() << "backend filtered by BATCHLAS_TEST_BACKEND environment variable";
         }
 
         // Use portable template-based type filtering instead of typeid().name()
         if (!should_run_float_type<ScalarType>()) {
-            GTEST_SKIP() << "Float type filtered by BATCHLAS_TEST_FLOAT_TYPE environment variable";
+            GTEST_SKIP() << "float type filtered by BATCHLAS_TEST_FLOAT_TYPE environment variable";
         }
 
         // The queue carries the backend. Tests are typed on a Backend, so bind
@@ -381,7 +381,7 @@ protected:
                 }
                 throw;
             } catch (const std::exception& e) {
-                GTEST_SKIP() << "Queue construction failed: " << e.what();
+                GTEST_SKIP() << "queue construction failed: " << e.what();
             }
         } else {
 #if !BATCHLAS_HAS_CPU_TARGET

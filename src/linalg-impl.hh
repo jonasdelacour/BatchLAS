@@ -318,14 +318,14 @@ namespace batchlas{
                     case ComputePrecision::BF16: return CUBLAS_COMPUTE_32F_FAST_16BF;
                     case ComputePrecision::TF32: return CUBLAS_COMPUTE_32F_FAST_TF32;
                     default:
-                        throw batchlas::unsupported("Unsupported precision for single precision type");
+                        throw batchlas::unsupported("enum_convert: Unsupported precision for single precision type");
                 }
             }
             else if constexpr (std::is_same_v<BaseType, double>) {
                 if (precision == ComputePrecision::F64) {
                     return CUBLAS_COMPUTE_64F;
                 }
-                throw batchlas::unsupported("Only F64 precision supported for double precision type");
+                throw batchlas::unsupported("enum_convert: Only F64 precision supported for double precision type");
             }
         } else
 #endif
@@ -344,7 +344,7 @@ namespace batchlas{
         } else
 #endif
         {
-            throw batchlas::unsupported("Unsupported backend or type combination");
+            throw batchlas::unsupported("enum_convert: Unsupported backend or type combination");
         }
     }
 
@@ -563,7 +563,7 @@ namespace batchlas{
 #if BATCHLAS_HAS_CUBLAS
     inline auto check_status(cublasStatus_t status) {
         if (status != CUBLAS_STATUS_SUCCESS) {
-            throw batchlas::device_error("CUBLAS error: " + std::to_string(status));
+            throw batchlas::device_error("check_status: CUBLAS error: " + std::to_string(status));
         }
         return status;
     }
@@ -572,7 +572,7 @@ namespace batchlas{
 #if BATCHLAS_HAS_CUSPARSE
     inline auto check_status(cusparseStatus_t status) {
         if (status != CUSPARSE_STATUS_SUCCESS) {
-            throw batchlas::device_error("CUSPARSE error: " + std::to_string(status));
+            throw batchlas::device_error("check_status: CUSPARSE error: " + std::to_string(status));
         }
         return status;
     }
@@ -581,7 +581,7 @@ namespace batchlas{
 #if BATCHLAS_HAS_CUSOLVER
     inline auto check_status(cusolverStatus_t status) {
         if (status != CUSOLVER_STATUS_SUCCESS) {
-            throw batchlas::device_error("CUSOLVER error: " + std::to_string(status));
+            throw batchlas::device_error("check_status: CUSOLVER error: " + std::to_string(status));
         }
         return status;
     }
@@ -817,13 +817,13 @@ namespace batchlas{
                 cudaDeviceSynchronize();
                 auto blas_status = cublasCreate(&blas_handle_);
                 if (blas_status != CUBLAS_STATUS_SUCCESS)
-                    throw batchlas::device_error("cuBLAS initialization failed with status " +
+                    throw batchlas::device_error("LinalgHandle::LinalgHandle: cuBLAS initialization failed with status " +
                                                  std::to_string(static_cast<int>(blas_status)));
 
                 auto sparse_status = cusparseCreate(&sparse_handle_);
                 if (sparse_status != CUSPARSE_STATUS_SUCCESS) {
                     cublasDestroy(blas_handle_);  // no destructor runs for a throwing constructor
-                    throw batchlas::device_error("cuSPARSE initialization failed with status " +
+                    throw batchlas::device_error("LinalgHandle::LinalgHandle: cuSPARSE initialization failed with status " +
                                                  std::to_string(static_cast<int>(sparse_status)));
                 }
 
@@ -831,7 +831,7 @@ namespace batchlas{
                 if (solver_status != CUSOLVER_STATUS_SUCCESS) {
                     cusparseDestroy(sparse_handle_);
                     cublasDestroy(blas_handle_);
-                    throw batchlas::device_error("cuSOLVER initialization failed with status " +
+                    throw batchlas::device_error("LinalgHandle::LinalgHandle: cuSOLVER initialization failed with status " +
                                                  std::to_string(static_cast<int>(solver_status)));
                 }
                 cudaDeviceSynchronize();

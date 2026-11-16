@@ -504,10 +504,10 @@ TEST(SyevJacobiCtaAccuracy, RandomSymmetricMatchesDoubleReference) {
     constexpr Backend B = Backend::ROCM;
 #endif
     if (!test_utils::should_run_backend(B)) {
-        GTEST_SKIP() << "Backend filtered by BATCHLAS_TEST_BACKEND environment variable";
+        GTEST_SKIP() << "backend filtered by BATCHLAS_TEST_BACKEND environment variable";
     }
     if (!test_utils::should_run_float_type<float>()) {
-        GTEST_SKIP() << "Float type filtered by BATCHLAS_TEST_FLOAT_TYPE environment variable";
+        GTEST_SKIP() << "float type filtered by BATCHLAS_TEST_FLOAT_TYPE environment variable";
     }
     auto ctx = Queue("gpu", true);
     if (ctx.device().type != DeviceType::GPU) {
@@ -579,10 +579,10 @@ TEST(SyevJacobiCtaAccuracy, GradedSpdRelativeAccuracy) {
 #endif
 
     if (!test_utils::should_run_backend(B)) {
-        GTEST_SKIP() << "Backend filtered by BATCHLAS_TEST_BACKEND environment variable";
+        GTEST_SKIP() << "backend filtered by BATCHLAS_TEST_BACKEND environment variable";
     }
     if (!test_utils::should_run_float_type<float>()) {
-        GTEST_SKIP() << "Float type filtered by BATCHLAS_TEST_FLOAT_TYPE environment variable";
+        GTEST_SKIP() << "float type filtered by BATCHLAS_TEST_FLOAT_TYPE environment variable";
     }
     auto ctx = Queue("gpu", true);
     if (ctx.device().type != DeviceType::GPU) {

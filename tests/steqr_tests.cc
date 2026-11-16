@@ -669,12 +669,12 @@ TYPED_TEST(SteqrTest, StressExtremeMagnitudesN32) {
 
     } catch (const sycl::exception& e) {
         if (test_utils::may_skip_missing_kernel(e.what())) {
-            GTEST_SKIP() << "Skipping due to missing kernel bundle: " << e.what();
+            GTEST_SKIP() << "skipping due to missing kernel bundle: " << e.what();
         }
         throw;
     } catch (const std::exception& e) {
         if (test_utils::may_skip_missing_kernel(e.what())) {
-            GTEST_SKIP() << "Skipping due to missing kernel bundle: " << e.what();
+            GTEST_SKIP() << "skipping due to missing kernel bundle: " << e.what();
         }
         throw;
     }
@@ -1018,7 +1018,7 @@ TYPED_TEST(SteqrTest, GradedTridiagonalRelativeAccuracy) {
             this->ctx->wait();
         } catch (const std::exception& e) {
             if (test_utils::may_skip_missing_kernel(e.what())) {
-                GTEST_SKIP() << "Skipping due to missing kernel bundle: " << e.what();
+                GTEST_SKIP() << "skipping due to missing kernel bundle: " << e.what();
             }
             throw;
         }
@@ -1274,7 +1274,7 @@ TYPED_TEST(SteqrTest, MixedDirectionLockstep) {
                 params.cta_shift_strategy = shift;
                 std::string skip;
                 if (!run_steqr_vectors<B, Real>(*this->ctx, hd, he, params, evals, eigvects, info, skip)) {
-                    GTEST_SKIP() << "Skipping due to missing kernel bundle: " << skip;
+                    GTEST_SKIP() << "skipping due to missing kernel bundle: " << skip;
                 }
 
                 if (tridiag_batch_ok(*this->ctx, hd, he, ref, evals, eigvects, info)) continue;
@@ -1341,7 +1341,7 @@ TYPED_TEST(SteqrTest, PerChunkFailureIsolated) {
             SteqrParams<Real> params = {};
             std::string skip;
             if (!run_steqr_vectors<B, Real>(*this->ctx, hd, he, params, evals, eigvects, info, skip)) {
-                GTEST_SKIP() << "Skipping due to missing kernel bundle: " << skip;
+                GTEST_SKIP() << "skipping due to missing kernel bundle: " << skip;
             }
 
             int bad_items = 0;
@@ -1408,7 +1408,7 @@ TYPED_TEST(SteqrTest, RaggedTailBatch) {
                 params.cta_wg_size_multiplier = mult;
                 std::string skip;
                 if (!run_steqr_vectors<B, Real>(*this->ctx, hd, he, params, evals, eigvects, info, skip)) {
-                    GTEST_SKIP() << "Skipping due to missing kernel bundle: " << skip;
+                    GTEST_SKIP() << "skipping due to missing kernel bundle: " << skip;
                 }
 
                 std::vector<int> items;

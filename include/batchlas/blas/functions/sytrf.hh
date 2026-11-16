@@ -59,15 +59,15 @@ using sytrs_vendor = Event(Queue&, const MatrixView<T, MatrixFormat::Dense>&, co
 template <typename T>
 inline void sytrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
     if (A.rows() < 0 || A.cols() < 0) {
-        throw batchlas::invalid_argument("SYTRF: Matrix dimensions cannot be negative (A: rows=" +
+        throw batchlas::invalid_argument("sytrf: Matrix dimensions cannot be negative (A: rows=" +
                                          std::to_string(A.rows()) + ", cols=" + std::to_string(A.cols()) + ")");
     }
     if (A.rows() != A.cols()) {
-        throw batchlas::invalid_argument("SYTRF: A must be square, got " + std::to_string(A.rows()) + "x" +
+        throw batchlas::invalid_argument("sytrf: A must be square, got " + std::to_string(A.rows()) + "x" +
                                          std::to_string(A.cols()));
     }
     if (uplo != Uplo::Lower && uplo != Uplo::Upper) {
-        throw batchlas::invalid_argument("SYTRF: Invalid uplo parameter: " + std::to_string(static_cast<int>(uplo)));
+        throw batchlas::invalid_argument("sytrf: Invalid uplo parameter: " + std::to_string(static_cast<int>(uplo)));
     }
 }
 
@@ -84,11 +84,11 @@ inline void sytrs_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
                                   const MatrixView<T, MatrixFormat::Dense>& B, Uplo uplo) {
     sytrf_validate_params<T>(A, uplo);
     if (B.rows() != A.rows() || B.cols() < 0) {
-        throw batchlas::invalid_argument("SYTRS: B must be n x nrhs with n = " + std::to_string(A.rows()) + ", got " +
+        throw batchlas::invalid_argument("sytrs: B must be n x nrhs with n = " + std::to_string(A.rows()) + ", got " +
                                          std::to_string(B.rows()) + "x" + std::to_string(B.cols()));
     }
     if (A.batch_size() != B.batch_size()) {
-        throw batchlas::invalid_argument("SYTRS: A and B must share a batch size, got " +
+        throw batchlas::invalid_argument("sytrs: A and B must share a batch size, got " +
                                          std::to_string(A.batch_size()) + " and " + std::to_string(B.batch_size()));
     }
 }
