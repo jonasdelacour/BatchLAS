@@ -79,7 +79,7 @@ void refuse_batch_mask(const char* who, const Views&... v) {
 template <typename T, typename... V>
 void refuse_batch_mask(Op op, const char* who, Backend backend, const V&... v) {
     (void)call_mask(who, v...);
-    if (any_batch_mask(v...)) throw NoRouteError(op, backend, scalar_kind_of<T>, batch_mask_refusal(who));
+    if (any_batch_mask(v...)) throw batchlas::NoRouteError(op, backend, scalar_kind_of<T>, batch_mask_refusal(who));
 }
 
 }  // namespace batchlas::detail

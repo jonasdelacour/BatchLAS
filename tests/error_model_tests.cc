@@ -312,7 +312,7 @@ TEST(ErrorModelHierarchy, EveryRuntimeLeafIsCaughtAsBatchlasError) {
 // on batchlas::unsupported must see it, and so must the older std::runtime_error handlers.
 TEST(NoRoute, IsUnsupported) {
     const auto direct = [] {
-        throw NoRouteError(Op::hemm, Backend::CUDA, ScalarKind::C32, "built without cuBLAS");
+        throw batchlas::NoRouteError(Op::hemm, Backend::CUDA, ScalarKind::C32, "built without cuBLAS");
     };
     ExpectThreeWayCatch<batchlas::unsupported>(direct, "no route for hemm");
     EXPECT_THROW(direct(), std::runtime_error);

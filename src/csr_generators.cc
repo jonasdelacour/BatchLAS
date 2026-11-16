@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <batchlas/blas/csr_generators.hh>
 
-namespace batchlas {
-namespace csr_generators {
+namespace batchlas::csr_generators {
 
 template <typename T>
 Matrix<T, MatrixFormat::CSR> random_sparse_hermitian_csr(int n,
@@ -29,5 +28,4 @@ template Matrix<std::complex<float>, MatrixFormat::CSR> random_sparse_hermitian_
 template Matrix<std::complex<double>, MatrixFormat::CSR> random_sparse_hermitian_csr<std::complex<double>>(
     int, float, int, unsigned, base_type<std::complex<double>>::type, bool);
 
-}  // namespace csr_generators
-}  // namespace batchlas
+}  // namespace batchlas::csr_generators

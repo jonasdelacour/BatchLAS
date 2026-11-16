@@ -14,8 +14,7 @@
 #include <batchlas/device/detail/sscp_target.hh>
 
 
-namespace batchlas {
-    namespace detail {
+namespace batchlas::detail {
         template <typename T>
         using base_float_t = typename base_type<T>::type;
 
@@ -99,8 +98,4 @@ namespace batchlas {
         using ::batchlas::device::safmin;
         using ::batchlas::device::safmax;
 
-    }
-
-
-
-}
+}  // namespace batchlas::detail

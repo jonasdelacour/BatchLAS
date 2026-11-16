@@ -294,19 +294,19 @@ inline void SpmmColdLanczosSizes(minibench::Benchmark* b) { SpmmLanczosSizes(b);
 
 // CUDA and ROCM only: the NETLIB spmm throws on any transpose and is not compiled
 // at all in a vendor-free build, so registering it would take the process down.
-BATCHLAS_BENCH_CUDA_ALL_TYPES(BM_SPMM_Cells, SpmmCellSizes)
-BATCHLAS_BENCH_ROCM_ALL_TYPES(BM_SPMM_Cells, SpmmCellSizes)
+BATCHLAS_BENCH_CUDA_ALL_TYPES(BM_SPMM_Cells, SpmmCellSizes);
+BATCHLAS_BENCH_ROCM_ALL_TYPES(BM_SPMM_Cells, SpmmCellSizes);
 
-BATCHLAS_BENCH_CUDA_ALL_TYPES(BM_SPMM_Grid, SpmmGridSizes)
-BATCHLAS_BENCH_ROCM_ALL_TYPES(BM_SPMM_Grid, SpmmGridSizes)
+BATCHLAS_BENCH_CUDA_ALL_TYPES(BM_SPMM_Grid, SpmmGridSizes);
+BATCHLAS_BENCH_ROCM_ALL_TYPES(BM_SPMM_Grid, SpmmGridSizes);
 
-BATCHLAS_BENCH_CUDA_ALL_TYPES(BM_SPMM_Lanczos, SpmmLanczosSizes)
-BATCHLAS_BENCH_ROCM_ALL_TYPES(BM_SPMM_Lanczos, SpmmLanczosSizes)
+BATCHLAS_BENCH_CUDA_ALL_TYPES(BM_SPMM_Lanczos, SpmmLanczosSizes);
+BATCHLAS_BENCH_ROCM_ALL_TYPES(BM_SPMM_Lanczos, SpmmLanczosSizes);
 
-BATCHLAS_BENCH_CUDA_ALL_TYPES(BM_SPMM_ColdCells, SpmmColdCellSizes)
-BATCHLAS_BENCH_ROCM_ALL_TYPES(BM_SPMM_ColdCells, SpmmColdCellSizes)
+BATCHLAS_BENCH_CUDA_ALL_TYPES(BM_SPMM_ColdCells, SpmmColdCellSizes);
+BATCHLAS_BENCH_ROCM_ALL_TYPES(BM_SPMM_ColdCells, SpmmColdCellSizes);
 
-BATCHLAS_BENCH_CUDA_ALL_TYPES(BM_SPMM_ColdLanczos, SpmmColdLanczosSizes)
-BATCHLAS_BENCH_ROCM_ALL_TYPES(BM_SPMM_ColdLanczos, SpmmColdLanczosSizes)
+BATCHLAS_BENCH_CUDA_ALL_TYPES(BM_SPMM_ColdLanczos, SpmmColdLanczosSizes);
+BATCHLAS_BENCH_ROCM_ALL_TYPES(BM_SPMM_ColdLanczos, SpmmColdLanczosSizes);
 
 MINI_BENCHMARK_MAIN();

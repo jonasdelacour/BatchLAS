@@ -231,7 +231,6 @@ struct SytrdCtaConfig {
 
 } // namespace
 
-#include <tests/test_utils.hh>
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 using SytrdCtaTestTypes = ::testing::Types<SytrdCtaConfig<float, Backend::CUDA>, SytrdCtaConfig<double, Backend::CUDA>>;

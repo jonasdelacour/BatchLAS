@@ -10,8 +10,7 @@
 
 #include <cstdint>
 
-namespace batchlas {
-namespace ops::syfn {
+namespace batchlas::ops::syfn {
 
 template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
@@ -37,5 +36,4 @@ template <Backend B, typename T>
 void launch_scale(Queue& q, const MV<T>& V, Span<float_t<T>> W, SyfnFunction<float_t<T>> fn, const Core<T>& ws,
                   const std::uint8_t* mask);
 
-}  // namespace ops::syfn
-}  // namespace batchlas
+}  // namespace batchlas::ops::syfn

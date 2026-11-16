@@ -152,10 +152,10 @@ Event tridiagonal_solver(Queue& ctx,
         auto Vdata = Q.data_ptr();
         auto Vld = Q.ld();
 
-        sycl::local_accessor<T, 1> D_smem(smem_possible ? n + 1 : 0, h);
-        sycl::local_accessor<T, 1> L_smem(smem_possible ? n : 0, h);
-        sycl::local_accessor<T, 1> U_smem(smem_possible ? 2 * (n + 1) : 0, h);
-        sycl::local_accessor<T, 1> V_smem(smem_possible ? 2 * n : 0, h);
+        sycl::local_accessor<T, 1> D_smem(sycl::range<1>(smem_possible ? n + 1 : 0), h);
+        sycl::local_accessor<T, 1> L_smem(sycl::range<1>(smem_possible ? n : 0), h);
+        sycl::local_accessor<T, 1> U_smem(sycl::range<1>(smem_possible ? 2 * (n + 1) : 0), h);
+        sycl::local_accessor<T, 1> V_smem(sycl::range<1>(smem_possible ? 2 * n : 0), h);
 
         batchlas::impl::parallel_for(h, sycl::nd_range<1>(batch_size*32, 32), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();

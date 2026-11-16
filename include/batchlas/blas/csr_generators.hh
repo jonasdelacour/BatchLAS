@@ -10,9 +10,8 @@
 /// @file
 /// @brief Random CSR test-matrix generators (`batchlas::csr_generators`).
 
-namespace batchlas {
 /// @brief Random sparse test-matrix generators.
-namespace csr_generators {
+namespace batchlas::csr_generators {
 
 /// @brief Generates a batch of random sparse symmetric (real) or Hermitian (complex) \f$n \times n\f$ CSR matrices.
 ///
@@ -47,5 +46,4 @@ BATCHLAS_API Matrix<T, MatrixFormat::CSR> random_sparse_hermitian_csr(int n,
                                                                       typename base_type<T>::type diagonal_boost = typename base_type<T>::type(1),
                                                                       bool shared_pattern = true);
 
-}  // namespace csr_generators
-}  // namespace batchlas
+}  // namespace batchlas::csr_generators

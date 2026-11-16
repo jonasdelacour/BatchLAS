@@ -280,4 +280,4 @@ void ACC_GESVD_CTA(miniacc::State& state) {
 
 BATCHLAS_ACC_CUDA_ALL_TYPES(ACC_GESVD_CTA, GesvdCtaAccSizes)
 
-MINI_ACC_MAIN()
+MINI_ACC_MAIN();

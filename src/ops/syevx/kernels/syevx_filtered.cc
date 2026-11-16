@@ -258,8 +258,8 @@ Event syevx_filtered(Queue& ctx,
         const size_t rg = row_groups;
         ctx->submit([&](sycl::handler& h) {
             batchlas::impl::parallel_for<SyevxFilterBoundsPartialKernel<B, T, MFormat>>(h,
-                sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * rg * kBoundsWG},
-                                  sycl::range{kBoundsWG}),
+                sycl::nd_range<1>(sycl::range<1>{static_cast<size_t>(batch) * rg * kBoundsWG},
+                                  sycl::range<1>{kBoundsWG}),
                 [=](sycl::nd_item<1> item) {
                     const device::WorkGroup<static_cast<int>(kBoundsWG)> ex{item};
                     const size_t gid = item.get_group_linear_id();
@@ -287,8 +287,8 @@ Event syevx_filtered(Queue& ctx,
         constexpr int rwg = 128;
         ctx->submit([&](sycl::handler& h) {
             batchlas::impl::parallel_for<SyevxFilterBoundsReduceKernel<B, T, MFormat>>(h,
-                sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * rwg},
-                                  sycl::range{static_cast<size_t>(rwg)}),
+                sycl::nd_range<1>(sycl::range<1>{static_cast<size_t>(batch) * rwg},
+                                  sycl::range<1>{static_cast<size_t>(rwg)}),
                 [=](sycl::nd_item<1> item) {
                     const device::RtGroup<> ex{item};
                     const int b = static_cast<int>(item.get_group_linear_id());
@@ -375,8 +375,8 @@ Event syevx_filtered(Queue& ctx,
             constexpr int wg = 128;
             ctx->submit([&](sycl::handler& h) {
                 batchlas::impl::parallel_for<SyevxFilterResidualKernel<B, T, MFormat>>(h,
-                    sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * wg},
-                                      sycl::range{static_cast<size_t>(wg)}),
+                    sycl::nd_range<1>(sycl::range<1>{static_cast<size_t>(batch) * wg},
+                                      sycl::range<1>{static_cast<size_t>(wg)}),
                     [=](sycl::nd_item<1> item) {
                         const device::RtGroup<> ex{item};
                         const int b = static_cast<int>(item.get_group_linear_id());
@@ -656,8 +656,8 @@ Event syevx_filtered(Queue& ctx,
         constexpr int wg = 128;
         ctx->submit([&](sycl::handler& h) {
             batchlas::impl::parallel_for<SyevxFilterFinalizeKernel<B, T, MFormat>>(h,
-                sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * wg},
-                                  sycl::range{static_cast<size_t>(wg)}),
+                sycl::nd_range<1>(sycl::range<1>{static_cast<size_t>(batch) * wg},
+                                  sycl::range<1>{static_cast<size_t>(wg)}),
                 [=](sycl::nd_item<1> item) {
                     const device::RtGroup<> ex{item};
                     const int b = static_cast<int>(item.get_group_linear_id());

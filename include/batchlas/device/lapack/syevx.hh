@@ -9,9 +9,7 @@
 #include <batchlas/device/level1.hh>
 #include <batchlas/device/view.hh>
 
-namespace batchlas::device {
-
-namespace detail {
+namespace batchlas::device::detail {
 
 // lam: n ascending eigenvalues, q: their vectors. Block [first, first + count), or for a value
 // range (vl, vu] the leader's Sturm counts (stebz's `<=`) published in block[0..1] (int64 SLM).
@@ -46,6 +44,4 @@ BATCHLAS_DEVICE_INLINE int syevx_select(const Ex& ex, const L& lam, bool value_r
     return static_cast<int>(count);
 }
 
-}  // namespace detail
-
-}  // namespace batchlas::device
+}  // namespace batchlas::device::detail

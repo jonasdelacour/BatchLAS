@@ -16,8 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace batchlas {
-namespace ops::syfn {
+namespace batchlas::ops::syfn {
 
 
 template <Backend B, typename T>
@@ -126,5 +125,4 @@ void launch_scale(Queue& q, const MV<T>& V, Span<float_t<T>> W, SyfnFunction<flo
 BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(SYFN_KERNELS_INSTANTIATE)
 #undef SYFN_KERNELS_INSTANTIATE
 
-}  // namespace ops::syfn
-}  // namespace batchlas
+}  // namespace batchlas::ops::syfn

@@ -91,7 +91,7 @@ Event stebz(Queue& ctx,
         auto slm = sycl::local_accessor<std::byte, 1>(sycl::range<1>(wsz.local_bytes), h);
 
         batchlas::impl::parallel_for<StebzKernel<B, T>>(h,
-            sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch_size) * wg}, sycl::range{wg}),
+            sycl::nd_range<1>(sycl::range<1>{static_cast<size_t>(batch_size) * wg}, sycl::range<1>{wg}),
             [=](sycl::nd_item<1> item) {
                 const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
                 if (mask != nullptr && mask[bid] == 0) return;  // I1: before the first collective

@@ -11,8 +11,7 @@
 
 #include <sycl/sycl.hpp>
 
-namespace batchlas {
-namespace util {
+namespace batchlas::util {
 
 /**
  * @brief Helper function to get a raw pointer from a SYCL local accessor.
@@ -32,5 +31,4 @@ inline T* get_raw_ptr(const sycl::local_accessor<T, Dims>& accessor) {
     return accessor.template get_multi_ptr<sycl::access::decorated::no>().get();
 }
 
-} // namespace util
-} // namespace batchlas
+}  // namespace batchlas::util

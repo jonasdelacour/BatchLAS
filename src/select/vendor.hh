@@ -109,7 +109,7 @@ inline constexpr bool level3_tile_substitution_enabled =
 template <typename T>
 [[noreturn]] inline void throw_no_vendor_route(Op op, Backend backend, const char* library) {
     coverage::record_miss(op, scalar_kind_of<T>, backend, library);
-    throw NoRouteError(op, backend, scalar_kind_of<T>, std::string("built without ") + library);
+    throw batchlas::NoRouteError(op, backend, scalar_kind_of<T>, std::string("built without ") + library);
 }
 
 /// @}

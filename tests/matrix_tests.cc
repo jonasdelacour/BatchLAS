@@ -207,7 +207,6 @@ TEST(MatrixDenseTest, StaticFactoryMethods) {
 }
 
 // Additional tests for Matrix class
-#include <complex>
 
 TEST(MatrixDenseTest, DoubleAndComplexConstruction) {
     Matrix<double, MatrixFormat::Dense> dmat(3, 2, 1);

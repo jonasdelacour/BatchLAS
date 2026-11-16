@@ -285,4 +285,4 @@ void GesvdAccSizesNetlib(Benchmark* b) {
 
 BATCHLAS_REGISTER_ACCURACY_ALL_TYPES(ACC_GESVD_BLOCKED, GesvdAccSizes)
 
-MINI_ACC_MAIN()
+MINI_ACC_MAIN();

@@ -314,7 +314,7 @@ Event syevx_direct_subset(Queue& ctx,
         const size_t wg = std::min<size_t>(256, static_cast<size_t>(std::max<int64_t>(n, 1)));
         ctx->submit([&](sycl::handler& h) {
             batchlas::impl::parallel_for<SyevxSubsetFinalizeKernel<B, T, MFormat>>(h,
-                sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * wg}, sycl::range{wg}),
+                sycl::nd_range<1>(sycl::range<1>{static_cast<size_t>(batch) * wg}, sycl::range<1>{wg}),
                 [=](sycl::nd_item<1> item) {
                     const device::RtGroup<> ex{item};
                     const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());

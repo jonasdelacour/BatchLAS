@@ -97,4 +97,4 @@ void EigensolverSizesNetlib(Benchmark* b) {
 
 BATCHLAS_REGISTER_ACCURACY(ACC_SYEV_BLOCKED, EigensolverSizes)
 
-MINI_ACC_MAIN()
+MINI_ACC_MAIN();

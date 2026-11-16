@@ -19,7 +19,6 @@
 #include <src/queue.hh>
 #include <batchlas/no_route.hh>
 #include <algorithm>
-#include <cstring>
 #include <complex>
 #include <initializer_list>
 #include <limits>
@@ -31,7 +30,6 @@
 #include <vector>
 #include <cmath>
 #include <random>
-#include <initializer_list>
 #include <sstream>
 #include <type_traits>
 

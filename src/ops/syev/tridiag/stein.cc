@@ -97,8 +97,8 @@ Event stein(Queue& ctx,
         auto norm_local = sycl::local_accessor<T, 1>(sycl::range<1>(1), h);
 
         batchlas::impl::parallel_for<SteinIterateKernel<B, T>>(h,
-            sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch_size) * wg_iter},
-                              sycl::range{wg_iter}),
+            sycl::nd_range<1>(sycl::range<1>{static_cast<size_t>(batch_size) * wg_iter},
+                              sycl::range<1>{wg_iter}),
             [=](sycl::nd_item<1> item) {
                 const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
                 if (mask != nullptr && mask[bid] == 0) return;  // I1: before the first collective
@@ -127,8 +127,8 @@ Event stein(Queue& ctx,
         auto scratch = sycl::local_accessor<T, 1>(sycl::range<1>(1), h);
 
         batchlas::impl::parallel_for<SteinOrthoKernel<B, T>>(h,
-            sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch_size) * wg_ortho},
-                              sycl::range{wg_ortho}),
+            sycl::nd_range<1>(sycl::range<1>{static_cast<size_t>(batch_size) * wg_ortho},
+                              sycl::range<1>{wg_ortho}),
             [=](sycl::nd_item<1> item) {
                 const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
                 if (mask != nullptr && mask[bid] == 0) return;  // I1: before the first collective

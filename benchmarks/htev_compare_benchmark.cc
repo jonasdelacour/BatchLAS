@@ -112,18 +112,18 @@ void BM_HTEV_STEDC(minibench::State& state) {
 // ── Registration ─────────────────────────────────────────────────────────────
 
 #if BATCHLAS_HAS_CUDA_BACKEND
-BATCHLAS_BENCH_CUDA(BM_HTEV_STEQR, HtevDxCompareBenchSizes)
-BATCHLAS_BENCH_CUDA(BM_HTEV_STEDC, HtevDxCompareBenchSizes)
+BATCHLAS_BENCH_CUDA(BM_HTEV_STEQR, HtevDxCompareBenchSizes);
+BATCHLAS_BENCH_CUDA(BM_HTEV_STEDC, HtevDxCompareBenchSizes);
 #endif
 
 #if BATCHLAS_HAS_ROCM_BACKEND
-BATCHLAS_BENCH_ROCM(BM_HTEV_STEQR, HtevDxCompareBenchSizes)
-BATCHLAS_BENCH_ROCM(BM_HTEV_STEDC, HtevDxCompareBenchSizes)
+BATCHLAS_BENCH_ROCM(BM_HTEV_STEQR, HtevDxCompareBenchSizes);
+BATCHLAS_BENCH_ROCM(BM_HTEV_STEDC, HtevDxCompareBenchSizes);
 #endif
 
 #if BATCHLAS_HAS_HOST_BACKEND
-BATCHLAS_BENCH_NETLIB(BM_HTEV_STEQR, HtevDxCompareBenchSizes)
-BATCHLAS_BENCH_NETLIB(BM_HTEV_STEDC, HtevDxCompareBenchSizes)
+BATCHLAS_BENCH_NETLIB(BM_HTEV_STEQR, HtevDxCompareBenchSizes);
+BATCHLAS_BENCH_NETLIB(BM_HTEV_STEDC, HtevDxCompareBenchSizes);
 #endif
 
 MINI_BENCHMARK_MAIN();

@@ -146,7 +146,7 @@ Event syevx_direct(Queue& ctx,
             auto block = sycl::local_accessor<int64_t, 1>(sycl::range<1>(2), h);
 
             batchlas::impl::parallel_for<SyevxDirectSelectKernel<B, T, MFormat>>(h,
-                sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch_size) * wg}, sycl::range{wg}),
+                sycl::nd_range<1>(sycl::range<1>{static_cast<size_t>(batch_size) * wg}, sycl::range<1>{wg}),
                 [=](sycl::nd_item<1> item) {
                     const device::RtGroup<> ex{item};
                     const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());

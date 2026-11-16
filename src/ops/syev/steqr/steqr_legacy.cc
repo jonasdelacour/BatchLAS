@@ -70,7 +70,7 @@ Event steqr_impl(Queue& ctx,
     {
         BATCHLAS_KERNEL_TRACE_SCOPE("steqr:deflation_ranges");
         ctx -> submit([&](sycl::handler& cgh) {
-        batchlas::impl::parallel_for(cgh, sycl::range(batch_size), [=](sycl::id<1> id) {
+        batchlas::impl::parallel_for(cgh, sycl::range<1>(batch_size), [=](sycl::id<1> id) {
             auto i = id[0];
             auto ebid = e.batch_item(i);
             auto dbid = d.batch_item(i);
@@ -106,7 +106,7 @@ Event steqr_impl(Queue& ctx,
     {
         BATCHLAS_KERNEL_TRACE_SCOPE("steqr:deflation_writeout");
         ctx -> submit([&](sycl::handler& cgh) {
-        batchlas::impl::parallel_for(cgh, sycl::range(batch_size), [=](sycl::id<1> id) {
+        batchlas::impl::parallel_for(cgh, sycl::range<1>(batch_size), [=](sycl::id<1> id) {
             auto i = id[0];
             auto num_sub_problems = scan_view[i] - (i == 0 ? 0 : scan_view[i - 1]);
             auto offset = (i == 0 ? 0 : scan_view[i - 1]);
@@ -121,7 +121,7 @@ Event steqr_impl(Queue& ctx,
         BATCHLAS_KERNEL_TRACE_SCOPE("steqr:francis_sweep");
         ctx->submit([&](sycl::handler& cgh) {
         auto rotations_view = givens_rotations.kernel_view();
-        batchlas::impl::parallel_for<SteqrLegacyFrancisKernel<T>>(cgh, sycl::nd_range(sycl::range(ncus*128), sycl::range(64)), [=](sycl::nd_item<1> item) {
+        batchlas::impl::parallel_for<SteqrLegacyFrancisKernel<T>>(cgh, sycl::nd_range<1>(sycl::range<1>(ncus*128), sycl::range<1>(64)), [=](sycl::nd_item<1> item) {
             auto i = item.get_global_id(0);
             auto n_problems = scan_view[batch_size - 1];
 
@@ -165,7 +165,7 @@ Event steqr_impl(Queue& ctx,
     ctx -> submit([&](sycl::handler& cgh) {
         auto Qview = Q.kernel_view();
         auto rotations_view = givens_rotations.kernel_view();
-        batchlas::impl::parallel_for<SteqrLegacyRotationKernel<T>>(cgh, sycl::nd_range(sycl::range(Q.rows()*Q.batch_size()*2), sycl::range(Q.rows())), [=](sycl::nd_item<1> item) {
+        batchlas::impl::parallel_for<SteqrLegacyRotationKernel<T>>(cgh, sycl::nd_range<1>(sycl::range<1>(Q.rows()*Q.batch_size()*2), sycl::range<1>(Q.rows())), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group(0);
             auto k = item.get_local_linear_id();
             auto n_problems = scan_view[batch_size - 1];
@@ -326,7 +326,7 @@ Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e
                    BumpAllocator(wsl.scratch), params.max_sweeps);
 
         ctx -> submit([&](sycl::handler& cgh) {
-            batchlas::impl::parallel_for(cgh, sycl::range(batch_size), [=](sycl::id<1> id) {
+            batchlas::impl::parallel_for(cgh, sycl::range<1>(batch_size), [=](sycl::id<1> id) {
                 if (!e.active(id[0])) return;  // I3: neutral for the host's convergence read
                 auto ebid = e.batch_item(id[0]);
                 for (int64_t j = 0; j < n - 1; ++j) {
@@ -367,7 +367,7 @@ Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e
     }
 
     ctx -> submit([&](sycl::handler& cgh) {
-        batchlas::impl::parallel_for(cgh, sycl::nd_range(sycl::range(batch_size* n), sycl::range(n)), [=](sycl::nd_item<1> item) {
+        batchlas::impl::parallel_for(cgh, sycl::nd_range<1>(sycl::range<1>(batch_size* n), sycl::range<1>(n)), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
             auto intra = item.get_local_id(0);
             if (!eigenvalues.active(bid)) return;  // I1, no barrier
