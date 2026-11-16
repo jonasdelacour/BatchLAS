@@ -58,7 +58,7 @@ cmake --build build -j8 && sudo cmake --install build && sudo ldconfig
 
 ## 5. CMake Configuration Hints
 
-LAPACKE and CBLAS are optional (`find_netlib_libs`, `cmake/BatchLASDependencies.cmake`; without
+LAPACKE and CBLAS are optional (`batchlas_find_netlib_libs`, `cmake/BatchLASDependencies.cmake`; without
 them NETLIB is off). Elsewhere on disk: `-DLAPACKE_LIBRARY=<path> -DCBLAS_LIBRARY=<path>`.
 
 ## 6. Quick Smoke Test

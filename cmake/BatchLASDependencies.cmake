@@ -113,7 +113,7 @@ endfunction()
 set(BATCHLAS_OPENBLAS_ROOT "" CACHE PATH
     "OpenBLAS prefix whose libopenblas provides LAPACKE and CBLAS (auto-probed under Homebrew on macOS)")
 
-function(find_netlib_libs)
+function(batchlas_find_netlib_libs)
     message(STATUS "Searching for Netlib BLAS/LAPACK libraries")
 
     # Homebrew's keg-only OpenBLAS ships no liblapacke: LAPACKE_* and cblas_* live in
@@ -237,7 +237,7 @@ if(BATCHLAS_DETECTED_AMD_GPU OR BATCHLAS_ENABLE_ROCM)
     batchlas_find_rocm_libs()
 endif()
 
-find_netlib_libs()
+batchlas_find_netlib_libs()
 
 # Some BLAS builds dispatch to CPU kernels that compute wrong results; find out
 # now rather than through mysterious numerical test failures later.

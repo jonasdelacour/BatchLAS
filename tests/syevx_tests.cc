@@ -1592,9 +1592,9 @@ DirectRangeRun RunDirectRange(Queue& ctx,
     const auto Vv = V ? V->view() : MatrixView<float, MatrixFormat::Dense>();
 
     auto ws = UnifiedVector<std::byte>(
-        syevx_direct_buffer_size<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+        syevx_direct_buffer_size<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
             ctx, A, W.to_span(), static_cast<size_t>(capacity), jobz, Vv, params));
-    (void)syevx_direct<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+    (void)syevx_direct<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
         ctx, A, W.to_span(), m.to_span(), static_cast<size_t>(capacity), ws, jobz,
         Vv, params);
     ctx.wait();
@@ -1972,9 +1972,9 @@ DirectRangeRun run_subset_range(Queue& ctx,
     const auto Vv = V ? V->view() : MatrixView<float, MatrixFormat::Dense>();
 
     auto ws = UnifiedVector<std::byte>(
-        syevx_direct_subset_buffer_size<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+        syevx_direct_subset_buffer_size<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
             ctx, A, W.to_span(), static_cast<size_t>(capacity), jobz, Vv, params));
-    (void)syevx_direct_subset<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+    (void)syevx_direct_subset<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
         ctx, A, W.to_span(), m.to_span(), static_cast<size_t>(capacity), ws, jobz,
         Vv, params);
     ctx.wait();
@@ -2222,7 +2222,7 @@ TEST(SyevxDirectSubsetRangeTest, ValueRangeWorkspaceMirrorsTheWidenedStebzBuffer
     MatrixView<float, MatrixFormat::Dense> A_dummy(nullptr, n, n, n,
                                                    static_cast<int64_t>(n) * n, batch);
     const auto size_of = [&](const SyevxParams<float>& p) {
-        return syevx_direct_subset_buffer_size<test_utils::gpu_backend, float,
+        return syevx_direct_subset_buffer_size<test_utils::kGpuBackend, float,
                                                MatrixFormat::Dense>(
             *ctx, A_dummy, W.to_span(), static_cast<size_t>(capacity),
             JobType::EigenVectors, V, p);
@@ -2580,18 +2580,18 @@ TEST(SyevxRangeValidationTest, RejectsMalformedRanges) {
     // batch alone), so one sizing call with the defaults covers every case below.
     const SyevxParams<float> defaults;
     UnifiedVector<std::byte> ws(std::max<size_t>(
-        syevx_buffer_size<test_utils::gpu_backend>(
+        syevx_buffer_size<test_utils::kGpuBackend>(
             *ctx, A, W.to_span(), 8, JobType::NoEigenVectors,
             MatrixView<float, MatrixFormat::Dense>(), defaults),
         1));
 
     auto size_call = [&](const SyevxParams<float>& p, size_t neigs) {
-        return syevx_buffer_size<test_utils::gpu_backend>(
+        return syevx_buffer_size<test_utils::kGpuBackend>(
             *ctx, A, W.to_span(), neigs, JobType::NoEigenVectors,
             MatrixView<float, MatrixFormat::Dense>(), p);
     };
     auto solve_call = [&](const SyevxParams<float>& p, size_t neigs) {
-        return syevx<test_utils::gpu_backend>(
+        return syevx<test_utils::kGpuBackend>(
             *ctx, A, W.to_span(), neigs, ws.to_span(), JobType::NoEigenVectors,
             MatrixView<float, MatrixFormat::Dense>(), p);
     };
@@ -2643,7 +2643,7 @@ TEST(SyevxRangeValidationTest, RejectsMalformedRanges) {
         // not observable in the return type, so this pair of assertions is what
         // proves the resolution went where it was meant to.
         UnifiedVector<int32_t> m(static_cast<size_t>(batch), -1);
-        EXPECT_NO_THROW((void)syevx<test_utils::gpu_backend>(
+        EXPECT_NO_THROW((void)syevx<test_utils::kGpuBackend>(
             *ctx, A, W.to_span(), m.to_span(), size_t(8), ws.to_span(),
             JobType::NoEigenVectors, MatrixView<float, MatrixFormat::Dense>(), p));
         ctx->wait();
@@ -2651,7 +2651,7 @@ TEST(SyevxRangeValidationTest, RejectsMalformedRanges) {
         // A short `m` is an out-of-bounds device write with no host-side
         // diagnostic, so it is rejected before any device work.
         UnifiedVector<int32_t> m_short(0);
-        EXPECT_THROW((void)syevx<test_utils::gpu_backend>(
+        EXPECT_THROW((void)syevx<test_utils::kGpuBackend>(
                          *ctx, A, W.to_span(), m_short.to_span(), size_t(8),
                          ws.to_span(), JobType::NoEigenVectors,
                          MatrixView<float, MatrixFormat::Dense>(), p),
@@ -2683,19 +2683,19 @@ TEST(SyevxRangeValidationTest, SolverEntryPointsRejectMalformedRangesThemselves)
     const SyevxParams<float> defaults;
 
     UnifiedVector<std::byte> ws_direct(
-        syevx_direct_buffer_size<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+        syevx_direct_buffer_size<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
             *ctx, A, W.to_span(), size_t(k), JobType::NoEigenVectors, no_V, defaults));
     UnifiedVector<std::byte> ws_subset(
-        syevx_direct_subset_buffer_size<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+        syevx_direct_subset_buffer_size<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
             *ctx, A, W.to_span(), size_t(k), JobType::NoEigenVectors, no_V, defaults));
 
     auto direct = [&](const SyevxParams<float>& p) {
-        return syevx_direct<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+        return syevx_direct<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
             *ctx, A, W.to_span(), m.to_span(), size_t(k), ws_direct.to_span(),
             JobType::NoEigenVectors, no_V, p);
     };
     auto subset = [&](const SyevxParams<float>& p) {
-        return syevx_direct_subset<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+        return syevx_direct_subset<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
             *ctx, A, W.to_span(), m.to_span(), size_t(k), ws_subset.to_span(),
             JobType::NoEigenVectors, no_V, p);
     };
@@ -2780,26 +2780,26 @@ TEST(SyevxRangeValidationTest, SolverEntryPointsKeepTheirMLessOverloads) {
 
         if (!subset_path) {
             UnifiedVector<std::byte> ws(
-                syevx_direct_buffer_size<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+                syevx_direct_buffer_size<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
                     *ctx, A, W_m.to_span(), size_t(k), JobType::NoEigenVectors, no_V,
                     params));
-            (void)syevx_direct<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+            (void)syevx_direct<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
                 *ctx, A, W_m.to_span(), m.to_span(), size_t(k), ws.to_span(),
                 JobType::NoEigenVectors, no_V, params);
             // The m-less form: eight arguments, no `m`.
-            (void)syevx_direct<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+            (void)syevx_direct<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
                 *ctx, A, W_plain.to_span(), size_t(k), ws.to_span(),
                 JobType::NoEigenVectors, no_V, params);
         } else {
             UnifiedVector<std::byte> ws(
-                syevx_direct_subset_buffer_size<test_utils::gpu_backend, float,
+                syevx_direct_subset_buffer_size<test_utils::kGpuBackend, float,
                                                 MatrixFormat::Dense>(
                     *ctx, A, W_m.to_span(), size_t(k), JobType::NoEigenVectors, no_V,
                     params));
-            (void)syevx_direct_subset<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+            (void)syevx_direct_subset<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
                 *ctx, A, W_m.to_span(), m.to_span(), size_t(k), ws.to_span(),
                 JobType::NoEigenVectors, no_V, params);
-            (void)syevx_direct_subset<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+            (void)syevx_direct_subset<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
                 *ctx, A, W_plain.to_span(), size_t(k), ws.to_span(),
                 JobType::NoEigenVectors, no_V, params);
         }
@@ -2985,10 +2985,10 @@ TEST(SyevxRangeRoutingTest, EnvironmentDegradeAppliesToSizingAndSolvingAlike) {
 
     ScopedEnvVar env("BATCHLAS_SYEVX_ALGORITHM", "lobpcg");
     size_t bytes = 0;
-    ASSERT_NO_THROW(bytes = syevx_buffer_size<test_utils::gpu_backend>(
+    ASSERT_NO_THROW(bytes = syevx_buffer_size<test_utils::kGpuBackend>(
         *ctx, A, W.to_span(), size_t(k), JobType::NoEigenVectors, no_V, params));
     UnifiedVector<std::byte> ws(std::max<size_t>(bytes, 1));
-    ASSERT_NO_THROW((void)syevx<test_utils::gpu_backend>(
+    ASSERT_NO_THROW((void)syevx<test_utils::kGpuBackend>(
         *ctx, A, W.to_span(), m.to_span(), size_t(k), ws.to_span(),
         JobType::NoEigenVectors, no_V, params));
     ctx->wait();
@@ -3021,10 +3021,10 @@ TEST(SyevxRangeRoutingTest, IterativeSolversRejectRangesDirectly) {
     interior.il = 10;
     interior.iu = 13;
 
-    EXPECT_THROW(syevx_lobpcg_buffer_size<test_utils::gpu_backend>(
+    EXPECT_THROW(syevx_lobpcg_buffer_size<test_utils::kGpuBackend>(
                      *ctx, A, W.to_span(), neig, JobType::NoEigenVectors, no_V, interior),
                  std::invalid_argument);
-    EXPECT_THROW(syevx_filtered_buffer_size<test_utils::gpu_backend>(
+    EXPECT_THROW(syevx_filtered_buffer_size<test_utils::kGpuBackend>(
                      *ctx, A, W.to_span(), neig, JobType::NoEigenVectors, no_V, interior),
                  std::invalid_argument);
 
@@ -3032,19 +3032,19 @@ TEST(SyevxRangeRoutingTest, IterativeSolversRejectRangesDirectly) {
     // calls with the default Extremal range are untouched.
     size_t ws_bytes = 0;
     ASSERT_NO_THROW(ws_bytes = std::max(
-        syevx_lobpcg_buffer_size<test_utils::gpu_backend>(
+        syevx_lobpcg_buffer_size<test_utils::kGpuBackend>(
             *ctx, A, W.to_span(), neig, JobType::NoEigenVectors, no_V, SyevxParams<float>()),
-        syevx_filtered_buffer_size<test_utils::gpu_backend>(
+        syevx_filtered_buffer_size<test_utils::kGpuBackend>(
             *ctx, A, W.to_span(), neig, JobType::NoEigenVectors, no_V, SyevxParams<float>())));
     UnifiedVector<std::byte> ws(std::max<size_t>(ws_bytes, 1));
 
     // A real workspace, so the throw is provably the range check and not an
     // allocation failure.
-    EXPECT_THROW((void)syevx_lobpcg<test_utils::gpu_backend>(
+    EXPECT_THROW((void)syevx_lobpcg<test_utils::kGpuBackend>(
                      *ctx, A, W.to_span(), neig, ws.to_span(), JobType::NoEigenVectors,
                      no_V, interior),
                  std::invalid_argument);
-    EXPECT_THROW((void)syevx_filtered<test_utils::gpu_backend>(
+    EXPECT_THROW((void)syevx_filtered<test_utils::kGpuBackend>(
                      *ctx, A, W.to_span(), neig, ws.to_span(), JobType::NoEigenVectors,
                      no_V, interior),
                  std::invalid_argument);
@@ -3080,10 +3080,10 @@ TEST(SyevxPublicRangeTest, ValueRangeThroughTheMTakingOverload) {
 
     // Sized through the `m`-taking sizing form, purely to pin that the two calls
     // can be written with the same argument list. `m` is ignored by sizing.
-    UnifiedVector<std::byte> ws(syevx_buffer_size<test_utils::gpu_backend>(
+    UnifiedVector<std::byte> ws(syevx_buffer_size<test_utils::kGpuBackend>(
         *ctx, A, W.to_span(), m.to_span(), size_t(capacity), JobType::EigenVectors,
         V, params));
-    (void)syevx<test_utils::gpu_backend>(*ctx, A, W.to_span(), m.to_span(),
+    (void)syevx<test_utils::kGpuBackend>(*ctx, A, W.to_span(), m.to_span(),
                                    size_t(capacity), ws.to_span(), JobType::EigenVectors,
                                    V, params);
     ctx->wait();
@@ -3133,14 +3133,14 @@ TEST(SyevxPublicRangeTest, IndexRangeThroughBothOverloadsAgree) {
     UnifiedVector<float> W_m(static_cast<size_t>(k) * batch, kUntouched);
     UnifiedVector<float> W_plain(static_cast<size_t>(k) * batch, kUntouched);
     UnifiedVector<int32_t> m(static_cast<size_t>(batch), -1);
-    UnifiedVector<std::byte> ws(syevx_buffer_size<test_utils::gpu_backend>(
+    UnifiedVector<std::byte> ws(syevx_buffer_size<test_utils::kGpuBackend>(
         *ctx, A, W_m.to_span(), size_t(k), JobType::NoEigenVectors,
         MatrixView<float, MatrixFormat::Dense>(), params));
 
-    (void)syevx<test_utils::gpu_backend>(*ctx, A, W_m.to_span(), m.to_span(), size_t(k),
+    (void)syevx<test_utils::kGpuBackend>(*ctx, A, W_m.to_span(), m.to_span(), size_t(k),
                                    ws.to_span(), JobType::NoEigenVectors,
                                    MatrixView<float, MatrixFormat::Dense>(), params);
-    (void)syevx<test_utils::gpu_backend>(*ctx, A, W_plain.to_span(), size_t(k), ws.to_span(),
+    (void)syevx<test_utils::kGpuBackend>(*ctx, A, W_plain.to_span(), size_t(k), ws.to_span(),
                                    JobType::NoEigenVectors,
                                    MatrixView<float, MatrixFormat::Dense>(), params);
     ctx->wait();
@@ -3174,10 +3174,10 @@ TEST(SyevxPublicRangeTest, IterativePathsStillReportACount) {
 
     UnifiedVector<float> W(static_cast<size_t>(neig) * batch, kUntouched);
     UnifiedVector<int32_t> m(static_cast<size_t>(batch), -1);
-    UnifiedVector<std::byte> ws(syevx_buffer_size<test_utils::gpu_backend>(
+    UnifiedVector<std::byte> ws(syevx_buffer_size<test_utils::kGpuBackend>(
         *ctx, A, W.to_span(), size_t(neig), JobType::NoEigenVectors,
         MatrixView<float, MatrixFormat::Dense>(), params));
-    (void)syevx<test_utils::gpu_backend>(*ctx, A, W.to_span(), m.to_span(), size_t(neig),
+    (void)syevx<test_utils::kGpuBackend>(*ctx, A, W.to_span(), m.to_span(), size_t(neig),
                                    ws.to_span(), JobType::NoEigenVectors,
                                    MatrixView<float, MatrixFormat::Dense>(), params);
     ctx->wait();
@@ -3211,7 +3211,7 @@ namespace {
 // decltype, so `false` means "no viable overload" OR "more than one" -- and both
 // are the failure this guards against.
 template <typename... Args>
-using SyevxCallExpr = decltype(syevx<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+using SyevxCallExpr = decltype(syevx<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
     std::declval<Args>()...));
 
 template <typename Void, typename... Args>
@@ -3259,7 +3259,7 @@ static_assert(syevx_callable<Q, AV, Wv, int32_t&, Ws, JobType, AV, Pv>,
 // that the m-less sizing form must keep accepting a Value range or sizing a
 // value-range solve would be impossible.
 template <typename... Args>
-using SyevxSizeExpr = decltype(syevx_buffer_size<test_utils::gpu_backend, float,
+using SyevxSizeExpr = decltype(syevx_buffer_size<test_utils::kGpuBackend, float,
                                                  MatrixFormat::Dense>(
     std::declval<Args>()...));
 
@@ -3305,21 +3305,21 @@ TEST(SyevxOverloadResolutionTest, BracedParamsPicksTheSameOverloadAsAnExplicitOn
     UnifiedVector<int32_t> m_explicit(static_cast<size_t>(batch), -1);
     UnifiedVector<int32_t> m_braced(static_cast<size_t>(batch), -1);
 
-    UnifiedVector<std::byte> ws(syevx_buffer_size<test_utils::gpu_backend>(
+    UnifiedVector<std::byte> ws(syevx_buffer_size<test_utils::kGpuBackend>(
         *ctx, A, W_explicit.to_span(), size_t(k), JobType::NoEigenVectors, no_V,
         SyevxParams<float>()));
 
     // m-less: explicit params vs `{}`.
-    (void)syevx<test_utils::gpu_backend>(*ctx, A, W_explicit.to_span(), size_t(k),
+    (void)syevx<test_utils::kGpuBackend>(*ctx, A, W_explicit.to_span(), size_t(k),
                                    ws.to_span(), JobType::NoEigenVectors, no_V,
                                    SyevxParams<float>());
-    (void)syevx<test_utils::gpu_backend>(*ctx, A, W_braced.to_span(), size_t(k),
+    (void)syevx<test_utils::kGpuBackend>(*ctx, A, W_braced.to_span(), size_t(k),
                                    ws.to_span(), JobType::NoEigenVectors, no_V, {});
     // m-form: explicit params vs `{}`.
-    (void)syevx<test_utils::gpu_backend>(*ctx, A, W_m_explicit.to_span(),
+    (void)syevx<test_utils::kGpuBackend>(*ctx, A, W_m_explicit.to_span(),
                                    m_explicit.to_span(), size_t(k), ws.to_span(),
                                    JobType::NoEigenVectors, no_V, SyevxParams<float>());
-    (void)syevx<test_utils::gpu_backend>(*ctx, A, W_m_braced.to_span(),
+    (void)syevx<test_utils::kGpuBackend>(*ctx, A, W_m_braced.to_span(),
                                    m_braced.to_span(), size_t(k), ws.to_span(),
                                    JobType::NoEigenVectors, no_V, {});
     ctx->wait();

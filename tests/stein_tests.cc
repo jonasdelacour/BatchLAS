@@ -15,7 +15,7 @@
 
 using namespace batchlas;
 
-// Runs on test_utils::gpu_backend, which exists only with a GPU backend.
+// Runs on test_utils::kGpuBackend, which exists only with a GPU backend.
 #if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
 
 namespace {
@@ -69,7 +69,7 @@ protected:
         bp.il = il;
         bp.iu = iu;
         auto bws = UnifiedVector<std::byte>(
-            stebz_buffer_size<test_utils::gpu_backend, Real>(*ctx, n, batch, bp));
+            stebz_buffer_size<test_utils::kGpuBackend, Real>(*ctx, n, batch, bp));
         (void)stebz(*ctx, d_view, e_view,
                                        VectorView<Real>(w.data(), k, batch, 1, k),
                                        m.to_span(), bws, bp);
@@ -78,7 +78,7 @@ protected:
         Matrix<Real, MatrixFormat::Dense> Z(n, k, batch);
         SteinParams<Real> sp;
         auto sws = UnifiedVector<std::byte>(
-            stein_buffer_size<test_utils::gpu_backend, Real>(*ctx, n, k, batch, sp));
+            stein_buffer_size<test_utils::kGpuBackend, Real>(*ctx, n, k, batch, sp));
         (void)stein(*ctx, d_view, e_view,
                                        VectorView<Real>(w.data(), k, batch, 1, k),
                                        k, Z, sws, sp);
@@ -184,8 +184,8 @@ struct CountsFixture {
         bp.il = 0;
         bp.iu = k - 1;
         auto bws = UnifiedVector<std::byte>(
-            stebz_buffer_size<test_utils::gpu_backend, Real>(ctx, n, batch, bp));
-        (void)stebz<test_utils::gpu_backend>(ctx, dv(), ev(), wv(), m.to_span(), bws, bp);
+            stebz_buffer_size<test_utils::kGpuBackend, Real>(ctx, n, batch, bp));
+        (void)stebz<test_utils::kGpuBackend>(ctx, dv(), ev(), wv(), m.to_span(), bws, bp);
         ctx.wait();
     }
 };
@@ -238,9 +238,9 @@ TYPED_TEST(SteinTest, PerItemCountsIgnorePoisonedTail) {
 
     SteinParams<Real> sp;
     auto sws = UnifiedVector<std::byte>(
-        stein_buffer_size<test_utils::gpu_backend, Real>(
+        stein_buffer_size<test_utils::kGpuBackend, Real>(
             *this->ctx, n, k, CountsFixture<Real>::batch, sp));
-    (void)stein<test_utils::gpu_backend>(*this->ctx, f.dv(), f.ev(), f.wv(), k,
+    (void)stein<test_utils::kGpuBackend>(*this->ctx, f.dv(), f.ev(), f.wv(), k,
                                    Span<const int32_t>(f.counts.data(), f.counts.size()),
                                    Z, sws, sp);
     this->ctx->wait();
@@ -289,15 +289,15 @@ TYPED_TEST(SteinTest, FullCountsMatchesUniformOverload) {
 
     SteinParams<Real> sp;
     auto sws = UnifiedVector<std::byte>(
-        stein_buffer_size<test_utils::gpu_backend, Real>(*this->ctx, n, k, batch, sp));
+        stein_buffer_size<test_utils::kGpuBackend, Real>(*this->ctx, n, k, batch, sp));
 
     Matrix<Real, MatrixFormat::Dense> Z_uniform(n, k, batch);
-    (void)stein<test_utils::gpu_backend>(*this->ctx, f.dv(), f.ev(), f.wv(), k,
+    (void)stein<test_utils::kGpuBackend>(*this->ctx, f.dv(), f.ev(), f.wv(), k,
                                    Z_uniform, sws, sp);
     this->ctx->wait();
 
     Matrix<Real, MatrixFormat::Dense> Z_counts(n, k, batch);
-    (void)stein<test_utils::gpu_backend>(*this->ctx, f.dv(), f.ev(), f.wv(), k,
+    (void)stein<test_utils::kGpuBackend>(*this->ctx, f.dv(), f.ev(), f.wv(), k,
                                    Span<const int32_t>(f.counts.data(), f.counts.size()),
                                    Z_counts, sws, sp);
     this->ctx->wait();
@@ -321,7 +321,7 @@ TYPED_TEST(SteinTest, FullCountsMatchesUniformOverload) {
     f.counts[1] = k - 1;
 
     Matrix<Real, MatrixFormat::Dense> Z_short(n, k, batch);
-    (void)stein<test_utils::gpu_backend>(*this->ctx, f.dv(), f.ev(), f.wv(), k,
+    (void)stein<test_utils::kGpuBackend>(*this->ctx, f.dv(), f.ev(), f.wv(), k,
                                    Span<const int32_t>(f.counts.data(), f.counts.size()),
                                    Z_short, sws, sp);
     this->ctx->wait();
@@ -371,9 +371,9 @@ TYPED_TEST(SteinTest, ZeroCountYieldsZeroColumns) {
 
     SteinParams<Real> sp;
     auto sws = UnifiedVector<std::byte>(
-        stein_buffer_size<test_utils::gpu_backend, Real>(
+        stein_buffer_size<test_utils::kGpuBackend, Real>(
             *this->ctx, n, k, CountsFixture<Real>::batch, sp));
-    (void)stein<test_utils::gpu_backend>(*this->ctx, f.dv(), f.ev(), f.wv(), k,
+    (void)stein<test_utils::kGpuBackend>(*this->ctx, f.dv(), f.ev(), f.wv(), k,
                                    Span<const int32_t>(f.counts.data(), f.counts.size()),
                                    Z, sws, sp);
     this->ctx->wait();

@@ -515,27 +515,27 @@ Matrix<T, MatrixFormat::Dense> random_hermitian_tridiagonal_with_log10_cond_metr
 
 #define RANDOM_LOGCOND_METRIC_INSTANTIATE(back, fp) \
     template Matrix<BATCHLAS_UNPAREN fp, MatrixFormat::Dense> random_with_log10_cond_metric<back, BATCHLAS_UNPAREN fp>( \
-        Queue&, int, float_t<BATCHLAS_UNPAREN fp>, NormType, int, unsigned int, OrthoAlgorithm);
+        Queue&, int, float_t<BATCHLAS_UNPAREN fp>, NormType, int, unsigned, OrthoAlgorithm);
 
 #define RANDOM_HERMITIAN_LOGCOND_METRIC_INSTANTIATE(back, fp) \
     template Matrix<BATCHLAS_UNPAREN fp, MatrixFormat::Dense> random_hermitian_with_log10_cond_metric<back, BATCHLAS_UNPAREN fp>( \
-        Queue&, int, float_t<BATCHLAS_UNPAREN fp>, NormType, int, unsigned int, OrthoAlgorithm);
+        Queue&, int, float_t<BATCHLAS_UNPAREN fp>, NormType, int, unsigned, OrthoAlgorithm);
 
 #define RANDOM_BANDED_LOGCOND_METRIC_INSTANTIATE(back, fp) \
     template Matrix<BATCHLAS_UNPAREN fp, MatrixFormat::Dense> random_banded_with_log10_cond_metric<back, BATCHLAS_UNPAREN fp>( \
-        Queue&, int, int, float_t<BATCHLAS_UNPAREN fp>, NormType, int, unsigned int);
+        Queue&, int, int, float_t<BATCHLAS_UNPAREN fp>, NormType, int, unsigned);
 
 #define RANDOM_HERMITIAN_BANDED_LOGCOND_METRIC_INSTANTIATE(back, fp) \
     template Matrix<BATCHLAS_UNPAREN fp, MatrixFormat::Dense> random_hermitian_banded_with_log10_cond_metric<back, BATCHLAS_UNPAREN fp>( \
-        Queue&, int, int, float_t<BATCHLAS_UNPAREN fp>, NormType, int, unsigned int);
+        Queue&, int, int, float_t<BATCHLAS_UNPAREN fp>, NormType, int, unsigned);
 
 #define RANDOM_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(back, fp) \
     template Matrix<BATCHLAS_UNPAREN fp, MatrixFormat::Dense> random_tridiagonal_with_log10_cond_metric<back, BATCHLAS_UNPAREN fp>( \
-        Queue&, int, float_t<BATCHLAS_UNPAREN fp>, NormType, int, unsigned int);
+        Queue&, int, float_t<BATCHLAS_UNPAREN fp>, NormType, int, unsigned);
 
 #define RANDOM_HERMITIAN_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(back, fp) \
     template Matrix<BATCHLAS_UNPAREN fp, MatrixFormat::Dense> random_hermitian_tridiagonal_with_log10_cond_metric<back, BATCHLAS_UNPAREN fp>( \
-        Queue&, int, float_t<BATCHLAS_UNPAREN fp>, NormType, int, unsigned int);
+        Queue&, int, float_t<BATCHLAS_UNPAREN fp>, NormType, int, unsigned);
 
 BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(RANDOM_LOGCOND_METRIC_INSTANTIATE)
 BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(RANDOM_HERMITIAN_LOGCOND_METRIC_INSTANTIATE)

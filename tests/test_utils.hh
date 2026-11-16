@@ -248,11 +248,11 @@ struct backend_types_complex {
 
 // Choose one available GPU backend at compile time
 #if BATCHLAS_HAS_CUDA_BACKEND
-constexpr batchlas::Backend gpu_backend = batchlas::Backend::CUDA;
+constexpr batchlas::Backend kGpuBackend = batchlas::Backend::CUDA;
 #elif BATCHLAS_HAS_ROCM_BACKEND
-constexpr batchlas::Backend gpu_backend = batchlas::Backend::ROCM;
+constexpr batchlas::Backend kGpuBackend = batchlas::Backend::ROCM;
 #elif BATCHLAS_HAS_SYCL_BACKEND
-constexpr batchlas::Backend gpu_backend = batchlas::Backend::SYCL;
+constexpr batchlas::Backend kGpuBackend = batchlas::Backend::SYCL;
 #endif
 
 // The backend a native-kernel test pins (tests that call the CUDA-or-SYCL native kernels
