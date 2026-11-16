@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(REPO, "scripts"))
 import sweep_to_table as stt  # noqa: E402
 
 TEST = os.path.join(REPO, "tests", "tune_tests.cc")
-PIN_MAP = re.compile(r'(const std::map<std::string, std::string> pinned\{)(.*?)(\};)', re.S)
+PIN_MAP = re.compile(r"(const std::map<std::string, std::string> pinned\{)(.*?)(\};)", re.S)
 PIN = re.compile(r'\{"(\w+)", "([0-9a-f]{8})"\}')
 
 

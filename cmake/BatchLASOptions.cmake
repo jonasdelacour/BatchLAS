@@ -334,7 +334,7 @@ endif()
 if(BATCHLAS_ENABLE_METAL_MODE STREQUAL "ON" AND NOT BATCHLAS_SYCL_IMPL_ACPP)
     message(FATAL_ERROR "BATCHLAS_ENABLE_METAL=ON needs BATCHLAS_SYCL_IMPL=ACPP (DPC++ has no Metal backend)")
 endif()
-# Resolved by detect_sycl_gpu_architectures() in BatchLASDetectSYCL.cmake; this
+# Resolved by batchlas_detect_sycl_gpu_architectures() in BatchLASDetectSYCL.cmake; this
 # is the value that survives if sycl-ls is missing and detection bails out early.
 if(BATCHLAS_ENABLE_CUDA_MODE STREQUAL "ON")
     set(BATCHLAS_CUDA_ENABLED ON)

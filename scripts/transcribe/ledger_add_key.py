@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Give every cell of a ledger that lacks a new exact table key the value it was measured or
 transcribed at, prefixed in the order given (the tuner's axis order), so that sweep_to_table.py
 can read the ledger once choice.hh adds the key. Rewrites the file in place; run lines and every

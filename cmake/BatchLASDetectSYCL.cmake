@@ -245,7 +245,7 @@ endmacro()
 
 # Fills BATCHLAS_DETECTED_{NVIDIA,AMD}_GPU, BATCHLAS_DETECTED_NVIDIA_TARGETS and the non-NVIDIA GPU
 # targets. NVIDIA codegen flags are added later, once BATCHLAS_NVIDIA_ARCH has had its say.
-function(detect_sycl_gpu_architectures)
+function(batchlas_detect_sycl_gpu_architectures)
     batchlas_normalize_sycl_ls_architectures("${BATCHLAS_SYCL_LS_VERBOSE_OUTPUT}" _verbose)
 
     set(_targets "")
@@ -379,7 +379,7 @@ endfunction()
 if(NOT BATCHLAS_DETECT_SYCL_FUNCTIONS_ONLY)
 
 batchlas_run_sycl_ls()
-detect_sycl_gpu_architectures()
+batchlas_detect_sycl_gpu_architectures()
 detect_sycl_cpu_target()
 
 set(DETECTED_AMD_ARCH "")

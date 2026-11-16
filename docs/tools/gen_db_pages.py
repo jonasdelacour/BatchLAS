@@ -189,12 +189,12 @@ def evidence_page(root):
 OPS_DIR = os.path.join("src", "ops")
 TUNED_DIR = "tuned"
 FAMILY = re.compile(r'^struct\s+(\w+)\s*:\s*select::NoFields<"([^"]+)">\s*\{\s*\};\s*(?://\s*(.*))?$')
-STRUCT = re.compile(r'^struct\s+(\w+)\s*\{(?:\s*//\s*(.*))?$')
+STRUCT = re.compile(r"^struct\s+(\w+)\s*\{(?:\s*//\s*(.*))?$")
 NAMED = re.compile(r'static\s+constexpr\s+std::string_view\s+name\s*=\s*"([^"]+)"')
-FIELDS = re.compile(r'static\s+constexpr\s+std::array<std::string_view,\s*\d+>\s+fields\{([^}]*)\}')
-SPEC = re.compile(r'select::OpSpec\s+spec\{([^;]*)\};\s*(?://\s*(.*))?')
-KEYS = re.compile(r'key_names\{([^}]*)\}', re.S)
-GRID = re.compile(r'(grid_\w+)\{([^}]*)\}', re.S)
+FIELDS = re.compile(r"static\s+constexpr\s+std::array<std::string_view,\s*\d+>\s+fields\{([^}]*)\}")
+SPEC = re.compile(r"select::OpSpec\s+spec\{([^;]*)\};\s*(?://\s*(.*))?")
+KEYS = re.compile(r"key_names\{([^}]*)\}", re.S)
+GRID = re.compile(r"(grid_\w+)\{([^}]*)\}", re.S)
 # Which evidence page records each op's measurements.
 PERF_PAGE = {"posv": "potrf", "getrf": "lu", "getrs": "lu", "getri": "lu", "gesv": "lu",
              "geqrf": "qr", "orgqr": "qr", "ormqr": "qr", "symm": "level3", "syrk": "level3",
@@ -391,9 +391,9 @@ def self_test():
             fh.write('struct Tiny : select::NoFields<"tiny"> {};  // registers\n'
                      'struct Lpanel {\n    static constexpr std::string_view name = "lpanel";\n'
                      '    static constexpr std::array<std::string_view, 1> fields{"panel"};\n};\n'
-                     'inline constexpr select::OpSpec spec{Op::potrf, select::Lib::solver};\n'
+                     "inline constexpr select::OpSpec spec{Op::potrf, select::Lib::solver};\n"
                      'inline constexpr std::array<std::string_view, 2> key_names{"n:log:3", "batch:log"};\n'
-                     'inline constexpr std::array<int, 3> grid_n{1, 2, 4};\n')
+                     "inline constexpr std::array<int, 3> grid_n{1, 2, 4};\n")
         os.makedirs(os.path.join(root, TUNED_DIR))
         with open(os.path.join(root, TUNED_DIR, "potrf.sm_89.txt"), "w") as fh:
             fh.write("# op=potrf device=sm_89 date=2026-10-04\n# source=ledger:x.jsonl\n"
