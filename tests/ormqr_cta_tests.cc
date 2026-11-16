@@ -77,7 +77,7 @@ TYPED_TEST(OrmqrCtaTest, MatchesNetlibOrmqrLeftRightTrans) {
                          A_fact,
                          tau_view,
                          C_cta,
-                         Uplo::Upper, //QR factorization
+                         Uplo::Upper, // QR factorization
                          side,
                          trans,
                          k,
@@ -129,7 +129,7 @@ TYPED_TEST(OrmqrCtaTest, ThrowsOnNTooLarge) {
                     A,
                     VectorView<T>(tau),
                     C,
-                    Uplo::Upper, //QR factorization
+                    Uplo::Upper, // QR factorization
                     Side::Left,
                     Transpose::NoTrans,
                     /*k=*/n,

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // syfn (fullerenes plan P2.2): F = V f(Lambda) V^H. Items are A = Q diag(d) Q^H with Q a product of
 // two Householder reflectors (complex v for complex T) held in double, so each reference is f(d) on
 // that Q, formed and compared by MatrixView's double-precision checks; the Loewdin case draws its

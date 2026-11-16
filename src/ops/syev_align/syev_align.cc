@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // syev_align: eigenvector continuity (fullerenes plan P2.5). One gemm forms M = V_old^H V; one
 // work-item per cluster runs a one-sided Jacobi SVD of M's diagonal block and stores R^H over it;
 // a copy of V and one element-wise kernel apply V_c := V_c R. No kernel selection: there is one

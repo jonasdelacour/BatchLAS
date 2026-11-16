@@ -45,16 +45,16 @@ SteqrImplScratch<T> steqr_impl_layout(Queue& ctx, BumpAllocator& pool, int64_t n
 
 template <typename T>
 Event steqr_impl(Queue& ctx,
-                    const VectorView<T>& d, //Diagonal elements
-                    const VectorView<T>& e, //Off-diagonal elements
-                    JobType jobz, //Eigenvector computation flag
-                    const MatrixView<T, MatrixFormat::Dense>& Q, //Eigenvector storage
-                    const MatrixView<std::array<T,2>, MatrixFormat::Dense>& givens_rotations, //Storage for Givens rotations
-                    const Span<std::array<int32_t,3>>& deflation_indices, //#sub_problems deflation indices i.e. where e is zero
-                    const Span<ApplyOrder>& order_view, //Order of application of rotations, has #sub_problems number of entries
-                    const Span<int32_t>& sweep_counts, //Number of sweeps actually performed per sub-problem
+                    const VectorView<T>& d, // Diagonal elements
+                    const VectorView<T>& e, // Off-diagonal elements
+                    JobType jobz, // Eigenvector computation flag
+                    const MatrixView<T, MatrixFormat::Dense>& Q, // Eigenvector storage
+                    const MatrixView<std::array<T,2>, MatrixFormat::Dense>& givens_rotations, // Storage for Givens rotations
+                    const Span<std::array<int32_t,3>>& deflation_indices, // #sub_problems deflation indices i.e. where e is zero
+                    const Span<ApplyOrder>& order_view, // Order of application of rotations, has #sub_problems number of entries
+                    const Span<int32_t>& sweep_counts, // Number of sweeps actually performed per sub-problem
                     BumpAllocator allocator,
-                    size_t max_sweeps) { //Maximum number of sweeps to perform
+                    size_t max_sweeps) { // Maximum number of sweeps to perform
     BATCHLAS_KERNEL_TRACE_SCOPE("steqr");
     // Perform the Francis sweep for the i-th step
     // This function will apply a francis sweep of Givens rotations
@@ -135,7 +135,7 @@ Event steqr_impl(Queue& ctx,
             auto n = end_ix - start_ix;
 
             if (store_givens) sweep_counts[gid] = 0;
-            if (n == 1) continue; //Nothing to do for 1x1 blocks
+            if (n == 1) continue; // Nothing to do for 1x1 blocks
             // The sweep bodies are steqr_wg's (device::detail::wg_*); this route also records the
             // sweep count of each block for the rotation replay.
             if (n == 2) {
@@ -305,7 +305,7 @@ Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e
     auto wsl = steqr_legacy_layout<T>(ctx, pool, n, batch_size, jobz, params, eigenvalues, eigvects);
     const VectorView<T> d = wsl.d.with_batch_mask(mask);
     const VectorView<T> e = wsl.e.with_batch_mask(mask);
-    //Copy inputs to working buffers
+    // Copy inputs to working buffers
     (void)VectorView<T>::copy(ctx, d, d_in);
     (void)VectorView<T>::copy(ctx, e, e_in);
 

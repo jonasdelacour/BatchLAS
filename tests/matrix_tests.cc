@@ -36,12 +36,12 @@ TEST (MatrixDenseTest, StridedConstruction) {
     EXPECT_EQ(mat.stride(), stride);
     EXPECT_EQ(mat.data().size(), stride * batch);
 
-    //Ensure that the underlying data is zero'd first:
+    // Ensure that the underlying data is zero'd first:
     for (auto v : mat.data()) {
         EXPECT_FLOAT_EQ(v, 0.0f);
     }
 
-    //Now use matrix fill function (shouldn't fill the padding areas)
+    // Now use matrix fill function (shouldn't fill the padding areas)
     mat.fill(1.0f);
     for (int k = 0; k < batch; ++k) {
         for (int j = 0; j < cols; ++j) {

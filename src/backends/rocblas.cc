@@ -294,4 +294,4 @@ namespace batchlas {
 
     #undef ROCBLAS_OPS
     #undef ROCBLAS_REAL_OPS
-}
+}  // namespace batchlas

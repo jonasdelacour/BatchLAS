@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // sygst and sygvd: the generalized Hermitian-definite eigenproblem. Residuals and B-normalization through
 // batchlas::verify (reference products, never the routes under test), graded B (cond ~1e2 float, ~1e4
 // double), Hermitian A with nonzero imaginary parts, both triangles with the other one poisoned, padded ld

@@ -168,7 +168,7 @@ void stedc_merge_step(Queue& ctx,
 
     auto keep_indices = stedc_masked(VectorView<int32_t>(pool.allocate<int32_t>(ctx, n * batch_size), n, batch_size), mask);
     auto n_reduced = pool.allocate<int32_t>(ctx, batch_size);
-    //Deflation scheme
+    // Deflation scheme
     ctx -> submit([&](sycl::handler& h) {
         auto Q = eigvects.kernel_view();
         auto perm_local = sycl::local_accessor<int32_t, 1>(sycl::range<1>(n), h);
@@ -409,10 +409,10 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
         return steqr_dispatch<B, T>(ctx, d, e, eigenvalues, ws, jobz, steqr_params, eigvects, info);
     }
 
-    //Split the matrix into two halves
+    // Split the matrix into two halves
     int64_t m = n / 2;
 
-    //When uneven the first half has size m x m and the second (m+1) x (m+1)
+    // When uneven the first half has size m x m and the second (m+1) x (m+1)
     auto d1 = d(Slice(0, m));
     auto e1 = e(Slice(0, m - 1));
     auto d2 = d(Slice(m, SliceEnd()));
@@ -428,7 +428,7 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
     auto rho = pool.allocate<T>(ctx, batch_size);
 
     ctx -> parallel_for<StedcModifyDiagonal<B, T>>(sycl::range(batch_size), [=](sycl::id<1> idx) {
-        //Modify the two diagonal entries adjacent to the split
+        // Modify the two diagonal entries adjacent to the split
         auto ix = idx[0];
         if (!d1.active(ix)) return;  // I3: d is the caller's, and edited in place
         rho[ix] = e(m - 1, ix);
@@ -436,7 +436,7 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
         d2(0, ix) -= std::abs(rho[ix]);
     });
 
-    //Scope this section: after the child recursions return, their workspace memory can be reused
+    // Scope this section: after the child recursions return, their workspace memory can be reused
     {
         auto pool = BumpAllocator(ws.subspan(BumpAllocator::allocation_size<T>(ctx, batch_size)));
         auto ws1 = pool.allocate<std::byte>(ctx, stedc_internal_workspace_size<B, T>(ctx, m, batch_size, jobz, params));
@@ -447,7 +447,7 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
         (void)stedc_impl<B, T>(ctx, d2, e2, lambda2, ws2, jobz, params, E2, Q2, info);
     }
 
-    //Once the children are done their workspace can be reused for the merge.
+    // Once the children are done their workspace can be reused for the merge.
     auto merge_ws = pool.allocate<std::byte>(ctx, stedc_merge_step_workspace<T>(ctx, n, batch_size));
     MatrixView<T> Qprime = MatrixView<T>(pool.allocate<T>(ctx, n * n * batch_size).data(), n, n, n, n * n, batch_size);
     // One merge node per batch item on this driver, hence a divisor of 1.
@@ -913,7 +913,7 @@ Event stedc_dispatch(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>&
         }
     }
 
-    //Clean the output matrix before we begin.
+    // Clean the output matrix before we begin.
     (void)eigvects.fill_zeros(ctx);
     auto pool = BumpAllocator(ws);
     auto alloc_size = BumpAllocator::allocation_size<T>(ctx, n * n * d.batch_size());
@@ -1014,4 +1014,4 @@ BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(STEDC_INSTANTIATE)
 #undef STEDC_INSTANTIATE
 
 
-}
+}  // namespace batchlas

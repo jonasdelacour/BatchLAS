@@ -231,9 +231,9 @@ void copy_batch_mask(Span<std::uint8_t> dst, Span<const std::uint8_t> src) {
 }
 }  // namespace detail
 
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 // Matrix class implementation - Dense format
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 
 // Basic constructor for dense matrix (allocates uninitialized memory)
 template <typename T, MatrixFormat MType>
@@ -347,9 +347,9 @@ Matrix<T, MType>::Matrix(Span<const T> data, int rows, int cols, int ld,
     : Matrix(dense_checked_source<T>(data, rows, cols, ld, stride, batch_size),
              rows, cols, ld, stride, batch_size) {}
 
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 // Matrix class implementation - CSR format
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 
 // Basic constructor for CSR sparse matrix (allocates uninitialized memory)
 template <typename T, MatrixFormat MType>
@@ -390,9 +390,9 @@ Matrix<T, MType>::Matrix(const T* values, const int* row_offsets, const int* col
     bind();
 }
 
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 // Common Matrix class implementations (for all formats)
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 
 // Convert to a different matrix format
 template <typename T, MatrixFormat MType>
@@ -731,9 +731,9 @@ void Matrix<T, MType>::copy_from(const MatrixView<T, MType>& src) {
     }
 }
 
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 // Matrix class static method implementations - Dense format only
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 
 // Factory method to create identity matrix with SYCL
 template <typename T, MatrixFormat MType>
@@ -2060,9 +2060,9 @@ Matrix<T, MType> Matrix<T, MType>::to_row_major() const {
     return to_row_major(q);
 }
 
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 // MatrixView class implementation - Dense format
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 
 // Constructor for dense matrix view
 template <typename T, MatrixFormat MType>
@@ -2102,9 +2102,9 @@ MatrixView<T, MType>::MatrixView(T* data, int rows, int cols, int ld,
 }
 
 
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 // MatrixView class implementation - CSR format
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 
 // Constructor for CSR sparse matrix view
 template <typename T, MatrixFormat MType>
@@ -2120,9 +2120,9 @@ MatrixView<T, MType>::MatrixView(T* data, int* row_offsets, int* col_indices,
             offset_stride_(offset_stride > 0 ? offset_stride : rows + 1), data_ptrs_(data_ptrs, (data_ptrs ? batch_size : 0)) {
 }
 
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 // Common MatrixView implementations (for both Dense and CSR)
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 
 // Constructor for a submatrix view from a Matrix object
 template <typename T, MatrixFormat MType>
@@ -2239,12 +2239,12 @@ Event MatrixView<T, MType>::copy(Queue& ctx, const MatrixView<T, MType>& dest, c
         // Masked: the memcpy fast paths would write the inactive items, so only the kernel runs.
         const std::uint8_t* mask = detail::mask_ptr(detail::call_mask("copy", dest, src));
         if (!mask && src.stride() == src.rows() * src.cols() && dest.stride() == dest.rows() * dest.cols()) {
-            //If the stride is the same as the size of each matrix just do a straight memcpy
+            // If the stride is the same as the size of each matrix just do a straight memcpy
             auto event = static_cast<EventImpl>(ctx->memcpy(dest.data_.data(), src.data_.data(), src.data().size_bytes()));
             return event;
 #if defined(SYCL_EXT_ONEAPI_MEMCPY2D)  // sycl_ext_oneapi_memcpy2d; without it every strided case takes the copy kernel
         } else if (!mask && src.ld() == src.rows() && dest.ld() == dest.rows()){
-            //If both leading dimensions are the same as the number of rows we can utilize oneapis 2d copy kernel
+            // If both leading dimensions are the same as the number of rows we can utilize oneapis 2d copy kernel
             auto event = static_cast<EventImpl>(ctx->ext_oneapi_memcpy2d(  static_cast<void*>(dest.data_ptr()),
                                                     dest.stride() * sizeof(T),
                                                     static_cast<void*>(src.data_ptr()),
@@ -2261,7 +2261,7 @@ Event MatrixView<T, MType>::copy(Queue& ctx, const MatrixView<T, MType>& dest, c
             return event;
 #endif
         } else {
-            //If neither the ld nor the strides are unit, we need to do essentially a 3D copy
+            // If neither the ld nor the strides are unit, we need to do essentially a 3D copy
             detail::require_device_fp64<T>(ctx, "MatrixView::copy");
             auto [ global_size, local_size ] = compute_nd_range_sizes(
                     static_cast<size_t>(src.rows()) * src.cols() * src.batch_size(),
@@ -2307,7 +2307,7 @@ Event VectorView<T>::copy(Queue& ctx, const VectorView<T>& dest, const VectorVie
     const std::uint8_t* mask = detail::mask_ptr(detail::call_mask("copy", dest, src));
     if (!mask && ((src.stride() == src.size() && dest.stride() == dest.size() && src.inc() == 1 && dest.inc() == 1) ||
         (src.stride() == 1 && dest.stride() == 1 && src.inc() == src.size() && dest.inc() == dest.size()))) {
-        //If the stride is the same as the size of each vector just do a straight memcpy
+        // If the stride is the same as the size of each vector just do a straight memcpy
         auto event = static_cast<EventImpl>(ctx->memcpy(dest.data_.data(), src.data_.data(), src.size() * src.batch_size() * sizeof(T)));
         return event;
 #if defined(SYCL_EXT_ONEAPI_MEMCPY2D)  // sycl_ext_oneapi_memcpy2d; without it every strided case takes the copy kernel
@@ -2337,7 +2337,7 @@ Event VectorView<T>::copy(Queue& ctx, const VectorView<T>& dest, const VectorVie
         return event;
 #endif
     } else {
-        //If neither the ld nor the strides are unit, we need to do essentially a 2D copy
+        // If neither the ld nor the strides are unit, we need to do essentially a 2D copy
         detail::require_device_fp64<T>(ctx, "VectorView::copy");
         auto event = static_cast<EventImpl>(ctx->submit([&](sycl::handler& h) {
             batchlas::impl::parallel_for(h, sycl::range<2>(src.size(), src.batch_size()),
@@ -2595,9 +2595,9 @@ BackendMatrixHandle<T, MType>& MatrixView<T, MType>::operator*() const {
     return *backend_handle_;
 }
 
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 // Explicit template instantiations
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 
 // Dense Matrix instantiations
 template class Matrix<float, MatrixFormat::Dense>;
@@ -2718,7 +2718,7 @@ template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::
 template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::TriDiagToeplitz(int, double, double, double, int);
 template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::TriDiagToeplitz(int, std::complex<float>, std::complex<float>, std::complex<float>, int);
 template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::TriDiagToeplitz(int, std::complex<double>, std::complex<double>, std::complex<double>, int);
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 // Matrix conversion instantiations
 template Matrix<float, MatrixFormat::CSR> Matrix<float, MatrixFormat::Dense>::convert_to<MatrixFormat::CSR>(const float&) const;
 template Matrix<double, MatrixFormat::CSR> Matrix<double, MatrixFormat::Dense>::convert_to<MatrixFormat::CSR>(const double&) const;
@@ -2729,7 +2729,7 @@ template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::CSR>::
 template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::CSR>::convert_to<MatrixFormat::Dense>(const float&) const;
 template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::CSR>::convert_to<MatrixFormat::Dense>(const double&) const;
 
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 
 
 // fill instantiations

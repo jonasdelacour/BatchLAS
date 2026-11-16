@@ -394,7 +394,7 @@ struct BATCHLAS_API Queue{
     Queue(const Queue& base, bool in_order);
     /// @brief Take over @p other's device, SYCL queue and arena.
     /// @param[in,out] other  the Queue moved from; left moved-from
-    Queue(Queue&& other); //= default;
+    Queue(Queue&& other); // = default;
     /// @brief Take over @p other's device, SYCL queue and arena, releasing this Queue's.
     /// @param[in,out] other  the Queue moved from; left moved-from
     /// @return `*this`

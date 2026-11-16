@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//Implementation file for Lanczos algorithm
+// Implementation file for Lanczos algorithm
 #include <src/util/batch_mask.hh>
 #include <src/linalg-impl.hh>
 #include <src/math-helpers.hh>
@@ -42,10 +42,10 @@ namespace batchlas {
     template <Backend B, typename T, MatrixFormat MF>
     Event lanczos(Queue& ctx,
                 const MatrixView<T, MF>& A,
-                Span<typename base_type<T>::type> W, //Output eigenvalues
+                Span<typename base_type<T>::type> W, // Output eigenvalues
                 Span<std::byte> workspace,
                 JobType jobz,
-                const MatrixView<T, MatrixFormat::Dense>& V, //Output eigenvectors for jobz == JobType::EigenVectors
+                const MatrixView<T, MatrixFormat::Dense>& V, // Output eigenvectors for jobz == JobType::EigenVectors
                 const LanczosParams<T>& params) {
         // Every child honours the mask: the scratch views, both kernels, ortho, gemm/spmm, steqr and sort.
         const auto mask = detail::call_mask("lanczos", A, V);
@@ -63,7 +63,7 @@ namespace batchlas {
         auto alphas = pool.allocate<T>(ctx, n*batch_size);
         auto betas = pool.allocate<T>(ctx, n*batch_size);
 
-        //Batched SpMV is not supported so we have to represent our vector as a dense matrix padded with an extra column (to prevent fallback to SpMV)
+        // Batched SpMV is not supported so we have to represent our vector as a dense matrix padded with an extra column (to prevent fallback to SpMV)
         // Known defect: both columns are multiplied, one is consumed.
         // evidence: docs/design/known-defects.md#defect-3-lanczos-issues-a-two-column-multiply-and-consumes-one-column
         auto padded_output = MatrixView(V_vectormem.data(), n, 2, n, 2*n, batch_size, pool.allocate<T*>(ctx, batch_size).data()).with_batch_mask(mask);
@@ -83,7 +83,7 @@ namespace batchlas {
         auto wg_init = std::min(size_t(n), get_kernel_max_wg_size<InitKernel<B, T, MF>>(ctx));
         auto wg_lanczos = std::min(size_t(n), get_kernel_max_wg_size<LanczosKernel<B, T, MF>>(ctx));
 
-        //Initial guess
+        // Initial guess
         auto init = [&]{
             ctx -> submit([&](sycl::handler& h) {
                 batchlas::impl::parallel_for<InitKernel<B, T, MF>>(h, sycl::nd_range<1>(batch_size*wg_init, wg_init), [=](sycl::nd_item<1> it) {
@@ -158,7 +158,7 @@ namespace batchlas {
             }
         };
 
-        //Allocate workspace and compute eigenvalues/eigenvectors of the tridiagonal matrix
+        // Allocate workspace and compute eigenvalues/eigenvectors of the tridiagonal matrix
         auto Q_eigenvectors = pool.allocate<T>(ctx, jobz == JobType::EigenVectors ? n * n * batch_size : 0);
         const auto steqr_params = lanczos_steqr_params<T>();
         auto steqr_ws = pool.allocate<std::byte>(ctx, steqr_buffer_size<T>(
@@ -189,7 +189,7 @@ namespace batchlas {
                     V,
                     GemmOptions<T>{});
         }
-        //Sort the eigenvalues and eigenvectors using sycl::experimental::joint_sort
+        // Sort the eigenvalues and eigenvectors using sycl::experimental::joint_sort
         if (params.sort_enabled){
             auto sort_workspace = pool.allocate<std::byte>(ctx, sort_buffer_size(ctx, W, V, jobz));
             // The call's mask, whichever operand brought it: V may be unmasked or, without vectors, a dummy.
@@ -205,9 +205,9 @@ namespace batchlas {
     size_t lanczos_buffer_size(
         Queue& ctx,
         const MatrixView<T, MF>& A,
-        Span<typename base_type<T>::type> W, //Output eigenvalues
+        Span<typename base_type<T>::type> W, // Output eigenvalues
         JobType jobz,
-        const MatrixView<T, MatrixFormat::Dense>& V, //Output eigenvectors for jobz == JobType::EigenVectors
+        const MatrixView<T, MatrixFormat::Dense>& V, // Output eigenvectors for jobz == JobType::EigenVectors
         const LanczosParams<T>& params
     ) {
         auto n = A.rows();
@@ -267,11 +267,11 @@ namespace batchlas {
 
     BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(LANCZOS_INSTANTIATE_FOR_TYPE)
 
-    //LANCZOS_INSTANTIATE_FOR_FP(std::complex<float>)
-    //LANCZOS_INSTANTIATE_FOR_FP(std::complex<double>)
+    // LANCZOS_INSTANTIATE_FOR_FP(std::complex<float>)
+    // LANCZOS_INSTANTIATE_FOR_FP(std::complex<double>)
 
     #undef LANCZOS_INSTANTIATE
     #undef LANCZOS_INSTANTIATE_FOR_TYPE
 
 
-}
+}  // namespace batchlas

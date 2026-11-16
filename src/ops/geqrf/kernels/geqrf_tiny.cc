@@ -24,7 +24,7 @@
 // Outside the anonymous namespace: a kernel name may not name an internal-linkage entity.
 namespace batchlas {
 template <typename T, int N, int C, bool Masked> class GeqrfTinyKernel;
-}
+}  // namespace batchlas
 
 namespace batchlas {
 namespace ops::geqrf {

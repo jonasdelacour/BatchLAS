@@ -83,7 +83,7 @@ Event permuted_copy(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, c
     return ctx.get_event();
 }
 
-//Out of place permutation
+// Out of place permutation
 template <typename T, typename K>
 Event permute(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& data, const MatrixView<T, MatrixFormat::Dense>& temp_storage, const VectorView<K>& indices, const PermutedCopyParams& params = {}){
     (void)MatrixView<T>::copy(ctx, temp_storage, data);

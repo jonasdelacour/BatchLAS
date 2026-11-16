@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // syfn: matrix functions of Hermitian matrices (fullerenes plan P2.2). A pure composition with no
 // kernel choice of its own, so no Op and no route: syev, herk/syrk and gemm select for themselves,
 // and its element-wise kernels (weights, info, column scale) live in kernels/syfn_kernels.cc.

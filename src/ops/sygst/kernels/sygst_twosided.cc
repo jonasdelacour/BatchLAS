@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // sygst's TwoSided family (sygst_native.hh): mirror A, then apply the factor from both sides with two
 // full trsm (itype 1) or trmm (itypes 2, 3). evidence: docs/perf/sygvd.md#sygvd-routes
 

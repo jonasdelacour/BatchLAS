@@ -13,7 +13,7 @@ namespace {
 class QueueGetEventNoopKernel;
 class QueueEnqueueNoopKernel;
 class QueueExternalWorkBarrierKernel;
-}
+}  // namespace
 
 // Out-of-line members must be in namespace batchlas; the kernel-name tags above stay global on
 // purpose. evidence: docs/design/runtime-internals.md#runtime-internals-namespace-placement-of-out-of-line-definitions

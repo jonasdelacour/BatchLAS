@@ -231,7 +231,7 @@ namespace detail {
         }
         return algo;
     }
-}
+}  // namespace detail
 
 // Create a batch of random dense matrices with a specified log10 conditioning metric.
 template <Backend B, typename T>

@@ -661,4 +661,4 @@ namespace batchlas {
     }
 
     /// @}
-}
+}  // namespace batchlas

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // potri's local-memory-resident kernel: one work-group per order-m block, LAPACK's trti2 and lauu2
 // on a tile padded to a multiple of TS. Its lower triangle holds M = L diag(L)^-1 (the multipliers),
 // its upper one P = diag(L) L^-1 transposed, so neither overwrites the other; Upper runs the same

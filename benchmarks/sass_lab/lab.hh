@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
+#pragma once
 // SASS lab: hand-written vs device LA kernels of the same computation and shape.
 // Built by run_lab.sh outside CMake with the library's device flags; not part of the build.
-#pragma once
 
 #include <sycl/sycl.hpp>
 

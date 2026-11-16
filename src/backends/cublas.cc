@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // filepath: /home/jonaslacour/BatchLAS/src/backends/cublas_matrixview.cc
-//#include <batchlas/blas/linalg.hh>
+// #include <batchlas/blas/linalg.hh>
 #include <src/linalg-impl.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -600,7 +600,7 @@ namespace batchlas {
 
     template <Backend B, typename T>
     Event geqrf_vendor(Queue& ctx,
-        const MatrixView<T,MatrixFormat::Dense>& A, //In place reflectors (Lower triangle of A)
+        const MatrixView<T,MatrixFormat::Dense>& A, // In place reflectors (Lower triangle of A)
         Span<T> tau,
         Span<std::byte> workspace) {
         ::batchlas::detail::refuse_batch_mask<T>(Op::geqrf, "geqrf_vendor", B, A);
@@ -910,7 +910,7 @@ namespace batchlas {
         const MatrixView<T,MatrixFormat::Dense>& A,
         const MatrixView<T,MatrixFormat::Dense>& B,
         Transpose transA) {
-            return BumpAllocator::allocation_size<int>(ctx, A.batch_size() == 1 ? 1 : 0); //batched getrs just uses a single host integer.
+            return BumpAllocator::allocation_size<int>(ctx, A.batch_size() == 1 ? 1 : 0); // batched getrs just uses a single host integer.
         }
 
     template <Backend B, typename T>
@@ -943,13 +943,13 @@ namespace batchlas {
     template <Backend B, typename T>
     size_t getrf_vendor_buffer_size(Queue& ctx,
         const MatrixView<T, MatrixFormat::Dense>& A) {
-            return BumpAllocator::allocation_size<int>(ctx, A.batch_size()); //batched getrf just uses a single host integer.
+            return BumpAllocator::allocation_size<int>(ctx, A.batch_size()); // batched getrf just uses a single host integer.
         }
 
     template <Backend B, typename T>
     Event getri_vendor(Queue& ctx,
         const MatrixView<T, MatrixFormat::Dense>& A,
-        const MatrixView<T, MatrixFormat::Dense>& C, //C is overwritten with inverse of A
+        const MatrixView<T, MatrixFormat::Dense>& C, // C is overwritten with inverse of A
         Span<int64_t> pivots,
         Span<std::byte> workspace,
         Span<int32_t> info_out) {
@@ -1038,4 +1038,4 @@ namespace batchlas {
     #undef CUBLAS_SYMMETRIC_OPS
     #undef CUBLAS_COMPLEX_OPS
     #undef B_
-}
+}  // namespace batchlas

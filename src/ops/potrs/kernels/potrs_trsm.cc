@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The solve with a Cholesky factor (potrs.hh), shared by potrs, posv's cta and blocked and potri.
 // evidence: docs/perf/potri.md#potrs-and-potri
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // sysv (flat-kernel-selection.md §4.3): select::run takes the first entry of the nearest
 // tuned/sysv.<device>.txt row that can_run() admits. Cta is the fused factor-and-solve kernel; Compose
 // is the public sytrf then the routed sytrs (each selects its own kernel). evidence: docs/perf/sytrf.md

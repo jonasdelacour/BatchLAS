@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
+#pragma once
 // SASS lab, device LA parity: hand vs lean vs device for each op at WG 64 and 256 (dot/nrm2
 // also at 32 = one sub-group). Kernel names lab::KW<Op><T, N, V, WG>; sass_stats.py keys them
 // as "<Op>@<WG>". The hand and lean bodies are the lab's (ops_*.cc), with WG a parameter.
-#pragma once
 
 #include <benchmarks/sass_lab/lab.hh>
 

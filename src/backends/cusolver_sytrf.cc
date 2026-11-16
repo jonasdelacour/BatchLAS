@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // cuSOLVER sytrf, the vendor arm of the sytrf op. cuSOLVER 13.2 offers the legacy cusolverDn<t>sytrf
 // (int32 ipiv, LAPACK's convention, one matrix per call) and the 64-bit cusolverDnXsytrs (int64 ipiv);
 // there is no Xsytrf and no batched sytrf, so this is a per-item loop on one stream with one shared

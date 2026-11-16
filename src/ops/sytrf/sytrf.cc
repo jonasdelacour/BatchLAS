@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // sytrf (flat-kernel-selection.md §4.3): select::run takes the first entry of the nearest
 // tuned/sytrf.<device>.txt row that can_run() admits. sytrs is routed on its own (src/ops/sytrs/).
 // evidence: docs/perf/sytrf.md

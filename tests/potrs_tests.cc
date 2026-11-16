@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // potrs (solve with a Cholesky factor), a routed op with two families: `fused` (both substitutions in
 // one launch, B in SLM) and `trsm` (two public trsm calls). Residuals through batchlas::verify on graded
 // SPD inputs, each family pinned and checked reached (coverage rows), the fused ceilings straddled and

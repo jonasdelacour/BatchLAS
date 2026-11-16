@@ -1577,4 +1577,4 @@ namespace batchlas{
     #undef NETLIB_COMPLEX_OPS
     #undef NETLIB_FORMAT_BACKEND_OP
     #undef B_
-}
+}  // namespace batchlas

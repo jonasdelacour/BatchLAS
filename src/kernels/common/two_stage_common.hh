@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: MIT
+#pragma once
 // Helpers shared by syev_two_stage and syevx_direct_subset. Both run the Householder
 // chase in both jobz modes at a real band width kd: choose_two_stage_kd_for_job is not
 // safe for a path that never applies stage-2 reflectors.
 // build_phase_from_kd1_band / apply_phase_rows act on a kd = 1 band (sb2st_hh's
 // tridiagonal output in syev_two_stage, the sy2sb output in syevx_direct_subset).
-
-#pragma once
 
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/linalg.hh>

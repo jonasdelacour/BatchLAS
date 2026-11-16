@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
+#pragma once
 // Host LAPACK references (docs/design/verification.md): eigenvalues, singular values and getrf pivots
 // from LAPACKE, never from a BatchLAS path under test. Without LAPACKE (no host backend) every
 // function returns false, empty input included, and the caller skips: never a pass. With LAPACKE
 // (have_reference) false is a failed reference, and the caller fails.
-#pragma once
 
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/error.hh>

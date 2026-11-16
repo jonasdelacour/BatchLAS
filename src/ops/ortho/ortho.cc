@@ -149,8 +149,8 @@ namespace batchlas {
         const auto mask = detail::call_mask("ortho", A);
         const std::uint8_t* mk = detail::mask_ptr(mask);
         const bool masked = mk != nullptr;  // a captured null pointer can read as non-null on AdaptiveCpp Metal
-        //If transA == NoTrans we find the orthonormal basis of the column space
-        //Else we find the orthonormal basis of the row space
+        // If transA == NoTrans we find the orthonormal basis of the column space
+        // Else we find the orthonormal basis of the row space
         using float_t = typename base_type<T>::type;
         constexpr auto fmt = MatrixFormat::Dense;
         static LinalgHandle<B> handle;
@@ -165,8 +165,8 @@ namespace batchlas {
         Transpose inv_trans = is_A_trans ? Transpose::NoTrans :
                             std::is_same_v<T, std::complex<float_t>> ? Transpose::ConjTrans : Transpose::Trans;
         assert(k <= m);
-        //If k > m && transA == NoTrans the columns of A are linearly dependent
-        //Else if k > m && transA == Trans the rows of A are linearly dependent
+        // If k > m && transA == NoTrans the columns of A are linearly dependent
+        // Else if k > m && transA == Trans the rows of A are linearly dependent
         auto wsl = ortho_layout<B, T>(ctx, pool, A, m, k, algo, is_A_trans, mask);
         auto C = wsl.C;
         auto potrf_workspace = wsl.potrf_ws;
@@ -199,13 +199,13 @@ namespace batchlas {
         auto chol_alg = [&]{
             constexpr T alpha = 1.0;
             constexpr T beta = 0.0;
-            //Compute StS = S^T * S or StS = S * S^T (depending on transA)
+            // Compute StS = S^T * S or StS = S * S^T (depending on transA)
             (void)gram_into_C(A);
-            //Compute the Cholesky Factorization of StS
+            // Compute the Cholesky Factorization of StS
             // (void) on an Event: deliberate. This Queue is in-order, so the next submission
             // is already ordered after this one and the Event carries nothing the caller needs.
             (void)potrf<B>(ctx, C, PotrfOptions{}, potrf_workspace);
-            //Solve X * Chol(StS) = S
+            // Solve X * Chol(StS) = S
             (void)trsm<B>(ctx,
                     C,
                     A,
@@ -225,11 +225,11 @@ namespace batchlas {
         };
 
         auto cgs_alg = [&]{
-            //Implemented as an iterative process:
-            //1. Compute orthogonality of A[:,0 .. k-1] and A[:,k .. m-1]
-            //2. Subtract the projection of A[:,k .. m-1] onto A[:,0 .. k-1]
-            //3. Normalize A[:,0 .. k-1]
-            //Repeat until all vectors are orthogonal
+            // Implemented as an iterative process:
+            // 1. Compute orthogonality of A[:,0 .. k-1] and A[:,k .. m-1]
+            // 2. Subtract the projection of A[:,k .. m-1] onto A[:,0 .. k-1]
+            // 3. Normalize A[:,0 .. k-1]
+            // Repeat until all vectors are orthogonal
             auto Ymem = wsl.Ymem;
             auto normalize_wg_size = std::min(get_kernel_max_wg_size<OrthoNormalizeVector<B, T>>(ctx), size_t(m));
             for (int i = 0; i < k; i++){
@@ -239,7 +239,7 @@ namespace batchlas {
                                .with_batch_mask(mask);
                 auto C = VectorView(Ymem.data(), i, batch_size).with_batch_mask(mask);
                 auto A_next = is_A_trans ? A(i, Slice()) : A(Slice(), i);
-                if (i > 0){ //If it's the first vector we just need to normalize it
+                if (i > 0){ // If it's the first vector we just need to normalize it
                     // Rows: the gemv pair below projects conj(row i) against the rows, so for
                     // complex the row is conjugated around it.
                     if (is_A_trans) (void)conj_vector(A_next);
@@ -253,7 +253,7 @@ namespace batchlas {
                     }
                     if (is_A_trans) (void)conj_vector(A_next);
                 }
-                //Normalize A_i
+                // Normalize A_i
                 ctx -> submit([&](sycl::handler& h){
                     auto A_stride = A.stride();
                     auto Aptr = A.data_ptr();
@@ -291,7 +291,7 @@ namespace batchlas {
                     device::for_each_owned_exact(ex, k, [&](int i) { d(i) = device::Arith<T>::add(d(i), T(shift)); });  // C + shift I
                 });
             });
-            //Compute the Cholesky Factorization of StS
+            // Compute the Cholesky Factorization of StS
             (void)potrf<B>(ctx, C, PotrfOptions{}, potrf_workspace);
             (void)trsm<B>(ctx, C, A, {.side = is_A_trans ? Side::Left : Side::Right, .trans = inv_trans});
             chol_alg();
@@ -304,9 +304,9 @@ namespace batchlas {
         auto output_basis = wsl.output_basis;
 
         auto svqb_alg = [&](auto in_mat, auto out_mat) {
-            //Compute A^H * A
+            // Compute A^H * A
             (void)gemm<B>(ctx, in_mat, in_mat, C, {.transA = inv_trans, .transB = transA});
-            //Compute D = diag(A^H * A) ^-1/2
+            // Compute D = diag(A^H * A) ^-1/2
             ctx -> submit([&](sycl::handler& h) {
                 auto ATA_ptr = C.data_ptr();
                 batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>{size_t(batch_size * k)}, sycl::range<1>{size_t(k)}), [=](sycl::nd_item<1> it){
@@ -326,7 +326,7 @@ namespace batchlas {
                 });
                 });
             });
-            //Compute StS = D * StS * D
+            // Compute StS = D * StS * D
             ctx -> submit([&](sycl::handler& h){
                 auto D_local = sycl::local_accessor<float_t, 1>(sycl::range<1>(k), h);
                 auto ATA_ptr = C.data_ptr();
@@ -343,7 +343,7 @@ namespace batchlas {
 
             (void)syev<B>(ctx, C, lambdas, SyevOptions{}, syev_workspace);
 
-            //First Compute D * EigenVectors * Lambda^-1/2
+            // First Compute D * EigenVectors * Lambda^-1/2
             ctx -> submit([&](sycl::handler& h){
                 auto D_local = sycl::local_accessor<float_t, 1>(sycl::range<1>(k), h);
                 auto C_ptr = C.data_ptr();
@@ -360,9 +360,9 @@ namespace batchlas {
                 device::laqge(ex, D, lam_rsqrt, device::mat(C_ptr + bid * k * k, k, k, k));  // C := D C Lambda^-1/2
                 });
             });
-            //Compute Q = S * D * EigenVectors * Lambda^-1/2
+            // Compute Q = S * D * EigenVectors * Lambda^-1/2
             (void)gemm<B>(ctx, in_mat, C, out_mat, {.transA = transA});
-            //Memcpy
+            // Memcpy
         };
         // The m x k vectors op(A) C land in output_basis as columns; rows of A take their conjugates.
         auto svqb_into_A = [&] {
@@ -457,10 +457,10 @@ namespace batchlas {
         }
         BumpAllocator pool(workspace);
         constexpr auto fmt = MatrixFormat::Dense;
-        //When orthogonalizing against an external basis M,
-        //M must be an orthonormal basis
-        //Both A and M must be either tall-and-skinny or short-and-fat
-        //Furthermore the number of vectors in A and M must sum to at most the dimension of these vectors
+        // When orthogonalizing against an external basis M,
+        // M must be an orthonormal basis
+        // Both A and M must be either tall-and-skinny or short-and-fat
+        // Furthermore the number of vectors in A and M must sum to at most the dimension of these vectors
         auto nM = transM == Transpose::NoTrans ? M.cols_ : M.rows_;
         auto nA = transA == Transpose::NoTrans ? A.cols_ : A.rows_;
         auto k = transA == Transpose::NoTrans ? A.rows_ : A.cols_;
@@ -552,4 +552,4 @@ namespace batchlas {
     BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(ORTHO_INSTANTIATE)
 
     #undef ORTHO_INSTANTIATE
-}
+}  // namespace batchlas

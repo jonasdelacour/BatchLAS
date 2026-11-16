@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // sygvd's element-wise launches (sygvd_native.hh). No shared or sub-group state.
 
 #include <src/ops/sygvd/sygvd_native.hh>

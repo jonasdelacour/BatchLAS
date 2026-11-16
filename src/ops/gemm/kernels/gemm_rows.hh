@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
+#pragma once
 // The definitions behind gemm_launch.hh's row declarations, and the macros a shard TU
 // instantiates them with. Include it only from a shard TU: a row instantiated twice is an
 // undiagnosed ODR duplicate (explicit instantiations are COMDAT), a row instantiated nowhere
 // an undefined symbol when libbatchlas_sycl loads (it links -z now).
-#pragma once
 
 #include <src/ops/gemm/kernels/gemm_launch.hh>
 

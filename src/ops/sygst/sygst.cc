@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // sygst: the two-sided triangular reduction of sygvd. select::run takes the first entry of the nearest
 // tuned/sygst.<device>.txt row that can_run() admits. Blocked is LAPACK's dsygst/zhegst schedule on the
 // uplo triangles only: the SLM diagonal kernel (kernels/sygst_diag.cc) and the public trsm, gemm (for

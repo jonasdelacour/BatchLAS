@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Native batched sytrs from Bunch-Kaufman factors, LAPACK ?sytrs2 form
 // (batchlas/device/lapack/sytrs.hh): `cta` (one work-group per item, the converted factor in local memory, one sub-group per right-hand
 // side) and `blocked` (the converted factor and the gathered B in workspace per chunk of items,

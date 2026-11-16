@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // sygst's Blocked family (sygst_native.hh): LAPACK's dsygst/zhegst schedule on the uplo triangles, the
 // SLM diagonal kernel (sygst_diag.cc) and the public trsm, gemm, her2k/syr2k and trmm as its children.
 // evidence: docs/perf/sygvd.md#sygst-the-blocked-family

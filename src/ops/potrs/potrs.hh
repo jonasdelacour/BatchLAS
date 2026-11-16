@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // The solve with a Cholesky factor (kernels/potrs_trsm.cc), shared by potrs, posv's cta and blocked

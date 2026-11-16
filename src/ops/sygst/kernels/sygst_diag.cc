@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // sygst blocked's diagonal block (sygst_native.hh): a thin launcher over the public ?sygs2 body,
 // device::sygs2_group (include/batchlas/device/lapack/sygst.hh), ipw blocks per work-group. Orders
 // 32, 16 and 8 have compile-time instances.

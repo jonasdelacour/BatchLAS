@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // potri: the inverse from a Cholesky factor by LAPACK's algorithm, trtri then lauum, in place on
 // A's uplo triangle. select::run takes the first entry of the nearest tuned/potri.<device>.txt row
 // that can_run() admits: cta (both steps in one local-memory-resident launch) or blocked:nb (the

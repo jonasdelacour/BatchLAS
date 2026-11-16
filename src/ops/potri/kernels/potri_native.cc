@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // potri's triangle finish (potri_native.hh): element-wise, grid-strided.
 
 #include <src/ops/potri/potri_native.hh>

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // potri (inverse from a Cholesky factor; potrs's own cases are in potrs_tests.cc): residuals through
 // batchlas::verify, per-item info with the other items undisturbed, padded ld and stride with a
 // poisoned unreferenced triangle, and a saturating batch. The op is native and vendor-free, so no

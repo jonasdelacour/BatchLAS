@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // sytrf / sytrs / sysv: Bunch-Kaufman LDL^T with LAPACK ?sytrf semantics. Every route is pinned and
 // checked against the full symmetric matrix through batchlas::verify; the operand layout is never
 // natural (padded ld, padded batch stride, both pads and the unreferenced triangle poisoned with a large

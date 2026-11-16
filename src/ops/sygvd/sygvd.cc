@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // sygvd: the generalized Hermitian-definite eigensolver. select::run takes the first entry of the nearest
 // tuned/sygvd.<device>.txt row that can_run() admits. Compose is potrf(B) -> sygst -> syev -> back-transform,
 // each child a public routed op; Vendor is cuSOLVER ?sygvd per item or LAPACKE on the host. sygvd_factored

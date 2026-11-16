@@ -219,5 +219,5 @@ namespace batchlas {
 
 #undef SYTRD_CTA_INSTANTIATE
 
-}
+}  // namespace batchlas
 

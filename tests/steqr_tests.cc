@@ -78,7 +78,7 @@ std::optional<verify::Slack> float_slack(verify::Slack s) {
 }
 const verify::Slack kClosedFormN16{0.16, "old bound 1e-5 absolute, ||T||_2 = 2"};
 
-}
+}  // namespace
 
 template <typename T, Backend B>
 struct SteqrConfig {
@@ -139,7 +139,7 @@ TYPED_TEST(SteqrTest, SingleMatrix) {
     auto eigvects = Matrix<float_type>::Zeros(n, n, batch);
     params.sort_order = SortOrder::Ascending;
 
-    //VectorView<float_type>::copy(*this->ctx, VectorView(diag), VectorView(sub_diag)).wait();
+    // VectorView<float_type>::copy(*this->ctx, VectorView(diag), VectorView(sub_diag)).wait();
 
     auto ws = UnifiedVector<std::byte>(steqr_buffer_size<float_type>(*this->ctx, diag, sub_diag, eigenvalues, JobType::EigenVectors, params), std::byte(0));
     (void)steqr<B, float_type>(*this->ctx, VectorView(diag), VectorView(sub_diag), VectorView(eigenvalues),

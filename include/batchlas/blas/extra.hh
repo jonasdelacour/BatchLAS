@@ -295,4 +295,4 @@ namespace batchlas
     BATCHLAS_DISPATCH_ON_QUEUE(cond)
     BATCHLAS_DISPATCH_ON_QUEUE(cond_buffer_size)
 
-}
+}  // namespace batchlas

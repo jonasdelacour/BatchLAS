@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// Pass/fail bounds: c(kind) * f(n) * eps, c calibrated (docs/design/verification.md#verification-calibration).
 #pragma once
+// Pass/fail bounds: c(kind) * f(n) * eps, c calibrated (docs/design/verification.md#verification-calibration).
 
 #include <batchlas/blas/enums.hh>
 #include <batchlas/error.hh>

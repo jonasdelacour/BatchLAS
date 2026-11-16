@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once  // sygst blocked's diagonal-block kernel. evidence: docs/perf/sygvd.md#sygst-the-blocked-family
 
 #include <src/util/internal-api.hh>

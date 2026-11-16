@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // sygvd for the tuner (docs/design/flat-kernel-selection.md §6.1): a Hermitian A0 (fill_random) and an SPD
 // B0 (fill_random_spd). The timed call is itype 1, Upper (gfn2-xTB's dsygvd call; uplo is not a key, and
 // potrf routes Upper apart from Lower), with the jobz of the cell's key: it factors B, so both A and B are

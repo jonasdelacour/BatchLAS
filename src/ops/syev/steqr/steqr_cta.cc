@@ -289,4 +289,4 @@ namespace batchlas {
     template size_t steqr_cta_buffer_size<double>(Queue&, const VectorView<double>&, const VectorView<double>&, const VectorView<double>&, JobType, SteqrParams<double>);
 
     #undef STEQR_CTA_INSTANTIATE
-}
+}  // namespace batchlas

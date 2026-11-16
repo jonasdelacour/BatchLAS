@@ -91,4 +91,4 @@ namespace batchlas {
 
 #undef INV_INSTANTIATE
 
-}
+}  // namespace batchlas

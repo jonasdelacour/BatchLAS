@@ -261,14 +261,14 @@ namespace batchlas{
 #endif
     #if BATCHLAS_HAS_ROCM_BACKEND
         if constexpr (B == BackendLibrary::ROCBLAS || B == BackendLibrary::ROCSOLVER) {
-            //return trans == Transpose::NoTrans ? rocblas_operation_none : rocblas_operation_transpose;
+            // return trans == Transpose::NoTrans ? rocblas_operation_none : rocblas_operation_transpose;
             switch (trans) {
                 case Transpose::NoTrans: return rocblas_operation_none;
                 case Transpose::Trans: return rocblas_operation_transpose;
                 case Transpose::ConjTrans: return rocblas_operation_conjugate_transpose;
             }
         } else if constexpr (B == BackendLibrary::ROCSPARSE) {
-            //return trans == Transpose::NoTrans ? rocsparse_operation_none : rocsparse_operation_transpose;
+            // return trans == Transpose::NoTrans ? rocsparse_operation_none : rocsparse_operation_transpose;
             switch (trans){
                 case Transpose::NoTrans: return rocsparse_operation_none;
                 case Transpose::Trans: return rocsparse_operation_transpose;
@@ -552,7 +552,7 @@ namespace batchlas{
                 return std::forward<T>(arg);
             }
         }
-    }
+    }  // namespace detail
 
     // Combined enum and pointer conversion
     template <BackendLibrary B, typename... Args>
@@ -958,4 +958,4 @@ namespace batchlas{
             return (ctx -> get_device()).get_info<sycl::info::device::max_work_group_size>();
         }
     }
-}
+}  // namespace batchlas

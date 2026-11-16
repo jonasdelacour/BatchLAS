@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once  // sygvd compose's element-wise launches. evidence: docs/perf/sygvd.md#sygvd-api
 
 #include <src/util/internal-api.hh>

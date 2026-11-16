@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // sytrs (flat-kernel-selection.md §4.3): select::run takes the first entry of the nearest

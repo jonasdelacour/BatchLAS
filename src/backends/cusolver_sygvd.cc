@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // cuSOLVER sygvd, the vendor arm of the sygvd op. cuSOLVER 13.2 has the legacy cusolverDn<t>sygvd (and
 // the 64-bit Xsygvd) for one matrix per call and no batched generalized eigensolver, so this is a
 // per-item loop on one stream with one shared work buffer. evidence: docs/perf/sygvd.md#sygvd-routes

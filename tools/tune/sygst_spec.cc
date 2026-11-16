@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // sygst for the tuner (docs/design/flat-kernel-selection.md §6.1): a Hermitian A0 (fill_random) and an
 // SPD B factored once, untimed, by the public potrf under Auto, at every itype and triangle (table keys).
 // Each run is checked on the default items by ||P - F Q F^H|| / ||P|| (MatrixView::similarity_residual,

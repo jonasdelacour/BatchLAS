@@ -350,4 +350,4 @@ namespace batchlas {
     BATCHLAS_FOR_EACH_SCALAR_TYPE_1(CUSPARSE_OPS, Backend::CUDA)
 
     #undef CUSPARSE_OPS
-}
+}  // namespace batchlas

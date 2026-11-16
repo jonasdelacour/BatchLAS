@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // potri's kernels: the CTA trtri/lauum and the finish. evidence: docs/perf/potri.md#potri-the-algorithm

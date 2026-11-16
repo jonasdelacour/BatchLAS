@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // potri's blocked family, LAPACK's ?potri: ?trtri (every diagonal block inverted by the CTA kernel
 // in one launch, then two trmm per block column) and ?lauum (trmm, gemm, a copy back, the CTA
 // kernel on the diagonal block and herk/syrk per block row). Only the uplo triangle is read or

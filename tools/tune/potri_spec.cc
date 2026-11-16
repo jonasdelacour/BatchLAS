@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // potri for the tuner (docs/design/flat-kernel-selection.md §6.1): MatrixView::fill_random_spd A factored once,
 // untimed, by the public potrf under Auto; the timed call turns the Lower factor into the Lower triangle of the
 // inverse, which is mirrored onto a copy and checked on the default items by MatrixView::solve_residual with an

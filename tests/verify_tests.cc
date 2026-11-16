@@ -33,7 +33,7 @@ using batchlas::verify::Check;
 namespace {
 const double kNaN = std::numeric_limits<double>::quiet_NaN();
 template <typename T> using MV = MatrixView<T, MatrixFormat::Dense>;
-}
+}  // namespace
 
 TEST(Scalar, NanmaxPropagates) {
     EXPECT_TRUE(std::isnan(batchlas::verify::nanmax(kNaN, 1.0)));

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-//#include <batchlas/blas/linalg.hh>
+// #include <batchlas/blas/linalg.hh>
 #include <src/linalg-impl.hh>
 #include <batchlas/device/core.hh>
 #include <batchlas/util/sycl-vector.hh>
@@ -560,4 +560,4 @@ namespace batchlas {
     BATCHLAS_FOR_EACH_SCALAR_TYPE_1(CUSOLVER_OPS, Backend::CUDA)
 
     #undef CUSOLVER_OPS
-}
+}  // namespace batchlas

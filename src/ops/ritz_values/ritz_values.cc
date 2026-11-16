@@ -145,4 +145,4 @@ namespace batchlas {
     #undef RITZ_VALUES_INSTANTIATE_FOR_BACKEND
     #undef RITZ_VALUES_INSTANTIATE_FOR_BACKEND_TYPE
     #undef RITZ_VALUES_INSTANTIATE
-}
+}  // namespace batchlas

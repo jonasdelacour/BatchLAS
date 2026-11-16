@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Native batched sytrf / sytrs (cta, blocked, wg) / fused sysv, declarations only. PIVOT CONTRACT: LAPACK's ipiv, 1-based

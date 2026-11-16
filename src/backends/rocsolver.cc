@@ -476,4 +476,4 @@ namespace batchlas {
     BATCHLAS_FOR_EACH_SCALAR_TYPE_1(ROCSOLVER_OPS, Backend::ROCM)
 
     #undef ROCSOLVER_OPS
-}
+}  // namespace batchlas

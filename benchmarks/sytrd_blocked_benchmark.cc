@@ -56,7 +56,7 @@ void BM_SYTRD_BLOCKED(minibench::State& state) {
 
     state.SetKernel(
         q,
-        bench::pristine(A0), //sytrd_blocked mutates A so if it is not kept pristine between runs the speed results will change between runs.
+        bench::pristine(A0), // sytrd_blocked mutates A so if it is not kept pristine between runs the speed results will change between runs.
         d,e,tau,uplo,ws,nb,
         [](Queue& q, auto&&... xs) {
             (void)sytrd_blocked(q, std::forward<decltype(xs)>(xs)...);

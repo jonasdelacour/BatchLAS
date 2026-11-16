@@ -259,8 +259,8 @@ size_t tridiagonal_solver_buffer_size(Queue& ctx, size_t n, size_t batch_size, J
 //   TRIDAG_INSTANTIATE(back, std::complex<double>)
 BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(TRIDAG_INSTANTIATE)
 
-//TRIDAG_INSTANTIATE(Backend::CUDA, std::complex<float>)
-//TRIDAG_INSTANTIATE(Backend::CUDA, std::complex<double>)
+// TRIDAG_INSTANTIATE(Backend::CUDA, std::complex<float>)
+// TRIDAG_INSTANTIATE(Backend::CUDA, std::complex<double>)
 
 #undef TRIDAG_INSTANTIATE
 

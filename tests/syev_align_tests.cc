@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // syev_align (fullerenes plan P2.5): eigenvector continuity across a degenerate spectrum. The
 // acceptance case is the Hueckel (adjacency) matrix of Ih C60, whose levels are 1-, 3-, 4-, 5- and
 // 9-fold: a basis rotated at random inside every degenerate subspace must come back as the

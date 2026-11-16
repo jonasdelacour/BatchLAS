@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // sygvd's Compose family (sygvd_native.hh): potrf(B) -> sygst -> syev -> back-transform, each child a
 // public routed op on the caller's in-order queue. evidence: docs/perf/sygvd.md#sygvd-routes
 

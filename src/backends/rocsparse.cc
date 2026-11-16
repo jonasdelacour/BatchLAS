@@ -99,4 +99,4 @@ namespace batchlas {
     BATCHLAS_FOR_EACH_SCALAR_TYPE_1(ROCSPARSE_OPS, Backend::ROCM)
 
     #undef ROCSPARSE_OPS
-}
+}  // namespace batchlas

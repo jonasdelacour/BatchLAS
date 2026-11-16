@@ -15,13 +15,11 @@
 
 using namespace batchlas;
 
-/**
- * Comprehensive test suite for the norm function.
- *
- * This test suite covers all norm types (Frobenius, One, Inf, Max)
- * and works with batched matrices in both Dense and CSR formats.
- * Uses matrix factory methods to generate test matrices.
- */
+/// Comprehensive test suite for the norm function.
+///
+/// This test suite covers all norm types (Frobenius, One, Inf, Max)
+/// and works with batched matrices in both Dense and CSR formats.
+/// Uses matrix factory methods to generate test matrices.
 
 template <typename T, Backend B>
 struct TestConfig {

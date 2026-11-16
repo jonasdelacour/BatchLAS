@@ -34,4 +34,4 @@ Event lascl(Queue& ctx, const MatrixView<T, MType>& mat, T cfrom, T cto) {
 template Event lascl<MatrixFormat::Dense, float>(Queue&, const MatrixView<float, MatrixFormat::Dense>&, float, float);
 template Event lascl<MatrixFormat::Dense, double>(Queue&, const MatrixView<double, MatrixFormat::Dense>&, double, double);
 
-}
+}  // namespace batchlas

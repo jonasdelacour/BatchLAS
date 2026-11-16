@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Native batched Bunch-Kaufman LDL^T: the CTA tier (one sub-group per matrix, the logical lower
 // triangle resident in local memory, n <= 32; with B it is sysv's fused factor-and-solve), the
 // work-group tier (one work-group per matrix, unblocked ?sytf2 in place in global memory, any n),

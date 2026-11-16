@@ -37,7 +37,7 @@ namespace batchlas {
     template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
     class BATCHLAS_API MatrixView;
 
-    //Forward declare VectorView with default parameter
+    // Forward declare VectorView with default parameter
     template <typename T = float>
     class BATCHLAS_API VectorView;
 
@@ -128,7 +128,7 @@ namespace batchlas {
     /// A negative `start` or `end` counts from the end of the dimension (`-1` is
     /// the last index). Slicing is dense-only and never copies.
     /// @ingroup api_matrix
-    struct Slice { //Default Slice selects entire matrix
+    struct Slice { // Default Slice selects entire matrix
         int64_t start = std::numeric_limits<int64_t>::min();  ///< First index; negative counts from the end. The default (min) with a default end means the whole dimension.
         int64_t end = std::numeric_limits<int64_t>::max();    ///< One past the last index; negative counts from the end; max means the end of the dimension.
         /// @brief Selects \f$[\mathrm{start}, \mathrm{dim})\f$.
@@ -485,7 +485,7 @@ namespace batchlas {
                 }
             }
         }
-    }
+    }  // namespace detail
 
     // Out-of-line KernelMatrixView members: documented at their declarations.
     template <typename T, MatrixFormat MType>

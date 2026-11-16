@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The public sytrs: validation, the empty problem, then sytrs.hh's routed solve.
 // evidence: docs/perf/sytrf.md
 

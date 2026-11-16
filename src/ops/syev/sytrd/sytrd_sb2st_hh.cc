@@ -213,7 +213,7 @@ class Sb2stHhBackWaveKernel;
 
 constexpr int kBackCols = 8;  // columns of Z per work-group (global-memory path)
 
-}
+}  // namespace
 
 // Wave back-transform: resident Z tile + concurrent application of every reflector
 // in a commuting run (build_sb2st_hh_wave_offsets). One work-group of S sub-groups

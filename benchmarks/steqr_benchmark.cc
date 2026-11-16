@@ -21,11 +21,11 @@ void BM_STEQR(minibench::State& state) {
     const size_t n_sweeps = state.range(2) > 0 ? state.range(2) : 10;
     const size_t arg3 = state.range(3);
     const size_t arg4 = state.range(4);
-    //const int use_block_rotations = state.range(4);
+    // const int use_block_rotations = state.range(4);
     JobType jobz = JobType::EigenVectors;
     const double avg_deflations_per_eigenvalue = 2.5; // Empirical average
     const double flops_eigvals = avg_deflations_per_eigenvalue * double(n) * double(n) * 35.0/2.0; // Approximate number of flops to compute all eigenvalues.
-    const double flops_eigvects = 3 * avg_deflations_per_eigenvalue * double(n) * double(n) * double(n) - 3 * avg_deflations_per_eigenvalue * double(n) * double(n);  //Extra flops if eigvects are required.
+    const double flops_eigvects = 3 * avg_deflations_per_eigenvalue * double(n) * double(n) * double(n) - 3 * avg_deflations_per_eigenvalue * double(n) * double(n);  // Extra flops if eigvects are required.
 
     const double total_flops = (flops_eigvals + (jobz == JobType::EigenVectors ? flops_eigvects : 0)) * double(batch);
 

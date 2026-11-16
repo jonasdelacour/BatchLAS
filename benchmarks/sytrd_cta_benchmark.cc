@@ -45,7 +45,7 @@ void BM_SYTRD_CTA(minibench::State& state) {
 
     state.SetKernel(
         q,
-        bench::pristine(A), //sytrd mutates A so if it is not kept pristine between runs the speed results will change between runs.
+        bench::pristine(A), // sytrd mutates A so if it is not kept pristine between runs the speed results will change between runs.
         d,e,tau,uplo,ws_dummy,wg_mult,
         [](Queue& q, auto&&... xs) {
             (void)sytrd_cta(q, std::forward<decltype(xs)>(xs)...);

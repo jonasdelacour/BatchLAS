@@ -182,7 +182,7 @@ UnifiedVector<T>& UnifiedVector<T>::operator=(const UnifiedVector<T>& other) {
         capacity_ = other.capacity_;
     }
     size_ = other.size_;
-    //If the type is trivially copyable, use the sycl memcpy function
+    // If the type is trivially copyable, use the sycl memcpy function
     if constexpr(std::is_trivially_copyable_v<T>){
         Device dev = Device::default_device();
         const auto& ctx = QueueImpl::shared_context(dev);
