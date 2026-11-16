@@ -3,6 +3,7 @@
 // MatrixView's verification scalars and item lists.
 
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/verify/reference.hh>
 #include <batchlas/verify/tolerance.hh>
@@ -160,10 +161,11 @@ TEST(Tolerance, BoundAndPass) {
 TEST(Tolerance, RecordsWhenAsked) {
     const std::string path = ::testing::TempDir() + "verify_record.txt";
     std::remove(path.c_str());
-    ASSERT_EQ(setenv("BATCHLAS_VERIFY_RECORD", path.c_str(), 1), 0);
-    (void)batchlas::verify::pass<std::complex<float>>(Check::orthogonality, 7, 1e-6);
-    unsetenv("BATCHLAS_VERIFY_RECORD");
-    (void)batchlas::verify::pass<float>(Check::solve, 7, 1e-6);  // unset: nothing appended
+    {
+        batchlas::ScopedEnvVar record("BATCHLAS_VERIFY_RECORD", path.c_str());
+        (void)batchlas::verify::pass<std::complex<float>>(Check::orthogonality, 7, 1e-6);
+    }
+    (void)batchlas::verify::pass<float>(Check::solve, 7, 1e-6);  // out of scope: nothing appended
 
     std::ifstream in(path);
     std::string line;
@@ -213,14 +215,15 @@ TEST(Tolerance, WithinIsPassWithoutRecording) {
     using batchlas::verify::within;
     const std::string path = ::testing::TempDir() + "within_never_records.txt";
     std::remove(path.c_str());
-    ASSERT_EQ(setenv("BATCHLAS_VERIFY_RECORD", path.c_str(), 1), 0);
-    const double b = batchlas::verify::bound<double>(Check::blas, 5);
-    EXPECT_TRUE(within<double>(Check::blas, 5, b));
-    EXPECT_FALSE(within<double>(Check::blas, 5, std::nextafter(b, 1.0)));
-    EXPECT_FALSE(within<double>(Check::blas, 5, kNaN));
-    EXPECT_TRUE(within<double>(Check::blas, 5, 1.5 * b, Slack{2.0, "r"}));
-    EXPECT_FALSE(within<double>(Check::blas, 5, 1.5 * b, Slack{0.5, "r"}));
-    unsetenv("BATCHLAS_VERIFY_RECORD");
+    {
+        batchlas::ScopedEnvVar record("BATCHLAS_VERIFY_RECORD", path.c_str());
+        const double b = batchlas::verify::bound<double>(Check::blas, 5);
+        EXPECT_TRUE(within<double>(Check::blas, 5, b));
+        EXPECT_FALSE(within<double>(Check::blas, 5, std::nextafter(b, 1.0)));
+        EXPECT_FALSE(within<double>(Check::blas, 5, kNaN));
+        EXPECT_TRUE(within<double>(Check::blas, 5, 1.5 * b, Slack{2.0, "r"}));
+        EXPECT_FALSE(within<double>(Check::blas, 5, 1.5 * b, Slack{0.5, "r"}));
+    }
     std::ifstream in(path);
     EXPECT_FALSE(in.good() && in.peek() != std::ifstream::traits_type::eof());
     std::remove(path.c_str());
@@ -229,9 +232,10 @@ TEST(Tolerance, WithinIsPassWithoutRecording) {
 TEST(Tolerance, RecordsSlackFactorReasonAndRawValue) {
     const std::string path = ::testing::TempDir() + "verify_record_slack.txt";
     std::remove(path.c_str());
-    ASSERT_EQ(setenv("BATCHLAS_VERIFY_RECORD", path.c_str(), 1), 0);
-    (void)batchlas::verify::pass<double>(Check::eigen_residual, 9, 3e-12, batchlas::verify::Slack{8.0, "graded spectrum, see docs"});
-    unsetenv("BATCHLAS_VERIFY_RECORD");
+    {
+        batchlas::ScopedEnvVar record("BATCHLAS_VERIFY_RECORD", path.c_str());
+        (void)batchlas::verify::pass<double>(Check::eigen_residual, 9, 3e-12, batchlas::verify::Slack{8.0, "graded spectrum, see docs"});
+    }
     std::ifstream in(path);
     std::string line;
     ASSERT_TRUE(std::getline(in, line));
