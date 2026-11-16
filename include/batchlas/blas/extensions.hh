@@ -2155,8 +2155,8 @@ namespace batchlas {
                                     Span<T> singular_values_out,
                                     const MatrixView<T, MatrixFormat::Dense>& u,
                                     const MatrixView<T, MatrixFormat::Dense>& vh) {
-        static_cast<void>(u);
-        static_cast<void>(vh);
+        (void)u;
+        (void)vh;
         return bdsqr_buffer_size(ctx, d, e, singular_values_out);
     }
 

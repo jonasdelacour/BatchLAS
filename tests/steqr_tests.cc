@@ -986,7 +986,7 @@ TYPED_TEST(SteqrTest, GradedTridiagonalRelativeAccuracy) {
         // Deterministic multiplicative factors in [0.5, 1.5) and signs, so the
         // input does not depend on a library RNG.
         uint32_t state = 12345u + static_cast<uint32_t>(n);
-        auto next_unit = [&]() {
+        auto next_unit = [&] {
             state = state * 1664525u + 1013904223u;
             return 0.5L + static_cast<long double>(state >> 8) / static_cast<long double>(1u << 24);
         };
@@ -1225,7 +1225,7 @@ TYPED_TEST(SteqrTest, MixedDirectionLockstep) {
         if (B == Backend::NETLIB && n == 32) continue;  // host tier: no leaf width, 3x the test's time
         const int batch = n == 32 ? 1025 : 4099;
         uint32_t state = 777u + static_cast<uint32_t>(n);
-        auto next_unit = [&]() {
+        auto next_unit = [&] {
             state = state * 1664525u + 1013904223u;
             return 0.5L + static_cast<long double>(state >> 8) / static_cast<long double>(1u << 24);
         };
@@ -1318,7 +1318,7 @@ TYPED_TEST(SteqrTest, PerChunkFailureIsolated) {
         const int per_warp = n <= 4 ? 8 : (n <= 8 ? 4 : 2);
         auto poisoned = [&](int b) { return b % per_warp == (b / per_warp) % per_warp; };
         uint32_t state = 4242u + static_cast<uint32_t>(n);
-        auto next_unit = [&]() {
+        auto next_unit = [&] {
             state = state * 1664525u + 1013904223u;
             return 0.5L + static_cast<long double>(state >> 8) / static_cast<long double>(1u << 24);
         };
@@ -1389,7 +1389,7 @@ TYPED_TEST(SteqrTest, RaggedTailBatch) {
                 const int batch = (32 * mult / P) * k + 1;
                 auto checked = [&](int b) { return batch <= 8192 || b < 64 || b >= batch - 64; };
                 uint32_t state = 99u + static_cast<uint32_t>(n * 1000 + mult * 100 + k);
-                auto next_unit = [&]() {
+                auto next_unit = [&] {
                     state = state * 1664525u + 1013904223u;
                     return 0.5L + static_cast<long double>(state >> 8) / static_cast<long double>(1u << 24);
                 };

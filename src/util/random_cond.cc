@@ -200,16 +200,16 @@ namespace detail {
     Matrix<T, MatrixFormat::Dense> banded_orthogonal(int n,
                                                      int bandwidth,
                                                      int batch_size,
-                                                     unsigned int seed) {
+                                                     unsigned seed) {
         Matrix<T, MatrixFormat::Dense> Q = Matrix<T, MatrixFormat::Dense>::Identity(n, batch_size);
         if (bandwidth <= 0) return Q;
 
         const real_t<T> two_pi = real_t<T>(2) * std::acos(real_t<T>(-1));
         for (int b = 0; b < batch_size; ++b) {
-            std::mt19937 rng(seed + 1315423911u * static_cast<unsigned int>(b));
+            std::mt19937 rng(seed + 1315423911u * static_cast<unsigned>(b));
             std::uniform_real_distribution<real_t<T>> angle_dist(real_t<T>(0), two_pi);
 
-            const int offset = static_cast<int>(rng() % static_cast<unsigned int>(bandwidth + 1));
+            const int offset = static_cast<int>(rng() % static_cast<unsigned>(bandwidth + 1));
             for (int i = offset; i + bandwidth < n; i += (bandwidth + 1)) {
                 const real_t<T> theta = angle_dist(rng);
                 const real_t<T> c = std::cos(theta);
@@ -240,7 +240,7 @@ Matrix<T, MatrixFormat::Dense> random_with_log10_cond_metric(Queue &ctx,
                                                              float_t<T> log10_kappa,
                                                              NormType metric,
                                                              int batch_size,
-                                                             unsigned int seed,
+                                                             unsigned seed,
                                                              OrthoAlgorithm algo) {
     using real_t = float_t<T>;
 
@@ -295,7 +295,7 @@ Matrix<T, MatrixFormat::Dense> random_hermitian_with_log10_cond_metric(Queue &ct
                                                                        float_t<T> log10_kappa,
                                                                        NormType metric,
                                                                        int batch_size,
-                                                                       unsigned int seed,
+                                                                       unsigned seed,
                                                                        OrthoAlgorithm algo) {
     using real_t = float_t<T>;
     if (n <= 0 || batch_size <= 0) {
@@ -341,7 +341,7 @@ Matrix<T, MatrixFormat::Dense> random_banded_with_log10_cond_metric(Queue &ctx,
                                                                     float_t<T> log10_kappa,
                                                                     NormType metric,
                                                                     int batch_size,
-                                                                    unsigned int seed) {
+                                                                    unsigned seed) {
     using real_t = float_t<T>;
     if (n <= 0 || batch_size <= 0) {
         throw batchlas::invalid_argument("random_banded_with_log10_cond_metric: n and batch_size must be positive");
@@ -388,7 +388,7 @@ Matrix<T, MatrixFormat::Dense> random_hermitian_banded_with_log10_cond_metric(Qu
                                                                               float_t<T> log10_kappa,
                                                                               NormType metric,
                                                                               int batch_size,
-                                                                              unsigned int seed) {
+                                                                              unsigned seed) {
     using real_t = float_t<T>;
     if (n <= 0 || batch_size <= 0) {
         throw batchlas::invalid_argument("random_hermitian_banded_with_log10_cond_metric: n and batch_size must be positive");
@@ -434,7 +434,7 @@ Matrix<T, MatrixFormat::Dense> random_tridiagonal_with_log10_cond_metric(Queue &
                                                                          float_t<T> log10_kappa,
                                                                          NormType metric,
                                                                          int batch_size,
-                                                                         unsigned int /*seed*/) {
+                                                                         unsigned /*seed*/) {
     using real_t = float_t<T>;
     if (n <= 0 || batch_size <= 0) {
         throw batchlas::invalid_argument("random_tridiagonal_with_log10_cond_metric: n and batch_size must be positive");
@@ -457,7 +457,7 @@ Matrix<T, MatrixFormat::Dense> random_hermitian_tridiagonal_with_log10_cond_metr
                                                                                    float_t<T> log10_kappa,
                                                                                    NormType metric,
                                                                                    int batch_size,
-                                                                                   unsigned int seed) {
+                                                                                   unsigned seed) {
     using real_t = float_t<T>;
     if constexpr (std::is_same_v<T, float>) {
         if (metric == NormType::Spectral) {

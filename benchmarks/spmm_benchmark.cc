@@ -38,9 +38,9 @@ template <typename T>
 T spmm_value(std::uint64_t h) {
     const auto unit = [](std::uint64_t x) {
         x ^= x >> 33;
-        x *= 0xff51afd7ed558ccdULL;
+        x *= 0xff51afd7ed558ccdull;
         x ^= x >> 33;
-        x *= 0xc4ceb9fe1a85ec53ULL;
+        x *= 0xc4ceb9fe1a85ec53ull;
         x ^= x >> 33;
         const double u = static_cast<double>(x >> 11) * (1.0 / 9007199254740992.0);
         const double mag = 0.25 + 0.5 * u;
@@ -155,7 +155,7 @@ void run_spmm(minibench::State& state) {
         *q, *Av, *Bv, *Cv, alpha, beta, transA, transB);
     auto ws = std::make_shared<UnifiedVector<std::byte>>(ws_size);
 
-    auto kernel_once = [q, Av, Bv, Cv, Amat, Bmat, Cmat, ws, alpha, beta, transA, transB]() {
+    auto kernel_once = [q, Av, Bv, Cv, Amat, Bmat, Cmat, ws, alpha, beta, transA, transB] {
         if constexpr (A == Arm::Warm) {
             (void)spmm<Bk, T, MatrixFormat::CSR>(*q, *Av, *Bv, *Cv, alpha, beta,
                                            transA, transB, ws->to_span());

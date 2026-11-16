@@ -876,7 +876,7 @@ Matrix<Scalar, MatrixFormat::Dense> make_graded_dense_matrix(int n,
         // reproducible without pulling in a generator that is itself suspect.
         std::vector<double> u(static_cast<size_t>(n)), v(static_cast<size_t>(n));
         uint64_t state = 0x9E3779B97F4A7C15ull + static_cast<uint64_t>(b) * 0x1000193ull;
-        auto next = [&state]() {
+        auto next = [&state] {
             state = state * 6364136223846793005ull + 1442695040888963407ull;
             return static_cast<double>((state >> 11) & ((1ull << 53) - 1)) / static_cast<double>(1ull << 53) - 0.5;
         };
@@ -1670,7 +1670,7 @@ void fill_mixed_svd_matrices(MatrixView<Scalar, MatrixFormat::Dense> A, unsigned
     const int n = A.rows();
     const int batch = A.batch_size();
     unsigned state = seed;
-    auto next = [&state]() {
+    auto next = [&state] {
         state = state * 1664525u + 1013904223u;
         return double(state >> 8) / double(1u << 24);
     };

@@ -46,7 +46,7 @@ constexpr const char* kColorName = "\033[1m";
 /// @ingroup api_internal_helpers
 struct Config {
     size_t samples = 1024;
-    unsigned int seed = 1234u;
+    unsigned seed = 1234u;
     std::vector<double> log10_cond_values;
 };
 
@@ -192,7 +192,7 @@ public:
     size_t samples() const { return cfg_.samples; }
     /// @brief Base RNG seed (`--seed`).
     /// @return Config::seed
-    unsigned int seed() const { return cfg_.seed; }
+    unsigned seed() const { return cfg_.seed; }
     /// @brief Requested \f$\log_{10} \kappa\f$ of this run.
     /// @return the target, or NaN when `--log10-cond` was not given
     double target_log10_cond() const { return target_log10_cond_; }
@@ -795,7 +795,7 @@ inline CliOptions ParseCommandLine(int argc, char** argv) {
         if (s.rfind("--samples=", 0) == 0) {
             opt.cfg.samples = std::stoul(s.substr(10));
         } else if (s.rfind("--seed=", 0) == 0) {
-            opt.cfg.seed = static_cast<unsigned int>(std::stoul(s.substr(7)));
+            opt.cfg.seed = static_cast<unsigned>(std::stoul(s.substr(7)));
         } else if (s.rfind("--log10-cond=", 0) == 0) {
             opt.cfg.log10_cond_values = dedup_nearly_equal(parse_range_or_list_double(s.substr(13)));
         } else if (s.rfind("--csv=", 0) == 0) {

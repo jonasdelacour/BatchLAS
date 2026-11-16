@@ -26,7 +26,7 @@ namespace {
 
 namespace S = ops::potrs;
 
-template <class T>
+template <typename T>
 struct PotrsProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     Queue& q;

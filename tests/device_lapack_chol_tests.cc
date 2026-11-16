@@ -617,7 +617,7 @@ TYPED_TEST(DeviceApiCholTest, SaturatingBatchIsBitIdentical) {
             for (int e = 0; e < s.stride; ++e) bad += !same_bits(v[std::size_t(b) * s.stride + e], v[e]);
         return bad;
     };
-    auto all_zero = [&]() {
+    auto all_zero = [&] {
         const auto gi = this->dev.down(info, kSat);
         return int(std::count(gi.begin(), gi.end(), 0));
     };
@@ -788,7 +788,7 @@ TYPED_TEST(DeviceApiCholTest, DISABLED_TimingAgainstTheHostRoutes) {
         const auto potri_ws = batchlas::device::buffer_size<batchlas::device::routine::potri<UL>, Big<T>, T>(n);
         std::byte* gbuf = d.alloc<std::byte>(std::max<std::size_t>(potri_ws.global_bytes * kTimeBatch, 1), std::byte{0});
         T* const h0 = d.up(p.h);
-        const double dev_potrf = median_ms(ctx, [&]() {
+        const double dev_potrf = median_ms(ctx, [&] {
             reset(h0);
             run_blocked(d, kTimeBatch, potrf_ws, info,
                         [=](const auto& ex, int b, const batchlas::device::Workspace& w) { return batchlas::device::potrf<UL, Big<T>>(ex, batchlas::device::item(ka, b), w); });
@@ -799,12 +799,12 @@ TYPED_TEST(DeviceApiCholTest, DISABLED_TimingAgainstTheHostRoutes) {
             const select::ScopedPin<ops::potrf::PotrfChoice> pin("potrf", ops::potrf::PotrfChoice{ops::potrf::Blocked{}});
             const std::size_t wsb = batchlas::potrf_buffer_size(ctx, V, UL);
             std::byte* ws = host_ws(d, wsb);
-            host_potrf_ms = median_ms(ctx, [&]() {
+            host_potrf_ms = median_ms(ctx, [&] {
                 reset(h0);
                 (void)batchlas::potrf(ctx, V, UL, Span<std::byte>(ws, wsb), Span<std::int32_t>(info, kTimeBatch));
             });
         }
-        const double dev_potri = median_ms(ctx, [&]() {
+        const double dev_potri = median_ms(ctx, [&] {
             reset(dfac);
             run_blocked(
                 d, kTimeBatch, potri_ws, info, [=](const auto& ex, int b, const batchlas::device::Workspace& w) { return batchlas::device::potri<UL, Big<T>>(ex, batchlas::device::item(ka, b), w); },
@@ -814,7 +814,7 @@ TYPED_TEST(DeviceApiCholTest, DISABLED_TimingAgainstTheHostRoutes) {
             const select::ScopedPin<ops::potri::PotriChoice> pin("potri", ops::potri::PotriChoice{ops::potri::Blocked{64}});
             const std::size_t wsb = batchlas::potri_buffer_size(ctx, V, UL);
             std::byte* ws = host_ws(d, wsb);
-            host_potri_ms = median_ms(ctx, [&]() {
+            host_potri_ms = median_ms(ctx, [&] {
                 reset(dfac);
                 (void)batchlas::potri(ctx, V, UL, Span<std::byte>(ws, wsb), Span<std::int32_t>(info, kTimeBatch));
             });

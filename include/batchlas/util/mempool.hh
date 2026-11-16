@@ -78,9 +78,9 @@ struct BumpAllocator {
     /// @param[in] device  device whose base-address alignment applies
     /// @return \f$\max(16,\ \mathrm{MEM\_BASE\_ADDR\_ALIGN}/8,\ \mathrm{alignof}(T))\f$ bytes
     template<typename T>
-    constexpr inline static auto alignment(const Device& device){
+    static inline constexpr auto alignment(const Device& device){
         // 16-byte floor: vendors commonly require it and SYCL cannot query it.
-        auto device_align_bytes = std::max((size_t)16, (size_t)device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN)/8);
+        auto device_align_bytes = std::max(static_cast<size_t>(16), static_cast<size_t>(device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN))/8);
         return std::max(device_align_bytes, static_cast<std::uintptr_t>(alignof(T)));
     }
 
@@ -89,7 +89,7 @@ struct BumpAllocator {
     /// @param[in] size    number of elements
     /// @return \f$\mathrm{size} \cdot \mathrm{sizeof}(T)\f$ rounded up to a multiple of alignment<T>()
     template<typename T>
-    constexpr inline static size_t allocation_size(const Device& device, size_t size){
+    static inline constexpr size_t allocation_size(const Device& device, size_t size){
         if (size == 0) return 0; // Handle zero size allocation gracefully
         std::uintptr_t total_size = size * sizeof(T);
         return (total_size + alignment<T>(device) - 1) & ~(alignment<T>(device) - 1);
@@ -100,7 +100,7 @@ struct BumpAllocator {
     /// @param[in] size  number of elements
     /// @return the same byte count as the `Device` overload
     template<typename T>
-    constexpr inline static size_t allocation_size(Queue& ctx, size_t size)   {return allocation_size<T>(ctx.device(), size);}
+    static inline constexpr size_t allocation_size(Queue& ctx, size_t size)   {return allocation_size<T>(ctx.device(), size);}
 
     /// @brief Carve `size` elements of `T`, aligned to alignment<T>(), off the front of the pool.
     /// @tparam T element type
@@ -109,7 +109,7 @@ struct BumpAllocator {
     /// @return the allocated elements (uninitialised; unbacked in a sizing pool)
     /// @throws batchlas::workspace_error if the pool has fewer than allocation_size<T>() bytes left
     template<typename T>
-    constexpr inline Span<T> allocate(const Device& device, size_t size){
+    inline constexpr Span<T> allocate(const Device& device, size_t size){
         if (size == 0) return {};
         size_t alloc_size = allocation_size<T>(device,size);
         if (alloc_size > byte_size){
@@ -146,7 +146,7 @@ struct BumpAllocator {
     /// @return the allocated elements (uninitialised; unbacked in a sizing pool)
     /// @throws batchlas::workspace_error if the pool has fewer than allocation_size<T>() bytes left
     template<typename T>
-    constexpr inline Span<T> allocate(Queue& ctx, size_t size) {return allocate<T>(ctx.device(), size);}
+    inline constexpr Span<T> allocate(Queue& ctx, size_t size) {return allocate<T>(ctx.device(), size);}
 
     /// @brief The still-unclaimed tail of the pool.
     ///

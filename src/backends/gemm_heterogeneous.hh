@@ -75,7 +75,7 @@ Event gemm_heterogeneous_loop(Queue& ctx,
     for (int batch_index = 0; batch_index < A.batch_size(); ++batch_index) {
         const auto [m, k] = get_effective_dims(A, transA, batch_index);
         const auto [k_b, n] = get_effective_dims(B, transB, batch_index);
-        static_cast<void>(k_b);
+        (void)k_b;
         if (m == 0 || n == 0) {
             continue;
         }

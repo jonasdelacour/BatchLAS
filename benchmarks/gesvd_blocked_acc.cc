@@ -136,7 +136,7 @@ void run_gesvd_blocked_acc(miniacc::State& state) {
         UnifiedVector<Real> s(static_cast<size_t>(n) * static_cast<size_t>(cur_batch));
 
         try {
-            const size_t ws_bytes = [&]() {
+            const size_t ws_bytes = [&] {
                 if constexpr (is_complex<Scalar>::value) {
                     return gesvd_blocked_buffer_size<B, Scalar>(*q,
                                                                 A_work,

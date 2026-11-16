@@ -20,16 +20,16 @@ namespace batchlas {
 namespace ops::syfn {
 
 
-template <Backend B, class T>
+template <Backend B, typename T>
 struct WeightsKernel {};
-template <Backend B, class T>
+template <Backend B, typename T>
 struct InfoKernel {};
-template <Backend B, class T>
+template <Backend B, typename T>
 struct ScaleKernel {};
-template <Backend B, class T>
+template <Backend B, typename T>
 struct ZeroKernel {};
 
-template <class R>
+template <typename R>
 inline bool out_of_domain(SyfnKind k, R w) {
     switch (k) {
         case SyfnKind::InvSqrt: return w <= R(0);
@@ -40,7 +40,7 @@ inline bool out_of_domain(SyfnKind k, R w) {
 }
 
 // The column scale: sqrt(f(w)) for the rank-k form, f(w) otherwise; 0 out of the domain.
-template <class R>
+template <typename R>
 inline R column_scale(SyfnKind k, R w, R weight) {
     if (out_of_domain(k, w)) return R(0);
     switch (k) {
@@ -52,7 +52,7 @@ inline R column_scale(SyfnKind k, R w, R weight) {
     }
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 void launch_info(Queue& q, const MV<T>& V, Span<float_t<T>> W, SyfnKind kind, Span<int32_t> info,
                  Span<int32_t> syev_info, const std::uint8_t* mask) {
     using R = float_t<T>;
@@ -73,7 +73,7 @@ void launch_info(Queue& q, const MV<T>& V, Span<float_t<T>> W, SyfnKind kind, Sp
     });
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch_zero(Queue& q, const MV<T>& V, const MV<T>& F, const std::uint8_t* mask) {
     const int64_t n = V.rows(), batch = V.batch_size();
     T* fp = F.data_ptr();
@@ -87,7 +87,7 @@ Event launch_zero(Queue& q, const MV<T>& V, const MV<T>& F, const std::uint8_t* 
     return q.get_event();
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 void launch_scale(Queue& q, const MV<T>& V, Span<float_t<T>> W, SyfnFunction<float_t<T>> fn, const Core<T>& ws,
                   const std::uint8_t* mask) {
     using R = float_t<T>;

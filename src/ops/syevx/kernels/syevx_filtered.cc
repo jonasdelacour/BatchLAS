@@ -609,8 +609,8 @@ Event syevx_filtered(Queue& ctx,
                     rmax = std::max(rmax, resid_span[static_cast<size_t>(b * k + j)]);
                 std::fprintf(stderr,
                     "[filt] iter=%zu b=%lld dcap=%d dneed=%d auto=%d rmax=%g tol=%g eff=%zu\n",
-                    iter, (long long)b, degree_cap[b], degree_need[b], (int)auto_degree,
-                    (double)rmax, (double)use_tol, eff_degree);
+                    iter, static_cast<long long>(b), degree_cap[b], degree_need[b], static_cast<int>(auto_degree),
+                    static_cast<double>(rmax), static_cast<double>(use_tol), eff_degree);
             }
         }
 

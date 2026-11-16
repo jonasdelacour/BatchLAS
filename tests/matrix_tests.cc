@@ -1763,7 +1763,7 @@ TEST(FillDiagonalVector, OffsetsAtOrPastTheEdge) {
 // recovered from the permutation; the bug made them a linear function of fill_random_spd's column 0.
 TEST(SeededFills, IndependentStreams) {
     constexpr int n = 256;
-    constexpr unsigned int seed = 21u;
+    constexpr unsigned seed = 21u;
     Queue ctx(Device::default_device());
     Matrix<float, MatrixFormat::Dense> piv(n, n), spd(n, n);
     piv.fill_random_pivoted(ctx, seed).wait();

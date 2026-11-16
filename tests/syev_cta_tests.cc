@@ -166,7 +166,7 @@ TYPED_TEST(SyevCtaTest, EigenvectorsN32RandomLowerResidualAndOrtho) {
 }
 
 TYPED_TEST(SyevCtaTest, EigenvectorsNearDegenerateLowerResidualAndOrtho_Stress) {
-    const bool dbg = []() {
+    const bool dbg = [] {
         const char* e = std::getenv("BATCHLAS_CTA_DEBUG_SYNC");
         return e && std::string(e) == "1";
     }();

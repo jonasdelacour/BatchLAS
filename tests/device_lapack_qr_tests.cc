@@ -492,7 +492,7 @@ TEST(DeviceApiQrArgs, BadArgumentsReturnMinusI) {
     const int m = 40, n = 33;
     const Batch<T> A(m, n, 1, 61, 4.0, 0.2);
     T* a = d.up(A.h);
-    T* tp = d.alloc<T>(n, 0.f);
+    T* tp = d.alloc<T>(n, 0.0f);
     const auto av = kview(a, A);
     const batchlas::device::WorkspaceSize sz = batchlas::device::buffer_size<batchlas::device::routine::orgqr, Blk<T>, T>(m, n);
     Launch<T> L(d, sz, 1);

@@ -95,7 +95,7 @@ inline double median_of(std::vector<double> values) {
     const auto mid = values.begin() + static_cast<std::ptrdiff_t>(values.size() / 2);
     std::nth_element(values.begin(), mid, values.end());
     const double upper = *mid;
-    if ((values.size() & 1U) != 0U) {
+    if ((values.size() & 1u) != 0u) {
         return upper;
     }
     const auto lower_mid = values.begin() + static_cast<std::ptrdiff_t>(values.size() / 2 - 1);

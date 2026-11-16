@@ -1014,7 +1014,7 @@ Matrix<float, MatrixFormat::Dense> MakeGradedSymmetric(int n, int batch, float s
     // Deterministic: an iteration-count comparison across two runs is only
     // meaningful on identical input.
     unsigned state = seed;
-    auto next = [&]() {
+    auto next = [&] {
         state = state * 1664525u + 1013904223u;
         return (float(state >> 8) / float(1u << 24)) - 0.5f;  // [-0.5, 0.5)
     };
@@ -1629,7 +1629,7 @@ std::vector<float> ToeplitzSpectrumAscending(int n, float diag, float s) {
 Matrix<float, MatrixFormat::Dense> MakeShiftedPerItem(int n, int batch, unsigned seed = 4242u) {
     Matrix<float, MatrixFormat::Dense> A(n, n, batch);
     unsigned state = seed;
-    auto next = [&]() {
+    auto next = [&] {
         state = state * 1664525u + 1013904223u;
         return (float(state >> 8) / float(1u << 24)) - 0.5f;
     };

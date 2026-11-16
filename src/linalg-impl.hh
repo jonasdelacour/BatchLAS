@@ -864,15 +864,15 @@ namespace batchlas{
                 cudaDeviceSynchronize();
             }
 
-            constexpr inline operator cublasHandle_t() const {
+            inline constexpr operator cublasHandle_t() const {
                 return blas_handle_;
             }
 
-            constexpr inline operator cusparseHandle_t() const {
+            inline constexpr operator cusparseHandle_t() const {
                 return sparse_handle_;
             }
 
-            constexpr inline operator cusolverDnHandle_t() const {
+            inline constexpr operator cusolverDnHandle_t() const {
                 return solver_handle_;
             }
 
@@ -921,8 +921,8 @@ namespace batchlas{
                 hipDeviceSynchronize();
             }
 
-            constexpr inline operator rocblas_handle() const { return blas_handle_; }
-            constexpr inline operator rocsparse_handle() const { return sparse_handle_; }
+            inline constexpr operator rocblas_handle() const { return blas_handle_; }
+            inline constexpr operator rocsparse_handle() const { return sparse_handle_; }
 
             void setStream(const Queue& ctx) {
                 setStream(static_cast<hipStream_t>(impl::query_stream<impl::Native::Hip>(*ctx)));

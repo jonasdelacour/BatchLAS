@@ -250,7 +250,7 @@ namespace batchlas {
         static LinalgHandle<B> handle;
 
         const auto [m, n, k] = backend::shape::validate_product<batchlas::invalid_argument>("trmm", A, Bmat, C, side);
-        static_cast<void>(k);  // rocblas_?trmm takes A's order from side, not as an argument
+        (void)k;  // rocblas_?trmm takes A's order from side, not as an argument
 
         // ROCm >= 6.3 14-arg out-of-place form: ..., A, lda, B, ldb, C, ldc (B input, C output).
         impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {

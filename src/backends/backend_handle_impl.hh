@@ -32,13 +32,13 @@ struct BackendMatrixHandle {
     BackendMatrixHandle(const MatrixView<T, MType>& matrix) { initialize(matrix); }
 
     #if BATCHLAS_HAS_CUSPARSE
-        constexpr inline operator cusparseDnMatDescr_t() const { return cusparse_descr_; }
-        constexpr inline operator cusparseSpMatDescr_t() const { return cusparse_descr_sp_; }
+        inline constexpr operator cusparseDnMatDescr_t() const { return cusparse_descr_; }
+        inline constexpr operator cusparseSpMatDescr_t() const { return cusparse_descr_sp_; }
     #endif
 
     #if BATCHLAS_HAS_ROCSPARSE
-        constexpr inline operator rocsparse_dnmat_descr() const { return rocsparse_descr_; }
-        constexpr inline operator rocsparse_spmat_descr() const { return rocsparse_descr_sp_; }
+        inline constexpr operator rocsparse_dnmat_descr() const { return rocsparse_descr_; }
+        inline constexpr operator rocsparse_spmat_descr() const { return rocsparse_descr_sp_; }
     #endif
 
 private:

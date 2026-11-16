@@ -70,7 +70,7 @@ using batchlas::verify::Check;
 
 namespace {
 
-template <typename T, Backend B> struct ApiConfig {
+template <class T, Backend B> struct ApiConfig {
     using ScalarType = T;
     static constexpr Backend BackendVal = B;
 };
@@ -172,7 +172,7 @@ template <class T> double gebrd_residual(const GebrdData<T>& in, const std::vect
     return static_cast<double>(std::sqrt(num) / std::max(std::sqrt(den), std::numeric_limits<L>::min()));
 }
 
-template <typename Config> class DeviceApiSvd : public test_utils::BatchLASTest<Config> {
+template <class Config> class DeviceApiSvd : public test_utils::BatchLASTest<Config> {
 protected:
     using T = typename Config::ScalarType;
     static constexpr Backend B = Config::BackendVal;

@@ -151,7 +151,7 @@ namespace batchlas
                                                                                float_t<T> log10_kappa,
                                                                                NormType metric,
                                                                                int batch_size = 1,
-                                                                               unsigned int seed = 42,
+                                                                               unsigned seed = 42,
                                                                                OrthoAlgorithm algo = OrthoAlgorithm::CGS2);
 
     /// @brief Random symmetric/Hermitian matrices with a prescribed \f$\log_{10}\f$ condition number.
@@ -172,7 +172,7 @@ namespace batchlas
                                                                                         float_t<T> log10_kappa,
                                                                                         NormType metric,
                                                                                         int batch_size = 1,
-                                                                                        unsigned int seed = 42,
+                                                                                        unsigned seed = 42,
                                                                                         OrthoAlgorithm algo = OrthoAlgorithm::CGS2);
 
     /// @brief Random banded matrices with a prescribed \f$\log_{10}\f$ condition number.
@@ -198,7 +198,7 @@ namespace batchlas
                                                                                       float_t<T> log10_kappa,
                                                                                       NormType metric,
                                                                                       int batch_size = 1,
-                                                                                      unsigned int seed = 42);
+                                                                                      unsigned seed = 42);
 
     /// @brief Random symmetric/Hermitian banded matrices with a prescribed \f$\log_{10}\f$ condition number.
     /// @param[in] ctx          queue the kernels are enqueued on
@@ -220,7 +220,7 @@ namespace batchlas
                                                                                                float_t<T> log10_kappa,
                                                                                                NormType metric,
                                                                                                int batch_size = 1,
-                                                                                               unsigned int seed = 42);
+                                                                                               unsigned seed = 42);
 
     /// @brief Random tridiagonal matrices with a prescribed \f$\log_{10}\f$ condition number.
     ///
@@ -241,7 +241,7 @@ namespace batchlas
                                                                                           float_t<T> log10_kappa,
                                                                                           NormType metric,
                                                                                           int batch_size = 1,
-                                                                                          unsigned int seed = 42);
+                                                                                          unsigned seed = 42);
 
     /// @brief Random Hermitian tridiagonal matrices with a prescribed \f$\log_{10}\f$ condition number.
     ///
@@ -263,7 +263,7 @@ namespace batchlas
                                                                                                     float_t<T> log10_kappa,
                                                                                                     NormType metric,
                                                                                                     int batch_size = 1,
-                                                                                                    unsigned int seed = 42);
+                                                                                                    unsigned seed = 42);
 
     /// @brief Batched plain transpose \f$B_i := A_i^T\f$ (no conjugation).
     /// @tparam T   float or double

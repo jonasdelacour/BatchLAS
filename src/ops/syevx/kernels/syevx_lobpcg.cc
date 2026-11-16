@@ -431,7 +431,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
 
 
         //Double buffering pointer swap approach as opposed to copying data unnecessarily
-        auto swap_subspace = [&](){
+        auto swap_subspace = [&]{
             std::swap(X, X_new);
             std::swap(P, P_new);
             std::swap(R, R_new);
@@ -499,7 +499,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
             auto Xk = X.kernel_view();
             const int64_t nn = n;
             const int64_t kk = block_vectors;
-            const unsigned int seed = 42; // fill_random's default
+            const unsigned seed = 42; // fill_random's default
             ctx->submit([&](sycl::handler& h) {
                 batchlas::impl::parallel_for<SyevxLobpcgInitKernel<B, T, MFormat>>(h,
                     sycl::range<1>(static_cast<size_t>(batch_size * nn * kk)), [=](sycl::id<1> tid) {

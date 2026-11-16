@@ -101,7 +101,7 @@ public:
     }
     std::vector<CellKey> grid(const std::string& dtype,
                               const std::map<std::string, std::vector<std::string>>& overrides) const override {
-        static_cast<void>(dtype);
+        (void)dtype;
         std::vector<CellKey> cells;
         for (int m : Y::grid_mn)
             for (int n : Y::grid_mn)

@@ -64,7 +64,7 @@ namespace {
 namespace ts = test_support;
 using ts::Live;
 
-template <typename T>
+template <class T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
 constexpr int kBatch = 1024;
@@ -95,7 +95,7 @@ static_assert(device::buffer_size<device::routine::sysv<Uplo::Upper>, device::ti
 static_assert(std::is_same_v<device::resolve_tier_t<device::routine::sysv<Uplo::Upper>, float, device::tier::upto<4096>>, device::tier::Blocked<1>>);
 
 // ---- data ---------------------------------------------------------------------------------------
-template <typename T>
+template <class T>
 T draw(std::mt19937& g) {
     std::uniform_real_distribution<double> u(-1.0, 1.0);
     const double re = u(g), im = u(g);
@@ -105,7 +105,7 @@ T draw(std::mt19937& g) {
 // Item b of the full symmetric batch (complex: symmetric, not Hermitian). b % 16 picks its kind:
 // 5 a zero row and column (singular: info > 0), 9 a NaN off the diagonal, 12 a dominant diagonal
 // (1 x 1 pivots, no interchange), 14 a zero diagonal (2 x 2 pivots); the rest uniform in [-1, 1].
-template <typename T>
+template <class T>
 Matrix<T> symmetric_batch(int n, unsigned seed) {
     Matrix<T> full(n, n, kBatch);
     std::mt19937 g(seed);
@@ -126,14 +126,14 @@ Matrix<T> symmetric_batch(int n, unsigned seed) {
 }
 
 // The uplo triangle of `full` in padded storage (ld n + 3, item gap 7), poison elsewhere.
-template <typename T>
+template <class T>
 Matrix<T> stored(const Matrix<T>& full, Uplo uplo) {
     Matrix<T> a = ts::padded<T>(full.rows(), full.cols(), full.batch_size(), 3, 7);
     ts::store<T>(a, full, Live::triangle(uplo));
     return a;
 }
 
-template <typename T>
+template <class T>
 Matrix<T> rhs(int n, int nrhs, unsigned seed, int batch = kBatch) {
     Matrix<T> src(n, nrhs, batch);
     std::mt19937 g(seed);
@@ -163,7 +163,7 @@ inline int singular_m(int b, int n) {
 }
 inline int phys_of(Uplo uplo, int n, int i) { return uplo == Uplo::Upper ? n - 1 - i : i; }
 
-template <typename T>
+template <class T>
 Matrix<T> blocked_batch(int n, int batch, Uplo uplo, unsigned seed) {
     Matrix<T> full(n, n, batch);
     std::mt19937 g(seed);
@@ -203,13 +203,13 @@ inline std::vector<int32_t> forced_ipiv(BKind kd, int n, Uplo uplo) {
 }
 
 // ---- comparisons --------------------------------------------------------------------------------
-template <typename T>
+template <class T>
 bool has_nan(const T& v) {
     if constexpr (std::is_floating_point_v<T>) return std::isnan(v);
     else return std::isnan(v.real()) || std::isnan(v.imag());
 }
 
-template <typename T>
+template <class T>
 ::testing::AssertionResult same_storage(const Matrix<T>& x, const Matrix<T>& y, const char* what) {
     if (x.stride() != y.stride() || x.batch_size() != y.batch_size()) return ::testing::AssertionFailure() << what << ": layouts differ";
     const std::size_t count = static_cast<std::size_t>(x.stride()) * x.batch_size();
@@ -328,7 +328,7 @@ struct Outs {
     unsigned char* canary;  // kCanary bytes per work-group
 };
 
-template <Uplo UL, class Tier, int WG, typename T>
+template <Uplo UL, class Tier, int WG, class T>
 void dev_sytrf(sycl::queue& q, const Matrix<T>& a, int32_t* ipiv, Outs o, int wg, std::size_t ws_offset = 0, Gws gw = {}) {
     const int n = a.rows();
     const std::size_t need = device::buffer_size<device::routine::sytrf<UL>, Tier, T>(n).local_bytes;
@@ -347,7 +347,7 @@ void dev_sytrf(sycl::queue& q, const Matrix<T>& a, int32_t* ipiv, Outs o, int wg
         a.batch_size());
 }
 
-template <Uplo UL, class Tier, int WG, typename T>
+template <Uplo UL, class Tier, int WG, class T>
 void dev_sytrs(sycl::queue& q, const Matrix<T>& a, const Matrix<T>& bm, const int32_t* ipiv, Outs o, int wg, Gws gw = {}) {
     const int n = a.rows(), nrhs = bm.cols();
     const std::size_t need = device::buffer_size<device::routine::sytrs<UL>, Tier, T>(n, nrhs).local_bytes;
@@ -367,7 +367,7 @@ void dev_sytrs(sycl::queue& q, const Matrix<T>& a, const Matrix<T>& bm, const in
         a.batch_size());
 }
 
-template <Uplo UL, class Tier, int WG, typename T>
+template <Uplo UL, class Tier, int WG, class T>
 void dev_sysv(sycl::queue& q, const Matrix<T>& a, const Matrix<T>& bm, int32_t* ipiv, Outs o, int wg, Gws gw = {}) {
     const int n = a.rows(), nrhs = bm.cols();
     const std::size_t need = device::buffer_size<device::routine::sysv<UL>, Tier, T>(n, nrhs).local_bytes;
@@ -390,7 +390,7 @@ void dev_sysv(sycl::queue& q, const Matrix<T>& a, const Matrix<T>& bm, int32_t* 
 // The host routes' work-group width for `wg` / Blocked<1> parity (sytrf_kernels.cc group_width).
 int host_width(int n) { return std::max(32, std::min(256, (n + 31) / 32 * 32)); }
 
-template <typename Config>
+template <class Config>
 class DeviceApiSytrfTest : public test_utils::BatchLASTest<Config> {
   protected:
     using T = typename Config::ScalarType;

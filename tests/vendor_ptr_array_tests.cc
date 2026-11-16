@@ -46,17 +46,17 @@ template <typename T> T cj(T v) {
 }
 
 inline std::uint32_t mix(std::uint32_t x) {
-    x ^= x >> 16; x *= 0x7feb352dU; x ^= x >> 15; x *= 0x846ca68bU; x ^= x >> 16;
+    x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
     return x;
 }
 
 // Deterministic entry in [-1, 1] (both parts for complex T), distinct per item and salt.
 template <typename T> T entry(int i, int j, int b, int salt) {
-    const std::uint32_t s = mix(std::uint32_t(i) * 7919U + std::uint32_t(j) * 104729U +
-                                std::uint32_t(b) * 1299709U + std::uint32_t(salt) * 15485863U);
+    const std::uint32_t s = mix(std::uint32_t(i) * 7919u + std::uint32_t(j) * 104729u +
+                                std::uint32_t(b) * 1299709u + std::uint32_t(salt) * 15485863u);
     const double re = mix(s) / 4294967295.0 * 2.0 - 1.0;
     if constexpr (is_std_complex_v<T>) {
-        const double im = mix(s + 1U) / 4294967295.0 * 2.0 - 1.0;
+        const double im = mix(s + 1u) / 4294967295.0 * 2.0 - 1.0;
         return T(Real<T>(re), Real<T>(im));
     } else {
         return T(re);

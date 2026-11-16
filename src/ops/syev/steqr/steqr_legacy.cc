@@ -385,7 +385,7 @@ Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e
 template <typename T>
 size_t steqr_legacy_buffer_size(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
                                 const VectorView<T>& eigenvalues, JobType jobz, SteqrParams<T> params) {
-    static_cast<void>(e);
+    (void)e;
     const auto n = d.size();
     const auto batch_size = d.batch_size();
     // Shape-only stand-in for the eigenvector matrix; the layout reads its

@@ -156,7 +156,7 @@ DenseMatrix conditioned_random_impl(const std::string& which,
                                     typename base_type<T>::type log10_kappa,
                                     NormType metric,
                                     int batch_size,
-                                    unsigned int seed,
+                                    unsigned seed,
                                     int kd,
                                     OrthoAlgorithm algorithm,
                                     Backend backend,
@@ -313,7 +313,7 @@ void init_misc_ops(py::module_& module) {
                                     int cols,
                                     bool hermitian,
                                     int batch_size,
-                                    unsigned int seed) {
+                                    unsigned seed) {
         const std::string dtype = lower_copy(dtype_name_value);
         const DTypeCode code = dtype == "float32"   ? DTypeCode::Float32
                                : dtype == "float64" ? DTypeCode::Float64
@@ -414,7 +414,7 @@ void init_misc_ops(py::module_& module) {
                                                int n,
                                                float density,
                                                int batch_size,
-                                               unsigned int seed,
+                                               unsigned seed,
                                                const py::object& diagonal_boost,
                                                bool shared_pattern) {
         const std::string dtype = lower_copy(dtype_name_value);
@@ -437,7 +437,7 @@ void init_misc_ops(py::module_& module) {
                                                 double log10_kappa,
                                                 const std::string& metric_name,
                                                 int batch_size,
-                                                unsigned int seed,
+                                                unsigned seed,
                                                 int kd,
                                                 const std::string& algorithm_name,
                                                 const std::string& backend_name,

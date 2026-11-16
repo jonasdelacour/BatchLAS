@@ -26,7 +26,7 @@ namespace {
 
 namespace I = ops::sygst;
 
-template <class T>
+template <typename T>
 struct SygstProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     Queue& q;

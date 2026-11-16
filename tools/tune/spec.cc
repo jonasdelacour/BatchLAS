@@ -88,7 +88,7 @@ std::vector<ArmOutcome> run_cell_audited(const OpSpec& spec, const CellRequest& 
 }
 
 std::vector<std::int64_t> OpSpec::dims(const std::string& dtype, const CellKey& key) const {
-    static_cast<void>(dtype);
+    (void)dtype;
     std::vector<std::int64_t> out;
     for (const auto& [name, value] : key) {
         if (name == "batch") continue;
@@ -115,7 +115,7 @@ std::map<std::string, std::vector<std::string>> OpSpec::family_sources(const std
 
 std::vector<CellKey> OpSpec::grid(const std::string& dtype,
                                   const std::map<std::string, std::vector<std::string>>& overrides) const {
-    static_cast<void>(dtype);
+    (void)dtype;
     auto ax = axes();
     for (const auto& [name, values] : overrides) {
         auto it = std::find_if(ax.begin(), ax.end(), [&](const auto& a) { return a.first == name; });

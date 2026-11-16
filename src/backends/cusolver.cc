@@ -342,8 +342,8 @@ namespace batchlas {
                                         const MatrixView<T, MatrixFormat::Dense>& Vh,
                                         SvdVectors jobu,
                                         SvdVectors jobvh) {
-            static_cast<void>(U);
-            static_cast<void>(Vh);
+            (void)U;
+            (void)Vh;
             if (!gesvd_detail::batched_route_ok(A)) {
                 // Deliberately not silently falling back to a looped gesvdj: that is a
                 // different algorithm with a different cost, and reporting it under the

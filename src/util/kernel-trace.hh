@@ -60,7 +60,7 @@ inline void _init_once() {
     g_enabled.store(enabled);
 
     if (enabled) {
-        std::atexit([]() {
+        std::atexit([] {
             // Best-effort flush at process exit.
             try {
                 batchlas_kernel_trace::flush();

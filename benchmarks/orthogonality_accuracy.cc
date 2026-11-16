@@ -40,7 +40,7 @@ struct Options {
     int samples = 4096;
     double log10_cond_min = 0.0;
     double log10_cond_max = 10.0;
-    unsigned int seed = 1234u;
+    unsigned seed = 1234u;
     size_t max_sweeps = 100;
     std::string cta_shift = "wilkinson";
     std::string output = "output/accuracy/orthogonality_accuracy.csv";
@@ -77,7 +77,7 @@ Options parse_args(int argc, char** argv) {
         } else if (arg.starts_with("--log10-cond-max")) {
             opt.log10_cond_max = std::stod(get_value(arg));
         } else if (arg.starts_with("--seed")) {
-            opt.seed = static_cast<unsigned int>(std::stoul(get_value(arg)));
+            opt.seed = static_cast<unsigned>(std::stoul(get_value(arg)));
         } else if (arg.starts_with("--max-sweeps")) {
             opt.max_sweeps = static_cast<size_t>(std::stoul(get_value(arg)));
         } else if (arg.starts_with("--cta-shift")) {
@@ -193,7 +193,7 @@ int run_accuracy(const Options& opt) {
                 static_cast<Real>(target_log10),
                 NormType::Spectral,
                 cur_batch,
-                opt.seed + static_cast<unsigned int>(sample_id));
+                opt.seed + static_cast<unsigned>(sample_id));
             q->wait();
             accuracy::share_inputs(opt.inputs, sample_id, dense_A);
 

@@ -103,7 +103,7 @@ public:
     }
     std::vector<CellKey> grid(const std::string& dtype,
                               const std::map<std::string, std::vector<std::string>>& overrides) const override {
-        static_cast<void>(dtype);
+        (void)dtype;
         std::vector<CellKey> cells;
         auto add = [&](std::string_view t, int n, int k, int b) {
             cells.push_back({{"form", std::string(K::form_of(n, k))}, {"trans", std::string(t)}, {"n", std::to_string(n)},

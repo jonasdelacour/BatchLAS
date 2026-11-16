@@ -1364,9 +1364,9 @@ TEST_F(ILUKTests, DISABLED_FactorLevelStructure) {
             const int depthL = *std::max_element(lvlL.begin(), lvlL.end()) + 1;
             const int depthU = *std::max_element(lvlU.begin(), lvlU.end()) + 1;
             std::cout << "  level=" << level << " n=" << n << " lu_nnz=" << lu.nnz()
-                      << " nnz/row=" << (double)lu.nnz()/n
-                      << "  L_depth=" << depthL << " (avg " << (double)n/depthL << " rows/level)"
-                      << "  U_depth=" << depthU << " (avg " << (double)n/depthU << " rows/level)\n";
+                      << " nnz/row=" << static_cast<double>(lu.nnz())/n
+                      << "  L_depth=" << depthL << " (avg " << static_cast<double>(n)/depthL << " rows/level)"
+                      << "  U_depth=" << depthU << " (avg " << static_cast<double>(n)/depthU << " rows/level)\n";
         }
     }
 }

@@ -2108,7 +2108,7 @@ TYPED_TEST(GemmCandidates, WideTransposedPipelineEveryTileFormAndLegAtSaturating
                     ++ran;
                 }
                 for (const auto& [la, lb, vec] : wide_v2_leg_layouts<T>()) {
-                    static_cast<void>(vec);
+                    (void)vec;
                     Spec s{ta, tb, 2 * w.m, 2 * w.n, 48, 4, la};
                     if (lb != la) s.layout_b = lb;
                     s.seed = 10300u + 13u * unsigned(la) + unsigned(lb);

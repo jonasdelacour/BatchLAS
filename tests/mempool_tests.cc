@@ -83,7 +83,7 @@ TEST_F(BumpAllocatorTest, AlignmentRequirements) {
     auto complex_span = pool.allocate<std::complex<double>>(device, 1);
 
     // Check alignment based on actual BumpAllocator implementation
-    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+    auto device_align = std::max(static_cast<size_t>(16), device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
     auto char_align = std::max(device_align, static_cast<std::uintptr_t>(alignof(char)));
     auto int_align = std::max(device_align, static_cast<std::uintptr_t>(alignof(int)));
     auto double_align = std::max(device_align, static_cast<std::uintptr_t>(alignof(double)));
@@ -98,7 +98,7 @@ TEST_F(BumpAllocatorTest, AlignmentRequirements) {
 // Test allocation_size static methods
 TEST_F(BumpAllocatorTest, AllocationSizeCalculation) {
     // First let's understand the device alignment requirements
-    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+    auto device_align = std::max(static_cast<size_t>(16), device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
     std::cout << "Device alignment: " << device_align << " bytes" << std::endl;
 
     // Test allocation_size with device
@@ -139,7 +139,7 @@ TEST_F(BumpAllocatorTest, AllocationSizeCalculation) {
 // Test buffer alignment and exhaustion
 TEST_F(BumpAllocatorTest, BufferExhaustion) {
     // First, let's understand the allocation size behavior
-    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+    auto device_align = std::max(static_cast<size_t>(16), device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
     std::cout << "Device alignment: " << device_align << " bytes" << std::endl;
 
     // Check how much space a single int actually needs
@@ -219,7 +219,7 @@ TEST_F(BumpAllocatorTest, BufferExhaustion) {
 
 // Test device allocation behavior
 TEST_F(BumpAllocatorTest, DeviceAllocationBehavior) {
-    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+    auto device_align = std::max(static_cast<size_t>(16), device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
 
     // allocation_size returns the space needed including alignment
     auto char_align = std::max(device_align, static_cast<std::uintptr_t>(alignof(char)));
@@ -264,7 +264,7 @@ TEST_F(BumpAllocatorTest, DeviceAllocationBehavior) {
 
 // Test the relationship between allocation_size and actual allocations
 TEST_F(BumpAllocatorTest, AllocationSizeVsActualBehavior) {
-    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+    auto device_align = std::max(static_cast<size_t>(16), device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
 
     // allocation_size is used for planning - it tells you the worst-case
     // space needed if this was the only allocation
@@ -330,7 +330,7 @@ TEST_F(BumpAllocatorTest, SyevxLikeUsagePattern) {
     // Add (device_align - 1) padding bytes so the BumpAllocator can absorb any initial
     // misalignment of the allocation returned by new[] (which only guarantees
     // alignof(std::max_align_t), not the device's MEM_BASE_ADDR_ALIGN).
-    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+    auto device_align = std::max(static_cast<size_t>(16), device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
     auto large_buffer = std::make_unique<std::byte[]>(total_size + device_align - 1);
     BumpAllocator pool(large_buffer.get(), total_size + device_align - 1);
 
@@ -399,7 +399,7 @@ TEST_F(BumpAllocatorTest, DisjointAllocationSizeAndAllocate) {
     // Phase 2: Create allocator with calculated size in different context.
     // Add (device_align - 1) padding bytes so the BumpAllocator can absorb any initial
     // misalignment from new[] (which only guarantees alignof(std::max_align_t)).
-    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+    auto device_align = std::max(static_cast<size_t>(16), device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
     auto planned_buffer = std::make_unique<std::byte[]>(total_calculated_size + device_align - 1);
     BumpAllocator pool(planned_buffer.get(), total_calculated_size + device_align - 1);
 
@@ -432,7 +432,7 @@ TEST_F(BumpAllocatorTest, DisjointAllocationSizeAndAllocate) {
 
 // Test edge cases and error conditions
 TEST_F(BumpAllocatorTest, EdgeCasesAndErrors) {
-    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+    auto device_align = std::max(static_cast<size_t>(16), device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
 
     // Test with properly aligned small buffer
     const size_t small_size = 128; // Should work if aligned
@@ -514,7 +514,7 @@ TEST_F(BumpAllocatorTest, PointerArrayAllocations) {
     EXPECT_EQ(ptr_array3.size(), batch_size);
 
     // Verify alignment based on actual requirements
-    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+    auto device_align = std::max(static_cast<size_t>(16), device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
     auto ptr_align = std::max(device_align, static_cast<std::uintptr_t>(alignof(float*)));
 
     EXPECT_EQ(reinterpret_cast<std::uintptr_t>(ptr_array1.data()) % ptr_align, 0);
@@ -538,7 +538,7 @@ TEST_F(BumpAllocatorTest, WorkspaceAllocationPatterns) {
     EXPECT_EQ(byte_workspace3.size(), 2048);
 
     // All should be properly aligned to their respective requirements
-    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+    auto device_align = std::max(static_cast<size_t>(16), device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
     auto byte_align = std::max(device_align, static_cast<std::uintptr_t>(alignof(std::byte)));
     auto float_align = std::max(device_align, static_cast<std::uintptr_t>(alignof(float)));
 
@@ -564,7 +564,7 @@ TEST_F(BumpAllocatorTest, RealisticBufferSizeCalculationAndUsage) {
 
     // Create allocator with calculated size.
     // Add (device_align - 1) padding bytes to absorb initial alignment gap from new[].
-    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+    auto device_align = std::max(static_cast<size_t>(16), device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
     auto realistic_buffer = std::make_unique<std::byte[]>(total_size + device_align - 1);
     BumpAllocator pool(realistic_buffer.get(), total_size + device_align - 1);
 
@@ -607,7 +607,7 @@ TEST_F(BumpAllocatorTest, AllocationOrderingConsistency) {
     EXPECT_EQ(c2.size(), 1024);
 
     // All should be properly aligned to their respective requirements
-    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+    auto device_align = std::max(static_cast<size_t>(16), device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
     auto int_align = std::max(device_align, static_cast<std::uintptr_t>(alignof(int)));
     auto double_align = std::max(device_align, static_cast<std::uintptr_t>(alignof(double)));
     auto byte_align = std::max(device_align, static_cast<std::uintptr_t>(alignof(std::byte)));
@@ -682,7 +682,7 @@ TEST_F(BumpAllocatorTest, QueueVsDeviceConsistency) {
     EXPECT_EQ(span1.size(), 50);
     EXPECT_EQ(span2.size(), 50);
 
-    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+    auto device_align = std::max(static_cast<size_t>(16), device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
     auto alignment = std::max(device_align, static_cast<std::uintptr_t>(alignof(double)));
     EXPECT_EQ(reinterpret_cast<std::uintptr_t>(span1.data()) % alignment, 0);
     EXPECT_EQ(reinterpret_cast<std::uintptr_t>(span2.data()) % alignment, 0);
@@ -730,7 +730,7 @@ TEST_F(BumpAllocatorTest, MeasuredSizeSufficesForRealAllocation) {
     EXPECT_GT(measured, 0u);
 
     // A real pool of exactly that size, based at a device-aligned address.
-    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+    auto device_align = std::max(static_cast<size_t>(16), device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
     void* mem = std::aligned_alloc(device_align, ((measured + device_align - 1) / device_align) * device_align);
     ASSERT_NE(mem, nullptr);
 
@@ -775,7 +775,7 @@ TEST_F(BumpAllocatorTest, MeasuredSizeSufficesFromAMisalignedBase) {
 // every such caller. Summed allocation_size totals always had this property;
 // sizing mode has to keep it.
 TEST_F(BumpAllocatorTest, MeasuredSizeIsAnAlignmentMultiple) {
-    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+    auto device_align = std::max(static_cast<size_t>(16), device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
 
     auto sizer = BumpAllocator::measuring();
     replay_layout(sizer, device);
@@ -795,7 +795,7 @@ TEST_F(BumpAllocatorTest, MeasuredSizeIsTight) {
     replay_layout(sizer, device);
     const size_t measured = sizer.required_bytes();
 
-    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+    auto device_align = std::max(static_cast<size_t>(16), device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
     void* mem = std::aligned_alloc(device_align, ((measured + device_align - 1) / device_align) * device_align);
     ASSERT_NE(mem, nullptr);
 
@@ -830,7 +830,7 @@ TEST_F(BumpAllocatorTest, MeasuredSizeNeverExceedsSummedAllocationSize) {
 // so that views can be built over it -- it just never backs them with memory.
 TEST_F(BumpAllocatorTest, MeasuringHandsOutUsableButUnbackedAddresses) {
     auto sizer = BumpAllocator::measuring();
-    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+    auto device_align = std::max(static_cast<size_t>(16), device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
 
     auto a = sizer.allocate<float>(device, 10);
     auto b = sizer.allocate<double>(device, 10);
@@ -864,7 +864,7 @@ TEST_F(BumpAllocatorTest, MeasuringRejectsQueriesThatMeanNothing) {
 // ---- per-queue workspace arena --------------------------------------------
 
 TEST_F(BumpAllocatorTest, WorkspaceLeaseIsUsableAndAligned) {
-    auto device_align = std::max((size_t)16, device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
+    auto device_align = std::max(static_cast<size_t>(16), device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN) / 8);
 
     auto lease = queue->workspace(4096);
     ASSERT_NE(lease.data(), nullptr);

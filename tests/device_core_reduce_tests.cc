@@ -84,7 +84,7 @@ TEST(DeviceCoreReduceHost, ArgmaxMergeTieRules) {
     using A = batchlas::device::ArgMax<float>;
     namespace alg = batchlas::device::alg;
     const A none{-1, -std::numeric_limits<float>::infinity()};
-    const A a{3, 2.f}, b{1, 2.f}, c{5, 7.f};
+    const A a{3, 2.0f}, b{1, 2.0f}, c{5, 7.0f};
     auto low = [](A x, A y) { return batchlas::device::argmax_merge(x, y, alg::TieLowest{}); };
     auto high = [](A x, A y) { return batchlas::device::argmax_merge(x, y, alg::TieHighest{}); };
     auto rt = [](A x, A y, bool lo) { return batchlas::device::argmax_merge(x, y, alg::TieRt{lo}); };

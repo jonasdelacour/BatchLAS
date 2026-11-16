@@ -24,18 +24,18 @@
 namespace batchlas {
 namespace ops::syev_align {
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
-template <Backend B, class T>
+template <Backend B, typename T>
 struct ClusterRotationKernel {};
-template <Backend B, class T>
+template <Backend B, typename T>
 struct ClusterApplyKernel {};
 
-template <class T>
+template <typename T>
 inline constexpr bool complex_v = is_std_complex_v<T>;
 
-template <class T>
+template <typename T>
 struct Workspace {
     Span<T> m;            // m x m per item: M = V_old^H V, then R^H on each cluster's diagonal block
     Span<T> vcopy;        // n x m per item: W of the Jacobi SVD (block (s, s), ld n), then a copy of V
@@ -45,7 +45,7 @@ struct Workspace {
 };
 
 // One description for the call and the size query (a mismatch overruns the workspace).
-template <class T>
+template <typename T>
 Workspace<T> carve(const Device& dev, BumpAllocator& pool, int64_t n, int64_t m, int64_t batch) {
     Workspace<T> w;
     w.m = pool.allocate<T>(dev, size_t(m * m * batch));
@@ -59,7 +59,7 @@ Workspace<T> carve(const Device& dev, BumpAllocator& pool, int64_t n, int64_t m,
 // G is the cluster's p x p block of M (ld m), W the accumulated right rotations (ld n). On return
 // G holds R^H = U W^H, where B = U Sigma W^H. Columns of U whose singular value is below
 // p eps sigma_max are completed by Gram-Schmidt on unit vectors, so R stays unitary.
-template <class T>
+template <typename T>
 inline void procrustes_block(T* G, int64_t ldg, T* W, int64_t ldw, T* flag, int p) {
     using Real = float_t<T>;
     const Real eps = std::numeric_limits<Real>::epsilon();
@@ -151,7 +151,7 @@ inline void procrustes_block(T* G, int64_t ldg, T* W, int64_t ldw, T* flag, int 
     }
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& ctx, const MV<T>& V_old, Span<float_t<T>> eigenvalues, const MV<T>& V, float_t<T> tol,
              Span<std::byte> workspace) {
     using Real = float_t<T>;

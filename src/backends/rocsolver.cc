@@ -73,7 +73,7 @@ namespace batchlas {
                 Span<T> tau,
                 Span<std::byte> workspace) {
         ::batchlas::detail::refuse_batch_mask<T>(Op::geqrf, "geqrf_vendor", B, A);
-        static_cast<void>(workspace);
+        (void)workspace;
         static LinalgHandle<B> handle;
         impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
             handle.setStream(stream);
@@ -104,9 +104,9 @@ namespace batchlas {
     size_t geqrf_vendor_buffer_size(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A,
                              Span<T> tau) {
-        static_cast<void>(ctx);
-        static_cast<void>(A);
-        static_cast<void>(tau);
+        (void)ctx;
+        (void)A;
+        (void)tau;
         return 0;
     }
 
@@ -123,7 +123,7 @@ namespace batchlas {
                       Span<T> tau,
                       Span<std::byte> workspace) {
         ::batchlas::detail::refuse_batch_mask<T>(Op::ormqr, "ormqr_vendor", B, A, C);
-        static_cast<void>(workspace);
+        (void)workspace;
         static LinalgHandle<B> handle;
         auto m = C.rows();
         auto n = C.cols();
@@ -163,12 +163,12 @@ namespace batchlas {
                                     Side side,
                                     Transpose trans,
                                     Span<T> tau) {
-        static_cast<void>(ctx);
-        static_cast<void>(A);
-        static_cast<void>(C);
-        static_cast<void>(side);
-        static_cast<void>(trans);
-        static_cast<void>(tau);
+        (void)ctx;
+        (void)A;
+        (void)C;
+        (void)side;
+        (void)trans;
+        (void)tau;
         return static_cast<size_t>(0);
     }
 
@@ -182,7 +182,7 @@ namespace batchlas {
                 Span<T> tau,
                 Span<std::byte> workspace) {
         ::batchlas::detail::refuse_batch_mask<T>(Op::orgqr, "orgqr_vendor", B, A);
-        static_cast<void>(workspace);
+        (void)workspace;
         static LinalgHandle<B> handle;
         auto m = A.rows();
         auto n = A.cols();
@@ -212,9 +212,9 @@ namespace batchlas {
     size_t orgqr_vendor_buffer_size(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A,
                              Span<T> tau) {
-        static_cast<void>(ctx);
-        static_cast<void>(A);
-        static_cast<void>(tau);
+        (void)ctx;
+        (void)A;
+        (void)tau;
         return 0;
     }
 
@@ -278,7 +278,7 @@ namespace batchlas {
                 Span<int64_t> pivots,
                 Span<std::byte> workspace) {
         ::batchlas::detail::refuse_batch_mask<T>(Op::getrs, "getrs_vendor", Back, A, B);
-        static_cast<void>(workspace);
+        (void)workspace;
         static LinalgHandle<Back> handle;
         auto ipiv = pivots.as_span<int>();
         impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
@@ -317,10 +317,10 @@ namespace batchlas {
                              const MatrixView<T, MatrixFormat::Dense>& A,
                              const MatrixView<T, MatrixFormat::Dense>& B,
                              Transpose transA) {
-        static_cast<void>(ctx);
-        static_cast<void>(A);
-        static_cast<void>(B);
-        static_cast<void>(transA);
+        (void)ctx;
+        (void)A;
+        (void)B;
+        (void)transA;
         return 0;
     }
 

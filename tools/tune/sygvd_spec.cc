@@ -23,7 +23,7 @@ namespace {
 
 namespace I = ops::sygvd;
 
-template <class T>
+template <typename T>
 struct SygvdProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     using R = typename base_type<T>::type;

@@ -17,7 +17,7 @@ namespace batchlas::ops::ormqr {
 enum class WyPin { Measured, Gemm, Trmm };
 
 inline WyPin wy_pin() {
-    static const WyPin result = []() {
+    static const WyPin result = [] {
         const char* v = batchlas::settings().selection.ormqr_wy.get();
         if (!v) return WyPin::Measured;
         const std::string s(v);

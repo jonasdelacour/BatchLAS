@@ -477,7 +477,7 @@ namespace batchlas {
                 std::ostringstream tmp;
                 print_value(tmp, value);
                 const std::string s = tmp.str();
-                if ((int)s.size() < width) {
+                if (static_cast<int>(s.size()) < width) {
                     os << std::setw(width) << s;
                 } else {
                     // If the representation is wider than the field, print as-is to retain info
@@ -1456,7 +1456,7 @@ namespace batchlas {
         /// @throws batchlas::invalid_argument if @p hermitian and \f$\mathrm{rows} \ne \mathrm{cols}\f$
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
-        Event fill_random(const Queue& ctx, bool hermitian = false, unsigned int seed = 42) const;
+        Event fill_random(const Queue& ctx, bool hermitian = false, unsigned seed = 42) const;
 
         /// @brief fill_random() on a new default queue.
         /// @param[in] hermitian  make every item Hermitian
@@ -1464,7 +1464,7 @@ namespace batchlas {
         /// @return the event of the kernel
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
-        Event fill_random(bool hermitian = false, unsigned int seed = 42) const {
+        Event fill_random(bool hermitian = false, unsigned seed = 42) const {
             return fill_random(Queue(Device::default_device_for<T>()), hermitian, seed);
         }
 
@@ -1484,7 +1484,7 @@ namespace batchlas {
             requires CsrMatrixFormat<M>
         Event fill_random_sparse_hermitian(const Queue& ctx,
                                            float density,
-                                           unsigned int seed = 42,
+                                           unsigned seed = 42,
                                            typename base_type<T>::type diagonal_boost = typename base_type<T>::type(1),
                                            bool shared_pattern = true) const;
 
@@ -1497,7 +1497,7 @@ namespace batchlas {
         template <MatrixFormat M = MType>
             requires CsrMatrixFormat<M>
         Event fill_random_sparse_hermitian(float density,
-                                           unsigned int seed = 42,
+                                           unsigned seed = 42,
                                            typename base_type<T>::type diagonal_boost = typename base_type<T>::type(1),
                                            bool shared_pattern = true) const {
             return fill_random_sparse_hermitian(Queue(Device::default_device_for<T>()), density, seed, diagonal_boost, shared_pattern);
@@ -1666,7 +1666,7 @@ namespace batchlas {
             requires DenseMatrixFormat<M>
         Event fill_triangular_random(const Queue& ctx, Uplo uplo,
                                      Diag diag = Diag::Unit,
-                                     unsigned int seed = 42) const;
+                                     unsigned seed = 42) const;
 
         /// @brief fill_triangular_random() on a new default queue.
         /// @param[in] uplo  triangle that receives the random values
@@ -1677,7 +1677,7 @@ namespace batchlas {
             requires DenseMatrixFormat<M>
         Event fill_triangular_random(Uplo uplo,
                                      Diag diag = Diag::Unit,
-                                     unsigned int seed = 42) const {
+                                     unsigned seed = 42) const {
             return fill_triangular_random(Queue(Device::default_device_for<T>()), uplo, diag, seed);
         }
 
@@ -1693,14 +1693,14 @@ namespace batchlas {
         /// @throws batchlas::invalid_argument if \f$\mathrm{rows} \ne \mathrm{cols}\f$
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
-        Event fill_random_spd(const Queue& ctx, unsigned int seed = 42) const;
+        Event fill_random_spd(const Queue& ctx, unsigned seed = 42) const;
 
         /// @brief fill_random_spd() on a new default queue.
         /// @param[in] seed  RNG seed
         /// @return the event of the kernel
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
-        Event fill_random_spd(unsigned int seed = 42) const {
+        Event fill_random_spd(unsigned seed = 42) const {
             return fill_random_spd(Queue(Device::default_device_for<T>()), seed);
         }
 
@@ -1716,14 +1716,14 @@ namespace batchlas {
         /// @throws batchlas::invalid_argument if \f$\mathrm{rows} \ne \mathrm{cols}\f$, or if \f$n\f$ ints exceed the device's local memory
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
-        Event fill_random_pivoted(const Queue& ctx, unsigned int seed = 42) const;
+        Event fill_random_pivoted(const Queue& ctx, unsigned seed = 42) const;
 
         /// @brief fill_random_pivoted() on a new default queue.
         /// @param[in] seed  RNG seed
         /// @return the event of the kernel
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
-        Event fill_random_pivoted(unsigned int seed = 42) const {
+        Event fill_random_pivoted(unsigned seed = 42) const {
             return fill_random_pivoted(Queue(Device::default_device_for<T>()), seed);
         }
 
@@ -1742,7 +1742,7 @@ namespace batchlas {
         ///         or if \f$2n\f$ elements of T exceed the device's local memory
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
-        Event fill_graded_hermitian(const Queue& ctx, double log10_cond, unsigned int seed = 42) const;
+        Event fill_graded_hermitian(const Queue& ctx, double log10_cond, unsigned seed = 42) const;
 
         /// @brief fill_graded_hermitian() on a new default queue.
         /// @param[in] log10_cond  \f$\log_{10}\f$ of the target condition number; finite
@@ -1750,7 +1750,7 @@ namespace batchlas {
         /// @return the event of the kernel
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
-        Event fill_graded_hermitian(double log10_cond, unsigned int seed = 42) const {
+        Event fill_graded_hermitian(double log10_cond, unsigned seed = 42) const {
             return fill_graded_hermitian(Queue(Device::default_device_for<T>()), log10_cond, seed);
         }
 
@@ -1769,7 +1769,7 @@ namespace batchlas {
         /// @throws batchlas::invalid_argument if \f$\mathrm{rows} \ne \mathrm{cols}\f$
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
-        Event fill_near_degenerate_hermitian(const Queue& ctx, double noise, unsigned int seed = 42) const;
+        Event fill_near_degenerate_hermitian(const Queue& ctx, double noise, unsigned seed = 42) const;
         /// @}
 
 
@@ -2130,7 +2130,7 @@ namespace batchlas {
         /// @throws batchlas::invalid_argument if @p hermitian and \f$\mathrm{rows} \ne \mathrm{cols}\f$
         template <typename U = T, MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
-        static Matrix<T, MType> Random(int rows, int cols, bool hermitian = false, int batch_size = 1, unsigned int seed = 42);
+        static Matrix<T, MType> Random(int rows, int cols, bool hermitian = false, int batch_size = 1, unsigned seed = 42);
 
         /// @brief Random diagonally dominant sparse Hermitian batch; see csr_generators::random_sparse_hermitian_csr().
         /// @param[in] n               matrix order
@@ -2145,7 +2145,7 @@ namespace batchlas {
         static Matrix<T, MType> RandomSparseHermitian(int n,
                                   float density,
                                   int batch_size = 1,
-                                  unsigned int seed = 42,
+                                  unsigned seed = 42,
                                   typename base_type<T>::type diagonal_boost = typename base_type<T>::type(1),
                                   bool shared_pattern = true);
 
@@ -2158,7 +2158,7 @@ namespace batchlas {
         /// @return the new batch
         template <typename U = T, MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
-        static Matrix<T, MType> RandomTriangular(int n, Uplo uplo, Diag diag = Diag::NonUnit, int batch_size = 1, unsigned int seed = 42) {
+        static Matrix<T, MType> RandomTriangular(int n, Uplo uplo, Diag diag = Diag::NonUnit, int batch_size = 1, unsigned seed = 42) {
             auto result = Matrix<T, MType>(n, n, batch_size);
             result.fill_triangular_random(uplo, diag, seed).wait();
             return result;

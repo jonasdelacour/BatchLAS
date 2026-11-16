@@ -30,7 +30,7 @@ namespace ops::syfn {
 // flops. Inverse and Weights may be negative: Y = V f and F = Y V^H (gemm).
 inline bool rank_k_form(SyfnKind k) { return k == SyfnKind::InvSqrt || k == SyfnKind::Sqrt || k == SyfnKind::Exp; }
 
-template <class T>
+template <typename T>
 Core<T> carve_core(const Device& dev, BumpAllocator& pool, int64_t n, int64_t m, int64_t batch) {
     Core<T> c;
     c.y = pool.allocate<T>(dev, size_t(n * m * batch));
@@ -38,7 +38,7 @@ Core<T> carve_core(const Device& dev, BumpAllocator& pool, int64_t n, int64_t m,
     return c;
 }
 
-template <class T>
+template <typename T>
 struct Full {
     Span<T> v;             // n x n per item: the copy of A syev overwrites with V
     Span<float_t<T>> w;    // n per item
@@ -47,12 +47,12 @@ struct Full {
 };
 
 // V (the copy syev overwrites) as a view: the workspace rebuilt for the call, carrying its mask.
-template <class T>
+template <typename T>
 MV<T> v_view(Span<T> v, int64_t n, int64_t batch, Span<const std::uint8_t> mask) {
     return MV<T>(v.data(), int(n), int(n), int(n), int(n * n), int(batch)).with_batch_mask(mask);
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Full<T> carve_full(Queue& ctx, BumpAllocator& pool, int64_t n, int64_t batch, Uplo uplo,
                    Span<const std::uint8_t> mask) {
     Full<T> f;
@@ -66,7 +66,7 @@ Full<T> carve_full(Queue& ctx, BumpAllocator& pool, int64_t n, int64_t batch, Up
 
 // F := V diag(f(w)) V^H on the in-order queue q, for the items `mask` keeps. With `syev_info`
 // nonempty, info[b] is n + its value where it is nonzero.
-template <Backend B, class T>
+template <Backend B, typename T>
 Event from_eigen(Queue& q, const MV<T>& V, Span<float_t<T>> W, const MV<T>& F_in, SyfnFunction<float_t<T>> fn,
                  const Core<T>& ws, Span<int32_t> info, Span<int32_t> syev_info, Span<const std::uint8_t> mask) {
     using R = float_t<T>;
@@ -92,7 +92,7 @@ Event from_eigen(Queue& q, const MV<T>& V, Span<float_t<T>> W, const MV<T>& F_in
 
 // A sub-op can throw (NoRouteError vendor-free) after this op's own kernels are enqueued on the
 // caller's workspace: drain them before the exception lets the caller free it.
-template <class F>
+template <typename F>
 Event drain_on_throw(Queue& q, F&& body) {
     try {
         return body();
@@ -103,7 +103,7 @@ Event drain_on_throw(Queue& q, F&& body) {
 }
 
 // The weights travel inside SyfnFunction, which the dispatch spelling's pointer check cannot see.
-template <class R>
+template <typename R>
 void check_call(const Queue& q, const char* op, Span<int32_t> info, int64_t batch, SyfnFunction<R> fn) {
     if (!info.empty() && info.size() < size_t(batch)) {
         throw batchlas::invalid_argument(std::string(op) + ": info holds " + std::to_string(info.size()) +

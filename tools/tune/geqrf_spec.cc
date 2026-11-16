@@ -99,7 +99,7 @@ public:
     }
     std::vector<CellKey> grid(const std::string& dtype,
                               const std::map<std::string, std::vector<std::string>>& overrides) const override {
-        static_cast<void>(dtype);
+        (void)dtype;
         const auto ax = axes();
         for (const auto& [name, values] : overrides)
             if (std::none_of(ax.begin(), ax.end(), [&](const auto& a) { return a.first == name; }))

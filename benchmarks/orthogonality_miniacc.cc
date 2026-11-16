@@ -63,7 +63,7 @@ void run_ortho_case(miniacc::State& state, const char* impl_name) {
     size_t produced = 0;
     while (produced < state.samples()) {
         const int cur_batch = static_cast<int>(std::min<size_t>(static_cast<size_t>(chunk_batch), state.samples() - produced));
-        const unsigned int seed = state.seed() + static_cast<unsigned int>(produced);
+        const unsigned seed = state.seed() + static_cast<unsigned>(produced);
 
         Matrix<Real, MatrixFormat::Dense> dense_A = (m == n)
             ? random_hermitian_with_log10_cond_metric<B, Real>(

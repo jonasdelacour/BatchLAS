@@ -69,7 +69,7 @@ struct SpmmProblem {
         const int step = std::max(1, m / r);
         for (int v = 0; v < kVariants; ++v)
             for (int i = 0; i < m; ++i) {  // a fixed hash of (v, i): the pattern is the cell's structure
-                const int h = int((std::uint64_t(i) * 2654435761ULL + std::uint64_t(v) * 40503ULL) % std::uint64_t(m));
+                const int h = int((std::uint64_t(i) * 2654435761ull + std::uint64_t(v) * 40503ull) % std::uint64_t(m));
                 int* row = vc[v].data() + std::size_t(i) * r;
                 for (int d = 0; d < r; ++d) row[d] = (h + d * step) % m;
                 std::sort(row, row + r);

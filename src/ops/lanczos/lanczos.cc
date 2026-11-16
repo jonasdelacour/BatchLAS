@@ -84,7 +84,7 @@ namespace batchlas {
         auto wg_lanczos = std::min(size_t(n), get_kernel_max_wg_size<LanczosKernel<B, T, MF>>(ctx));
 
         //Initial guess
-        auto init = [&](){
+        auto init = [&]{
             ctx -> submit([&](sycl::handler& h) {
                 batchlas::impl::parallel_for<InitKernel<B, T, MF>>(h, sycl::nd_range<1>(batch_size*wg_init, wg_init), [=](sycl::nd_item<1> item) {
                     auto bid = item.get_group_linear_id();

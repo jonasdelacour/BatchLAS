@@ -141,7 +141,7 @@ namespace batchlas {
         static LinalgHandle<Back> handle;
 
         const auto [m, n, k] = shape::validate_product<batchlas::invalid_argument>("symm", A, B, C, side);
-        static_cast<void>(k);  // cublas?symm takes A's order from side, not as an argument
+        (void)k;  // cublas?symm takes A's order from side, not as an argument
 
         // The complex slots are the complex-symmetric ?symm (no conjugate; hemm_vendor is Hermitian).
         impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
@@ -191,7 +191,7 @@ namespace batchlas {
         static LinalgHandle<Back> handle;
 
         const auto [m, n, k] = shape::validate_product<batchlas::invalid_argument>("hemm", A, B, C, side);
-        static_cast<void>(k);  // cublas?hemm takes A's order from side
+        (void)k;  // cublas?hemm takes A's order from side
         // The two real slots have no callee: BLAS has no real ?hemm, and T is complex.
         impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
             handle.setStream(stream);
@@ -889,7 +889,7 @@ namespace batchlas {
             // drawn from the pool; getrs_vendor_buffer_size still reports the old
             // one-int figure, deliberately, because shrinking a workspace query is
             // the change this family has been bitten by before.
-            static_cast<void>(pool);
+            (void)pool;
             auto reinterpreted_pivots = pivots.as_span<int>();
             const auto arrays = ::batchlas::detail::vendor_ptr_arrays<T>(ctx, A, B);
             T** a_ptrs = arrays[0];

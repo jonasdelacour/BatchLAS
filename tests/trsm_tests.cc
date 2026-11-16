@@ -62,7 +62,7 @@ protected:
                           int batch_idx,
                           Uplo uplo,
                           Transpose trans = Transpose::NoTrans) {
-        const bool trace_enabled = []() {
+        const bool trace_enabled = [] {
             const char* v = std::getenv("BATCHLAS_TRSM_TRACE");
             if (!v) return false;
             return (std::string(v) == "1" || std::string(v) == "true" || std::string(v) == "TRUE" ||

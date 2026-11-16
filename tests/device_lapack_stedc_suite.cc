@@ -311,7 +311,7 @@ TEST(DeviceLapackStedcHelpers, UniformAndGroupSync) {
         using Spec = decltype(spec);
         using Ex = decltype(Spec::make(std::declval<sycl::nd_item<1>>()));
         constexpr int L = Spec::lanes;
-        float* uni = dev.up(std::vector<float>(std::size_t(items) * L, -7.f));
+        float* uni = dev.up(std::vector<float>(std::size_t(items) * L, -7.0f));
         int* flag = dev.up(std::vector<int>(std::size_t(items) * L, -7));
         int* syn = dev.up(std::vector<int>(std::size_t(items) * L, -7));
         int* gsyn = dev.up(std::vector<int>(std::size_t(items) * L, -7));

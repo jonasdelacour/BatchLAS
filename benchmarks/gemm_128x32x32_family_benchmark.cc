@@ -69,7 +69,7 @@ void register_family_variant_benchmark(const char* benchmark_name,
 }
 
 #if BATCHLAS_HAS_CUDA_BACKEND
-int register_cuda_family_benchmarks = []() {
+int register_cuda_family_benchmarks = [] {
     register_family_variant_benchmark<Backend::CUDA>("BM_GEMM_128x32x32_s2_u1<float, Backend::CUDA>", "reg:m=128:n=32:k=32:u=1",
                                                      Gemm128x32x32FamilyNnSizes);
     register_family_variant_benchmark<Backend::CUDA>("BM_GEMM_128x32x32_s2_u1_tn<float, Backend::CUDA>", "reg:m=128:n=32:k=32:u=1",
@@ -81,7 +81,7 @@ int register_cuda_family_benchmarks = []() {
 #endif
 
 #if BATCHLAS_HAS_ROCM_BACKEND
-int register_rocm_family_benchmarks = []() {
+int register_rocm_family_benchmarks = [] {
     register_family_variant_benchmark<Backend::ROCM>("BM_GEMM_128x32x32_s2_u1<float, Backend::ROCM>", "reg:m=128:n=32:k=32:u=1",
                                                      Gemm128x32x32FamilyNnSizes);
     register_family_variant_benchmark<Backend::ROCM>("BM_GEMM_128x32x32_s2_u1_tn<float, Backend::ROCM>", "reg:m=128:n=32:k=32:u=1",

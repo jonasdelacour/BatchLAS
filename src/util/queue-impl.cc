@@ -329,7 +329,7 @@ void Queue::enqueue(Event& event) {
     }
     sycl::event e = impl_->submit([&](sycl::handler& h) {
         h.depends_on(static_cast<sycl::event>(*event));
-        h.single_task<QueueEnqueueNoopKernel>([]() {});
+        h.single_task<QueueEnqueueNoopKernel>([] {});
     });
 #if BATCHLAS_SYCL_IMPL_ACPP
     if (!in_order_) impl_->pending_ = e;
@@ -361,7 +361,7 @@ Event Queue::get_event() const {
         // ext_oneapi_submit_barrier and may throw unsupported-feature errors.
     }
     EventImpl event = impl_->submit([&](sycl::handler& h) {
-        h.single_task<QueueGetEventNoopKernel>([]() {});
+        h.single_task<QueueGetEventNoopKernel>([] {});
     });
     return event;
 }
@@ -378,7 +378,7 @@ Event Queue::create_event_after_external_work() {
     } catch (const sycl::exception&) {
     }
     EventImpl event = impl_->submit([&](sycl::handler& h) {
-        h.single_task<QueueExternalWorkBarrierKernel>([]() {});
+        h.single_task<QueueExternalWorkBarrierKernel>([] {});
     });
     return event;
 }

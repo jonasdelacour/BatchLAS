@@ -43,7 +43,7 @@ struct Options {
     int samples = 4096;
     double log10_cond_min = 0.0;
     double log10_cond_max = 10.0;
-    unsigned int seed = 1234u;
+    unsigned seed = 1234u;
     size_t max_sweeps = 100;
     std::string cta_shift = "wilkinson"; // lapack | wilkinson
     std::string output = "output/accuracy/steqr_accuracy.csv";
@@ -80,7 +80,7 @@ Options parse_args(int argc, char** argv) {
         } else if (arg.starts_with("--log10-cond-max")) {
             opt.log10_cond_max = std::stod(get_value(arg));
         } else if (arg.starts_with("--seed")) {
-            opt.seed = static_cast<unsigned int>(std::stoul(get_value(arg)));
+            opt.seed = static_cast<unsigned>(std::stoul(get_value(arg)));
         } else if (arg.starts_with("--max-sweeps")) {
             opt.max_sweeps = static_cast<size_t>(std::stoul(get_value(arg)));
         } else if (arg.starts_with("--cta-shift")) {
@@ -257,7 +257,7 @@ int run_accuracy(const Options& opt) {
         for (int b = 0; b < cur_batch; ++b) {
             target_log10s[static_cast<std::size_t>(b)] = target_log10;
             auto A_b = random_hermitian_tridiagonal_with_log10_cond_metric<B, Real>(
-                *q, n, static_cast<Real>(target_log10), NormType::Spectral, 1, opt.seed + static_cast<unsigned int>(sample_id + b));
+                *q, n, static_cast<Real>(target_log10), NormType::Spectral, 1, opt.seed + static_cast<unsigned>(sample_id + b));
             MatrixView<Real, MatrixFormat::Dense>::copy(*q, dense_A_view.batch_item(b), A_b.batch_item(0)).wait();
         }
         q->wait();

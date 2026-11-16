@@ -43,7 +43,7 @@ template <typename T>
 T* UnifiedVector<T>::alloc_shared(size_t n) {
     Device dev = Device::default_device();
     const auto& ctx = QueueImpl::shared_context(dev);
-    const sycl::device sycl_dev = QueueImpl::device_arrays.at((int)dev.type).at(dev.idx);
+    const sycl::device sycl_dev = QueueImpl::device_arrays.at(static_cast<int>(dev.type)).at(dev.idx);
     T* p = sycl::malloc_shared<T>(n, sycl_dev, ctx);
     if (!p && n > 0) throw std::bad_alloc();
     return p;
@@ -132,7 +132,7 @@ void UnifiedVector<T>::resize(size_t new_size, T val){
         if(data_) sycl::free(data_, ctx);
         data_ = new_data;
         capacity_ = new_size;
-        std::generate(data_ + size_ , data_ + new_size, [val](){return val;});
+        std::generate(data_ + size_ , data_ + new_size, [val]{return val;});
         size_ = new_size;
     }
 }
@@ -186,7 +186,7 @@ UnifiedVector<T>& UnifiedVector<T>::operator=(const UnifiedVector<T>& other) {
     if constexpr(std::is_trivially_copyable_v<T>){
         Device dev = Device::default_device();
         const auto& ctx = QueueImpl::shared_context(dev);
-        const sycl::device sycl_dev = QueueImpl::device_arrays.at((int)dev.type).at(dev.idx);
+        const sycl::device sycl_dev = QueueImpl::device_arrays.at(static_cast<int>(dev.type)).at(dev.idx);
         sycl::queue q{ctx, sycl_dev};
         q.memcpy(data_, other.data_, size_*sizeof(T)).wait();
     } else {

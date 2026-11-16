@@ -112,7 +112,7 @@ namespace batchlas {
         auto ATA = pool.allocate<T>(ctx, k * k * batch_size);
         auto matAmem = pool.allocate<T*>(ctx, batch_size);
         auto matATAmem = pool.allocate<T*>(ctx, batch_size);
-        static_cast<void>(matAmem);
+        (void)matAmem;
 
         // Every scratch view carries the call's mask, so each size query asks for the masked family.
         auto C = MatrixView<T, fmt>(ATA.data(), k, k, k, k * k, batch_size, matATAmem.data()).with_batch_mask(mask);
@@ -196,7 +196,7 @@ namespace batchlas {
             return gemm<B>(ctx, in_mat, in_mat, C, {.transA = inv_trans, .transB = transA});
         };
 
-        auto chol_alg = [&](){
+        auto chol_alg = [&]{
             constexpr T alpha = 1.0;
             constexpr T beta = 0.0;
             //Compute StS = S^T * S or StS = S * S^T (depending on transA)
@@ -224,7 +224,7 @@ namespace batchlas {
             return ctx.get_event();
         };
 
-        auto cgs_alg = [&](){
+        auto cgs_alg = [&]{
             //Implemented as an iterative process:
             //1. Compute orthogonality of A[:,0 .. k-1] and A[:,k .. m-1]
             //2. Subtract the projection of A[:,k .. m-1] onto A[:,0 .. k-1]
@@ -273,7 +273,7 @@ namespace batchlas {
             }
         };
 
-        auto shift_chol_alg = [&](){
+        auto shift_chol_alg = [&]{
             (void)gram_into_C(A);
 
             auto ATA_ptr = C.data_ptr();
@@ -365,7 +365,7 @@ namespace batchlas {
             //Memcpy
         };
         // The m x k vectors op(A) C land in output_basis as columns; rows of A take their conjugates.
-        auto svqb_into_A = [&]() {
+        auto svqb_into_A = [&] {
             auto output_view = MatrixView<T,fmt>(output_basis.data(), m, k, m, k*m, batch_size).with_batch_mask(mask);
             svqb_alg(A, output_view);
             auto A_stride = A.stride();
