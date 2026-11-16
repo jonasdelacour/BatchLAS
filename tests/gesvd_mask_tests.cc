@@ -703,7 +703,7 @@ TEST(GebrdCtaSource, NoEarlyReturnInThePackedKernelAndLiveReadsTheMask) {
     const std::string live = first_code_line(path, "const bool live", launch);
     ASSERT_FALSE(live.empty()) << "the packed kernel has no live predicate";
     EXPECT_FALSE(first_code_line(path, "mask[prob_id]", launch).empty()) << "live does not read the mask: " << live;
-    const auto kernel = code_lines(path, launch, "} // namespace");
+    const auto kernel = code_lines(path, launch, "}  // namespace");
     const auto tile = code_lines(tile_path, body, "}");
     ASSERT_GT(kernel.size(), 10u) << "the packed kernel scan window is empty";
     ASSERT_GT(tile.size(), 10u) << "the gebd2_tile scan window is empty";
