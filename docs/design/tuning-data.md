@@ -131,6 +131,119 @@ candidate hash `from` of family `F` as `to`. Its `proof` says why that is sound:
   length, an include that now resolves elsewhere, or an include form it does not model
   (`__has_include`, `#include_next`, macro includes) gives no proof. It refuses uncommitted changes
   to the hashed files and is idempotent.
+- **`renamed:<base commit>`** (a template-parameter rename): `sweep_to_table.py --rehash-renamed
+  BASE [--op OP] [--device DEV]` proves each family's source list is the same at BASE and HEAD and
+  each file whose normalized text changed is alpha-equivalent to its BASE version, compared as C++
+  tokens (comments, whitespace and line splices vanish; string, raw-string and character literals
+  and each preprocessor line are single tokens). Every token is equal, except that within a
+  template's scope the head's parameters may be renamed by one bijection applied at every reference
+  in the scope. The scope is the head's parameter list plus the declaration it introduces: to that
+  declaration's `;` (after an `=`, the `;` ending the initializer), or to the `}` closing a class
+  body (then its `;`) or a function body. A function body is the first `{` outside brackets that is
+  not a `requires` expression's, or the `{` after a constructor's initializer list of `name(...)` and
+  `name{...}` items. A template template parameter's scope is its own list. A parameter has a name
+  only when its last token before any default is an identifier (not a reserved `__x` or `_X`)
+  after a type keyword, a class key, `typename`, `auto`, `...`, `*`, `&`, `&&`, `>`, `)` or another
+  identifier; every other form (`int Bar::*`, `const Foo`, `void (*F)()`, `int A[3]`) counts as
+  unnamed, so nothing in it can be renamed. A head token before a parameter's declaration
+  (`template <class A = T, class T = int>`) never refers to it. Each new name must be absent from
+  the old scope and from the parameters of every enclosing template, each old name absent from the
+  new scope, and neither may occur in the head before the declaration. A member access (`x.T`,
+  `p->T`, `B::T`) is not a reference; a lambda's trailing `-> T` is, after `[...](...)` and then
+  only `mutable`, `constexpr`, `consteval`, `noexcept`, `static`, `[[...]]`,
+  `__attribute__((...))` or an ALL_CAPS macro whose every hashed `#define` is object-like and only
+  those (`BATCHLAS_DEVICE_BODY`), where the `[` is not `[[` and starts the file or follows `(`, `,`,
+  `=`, `{`, `;`, `?`, `:`, `return`, `throw` or an operator other than `>`: after `operator`,
+  `delete`, an operand or `>` it is a subscript (`a.operator[](0)->T`, `delete [] (p)->T`,
+  `[[likely]] (p)->T` are member accesses). In an out-of-line member (`S<T>::f`, `S<T>::operator V<int>()`)
+  the class's members hide the parameters, so every class the declarator names must be defined
+  (matched by name) in a hashed file in the same namespace, must name neither the old nor the new
+  name (the parameters of the templates enclosing it aside) and its bases must hide neither. A
+  dependent base hides nothing: a parameter alone or before `::`, `<` or `...`, or a template-id
+  with a dependent argument (a parameter, or such a template-id) of `std::complex` and kin or of a
+  class template defined earlier in the same file at namespace scope that the base's name finds:
+  in the class's namespace, as `q::N` in its `q`, or unqualified in an enclosing namespace when no
+  namespace inside that one on the way (nor one nested there: inline, unnamed) mentions the name
+  other than before `<`, or holds a using-directive, in any scanned file. `std::true_type`,
+  `std::false_type`, `std::bool_constant<...>` and `std::integral_constant<...>` hide only `value`,
+  `value_type`, `type` and their own names while no scanned file can make `std` another namespace
+  or class (`struct std`, `namespace a::std`, `typedef X std;`) or specializes one of them (inside
+  `namespace std`, or `struct std::integral_constant<...>`). Any other base (an alias
+  template's `Al<T>`, `decltype(T())`, `n::Ca<int>`) may hide any name. Any of these gives no proof:
+  - a changed token count or directive, or any other renamed identifier;
+  - an inconsistent or non-bijective mapping;
+  - a new name not shaped `[A-Z][a-z][A-Za-z0-9]*` (`Scalar`, `Real`, `ScalarType`), an old one
+    neither so nor one capital (`T`, `R`, `U`), or either in the library-macro list (`I`, `assert`,
+    `errno`, `major`, ...) or among the 97 names of that shape some header of the SDK's include
+    tree defines (`Value`, `String`, `Length`, `End`, `Byte`, ...; perl, apache, zlib, ncurses and
+    `MacTypes.h`, none of which the sources include; `grep -rhoE '#\s*define\s+[A-Z][a-z]\w*'`
+    over the SDK, libc++, clang's, OpenBLAS's and AdaptiveCpp's include trees finds no other): the
+    `-dM` dump of every header the sources include on macOS (libc++, the SDK's C and POSIX headers,
+    OpenBLAS's `cblas.h` and `lapacke.h`, AdaptiveCpp's `sycl/sycl.hpp`) has no macro of that
+    shape, while lowercase ones (`sigmask` from `<csignal>`) and one capital (`I` from
+    `<complex.h>`) are macros there;
+  - a macro of the hashed files named like an old or new name that is not `#undef`'d later in its
+    own file with no `#include` between, or is in effect inside the scope; an `#undef` of such a
+    name without an earlier `#define` in its file; a `#pragma pop_macro`, `_Pragma` or `__pragma`
+    anywhere whose literal names an old or new name (`push_macro`, `#undef`, `pop_macro` restores
+    the macro), or whose operand is not one string literal (`_Pragma(#x)`);
+  - a macro that pastes with `##` (`CAT(U, p)` or `#define UPNAME U##p` builds `Up`), or whose
+    parameters or body name an old or new name, `__PRETTY_FUNCTION__` and kin or such a macro,
+    defined or expanded inside the renamed parameter's scope: a function-like macro's parameter
+    (`INSTANTIATE(T)`), a body naming a local `R` and a pasting macro expanded only elsewhere are
+    fine;
+  - a renamed parameter's scope that names `__PRETTY_FUNCTION__`, `__FUNCSIG__`,
+    `__builtin_FUNCSIG`, `assert` (glibc's passes `__PRETTY_FUNCTION__`) or `source_location`, which
+    spell `[T = int]`; `source_location` anywhere in a scanned file (a default argument spells its
+    caller); `__func__` and `__FUNCTION__` are the bare name and fine;
+  - a renamed reference inside a call of a macro some hashed file defines, of an ALL_CAPS name or of
+    an unqualified library macro name (`assert(...)`; `<cmath>`'s classification names such as
+    `isfinite` are functions in C++), or inside an attribute (`[[...]]`, `__attribute__((...))`,
+    `__declspec(...)`): `[[no_unique_address]]` names an attribute;
+  - a renamed reference inside a class whose bases may hide its old or new name;
+  - in the declarator, a parenthesised group holding `::` that may be the declarator itself
+    (`int (S<T>::f)()`, `Int (S<T>::v) = 1;`, `Int (S<T>::v){1};`): one not after an identifier,
+    `operator`, `decltype`, `noexcept` and kin, one followed by `(` or `[`, or one after a name that
+    may be the type: the name follows the head, a specifier, an attribute or an ALL_CAPS or hashed
+    macro name (maybe then `const`), and is not a constructor (`S<T>::S`, `~S`, unqualified in a
+    class); after an identifier, a type keyword, `*`, `&`, a template-id or `decltype(...)` it is
+    the declarator's name and the group its parameters (`void S<T>::f(std::size_t)`, `T const
+    at(std::size_t)`), as before `->` (a deduction guide);
+  - a line splice inside a raw string, a macro body whose brackets do not nest (`} int k() {`
+    balances only by count), or a digraph (`<%`, `%>`, `<:`, `:>`, `%:`, `%:%:`) other than a
+    directive's leading `%:`;
+  - in a template head, a `;` or `operator` outside brackets, or a `<` that may be a less-than
+    (after a non-identifier or an earlier or enclosing parameter, inside a template argument list
+    unless after `std::` and a std template such as `remove_cv_t`, or in the default argument of a
+    parameter not written `class|typename [...] [name]`): `template <int N = a < b>` and
+    `template <class T = C<a < b>>` end at a later `>`;
+  - an `#include` inside brackets or a class head; for an out-of-line member, a namespace
+    definition other than `namespace a::inline b {` or an alias;
+  - an `#if` branch that does not leave the bracket depth it found, or a conditional directive
+    inside a renamed parameter's scope or a class definition whose group reaches that scope's or
+    class's top level (outside brackets; a group wrapping the whole scope is fine); an `#include`
+    anywhere in a renamed parameter's scope;
+  - at the top level of a renamed parameter's scope or in a class head, a macro some hashed file
+    defines whose body, outside its own brackets, holds anything but identifiers, literals, `*` and
+    `&`, or holds a structural keyword (`template`, `requires`, a class key, `operator`, `try`, an
+    alternative token such as `and`), one of its own parameters or another such macro;
+  - a declaration it cannot delimit: a `{` after `]`, a function-try-block, a class body without
+    its `;`, a function body followed by a token no declaration starts with (a brace inside template
+    arguments reads as one), `&& requires (...) {` after the declarator (a ref-qualifier and a
+    clause read alike), or an initializer list it cannot read (a ternary in a trailing return type
+    reads as one).
+
+  A moved file is the moved proof's job. What the hashed files do not show is not seen: a macro
+  defined elsewhere that expands to a brace, `;` or keyword at a declaration's top level, a `-D`
+  override of an `#ifndef`-guarded attribute macro (the build passes none), or a macro of the
+  accepted name shape in a header the dump does not cover (libstdc++, glibc and DPC++'s headers on
+  Linux were not dumped), or one defined outside the hashed files that pastes or expands to an old
+  or new name or to `__PRETTY_FUNCTION__` (only `assert` is known to). Also trusted, unchecked: a
+  hashed `#define` that redirects `std`, `true_type` and kin or a class template's name
+  (`#define K Al`), and `__PRETTY_FUNCTION__` in an out-of-line member, which spells the class
+  head's parameter names; the sources have none of these. One file alone lacks the macros and classes of the others (a lambda after
+  `BATCHLAS_DEVICE_BODY` needs `core.hh`): the proof runs on the family's whole source list. It
+  refuses uncommitted changes to the hashed files and is idempotent.
 
 A sample must be stratified: every dtype and exact-key combination of the old records and the range
 of every log key, at least 64 cells. `sweep_to_table.py --emit-sample FILE --op OP --device DEV

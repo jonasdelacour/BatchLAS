@@ -12,6 +12,7 @@ tier bracketing); docs/design/flat-kernel-selection.md section 5.4 (table format
     scripts/sweep_to_table.py --self-test
     scripts/sweep_to_table.py --emit-sample OUT --op potrf --device sm_120 [--cells N]
     scripts/sweep_to_table.py --rehash-moved BASE [--op OP] [--device DEV]
+    scripts/sweep_to_table.py --rehash-renamed BASE [--op OP] [--device DEV]
 
 The one input is benchmarks/results/tuning/ledger/<op>.<device>.jsonl (--ledger DIR names another
 root). Every line carries "dtype" except `rehash`. Keys and candidates come from each dtype's newest
@@ -37,6 +38,7 @@ and that every row looks up to itself. Python 3 standard library only.
 """
 
 import argparse
+import bisect
 import hashlib
 import itertools
 import json
@@ -963,6 +965,1139 @@ def rehash_moved(ledger_path, op, base, at=None, repo=REPO, write=True):
     of the measured records, its source list at `base` maps file by file onto HEAD's under git
     renames, equal modulo comments, whitespace and include paths (each resolved, then renamed). One
     line per stored hash whose effective hash is the family's hash at `base`. Returns (report, records)."""
+    renames = {}
+
+    def prove(bp, hp, bt, ht):
+        if not renames:
+            renames["r"] = git_renames(repo, base, "HEAD")
+        why = moved_difference(bp, hp, bt, ht, renames["r"])
+        moved = sum(b != h for b, h in zip(bp, hp))
+        return why, f"{moved} files moved, equal modulo comments, whitespace and include paths"
+    return rehash_by_proof(ledger_path, op, base, "moved", prove, at, repo, write)
+
+
+CXX_KEYWORDS = frozenset("""alignas alignof asm auto bool break case catch char char8_t char16_t char32_t class
+concept const consteval constexpr constinit const_cast continue co_await co_return co_yield decltype default delete
+do double dynamic_cast else enum explicit export extern false float for friend goto if inline int long mutable
+namespace new noexcept nullptr operator private protected public register reinterpret_cast requires return short
+signed sizeof static static_assert static_cast struct switch template this thread_local throw true try typedef
+typeid typename union unsigned using virtual void volatile wchar_t while""".split())
+DIGRAPHS = ("%:%:", "<%", "%>", "<:", ":>", "%:")
+CXX_PUNCT = DIGRAPHS + ("<=>", "<<=", ">>=", "...", "->*", "::", "->", "++", "--", "<<", ">>", "<=", ">=", "==", "!=",
+                        "&&", "||", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", ".*", "##")
+ALT_TOKENS = frozenset("and and_eq bitand bitor compl not not_eq or or_eq xor xor_eq".split())
+# the tokens after which an identifier ending a template parameter is that parameter's name
+NAME_AFTER = frozenset("class typename auto bool char char8_t char16_t char32_t wchar_t short int long signed unsigned "
+                       "float double ... * & && > >> )".split())
+DECL_FOLLOW = ("}", ";", "::", "~")  # besides an identifier and `[[`, what can follow a function body
+NOT_DECL_START = ALT_TOKENS | {"catch", "requires"}
+# keywords a macro may not hide at the top level of a template declaration
+STRUCTURAL = frozenset("template requires class struct union enum operator try typename concept using typedef "
+                       "namespace friend catch".split()) | ALT_TOKENS
+INCLUDES = ("include", "include_next", "import", "embed")
+CONDITIONALS = {"if": 1, "ifdef": 1, "ifndef": 1, "elif": 0, "elifdef": 0, "elifndef": 0, "else": 0, "endif": -1}
+CXX_IDENT = re.compile(r"[A-Za-z_$\x80-\xff][A-Za-z0-9_$\x80-\xff]*")
+CXX_NUMBER = re.compile(r"\.?[0-9](?:[eEpP][+-]|'[A-Za-z0-9_]|[A-Za-z0-9_.])*")
+CXX_RAW = re.compile(r'"([^ ()\\\t\v\f\n]{0,16})\(')
+CXX_MACRO_LIKE = re.compile(r"[A-Z][A-Z0-9_]+")
+RESERVED = re.compile(r"__|_[A-Z]")  # __restrict, _Atomic: the implementation's, never a parameter's name
+# lowercase names the C, C++ and POSIX libraries or a compiler's predefines may make macros, and
+# contextual keywords: a renamed parameter takes or leaves none of them
+LIBRARY_MACROS = frozenset("""assert errno offsetof setjmp sigsetjmp va_arg va_copy va_end va_start stdin stdout stderr
+unix linux i386 sun major minor makedev alloca htons htonl ntohs ntohl st_atime st_mtime st_ctime timeradd timersub
+timerclear timerisset timercmp howmany roundup powerof2 nitems isset isclr setbit clrbit isnan isinf isfinite isnormal
+signbit fpclassify isgreater isgreaterequal isless islessequal islessgreater isunordered complex imaginary I getc putc
+getchar putchar min max small near far interface final override import module""".split())
+# A renamed parameter's names: no macro of the headers the hashed files include has this shape (the
+# -dM dump of every system, BLAS/LAPACKE and SYCL header they include, docs/design/tuning-data.md)
+NEW_NAME = re.compile(r"[A-Z][a-z][A-Za-z0-9]*")
+OLD_NAME = re.compile(r"[A-Z]|[A-Z][a-z][A-Za-z0-9]*")
+# the names of that shape some macOS SDK header #defines (grep of the SDK, libc++, clang's, OpenBLAS's
+# and AdaptiveCpp's include trees): perl, apache, zlib, ncurses and MacTypes.h, none included here
+CAMEL_MACROS = frozenset("""BerkelyFS Byte Bytef CreateLSTMBreakEngine CreateLSTMData CreateLSTMDataForScript
+Debugger68k DebugStr68k DeleteLSTMData Divide Egaddr Egcall Egcmp Egmemload Egmemstore End Enddata EndOfStream Entry
+ExtBoolname ExtNumname ExtStrname Gaddr Gcall Gcmp Gload Gmemload Gmemstore Gotoff Gotoff2 Gotoff3 Gpop Gpush Gstack
+IoFLUSH Length Lgcmp Lgmemload Lgmemstore Lgotoff Lgotoff2 Lgotoff3 MgObjIV MgTypeExt MpDirFLAGS MpDirNONE
+MpDirSeenFLAGS MpDirSeenNONE MpDirSeenType MpDirSeenUNSET MpDirType MpDirUNSET MpHandlerANON MpHandlerAUTOLOAD
+MpHandlerDYNAMIC MpHandlerFAKE MpHandlerFLAGS MpHandlerMETHOD MpHandlerNONE MpHandlerOBJECT MpHandlerPARSED
+MpHandlerType MpInterpBASE MpInterpCLONED MpInterpFLAGS MpInterpNONE MpInterpType MpReqFLAGS MpReqNONE MpReqType
+MpSrvACCESS MpSrvAUTHEN MpSrvAUTHZ MpSrvAUTOLOAD MpSrvCLEANUP MpSrvCLONE MpSrvENABLE MpSrvFIXUP MpSrvFLAGS MpSrvLOG
+MpSrvNONE MpSrvPARENT MpSrvRESPONSE MpSrvTRANS MpSrvType MpSrvTYPE MpSrvUNSET Newx Newxz NeXTBSD Nil String StrLength
+SvCLASS SvObjIV Times Value""".split())
+# what spells a function's signature, template parameter names included ("void f() [T = int]"): glibc's
+# assert passes __PRETTY_FUNCTION__, a source_location default argument its caller's
+SOURCE_LOCATION = frozenset(("source_location", "__builtin_source_location"))
+PRETTY_NAMES = SOURCE_LOCATION | frozenset("__PRETTY_FUNCTION__ __FUNCSIG__ __builtin_FUNCSIG assert".split())
+# the tokens after which a '[' starts a lambda, never a subscript, `operator[]`, `delete[]` or `[[`
+LAMBDA_AFTER = frozenset("( , = { ; ? : ! ~ + - * / % ^ & | && || < <= >= == != <=> += -= *= /= %= &= |= ^= <<= >>= "
+                         "<< return throw co_return co_yield co_await and or not".split())
+# what a base of only these can name: hidden from a parameter by no other member
+INTEGRAL_CONSTANT_BASES = ("true_type", "false_type", "bool_constant", "integral_constant")
+INTEGRAL_CONSTANT_MEMBERS = frozenset(("value", "value_type", "type") + INTEGRAL_CONSTANT_BASES)
+STD_CLASS_TEMPLATES = frozenset("complex pair tuple array vector integral_constant numeric_limits".split())
+STD_TEMPLATES = STD_CLASS_TEMPLATES | frozenset("""bool_constant remove_cv_t remove_cvref_t remove_reference_t
+remove_const_t remove_pointer_t add_const_t add_pointer_t decay_t conditional_t enable_if_t common_type_t make_signed_t
+make_unsigned_t underlying_type_t invoke_result_t type_identity_t""".split())
+# <cmath>'s classification names are functions in C++ ([c.math.fpclass]; libc++ and libstdc++ #undef C's macros)
+CMATH_FUNCTIONS = frozenset("""isnan isinf isfinite isnormal signbit fpclassify isgreater isgreaterequal isless
+islessequal islessgreater isunordered""".split())
+TYPE_KEYWORDS = tuple("auto bool char char8_t char16_t char32_t wchar_t short int long signed unsigned float double "
+                      "void".split())
+LAMBDA_SPECIFIERS = ("mutable", "constexpr", "consteval", "noexcept", "static")
+ATTRIBUTE_CALLS = ("__attribute__", "__declspec", "_Pragma")
+PRAGMA_OPS = ("_Pragma", "__pragma")
+MEMBER_ACCESS = (".", "->", "::", ".*", "->*")
+CLASS_KEYS = ("class", "struct", "union")
+REQUIRES_EXPR_AFTER = ("requires", "&&", "||", "!", "(", ",", "=", "and", "or", "not", "return")
+
+
+def cxx_tokens(data):
+    """The C++ tokens of bytes `data`: [(kind, text)], kind id, num, str (string or character literal,
+    prefix and suffix included), punct, or pp (one whole directive, its tokens joined by spaces).
+    Line splices are joined first; comments and whitespace vanish. A splice inside a raw string,
+    which C++ keeps there, raises ValueError."""
+    text, parts, splices, last, size = data.decode("latin-1"), [], [], 0, 0
+    for m in re.finditer(r"\\\r?\n", text):
+        parts.append(text[last:m.start()])
+        size, last = size + m.start() - last, m.end()
+        splices.append(size)
+    s = "".join(parts) + text[last:]
+    out, pp, i, n, bol, last = [], None, 0, len(s), True, -1
+
+    def quoted(j):
+        q, j = s[j], j + 1
+        while j < n and s[j] not in (q, "\n"):
+            j += 2 if s[j] == "\\" else 1
+        return min(j + 1, n)
+    while i < n:
+        c, kind = s[i], "punct"
+        if c == "\n" or c in " \t\r\f\v":
+            if c == "\n":
+                if pp is not None:
+                    out.append(("pp", " ".join(pp)))
+                pp, bol = None, True
+            i += 1
+            continue
+        if s.startswith("//", i) or s.startswith("/*", i):
+            j = s.find("\n" if s[i + 1] == "/" else "*/", i + 2)
+            i = n if j < 0 else j + (0 if s[i + 1] == "/" else 2)
+            continue
+        if bol and (c == "#" or s.startswith("%:", i)):
+            pp, j = [], i + (1 if c == "#" else 2)
+        elif pp is not None and c == "<" and pp[1:] in (["include"], ["include_next"], ["import"]):
+            j = s.find(">", i)
+            j = n if j < 0 or "\n" in s[i:j] else j + 1
+        elif CXX_IDENT.match(s, i):
+            j, kind = CXX_IDENT.match(s, i).end(), "id"
+            word, raw = s[i:j], CXX_RAW.match(s, j)
+            if word in ("R", "LR", "uR", "UR", "u8R") and raw:
+                end = s.find(")" + raw.group(1) + '"', raw.end())
+                j, kind = n if end < 0 else end + len(raw.group(1)) + 2, "str"
+                nxt = bisect.bisect_right(splices, raw.start())
+                if nxt < len(splices) and splices[nxt] < j:
+                    raise ValueError(f"a line splice inside the raw string at offset {i}")
+            elif word in ("L", "u", "U", "u8") and j < n and s[j] in "\"'":
+                j, kind = quoted(j), "str"
+        elif c.isdigit() or (c == "." and s[i + 1:i + 2].isdigit()):
+            j, kind = CXX_NUMBER.match(s, i).end(), "num"
+        elif c in "\"'":
+            j, kind = quoted(i), "str"
+        elif s.startswith("<::", i) and s[i + 3:i + 4] not in (":", ">"):
+            j = i + 1  # [lex.pptoken]: '<' then '::', not the digraph '<:'
+        else:
+            j = i + next((len(p) for p in CXX_PUNCT if s.startswith(p, i)), 1)
+        if kind == "str" and CXX_IDENT.match(s, j):
+            j = CXX_IDENT.match(s, j).end()
+        if pp is None:
+            out.append((kind, s[i:j]))
+        elif pp[1:2] == ["define"] and len(pp) == 3 and c == "(" and i == last:
+            pp[2] += "("  # a function-like macro: its parameters are its own
+        else:
+            pp.append(s[i:j])
+        bol, i, last = False, j, j
+    if pp is not None:
+        out.append(("pp", " ".join(pp)))
+    return out
+
+
+def code_of(toks):
+    """The non-directive tokens of cxx_tokens `toks`: (their indices, texts, kinds)."""
+    code = [k for k, x in enumerate(toks) if x[0] != "pp"]
+    return code, [toks[k][1] for k in code], [toks[k][0] for k in code]
+
+
+def close_of(t, q):
+    """The index of the bracket closing t[q], one of '(', '[' or '{'; ValueError when unbalanced."""
+    depth = []
+    for r in range(q, len(t)):
+        if t[r] in ("(", "[", "{"):
+            depth.append(t[r])
+        elif t[r] in (")", "]", "}"):
+            if not depth or "([{"[")]}".index(t[r])] != depth.pop():
+                raise ValueError(f"unbalanced '{t[r]}' at token {r}")
+            if not depth:
+                return r
+    raise ValueError(f"unclosed '{t[q]}' at token {q}")
+
+
+def open_of(t, q):
+    """The index of the bracket opening t[q], one of ')', ']' or '}'; ValueError when unbalanced."""
+    depth = []
+    for r in range(q, -1, -1):
+        if t[r] in (")", "]", "}"):
+            depth.append(t[r])
+        elif t[r] in ("(", "[", "{"):
+            if not depth or ")]}"["([{".index(t[r])] != depth.pop():
+                raise ValueError(f"unbalanced '{t[r]}' at token {r}")
+            if not depth:
+                return r
+    raise ValueError(f"unopened '{t[q]}' at token {q}")
+
+
+def angle_close(t, q):
+    """The index of the '>' closing the '<' at t[q] (brackets skipped); ValueError when there is none."""
+    angle, r = 0, q
+    while r < len(t):
+        if t[r] in ("(", "["):
+            r = close_of(t, r)
+        elif t[r] in ("<", ">", ">>"):
+            angle += 1 if t[r] == "<" else -len(t[r])
+            if angle <= 0:
+                if angle < 0:
+                    raise ValueError(f"'>>' closes the '<' at token {q} and more")
+                return r
+        elif t[r] in (";", "{", "}", ")", "]"):
+            break
+        r += 1
+    raise ValueError(f"unclosed '<' at token {q}")
+
+
+def angle_open(t, q):
+    """The index of the '<' opening the '>' at t[q] (brackets skipped); ValueError when there is none."""
+    angle, r = 0, q
+    while r >= 0:
+        if t[r] in (")", "]"):
+            r = open_of(t, r)
+        elif t[r] in ("<", ">", ">>"):
+            angle += -1 if t[r] == "<" else len(t[r])
+            if angle == 0:
+                return r
+        elif t[r] in (";", "{", "}", "(", "["):
+            break
+        r -= 1
+    raise ValueError(f"unopened '>' at token {q}")
+
+
+def template_scopes(t, kinds, std_ok=False, macros=frozenset()):
+    """Every template head of the code token texts `t` (code_of) as (first, last, [(token index,
+    parameter name or None)], declarator qualifiers): from `template` to the end of the declaration
+    it introduces, or, for a template template parameter, to the end of its own list. The declaration
+    ends at its `;` at bracket depth 0, after an `=` at its `;`, or at the `}` closing its body (the
+    `;` after it included): a class's `{`, a function's first `{` at depth 0, or the `{` after a
+    constructor's initializer list, which must read as `name(...)`/`name{...}` items. A `requires {`
+    or `requires (...) {` expression is not the body. The qualifiers are the class names a qualified
+    declarator names (S in `S<T>::f`), "?" when a parenthesised declarator may hide one (may_be_type;
+    `macros` are the names some #define makes macros). Raises ValueError for a head, a declaration or
+    a `{` it cannot place: a `{` after `]` or `try`, a class body not followed by `;`, an unreadable
+    initializer list."""
+    scopes, nested, opener, top = [], set(), {}, namespace_scope(t, kinds)
+
+    def head_at(p):
+        return t[p] == "template" and t[p + 1:p + 2] == ["<"] and (p == 0 or t[p - 1] not in MEMBER_ACCESS)
+
+    def param_name(group):
+        """The declared name of one parameter: its last token before a default when that is a top-level
+        identifier after a type keyword, class key, `typename`, `auto`, `...`, `*`, `&`, `&&`, `>`, `)`
+        or another identifier, else None (unnamed, or a form not modelled: `Bar::*`, `const Foo`,
+        `void (*F)()`, `int A[3]`)."""
+        decl = [e for e in itertools.takewhile(lambda e: not (e[1] and t[e[0]] == "="), group)]
+        if len(decl) < 2 or not decl[-1][1]:
+            return None
+        q, prev = decl[-1][0], t[decl[-2][0]]
+        word = kinds[q] == "id" and t[q] not in CXX_KEYWORDS | ALT_TOKENS and not RESERVED.match(t[q])
+        if not word or not (prev in NAME_AFTER or kinds[decl[-2][0]] == "id" and prev not in CXX_KEYWORDS and
+                            prev not in ALT_TOKENS):
+            return None
+        return q
+
+    def less_than(q, group, names, angle):
+        """May the '<' at t[q], outside brackets in a template head, be a less-than (which would end
+        the head later than a compiler does)? After a non-identifier, after a parameter in `names`,
+        inside a template argument list (`class T = C<a < b>>`) but after `std::` and one of
+        STD_TEMPLATES (when std_ok, std_trusted), or in the default argument of a parameter not written
+        `class|typename [...] [name]`. A type-id's own `<` opens a template argument list: in a
+        well-formed type default only an argument list holds an expression."""
+        std = std_ok and t[q - 1] in STD_TEMPLATES and t[q - 3:q - 1] == ["std", "::"] and t[q - 4:q - 3] != ["::"]
+        if angle > 1 and not std or kinds[q - 1] != "id" or t[q - 1] in CXX_KEYWORDS | ALT_TOKENS or t[q - 1] in names:
+            return True
+        decl = [t[e] for e, _ in itertools.takewhile(lambda e: not (e[1] and t[e[0]] == "="), group)]
+        rest = decl[1 + (decl[1:2] == ["..."]):]
+        return len(decl) < len(group) and not (decl[:1] in (["class"], ["typename"]) and len(rest) <= 1 and
+                                               all(CXX_IDENT.fullmatch(w) for w in rest))
+
+    def parse_list(p, outer=frozenset()):
+        params, group, depth, angle, q = [], [], [], 1, p + 2
+        outer = outer | {t[n] for f, e, ps, _ in scopes if f < p <= e for n in ps if n is not None}
+        while True:
+            if q >= len(t):
+                raise ValueError(f"unclosed template head at token {p}")
+            x = t[q]
+            names = outer | {t[n] for g in params for n in [param_name(g)]
+                             if n is not None and t[g[0][0]] != "template"}
+            if not depth and (x in (";", "operator") or x == "<" and less_than(q, group, names, angle)):
+                raise ValueError(f"cannot delimit the template head at token {p}: '{x}' at token {q}")
+            if not depth and head_at(q):
+                end, inner = parse_list(q, names)
+                nested.add(q)
+                scopes.append((q, end, inner, set()))
+                group += [(r, False) for r in range(q, end + 1)]
+                q = end + 1
+                continue
+            top = not depth and angle == 1
+            if x in ("(", "[", "{"):
+                depth.append(x)
+            elif x in (")", "]", "}"):
+                if not depth or "([{"[")]}".index(x)] != depth.pop():
+                    raise ValueError(f"unbalanced '{x}' in a template head at token {q}")
+            elif not depth and x in ("<", ">", ">>"):
+                angle += 1 if x == "<" else -len(x)
+                if angle < 0:
+                    raise ValueError(f"'>>' closes a template head at token {q}")
+                if angle == 0:
+                    params.append(group)
+                    return q, [param_name(g) for g in params if g]
+            elif top and x == ",":
+                params.append(group)
+                group, q = [], q + 1
+                continue
+            group.append((q, top))
+            q += 1
+
+    def after_heads(q):
+        while t[q:q + 2] == ["template", "<"]:
+            q = angle_close(t, q + 1) + 1
+        return q
+
+    def mem_init_body(q):
+        """The index of the body '{' after the constructor initializer list starting at t[q]."""
+        while True:
+            r = q
+            while r < len(t) and (t[r] in ("::", "template") or kinds[r] == "id" and t[r] not in CXX_KEYWORDS):
+                r = angle_close(t, r + 1) + 1 if kinds[r] == "id" and t[r + 1:r + 2] == ["<"] else r + 1
+            if r == q or t[r:r + 1] not in (["("], ["{"]):
+                raise ValueError(f"cannot read a constructor's initializer list at token {min(r, len(t) - 1)}")
+            r = close_of(t, r) + 1
+            r += t[r:r + 1] == ["..."]
+            if t[r:r + 1] == ["{"]:
+                return r
+            if t[r:r + 1] != [","]:
+                raise ValueError(f"cannot read a constructor's initializer list at token {min(r, len(t) - 1)}")
+            q = r + 1
+
+    def requires_expr(q, declarator):
+        """Does the ')' at t[q] close a requires-expression's parameter list? After the `declarator`
+        (a function's parameter list, `->` or `operator`), `&& requires (...) {` is ambiguous."""
+        o = opener.get(q, 0)
+        if declarator and o >= 2 and t[o - 1] == "requires" and t[o - 2] in ("&&", "and"):
+            raise ValueError(f"cannot tell a requires-expression from a ref-qualifier's clause at token {o - 1}")
+        return o >= 2 and t[o - 1] == "requires" and t[o - 2] in REQUIRES_EXPR_AFTER
+
+    def is_class_decl(q):
+        """Does a class key precede the declaration's first `{`, `;`, `=` or `:` outside brackets?"""
+        q = after_heads(q)
+        while q < len(t) and t[q] not in ("{", ";", "=", ":"):
+            if t[q] in CLASS_KEYS + ("enum",):
+                return True
+            q = close_of(t, q) + 1 if t[q] in ("(", "[") else q + 1
+        return False
+
+    def decl_end(q0):
+        is_class = is_class_decl(q0)
+        opener.clear()
+        depth, init, declarator, q = [], False, False, after_heads(q0)
+        while q < len(t):
+            x, prev = t[q], t[q - 1]
+            if not depth and (x in ("->", "operator") or x == "(" and prev not in REQUIRES_EXPR_AFTER and
+                              prev not in ("requires", "decltype", "sizeof", "alignof")):
+                declarator = True
+            if x in ("(", "["):
+                depth.append(q)
+            elif x in (")", "]"):
+                if not depth or t[depth[-1]] != "(["[")]".index(x)]:
+                    raise ValueError(f"unbalanced '{x}' at token {q}")
+                opener[q] = depth.pop()
+            elif x == "{" and (depth or init or prev == "requires" or
+                               prev == ")" and requires_expr(q - 1, declarator)):
+                q = close_of(t, q)
+            elif x == "{":
+                if prev == "]":
+                    raise ValueError(f"cannot tell a body from an initializer at token {q}")
+                close = close_of(t, q)
+                if t[close + 1:close + 2] == [";"]:
+                    return close + 1
+                if is_class:
+                    raise ValueError(f"a class body not followed by ';' at token {close}")
+                nxt = close + 1 < len(t) and t[close + 1]
+                attr = nxt == "[" and t[close + 2:close + 3] == ["["]
+                if nxt and not attr and nxt not in DECL_FOLLOW and (kinds[close + 1] != "id" or
+                                                                    nxt in NOT_DECL_START):
+                    raise ValueError(f"'{nxt}' after the body at token {q} (a brace in template arguments?)")
+                return close
+            elif not depth and x == "try":
+                raise ValueError(f"cannot delimit a function-try-block at token {q}")
+            elif x == "}":
+                raise ValueError(f"the enclosing block ends inside a template declaration at token {q}")
+            elif not depth and x == ";":
+                return q
+            elif not depth and x == "=" and prev != "operator":
+                init = True
+            elif not depth and x == ":" and not init and not is_class:
+                return close_of(t, mem_init_body(q + 1))
+            q += 1
+        raise ValueError("a template declaration runs off the end of the file")
+
+    def quals_before(p):
+        """The class names qualifying the declarator name that ends at t[p]."""
+        ops = [r for r in range(max(p - 3, 0), p + 1) if t[r] == "operator"]
+        if ops:
+            p = ops[-1] - 1
+        else:
+            p = angle_open(t, p) - 1 if t[p] == ">" else p
+            if p < 0 or kinds[p] != "id" or t[p] in CXX_KEYWORDS:
+                return set()
+            p -= 1 + (p > 0 and t[p - 1] in ("~", "compl"))
+        p -= p >= 0 and t[p] == "template"
+        out = set()
+        while p >= 1 and t[p] == "::":
+            p -= 1
+            if t[p] == ">":
+                p = angle_open(t, p) - 1
+            if p < 0 or kinds[p] != "id" or t[p] in CXX_KEYWORDS:
+                break
+            out.add(t[p])
+            p -= 1
+        return out
+
+    def declarator_quals(q0, end):
+        """quals_before at every name the declarator may end in, the qualifier of a top-level
+        `::operator` (a conversion to a template-id, `S<T>::operator V<int>()`) included; "?" when a
+        parenthesised group holding `::` may be the declarator (`int (S<T>::f)()`, `Int (S<T>::v) = 1`):
+        one not after an identifier or `operator` and kin, one followed by `(` or `[`, or one after a
+        name that may_be_type, unless `->` follows."""
+        out, depth, q = set(), 0, after_heads(q0)
+        while q <= end:
+            x = t[q]
+            if not depth and (x in ("{", ";", "->", ":") or x == "=" and t[q - 1] != "operator"):
+                return out | quals_before(q - 1 - (t[q - 1] == "final"))
+            if not depth and x == "operator":
+                out |= quals_before(q)
+            if not depth and x == "(":
+                out |= quals_before(q - 1)
+                close = close_of(t, q)
+                after = t[close + 1:close + 3]
+                word = kinds[q - 1] == "id" and t[q - 1] not in CXX_KEYWORDS
+                named = word or t[q - 1] in (
+                    "operator", "requires", "decltype", "sizeof", "alignof", "noexcept", "alignas", "throw")
+                subscript = after[:1] == ["["] and after != ["[", "["]
+                if "::" in t[q:close] and (not named or after[:1] == ["("] or subscript or
+                                           word and after[:1] != ["->"] and may_be_type(q - 1, q0)):
+                    out.add("?")
+            depth += (x in ("(", "[")) - (x in (")", "]"))
+            q += 1
+        return out
+
+    def may_be_type(p, q0):
+        """May the name ending at t[p], before a top-level `(`, be the declaration's type, making the
+        `(...)` a parenthesised declarator (`Int (S<T>::v) = 1;`)? Not for a constructor or destructor
+        (`S<T>::S`, `~S`, unqualified in a class) nor after what ends a type: an identifier that is not
+        ALL_CAPS or a `macros` name, a type keyword, `*`, `&`, `&&`, a template-id's `>` or `decltype(...)`,
+        each maybe then `const` or `volatile`."""
+        r, parts = p, [t[p]]
+        if t[p - 1] in ("~", "compl"):
+            return False
+        try:
+            while r >= 2 and t[r - 1] == "::":
+                r = angle_open(t, r - 2) - 1 if t[r - 2] == ">" else r - 2
+                if r < 0 or kinds[r] != "id" or t[r] in CXX_KEYWORDS:
+                    return True
+                parts.append(t[r])
+        except ValueError:
+            return True
+        if parts[1:2] == parts[:1] or len(parts) == 1 and not top[q0]:
+            return False
+        b = r - 1 - (t[r - 1:r] == ["template"])
+        while b >= 0 and t[b] in ("const", "volatile"):
+            b -= 1
+        if b < 0 or b == after_heads(q0) - 1:
+            return True
+        if kinds[b] == "id" and t[b] not in CXX_KEYWORDS:
+            return bool(CXX_MACRO_LIKE.fullmatch(t[b])) or t[b] in macros
+        if t[b] == ")":
+            return t[open_of(t, b) - 1] != "decltype"
+        return t[b] not in TYPE_KEYWORDS + ("*", "&", "&&", ">", ">>")
+    for p in range(len(t)):
+        if head_at(p) and p not in nested:
+            close, params = parse_list(p)
+            end = decl_end(close + 1)
+            scopes.append((p, end, params, declarator_quals(close + 1, end)))
+    return [(a, b, [(q, t[q]) if q is not None else (None, None) for q in ps], qs) for a, b, ps, qs in scopes]
+
+
+def class_definitions(t, kinds, opaque=frozenset()):
+    """Every class, struct or union definition of the code token texts `t` (code_of) as (name, first,
+    last, bases): the class key, its closing '}', and each base specifier as a list of token indices.
+    An `opaque` macro (opaque_macros) in a class head or base clause raises ValueError."""
+    out = []
+    for i, x in enumerate(t):
+        if x not in CLASS_KEYS or i and t[i - 1] in ("<", ",", "enum"):
+            continue
+        r, name = i + 1, None
+        while r < len(t):
+            if t[r] in opaque:
+                raise ValueError(f"macro {t[r]} in the head of a class at token {r}")
+            if t[r] == "alignas" or t[r] == "[":
+                r = close_of(t, r + (t[r] == "alignas")) + 1
+            elif t[r] == "::" or kinds[r] == "id" and t[r] not in CXX_KEYWORDS:
+                name = t[r] if t[r] not in ("::", "final") else name
+                if t[r + 1:r + 2] == ["("] and (CXX_MACRO_LIKE.fullmatch(t[r]) or t[r].startswith("__")):
+                    r = close_of(t, r + 1)
+                elif t[r + 1:r + 2] == ["<"] and t[r] != "::":
+                    r = angle_close(t, r + 1)
+                r += 1
+            else:
+                break
+        if name is None or t[r:r + 1] not in (["{"], [":"]):
+            continue
+        bases, group, angle = [], [], 0
+        if t[r] == ":":
+            r += 1
+            while r < len(t) and not (t[r] == "{" and angle == 0):
+                if t[r] in ("(", "["):
+                    group += range(r, close_of(t, r) + 1)
+                    r = close_of(t, r) + 1
+                    continue
+                if t[r] in (";", "}", ")", "]", "{") or t[r] in opaque:
+                    raise ValueError(f"cannot read the base clause of class {name} at token {r}")
+                angle += (t[r] == "<") - (t[r] == ">") - 2 * (t[r] == ">>")
+                if t[r] == "," and angle == 0:
+                    bases, group = bases + [group], []
+                else:
+                    group.append(r)
+                r += 1
+            bases.append(group)
+        out.append((name, i, close_of(t, r), bases))
+    return out
+
+
+def dependent_base(t, base, bound):
+    """Is the base specifier `base` (token indices into the code token texts `t`) dependent as
+    modelled: after access specifiers, `virtual` and attributes, a parameter in `bound` alone or before
+    `::`, `<` or `...`? Any other base (an alias template's `Al<T>`, `decltype(T())`, `::T`) counts as
+    non-dependent, so its members may hide a parameter."""
+    xs = [t[q] for q in base]
+    while xs and (xs[0] in ("public", "protected", "private", "virtual") or xs[:2] == ["[", "["]):
+        xs = xs[close_of(xs, 0) + 1 if xs[0] == "[" else 1:]
+    return bool(xs) and xs[0] in bound and xs[1:2] in ([], ["::"], ["<"], ["..."])
+
+
+def namespace_scope(t, kinds):
+    """For each code token text of `t` (code_of): is every bracket enclosing it a namespace's `{`?"""
+    out, stack, pending = [], [], None
+    for q, x in enumerate(t):
+        if x == "namespace" and (not q or t[q - 1] != "using"):
+            r = q + 1
+            while r < len(t) and (t[r] in ("::", "inline") or kinds[r] == "id" and t[r] not in CXX_KEYWORDS):
+                r += 1
+            pending = r if t[r:r + 1] == ["{"] else pending
+        out.append(all(stack))
+        if x in ("(", "[", "{"):
+            stack.append(x == "{" and pending == q)
+        elif x in (")", "]", "}") and stack:
+            stack.pop()
+    return out
+
+
+def std_trusted(t, kinds):
+    """Does `std` name only the global namespace std: is every `std` a `std::` (in a namespace
+    definition's name only first, at the top level), a top-level `namespace std {` or a `using
+    namespace std;`? Any other `std` (`struct std`, `typedef X std;`, `namespace a::std`) may declare one.
+    Nor may the code specialize one of INTEGRAL_CONSTANT_BASES (inside `namespace std`, or `struct
+    std::integral_constant<...>`), which would give it members of its own."""
+    paths = namespace_paths(t, kinds)
+
+    def chain_start(q):
+        while q >= 2 and t[q - 1] in ("::", "inline") and (t[q - 1] == "inline" or kinds[q - 2] == "id"):
+            q -= 1 if t[q - 1] == "inline" else 2
+        return q
+    if paths is not None and any(x in INTEGRAL_CONSTANT_BASES and (paths[q][:1] == ("std",) or t[q - 2:q] == [
+            "std", "::"] and t[max(q - 3 - (t[q - 3:q - 2] == ["::"]), 0)] in CLASS_KEYS) for q, x in enumerate(t)):
+        return False
+    return paths is not None and all(
+        x != "std" or t[q + 1:q + 2] == ["::"] and (t[chain_start(q) - 1:chain_start(q)] != ["namespace"] or
+                                                   chain_start(q) == q and paths[q] == ()) or
+        t[q - 1:q] == ["namespace"] and t[q + 1:q + 2] == ["{"] and paths[q] == () or
+        t[q - 2:q] == ["using", "namespace"] and t[q + 1:q + 2] == [";"] for q, x in enumerate(t))
+
+
+def class_templates(t, kinds, scopes):
+    """{(namespace path, name): first token} of every class template whose head (template_scopes) sits
+    at namespace scope: `template <...> [requires ...] struct N` and partial or explicit specializations."""
+    out, paths, top = {}, namespace_paths(t, kinds), namespace_scope(t, kinds)
+    for first, _, _, _ in scopes or []:
+        if paths is None or not top[first] or t[first - 1:first] in (["<"], [","]):  # a template template parameter
+            continue
+        q = angle_close(t, first + 1) + 1
+        if t[q:q + 1] == ["requires"]:
+            while q < len(t) and t[q] not in CLASS_KEYS + (";", "{", "="):
+                q = close_of(t, q) + 1 if t[q] in ("(", "[") else q + 1
+        if t[q:q + 1] and t[q] in CLASS_KEYS and q + 1 < len(t) and kinds[q + 1] == "id" and \
+                t[q + 1] not in CXX_KEYWORDS and t[q + 2:q + 3] in (["{"], [";"], [":"], ["<"], ["final"]):
+            out.setdefault((paths[first], t[q + 1]), first)
+    return out
+
+
+def namespace_names(t, kinds):
+    """{(namespace path, name)} of every identifier of the code token texts `t` not followed by `<` (what
+    may declare a name there other than as a template-id's use) and "using namespace" where a
+    using-directive is; None without readable namespaces."""
+    paths = namespace_paths(t, kinds)
+    return None if paths is None else {(paths[q], "using namespace" if t[q:q + 2] == ["using", "namespace"] else x)
+                                       for q, x in enumerate(t) if kinds[q] == "id" and t[q + 1:q + 2] != ["<"]}
+
+
+def base_hides(t, kinds, base, bound, here, known, std_ok, elsewhere=None):
+    """The names the base specifier `base` (token indices into `t`) can hide from a template parameter
+    of the class at namespace path `here` (None: any name). Nothing for a dependent_base or a template-id
+    of a class template that `known` ({(path, name): first token}, class_templates of earlier code at
+    namespace scope) or std holds with a dependent argument (a parameter in `bound`, or such a
+    template-id); INTEGRAL_CONSTANT_MEMBERS for std::true_type, std::bool_constant<...> and kin. An
+    unqualified name finds a template of an enclosing namespace when no namespace inside that one on the
+    way to here (nor one nested in it: inline and unnamed ones) holds the name or a using-directive in
+    `elsewhere` (namespace_names of every scanned file; None: never); `q::N` names here's q::N."""
+    if dependent_base(t, base, bound):
+        return frozenset()
+    xs = [t[q] for q in base]
+    while xs and (xs[0] in ("public", "protected", "private", "virtual") or xs[:2] == ["[", "["]):
+        xs = xs[close_of(xs, 0) + 1 if xs[0] == "[" else 1:]
+    xs = [w for x in xs[xs[:1] == ["::"]:] for w in ([">", ">"] if x == ">>" else [x])]
+    if std_ok and xs[:2] == ["std", "::"] and (xs[2:] in (["true_type"], ["false_type"]) or xs[2:3] in (
+            ["bool_constant"], ["integral_constant"]) and xs[3:4] == ["<"] and xs[-1] == ">"):
+        return INTEGRAL_CONSTANT_MEMBERS
+
+    def dependent(ys):
+        if ys in ([p] for p in bound) or len(ys) == 2 and ys[0] in bound and ys[1] == "...":
+            return True
+        if "<" not in ys or ys[-1] != ">":
+            return False
+        o = ys.index("<")
+        quals, name = ys[:o - 1:2], ys[o - 1]
+        if ys[1:o - 1:2] != ["::"] * (o // 2) or any(kinds_of.get(w) != "id" for w in quals + [name]):
+            return False
+        lib = std_ok and quals == ["std"] and name in STD_CLASS_TEMPLATES
+        if not lib and not visible(quals, name):
+            return False
+        args, group, depth = [], [], 0
+        for w in ys[o + 1:-1]:
+            depth += (w in ("(", "[", "{", "<")) - (w in (")", "]", "}", ">")) - 2 * (w == ">>")
+            if w == "," and depth == 0:
+                args, group = args + [group], []
+            else:
+                group.append(w)
+        return any(dependent(a) for a in args + [group])
+
+    def visible(quals, name):
+        if here is None or quals:
+            return here is not None and (here + tuple(quals), name) in known
+        at = next((i for i in range(len(here), -1, -1) if (here[:i], name) in known), None)
+        return at == len(here) or at is not None and elsewhere is not None and not any(
+            w in (name, "using namespace") and len(p) > at and p[:at + 1] == here[:at + 1] for p, w in elsewhere)
+    kinds_of = {t[q]: kinds[q] for q in base}
+    return frozenset() if dependent(xs) else None
+
+
+def namespace_paths(t, kinds):
+    """The names of the namespaces enclosing each code token text of `t` (code_of), "" for an unnamed
+    one, or None when some namespace definition is not `namespace a::inline b {` or an alias."""
+    out, stack, path, pending = [], [], (), None
+    for q, x in enumerate(t):
+        if x == "namespace" and (not q or t[q - 1] != "using"):
+            r, names = q + 1, []
+            while r < len(t) and (t[r] in ("::", "inline") or kinds[r] == "id" and t[r] not in CXX_KEYWORDS):
+                names += [] if t[r] in ("::", "inline") else [t[r]]
+                r += 1
+            if t[r:r + 1] == ["{"]:
+                pending = (r, tuple(names) or ("",))
+            elif t[r:r + 1] != ["="] or not names:
+                return None
+        if x == "{":
+            stack.append(path)
+            path += pending[1] if pending and pending[0] == q else ()
+        elif x == "}":
+            if not stack:
+                return None
+            path = stack.pop()
+        out.append(path)
+    return out
+
+
+def included(toks, first, last):
+    """The first #include, #import or #embed among cxx_tokens toks[first:last + 1], else None."""
+    return next((k for k in range(first, last + 1) if toks[k][0] == "pp" and
+                 " ".join(toks[k][1].split(" ")[1:2]) in INCLUDES), None)
+
+
+def ids_in(toks, first, last):
+    """The identifiers of cxx_tokens toks[first:last + 1], directives' included."""
+    return ({x for k, x in toks[first:last + 1] if k == "id"} |
+            {w for k, x in toks[first:last + 1] if k == "pp" for w in CXX_IDENT.findall(x)})
+
+
+def class_table(toks, opaque=frozenset(), std_ok=False, elsewhere=None):
+    """The class definitions of cxx_tokens `toks` as {name: [(identifiers it uses but the parameters of
+    the templates enclosing it, the names its bases can hide (class_hiding), its namespace_paths
+    path)]}; without readable template scopes every base hides any name, without readable namespaces
+    the path is None.
+    A conditional directive reaching a class's top level or an #include inside one raises ValueError."""
+    code, t, kinds = code_of(toks)
+    defs, groups = class_definitions(t, kinds, opaque), conditional_groups(toks)[1]
+    try:
+        scopes = template_scopes(t, kinds, std_ok)
+    except ValueError:
+        scopes = None
+    out, paths = defaultdict(list), namespace_paths(t, kinds)
+    level = list(itertools.accumulate(((x in ("(", "[", "{")) - (x in (")", "]", "}")) for x in t), initial=0))
+    for (name, first, last, _), hides in zip(defs, class_hiding(t, kinds, defs, scopes, std_ok, elsewhere)):
+        if straddling(groups, code[first], code[last], level[first]) is not None:
+            raise ValueError(f"a conditional directive reaches the top level of class {name}")
+        if included(toks, code[first], code[last]) is not None:
+            raise ValueError(f"an #include inside class {name}")
+        bound = {x for f, l, ps, _ in scopes or [] if f <= first <= l for _, x in ps if x}
+        out[name].append((ids_in(toks, code[first], code[last]) - bound, hides, paths and paths[first]))
+    return out
+
+
+def class_hiding(t, kinds, defs, scopes, std_ok, elsewhere=None):
+    """Per class_definitions entry of `defs`, the names its bases can hide from a template parameter
+    (base_hides; None: any name, so too without readable template scopes)."""
+    if scopes is None:
+        return [None if bases else frozenset() for _, _, _, bases in defs]
+    try:
+        known = class_templates(t, kinds, scopes)
+    except ValueError:
+        known = {}
+    paths, top, out = namespace_paths(t, kinds), namespace_scope(t, kinds), []
+    for _, first, _, bases in defs:
+        bound = {x for f, l, ps, _ in scopes if f <= first <= l for _, x in ps if x}
+        here = paths[first] if paths is not None and top[first] else None
+        earlier = {k for k, at in known.items() if at < first}
+        hides = [base_hides(t, kinds, base, bound, here, earlier, std_ok, elsewhere) for base in bases]
+        out.append(None if None in hides else frozenset().union(*hides))
+    return out
+
+
+def macro_names(toks):
+    """The identifiers that #define and #undef directives of cxx_tokens `toks` mention (a function-like
+    macro's own parameters aside), the macro names they define and each #define's (parameters, body
+    words), as (mentioned, defined, bodies, directives, attrs): directives lists each #define and #undef
+    as (token index, define or undef, name, the identifiers of its parameters and body, "##" when it
+    pastes), each #include as (token index, "include", None, set()), and each `#pragma pop_macro` and
+    `_Pragma`/`__pragma` (in code or a body) that may pop one as (token index, "pop", None, the identifiers of its
+    literal, or {"?"} for an operand that is not one string literal); attrs maps each defined name to
+    whether each #define is object-like and attribute_only. A macro body with unbalanced brackets raises
+    ValueError."""
+    mentioned, defined, bodies, directives, attrs = set(), set(), defaultdict(list), [], defaultdict(list)
+    for k, (kind, text) in enumerate(toks):
+        words = text.split(" ") if kind == "pp" else [x for _, x in toks[k:k + 4]] if text in PRAGMA_OPS else [text]
+        if kind == "pp" and words[1:2] and words[1] in INCLUDES:
+            directives.append((k, "include", None, set()))
+        for q in [q for q, w in enumerate(words) if w in PRAGMA_OPS and (kind == "pp" or q == 0)]:
+            lit = words[q + 1:q + 2] == ["("] and words[q + 3:q + 4] == [")"] and '"' in "".join(words[q + 2:q + 3])
+            if not lit or "pop_macro" in words[q + 2]:
+                directives.append((k, "pop", None, set(CXX_IDENT.findall(words[q + 2])) if lit else {"?"}))
+        if kind == "pp" and words[1:2] == ["pragma"] and "pop_macro" in text:
+            lit = words[2:] == ["pop_macro", "(", words[4] if words[4:] else "", ")"] and '"' in words[4]
+            directives.append((k, "pop", None, set(CXX_IDENT.findall(words[4])) if lit else {"?"}))
+        if kind != "pp" or words[1:2] not in (["define"], ["undef"]) or len(words) < 3:
+            continue
+        fn = words[2].endswith("(") and ")" in words
+        own = words[3:words.index(")")] if fn else []
+        body = words[words.index(")") + 1 if fn else 3:]
+        brackets = [w for w in body if w in ("(", ")", "[", "]", "{", "}")]
+        try:
+            nested = close_of(["("] + brackets + [")"], 0) == len(brackets) + 1
+        except ValueError:
+            nested = False
+        if not nested:  # `} int k() {` balances by count, not by nesting
+            raise ValueError(f"#define {words[2].rstrip('(')} has unbalanced brackets")
+        defined.add(words[2].rstrip("("))
+        mentioned.update(set(CXX_IDENT.findall(text)) - set(own))
+        directives.append((k, words[1], words[2].rstrip("("), set(CXX_IDENT.findall(" ".join(words[3:]))) |
+                           ({"##"} if "##" in words[3:] else set())))
+        if words[1] == "define":
+            own = set(own) | ({"__VA_ARGS__", "__VA_OPT__"} if "..." in own else set())
+            bodies[words[2].rstrip("(")].append((own, body))
+            attrs[words[2].rstrip("(")].append(not words[2].endswith("(") and attribute_only(body))
+    return mentioned, defined, bodies, directives, attrs
+
+
+def attribute_only(body):
+    """Is the macro body `body` (words) only attributes (`__attribute__((...))`, `__declspec(...)`,
+    `[[...]]`) and LAMBDA_SPECIFIERS, nothing a lambda's `-> T` could follow as an operand?"""
+    q = 0
+    while q < len(body):
+        if body[q] in ("__attribute__", "__declspec") and body[q + 1:q + 2] == ["("]:
+            q = close_of(body, q + 1) + 1
+        elif body[q:q + 2] == ["[", "["]:
+            q = close_of(body, q) + 1
+        elif body[q] in LAMBDA_SPECIFIERS:
+            q += 1
+        else:
+            return False
+    return True
+
+
+def opaque_macros(bodies):
+    """The macros of `bodies` (macro_names) whose expansion can change where a declaration ends: a body
+    whose top level, outside its own (...) and [...], holds anything but identifiers, literals, `*`
+    and `&`, or holds a structural keyword, a parameter of its own or another such macro."""
+    opaque = set()
+    while True:
+        more = {name for name, defs in bodies.items() if name not in opaque and any(
+            not inert(own, body, opaque) for own, body in defs)}
+        if not more:
+            return opaque
+        opaque |= more
+
+
+def inert(own, body, opaque):
+    """Is the macro body `body` (parameters `own`) one opaque_macros lets through?"""
+    depth = 0
+    for w in body:
+        depth += (w in ("(", "[")) - (w in (")", "]"))
+        if depth or w in (")", "]"):
+            continue
+        word = CXX_IDENT.fullmatch(w)
+        if not (word and w not in STRUCTURAL and w not in own and w not in opaque or w in ("*", "&", "&&") or
+                w[0].isdigit() or "\"" in w or "'" in w):
+            return False
+    return True
+
+
+def conditional_groups(toks):
+    """The conditional directives of cxx_tokens `toks` as (why not modelled or None, [(lowest bracket
+    depth, [directive token indices])]): one entry per #if..#endif, the lowest depth any of its
+    branches reaches and where its #if, #elif, #else and #endif are. Each branch must leave the depth
+    it found, no token may be a digraph (<% %> <: :> %: %:%:, a directive's leading %: aside) and no
+    #include may sit inside brackets, where the parser cannot see what it adds to a class or namespace."""
+    depth, open_, groups = 0, [], []
+    for k, (kind, text) in enumerate(toks):
+        words = text.split(" ")
+        if kind == "pp" and any(w in DIGRAPHS for w in words[1:]) or kind != "pp" and text in DIGRAPHS:
+            return f"a digraph at token {k}", groups
+        if depth and included(toks, k, k) is not None:
+            return f"an #include inside brackets at token {k}", groups
+        step = CONDITIONALS.get(words[1] if kind == "pp" and len(words) > 1 else None)
+        if step == 1:
+            open_.append([[k], depth, depth])
+        elif step is not None and (not open_ or open_[-1][1] != depth):
+            return f"the brackets of the #if branch ending at token {k} do not balance", groups
+        elif step is not None:
+            open_[-1][0].append(k)
+        if step == -1:
+            at, _, low = open_.pop()
+            groups.append((low, at))
+            if open_:
+                open_[-1][2] = min(open_[-1][2], low)
+        depth += (kind != "pp" and text in ("(", "[", "{")) - (kind != "pp" and text in (")", "]", "}"))
+        if open_:
+            open_[-1][2] = min(open_[-1][2], depth)
+    return ("an unterminated #if" if open_ else None), groups
+
+
+def straddling(groups, first, last, depth):
+    """The first directive inside tokens first..last of a conditional group (conditional_groups) that
+    reaches `depth`: a group wrapping the whole range, or kept below `depth`, is harmless."""
+    return next((k for low, at in groups if low <= depth for k in at if first < k < last), None)
+
+
+def macro_problem(names, k0, k1, here, directives, toks):
+    """Why a macro of the hashed files may change what one of `names` means in cxx_tokens toks[k0:k1 + 1]
+    of the file `here`, else None; `directives` maps each file to its macro_names directives. A macro
+    named like one must be #undef'd later in its own file with no #include between, and not be in
+    effect in the range (an #undef needs an earlier #define in its file), and no pop_macro anywhere may
+    restore one (nor any whose operand is computed); a macro whose parameters or body name one, a
+    PRETTY_NAMES name or such a macro, or that pastes with ##, is neither defined nor expanded in the
+    range."""
+    for f, dirs in directives.items():
+        for i, (k, what, name, ids) in enumerate(dirs):
+            if what == "pop" and ids & (names | {"?"}):
+                return f"a pop_macro in {f} may restore a macro named {' or '.join(sorted(names))}"
+            if name not in names:
+                continue
+            if what == "undef":
+                if not any(w == "define" and n == name for _, w, n, _ in dirs[:i]):
+                    return f"#undef {name} in {f} without an earlier #define there"
+                continue
+            end = next((e for e, w, n, _ in dirs[i + 1:] if w == "undef" and n == name), None)
+            if end is None or any(w == "include" and e < end for e, w, _, _ in dirs[i + 1:]):
+                return f"#define {name} in {f} may stay in effect beyond that file"
+            if f == here and k < k1 and end > k0:
+                return f"#define {name} is in effect inside the scope"
+    uses = defaultdict(set)
+    for dirs in directives.values():
+        for _, what, name, ids in dirs:
+            uses[name] |= ids if what == "define" else set()
+    bad = {n for n, ids in uses.items() if ids & (names | PRETTY_NAMES) or "##" in ids}
+    while bad:
+        more = {n for n, ids in uses.items() if n not in bad and ids & bad}
+        if not more:
+            break
+        bad |= more
+    defs = {k: n for k, w, n, _ in directives.get(here, []) if w == "define"}
+    hit = next((toks[k][1] if k not in defs else defs[k] for k in range(k0, k1 + 1) if
+                toks[k][0] == "id" and toks[k][1] in bad or defs.get(k) in bad), None)
+    return None if hit is None else (f"macro {hit}, which may name {' or '.join(sorted(names))}, paste a name or "
+                                     f"spell the signature, inside the scope")
+
+
+def renamed_tokens(a, b, directives=None, here="", defined=frozenset(), classes=None, opaque=frozenset(),
+                   std_ok=False, attr_macros=frozenset(), elsewhere=None):
+    """Why cxx_tokens `b` is not `a` up to template-parameter renames, else None, as (why, renames).
+    Within each template's scope (template_scopes) a parameter may be renamed by a bijection used at
+    every reference in that scope (a token of the head before the parameter is none), to a name absent
+    from the old scope, from the parameters of every enclosing template and, for an out-of-line member,
+    from the class's definition in the same namespace (in `classes`, class_table; the default is a's
+    own), whose old name is absent from the new scope and from that definition; a member access (x.T,
+    B::T) is not a reference, nor is a lambda's trailing return type after LAMBDA_SPECIFIERS,
+    attributes or `attr_macros`. Every other token must be equal. Each new name is NEW_NAME and each
+    old one OLD_NAME, neither in LIBRARY_MACROS or CAMEL_MACROS, nor in the head before the
+    declaration, nor met by a
+    macro of `directives` ({file: macro_names directives}, the default a's own as file `here`;
+    macro_problem); neither may sit inside an attribute or a call of a `defined`, ALL_CAPS or library
+    macro, nor be referenced inside a class whose bases may hide it (class_hiding). A renaming scope
+    may not hold an #include or, at its top level (outside brackets), an `opaque` macro
+    (opaque_macros); no conditional group may reach the top level of a renamed scope or of a class
+    from inside it (straddling), nor may a renaming scope name one of PRETTY_NAMES."""
+    if len(a) != len(b):
+        return f"{len(a)} -> {len(b)} tokens", 0
+    if any((x[0] == "pp" or y[0] == "pp") and x != y for x, y in zip(a, b)):
+        return "a directive differs", 0
+    code, t, kinds = code_of(a)
+    _, tb, kb = code_of(b)
+    try:
+        directives = {here: macro_names(a)[3]} if directives is None else directives
+        sa, sb = template_scopes(t, kinds, std_ok, defined), template_scopes(tb, kb, std_ok, defined)
+        local = class_definitions(t, kinds, opaque)
+        classes = class_table(a, opaque, std_ok, elsewhere) if classes is None else classes
+        hides = class_hiding(t, kinds, local, sa, std_ok, elsewhere)
+    except ValueError as e:
+        return f"cannot scope the templates: {e}", 0
+    _, groups = conditional_groups(a)
+    level = list(itertools.accumulate(((x in ("(", "[", "{")) - (x in (")", "]", "}")) for x in t), initial=0))
+    for name, f, l, _ in local:
+        if straddling(groups, code[f], code[l], level[f]) is not None:
+            return f"cannot scope the templates: an #if reaches the top level of class {name}", 0
+        if included(a, code[f], code[l]) is not None:
+            return f"cannot scope the templates: an #include inside class {name}", 0
+    if [(f, e, [q for q, _ in ps]) for f, e, ps, _ in sa] != [(f, e, [q for q, _ in ps]) for f, e, ps, _ in sb]:
+        return "the template structure differs", 0
+    hiding = [(name, f, l, h) for (name, f, l, _), h in zip(local, hides) if h != frozenset()]
+    paths = namespace_paths(t, kinds)
+    maps = []
+    for s, ((first, last, pa, quals), (_, _, pb, _)) in enumerate(zip(sa, sb)):
+        m = {x: y for (_, x), (_, y) in zip(pa, pb) if x != y}
+        olds, news = ids_in(a, code[first], code[last]), ids_in(b, code[first], code[last])
+        where = f"template at token {code[first]}"
+        if len(set(m.values())) != len(m):
+            return f"{where}: {m} is not a bijection", 0
+        if m and olds & PRETTY_NAMES:
+            return f"{where}: {min(olds & PRETTY_NAMES)} spells the renamed parameters", 0
+        cond = straddling(groups, code[first], code[last], level[first]) if m else None
+        if cond is not None:
+            return f"{where}: {a[cond][1][:20]} reaches the top level of the scope of a renamed parameter", 0
+        for k in range(code[first], code[last]) if m else ():
+            words, top = a[k][1].split(" "), level[bisect.bisect_left(code, k)] == level[first]
+            if a[k][0] == "pp" and words[1:2] and words[1] in INCLUDES:
+                return f"{where}: {' '.join(words[:2])} inside the scope of a renamed parameter", 0
+            if a[k][0] != "pp" and top and a[k][1] in opaque:
+                return f"{where}: macro {a[k][1]} at the top level of the scope of a renamed parameter", 0
+        outer = [e for e in range(len(sa)) if e != s and sa[e][0] <= first and last <= sa[e][1]]
+        outer_params = {x for e in outer for _, x in sa[e][2] + sb[e][2] if x}
+        quals = quals.union(*(sa[e][3] for e in outer))
+        for (at, x), (_, y) in zip(pa, pb):
+            if x == y:
+                continue
+            if y in olds or x in news:
+                return f"{where}: {x} -> {y}, but " + (
+                    f"{y} occurs in the old scope" if y in olds else f"{x} occurs in the new scope"), 0
+            if y in outer_params:
+                return f"{where}: {x} -> {y}, but an enclosing template has a parameter {y}", 0
+            if x in t[first:at] or y in tb[first:at]:
+                return f"{where}: {x} -> {y}, but {x if x in t[first:at] else y} occurs in the head before {x}", 0
+            odd = next((z for z, shape in ((x, OLD_NAME), (y, NEW_NAME)) if not shape.fullmatch(z) or
+                        z in LIBRARY_MACROS | CAMEL_MACROS), None)
+            if odd:
+                return (f"{where}: {x} -> {y}, but {odd} is not {'one capital or ' if odd == x else ''}[A-Z][a-z]"
+                        f"[A-Za-z0-9]* or is a library macro's name: a header outside the hashed files may "
+                        f"define it"), 0
+            why = macro_problem({x, y}, code[first], code[last], here, directives, a)
+            if why:
+                return f"{where}: {x} -> {y}, but {why}", 0
+            for name, f, l, h in hiding:
+                if (h is None or x in h or y in h) and any(
+                        t[q] == x and kinds[q] == "id" for q in range(max(f, first), min(l, last) + 1)):
+                    return (f"{where}: {x} -> {y}, but class {name} has a base whose members may hide {x} "
+                            f"or {y}"), 0
+            if "?" in quals:
+                return f"{where}: {x} -> {y}, but a parenthesised declarator may name a class member", 0
+            for q in sorted(quals):
+                defs, ns = classes.get(q, []), paths and paths[first]
+                if None in classes or ns is None or not any(path == ns for _, _, path in defs) or any(
+                        x in used or y in used or h is None or x in h or y in h for used, h, _ in defs):
+                    return (f"{where}: {x} -> {y} in an out-of-line member of {q}, whose definition is not in the "
+                            f"hashed files in this namespace, names {x} or {y} or has a base that may hide "
+                            f"them"), 0
+        maps.append(m)
+    bound = {x for _, _, ps, _ in sa for _, x in ps if x}
+    declared = [{x: at for at, x in ps if x} for _, _, ps, _ in sa]
+    open_, opener, macro_depth, in_attr = [], {}, 0, set()
+    try:
+        for j in range(len(t)):
+            if j not in in_attr and (t[j:j + 2] == ["[", "["] or t[j] in ATTRIBUTE_CALLS and t[j + 1:j + 2] == ["("]):
+                in_attr.update(range(j, close_of(t, j + (t[j] != "[")) + 1))
+    except ValueError as e:
+        return f"cannot scope the templates: {e}", 0
+
+    def member_access(j):
+        """Is t[j] named by `.`, `->`, `::` (or those + `template`)? `) -> T` of a lambda is not: a
+        `[...](...)` whose `[` is not `[[` and starts the code or follows LAMBDA_AFTER, then
+        LAMBDA_SPECIFIERS, `[[...]]`, `__attribute__((...))` and `attr_macros` (each #define of them
+        attribute_only)."""
+        p = j - 1 - (t[j - 1:j] == ["template"])
+        if p < 0 or t[p] not in MEMBER_ACCESS:
+            return False
+        q = p - 1
+        while q >= 0:
+            if t[q] in LAMBDA_SPECIFIERS or t[q] in attr_macros:
+                q -= 1
+            elif t[q] == "]" and q in opener and t[q - 1:q] == ["]"] and t[opener[q] + 1:opener[q] + 2] == ["["]:
+                q = opener[q] - 1
+            elif t[q] == ")" and q in opener and t[opener[q] - 1:opener[q]] in (["__attribute__"], ["__declspec"]):
+                q = opener[q] - 2
+            else:
+                break
+        if t[p] != "->" or q < 0 or q not in opener or t[opener[q] - 1:opener[q]] != ["]"]:
+            return True
+        lb = opener.get(opener[q] - 1, -1)
+        if lb < 0 or t[lb] != "[":
+            return True
+        return t[lb + 1] == "[" or lb > 0 and t[lb - 1] not in LAMBDA_AFTER
+    for j, text in enumerate(t):
+        kind, k, prev = kinds[j], code[j], t[j - 1] if j else ""
+        if text in ("(", "["):
+            like = text == "(" and j > 0 and kinds[j - 1] == "id" and prev not in bound and bool(
+                CXX_MACRO_LIKE.fullmatch(prev) or prev in defined or
+                prev in LIBRARY_MACROS - CMATH_FUNCTIONS and t[j - 2:j - 1] != ["::"])
+            open_.append((j, like))
+            macro_depth += like
+        elif text in (")", "]") and open_:
+            opener[j], like = open_.pop()
+            macro_depth -= like
+        member = member_access(j)
+        binder = None
+        if kind == "id" and text in bound and not member:
+            binder = max((s for s in range(len(sa)) if sa[s][0] <= j <= sa[s][1] and
+                          declared[s].get(text, j + 1) <= j), key=lambda s: sa[s][0], default=None)
+        want = text if binder is None else maps[binder].get(text, text)
+        if (kb[j], tb[j]) != (kind, want):
+            if kind != "id" or kb[j] != "id":
+                return f"token {k}: {text} -> {tb[j]}", 0
+            if binder is not None:
+                return f"token {k}: {text} -> {tb[j]}, an inconsistent rename (expected {want})", 0
+            return f"token {k}: {text} -> {tb[j]} is not a template parameter" + (
+                " (a member access)" if member else ""), 0
+        if want != text and macro_depth:
+            return f"token {k}: {text} -> {want} inside a macro call", 0
+        if want != text and j in in_attr:  # [[no_unique_address]] names an attribute, never a parameter
+            return f"token {k}: {text} -> {want} inside an attribute", 0
+    return None, sum(len(m) for m in maps)
+
+
+def alpha_problem(files):
+    """Why some (path, base bytes, head bytes) of `files` is not its base up to template-parameter
+    renames (renamed_tokens, with the macros and classes of every base and head file), else None, as
+    (why, renames, files renamed). std names the global namespace only when no file says otherwise
+    (std_trusted); an attribute macro is ALL_CAPS with every #define of it attribute_only."""
+    try:
+        toks = {(p, w): cxx_tokens(data) for p, old, new in files for w, data in (("b", old), ("h", new))}
+        named = {key: macro_names(x) for key, x in toks.items()}
+    except ValueError as e:
+        return f"cannot read the sources: {e}", 0, 0
+    odd = next(((p, why) for (p, _), x in toks.items() for why in [conditional_groups(x)[0]] if why), None)
+    if odd:
+        return f"{odd[0]}: {odd[1]}", 0, 0
+    defined = set().union(*(x[1] for x in named.values()))
+    bodies, attrs = defaultdict(list), defaultdict(list)
+    for _, _, b, _, at in named.values():
+        for name, defs in b.items():
+            bodies[name] += defs
+        for name, flags in at.items():
+            attrs[name] += flags
+    opaque = opaque_macros(bodies)
+    attr_macros = {name for name, flags in attrs.items() if CXX_MACRO_LIKE.fullmatch(name) and all(flags)}
+    directives = {p: named[(p, "b")][3] for p, _, _ in files}
+    std_ok = all(std_trusted(*code_of(x)[1:]) for x in toks.values())
+    names = [namespace_names(*code_of(x)[1:]) for x in toks.values()]
+    elsewhere = None if None in names else set().union(*names)
+    classes = defaultdict(list)
+    for p, _, _ in files:
+        try:
+            for name, defs in class_table(toks[(p, "b")], opaque, std_ok, elsewhere).items():
+                classes[name] += defs
+        except ValueError:
+            classes[None] = [(set(), None, None)]
+    renames = files_renamed = 0
+    for p, old, new in files:
+        if normalize_source(old) == normalize_source(new):
+            continue
+        why, n = renamed_tokens(toks[(p, "b")], toks[(p, "h")], directives, p, defined, classes, opaque, std_ok,
+                                attr_macros, elsewhere)
+        if why:
+            return f"{p}: {why}", 0, 0
+        renames, files_renamed = renames + n, files_renamed + (n > 0)
+    spelt = next(((p, min(w)) for (p, _), x in toks.items() for w in [SOURCE_LOCATION & ids_in(x, 0, len(x) - 1)]
+                  if renames and w), None)
+    if spelt:  # a default argument spells its caller's signature wherever it is declared
+        return f"{spelt[0]}: {spelt[1]} may spell a renamed parameter", 0, 0
+    return None, renames, files_renamed
+
+
+def renamed_difference(base_paths, head_paths, base, head):
+    """Why every head file is not its base file at the same path up to template-parameter renames
+    (alpha_problem, after v2 normalization), else None, as (why, renames, files renamed)."""
+    if base_paths != head_paths:
+        return "the source list changed (a move is the moved proof's job)", 0, 0
+    files = [(p, base.read(p), head.read(p)) for p in head_paths]
+    gone = [p for p, old, new in files if old is None or new is None]
+    if gone:
+        return f"{gone[0]} is missing", 0, 0
+    return alpha_problem(files)
+
+
+def rehash_renamed(ledger_path, op, base, at=None, repo=REPO, write=True):
+    """The renamed proof of a rehash (docs/design/tuning-data.md#tuning-data-kernel-hash): per family
+    of the measured records, the same source list at `base` and HEAD, every file equal up to
+    template-parameter renames (renamed_difference). One line per stored hash whose effective hash is
+    the family's hash at `base`. Returns (report, records)."""
+    def prove(bp, hp, bt, ht):
+        why, n, files = renamed_difference(bp, hp, bt, ht)
+        return why, f"{n} template parameters renamed in {files} files, otherwise equal modulo comments and whitespace"
+    return rehash_by_proof(ledger_path, op, base, "renamed", prove, at, repo, write)
+
+
+def rehash_by_proof(ledger_path, op, base, proof, prove, at=None, repo=REPO, write=True):
+    """The git proofs' driver: prove(base paths, head paths, base tree, head tree) -> (why not, why)
+    per family whose records sit at its `base` hash; one '<proof>:<base>' line per stored hash."""
     led = read_ledger(ledger_path, raw=True)
     stored = defaultdict(set)
     for c in led.cells:
@@ -972,7 +2107,6 @@ def rehash_moved(ledger_path, op, base, at=None, repo=REPO, write=True):
     if not stored:
         return ["no measured records"], []
     bt, ht = GitTree(repo, base), GitTree(repo, "HEAD")
-    rename = git_renames(repo, base, "HEAD")
     spec = f"tools/tune/{op}_spec.cc"
     if bt.read(spec) is None:
         return [f"{f}: no proof: {spec} is missing at {base}" for f in sorted(stored)], []
@@ -994,14 +2128,12 @@ def rehash_moved(ledger_path, op, base, at=None, repo=REPO, write=True):
             report.append(f"{f}: nothing to rehash (records at {','.join(sorted(set(eff.values())))}, "
                           f"{base} {h_base}, now {h_now})")
             continue
-        why = moved_difference(bp, hp, bt, ht, rename)
+        why, because = prove(bp, hp, bt, ht)
         if why:
             report.append(f"{f}: no proof: {why}")
             continue
-        moved = sum(b != h for b, h in zip(bp, hp))
         lines += [{"kind": "rehash", "family": f, "from": h, "to": h_now, "at": at or short[1],
-                   "proof": f"moved:{short[0]}",
-                   "why": f"{moved} files moved, equal modulo comments, whitespace and include paths"} for h in todo]
+                   "proof": f"{proof}:{short[0]}", "why": because} for h in todo]
         report.append(f"{f}: rehashed {','.join(todo)} -> {h_now}")
     if write and lines:
         with open(ledger_path, "a") as fh:
@@ -1017,21 +2149,25 @@ def hash_vector_problem(repo=REPO):
     return None if got == want else f"kernel hash v2 of {path}: {got} != {want}"
 
 
+def test_git(repo, *args):
+    subprocess.run(["git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
+                    *args], check=True, capture_output=True)
+
+
+def test_put(repo, path, data):
+    os.makedirs(os.path.dirname(os.path.join(repo, path)), exist_ok=True)
+    with open(os.path.join(repo, path), "wb") as f:
+        f.write(data)
+
+
+TEST_SPEC = '// kernel-sources-begin\n"{k}",{extra}\n// family: tiny\n"{t}",\n// kernel-sources-end\n'
+
+
 def moved_self_test(d, run_line, cell, cands):
     """--rehash-moved on throwaway git repos: a pure move, an include that now names another file,
     a content edit, a longer source list, an uncommitted change and the unmodelled include forms."""
-    bad = []
+    bad, git, put, spec = [], test_git, test_put, TEST_SPEC
     filler = "".join(f"int f{i}(int);\n" for i in range(24)).encode()
-    spec = '// kernel-sources-begin\n"{k}",{extra}\n// family: tiny\n"{t}",\n// kernel-sources-end\n'
-
-    def git(repo, *args):
-        subprocess.run(["git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
-                        *args], check=True, capture_output=True)
-
-    def put(repo, path, data):
-        os.makedirs(os.path.dirname(os.path.join(repo, path)), exist_ok=True)
-        with open(os.path.join(repo, path), "wb") as f:
-            f.write(data)
 
     def case(name, variant):
         repo = os.path.join(d, "moved-" + name)
@@ -1101,6 +2237,484 @@ def moved_self_test(d, run_line, cell, cands):
         repo, path, _ = case(name, name)
         report, recs = rehash_moved(path, "posv", "HEAD~1", repo=repo)
         expect(not recs and any("no proof" in r and want in r for r in report), f"{name} -> {report}")
+    return bad
+
+
+RENAMED_BASE_K = (b'#include "util.hh"\ntemplate <typename T, int N>\nstruct Tile { T v[N]; T get(int i) const '
+                  b'{ return v[i]; } };\ntemplate <typename T>\nT twice(T x) { int r = 2; return x * r; }  // kernel\n'
+                  b'const char* name = "T";\nint k;\n')
+RENAMED_HEAD_K = {
+    "ok": b'#include "util.hh"\ntemplate <typename Real, int N>\nstruct Tile { Real v[N]; Real get(int i) const '
+          b'{ return v[i]; } };\ntemplate <typename Scalar>\nScalar twice(Scalar x) { int r = 2; return x * r; }\n'
+          b'const char* name = "T";\nint k;\n',
+    "cosmetic": b'#include "util.hh"\n/* Real, not T */\ntemplate <typename Real,\n          int N>\nstruct Tile {\n'
+                b'    Real v[N];\n    Real get(int i) const { return v[i]; }  // one element\n};\n'
+                b'template <typename Scalar>\nScalar twice(Scalar x) { int r = 2; return x * r; }\n'
+                b'const char* name = "T";\nint k;\n',
+    "used": b'#include "util.hh"\ntemplate <typename Real, int N>\nstruct Tile { Real v[N]; Real get(int i) const '
+            b'{ return v[i]; } };\ntemplate <typename r>\nr twice(r x) { int r = 2; return x * r; }\n'
+            b'const char* name = "T";\nint k;\n',
+    "inconsistent": b'#include "util.hh"\ntemplate <typename Real, int N>\nstruct Tile { Real v[N]; Scalar get(int i) '
+                    b'const { return v[i]; } };\ntemplate <typename T>\nT twice(T x) { int r = 2; return x * r; }\n'
+                    b'const char* name = "T";\nint k;\n',
+    "nonparam": b'#include "util.hh"\ntemplate <typename Real, int N>\nstruct Tile { Real v[N]; Real get(int i) const '
+                b'{ return v[i]; } };\ntemplate <typename Scalar>\nScalar twice(Scalar x) { int two = 2; return x * two; }\n'
+                b'const char* name = "T";\nint k;\n',
+    "edit": b'#include "util.hh"\ntemplate <typename Real, int N>\nstruct Tile { Real v[N]; Real get(int i) const '
+            b'{ return v[i]; } };\ntemplate <typename Scalar>\nScalar twice(Scalar x) { int r = 2; return x * r + 0; }\n'
+            b'const char* name = "T";\nint k;\n',
+}
+
+
+RENAMED_MEMBER = b"template <class T> struct A : T { T x; typename B::T y; };\n"
+RENAMED_S = b"template <class T> struct S { using Rv = int; S(); void f(); T m, n; };\n"
+RENAMED_ALIAS = b"struct Base { using Zt = double; };\ntemplate <class> using Al = Base;\n"
+RENAMED_COL = b"#define COL(k) R a = R(k);\ntemplate <class D> int g() { using R = int; COL(1) return a; }\n"
+RENAMED_TI = b"template <class Rt, class T> struct Ti;\ntemplate <class T> struct Ti<int, T> { int v; };\n"
+RENAMED_STD = b"namespace bl { namespace std { struct true_type { using Up = int; }; }\n"
+RENAMED_INT = b"using Int = int;\ntemplate <class T> struct S { using Up = char; static Int v; };\n"
+# unnamed template parameters naming W: renaming W is never a parameter rename
+UNNAMED_FORMS = ("void (W::*)()", "int W::*", "W (&)[3]", "W[3]", "enum W", "struct W", "class W::V", "class = W",
+                 "typename = W", "W*", "W&", "const W", "W const", "typename W::type", "W", "W<int>", "decltype(W())",
+                 "W (*)(int)", "int (*)(W)", "template <class> class = W", "template <class W> class", "auto = W{}",
+                 "int = W::v", "class... ")
+RENAMED_FIXTURES = (  # (base, head, None for a proof or a substring of the refusal)
+    (RENAMED_MEMBER, b"template <class Rv> struct A : Rv { Rv x; typename B::T y; };", "T occurs in the new"),
+    (RENAMED_MEMBER, b"template <class Rv> struct A : Rv { Rv x; typename B::Rv y; };", "a member access"),
+    (b'template <class T> void f() { g("T", R"x(T)x", T(1)); }',
+     b'template <class Up> void f() { g("Up", R"x(T)x", Up(1)); }', '"T" -> "Up"'),
+    (b"template <class T> void f() { CHECK(T(1)); }", b"template <class Up> void f() { CHECK(Up(1)); }", "macro call"),
+    (b"template <class T> void f() { assert(T(1)); }", b"template <class Up> void f() { assert(Up(1)); }",
+     "assert spells"),
+    (b"template <class T> void f() { va_end(T(1)); }", b"template <class Up> void f() { va_end(Up(1)); }", "macro call"),
+    (b"#define M Up\ntemplate <class T> void f() { T(); }", b"#define M Up\ntemplate <class Up> void f() { Up(); }",
+     None),
+    (b"#define M Up\ntemplate <class T> void f() { M(); T(); }",
+     b"#define M Up\ntemplate <class Up> void f() { M(); Up(); }", "macro M, which may name T or Up"),
+    (b"#define I(T) template void f<T>();\ntemplate <class T> void f() { auto g = [](int k) mutable -> T "
+     b"{ return T(k); }; }", b"#define I(T) template void f<T>();\ntemplate <class Up> void f() "
+     b"{ auto g = [](int k) mutable -> Up { return Up(k); }; }", None),
+    (b"template <class T> void f(P* p) { p->T(); }", b"template <class Up> void f(P* p) { p->Up(); }",
+     "a member access"),
+    (b"#define cat(a, b) a##b\nstruct T1 {}; struct Up1 {};\ntemplate <class T> void f() { cat(T, 1) z; }",
+     b"#define cat(a, b) a##b\nstruct T1 {}; struct Up1 {};\ntemplate <class Up> void f() { cat(Up, 1) z; }",
+     "macro cat"),
+    (b"#define s(x) #x\ntemplate <class T> void f() { g(s(T)); }",
+     b"#define s(x) #x\ntemplate <class Up> void f() { g(s(Up)); }", "macro call"),
+    (b"#define OPEN g(\ntemplate <class T> void f() { T x; }", b"#define OPEN g(\ntemplate <class Up> void f() { Up x; }",
+     "unbalanced brackets"),
+    (b'template <class T> void f() { g(R"x(a\\\nb)x"); }', b'template <class T> void f() { g(R"x(ab)x"); }',
+     "line splice inside the raw string"),
+    (b"template <class T> auto f(T x) -> E<c ? g() : h(), int> { return 0; }\nT y;",
+     b"template <class Up> auto f(Up x) -> E<c ? g() : h(), int> { return 0; }\nUp y;", "initializer list"),
+    (b"template <class T> S<T>::S() : m(0) MACRO { }\nT y;", b"template <class Up> S<Up>::S() : m(0) MACRO { }\nUp y;",
+     "initializer list"),
+    (b"template <class T> void f() try { T x; } catch (...) { }",
+     b"template <class Up> void f() try { Up x; } catch (...) { }", "function-try-block"),
+    (b"template <class T> constexpr T v = T{1} + Up{2};", b"template <class Up> constexpr Up v = Up{1} + Up{2};",
+     "Up occurs in the old scope"),
+    (b"template <class T> void f() { a[0]()->T(); }", b"template <class Up> void f() { a[0]()->Up(); }",
+     "a member access"),
+    (b"template <class T> struct A { template <class Up> void f(Up); T t; };",
+     b"template <class T> struct A { template <class T> void f(T); T t; };", "an enclosing template has a parameter T"),
+    (RENAMED_S + b"template <class T> void S<T>::f() { T x; }",
+     RENAMED_S + b"template <class Rv> void S<Rv>::f() { Rv x; }", "out-of-line member of S"),
+    (RENAMED_S + b"template <class T> void S<T>::f() { T x; }",
+     RENAMED_S + b"template <class Vt> void S<Vt>::f() { Vt x; }", None),
+    (RENAMED_S + b"template <class T> S<T>::S() : m{0}, n(1) { T z; }",
+     RENAMED_S + b"template <class Real> S<Real>::S() : m{0}, n(1) { Real z; }", None),
+    (b"template <class T> void S<T>::f() { T x; }", b"template <class Vt> void S<Vt>::f() { Vt x; }",
+     "out-of-line member of S"),
+    (b"struct B { using Rv = int; };\ntemplate <class T> struct S : B { T x; };",
+     b"struct B { using Rv = int; };\ntemplate <class Rv> struct S : B { Rv x; };", "may hide"),
+    (b"template <class T> requires requires (T a) { a + a; } T f(T x) { return x; }",
+     b"template <class Up> requires requires (Up a) { a + a; } Up f(Up x) { return x; }", None),
+    (b"template <int N> void f() requires (N > 1) { int a[N]; }",
+     b"template <int Mv> void f() requires (Mv > 1) { int a[Mv]; }", None),
+    (b"template <int Bar::* = nullptr> int f() { return sizeof(Bar); }",
+     b"template <int Baz::* = nullptr> int f() { return sizeof(Baz); }", "Bar -> Baz is not a template parameter"),
+    (b"template <class T, double Bar::*> int f() { return sizeof(Bar); }",
+     b"template <class T, double Baz::*> int f() { return sizeof(Baz); }", "Bar -> Baz is not a template parameter"),
+    (b"template <class T, void (*F)(T), int A[3]> void f() { F(A[0]); }",
+     b"template <class T, void (*G)(T), int A[3]> void f() { G(A[0]); }", "F -> G is not a template parameter"),
+    (b"template <class T, int A[3]> void f() { g(A); }", b"template <class T, int B[3]> void f() { g(B); }",
+     "A -> B is not a template parameter"),
+    (b"template <class T, const Foo, typename T::Bar, struct Baz> int f() { return sizeof(Foo); }",
+     b"template <class T, const Qux, typename T::Bar, struct Baz> int f() { return sizeof(Qux); }",
+     "Foo -> Qux is not a template parameter"),
+    (b"template <class T, int* __restrict> void f() { T x; }", b"template <class T, int* X> void f() { T x; }",
+     "the template structure differs"),
+    (b"template <typename E> requires std::is_enum_v<E> && requires (E e) { g(e); } void f(E e) { g(e); }",
+     b"template <typename En> requires std::is_enum_v<En> && requires (En e) { g(e); } void f(En e) { g(e); }", None),
+    (b"template <class T, int* P, std::size_t N, C<int> V, template <class> class Tt, class... Ts, class = T>\n"
+     b"void f() { T a; *P; N; Tt<V> b; g<::h, Ts...>(); }",
+     b"template <class Tv, int* Qp, std::size_t Mv, C<int> Wv, template <class> class Ut, class... Us, class = Tv>\n"
+     b"void f() { Tv a; *Qp; Mv; Ut<Wv> b; g<::h, Us...>(); }", None),
+    (b"struct T { int a; };\ntemplate <class T> int f(T x) <% x; return T(x); %>",
+     b"struct T { int a; };\ntemplate <class Up> int f(Up x) <% x; return T(x); %>", "a digraph"),
+    (b"#define B <%\ntemplate <class T> int f(T x) { return 0; }", b"#define B <%\ntemplate <class Up> int f(Up x) "
+     b"{ return 0; }", "a digraph"),
+    (b"template <class T> auto f() -> int&& requires (sizeof(T) > 1) { return 0; }\nT y;",
+     b"template <class Up> auto f() -> int&& requires (sizeof(Up) > 1) { return 0; }\nUp y;", "ref-qualifier"),
+    (RENAMED_S + b"template <class T> void S<T>::f() and requires (sizeof(T) > 1) { }\nT y;",
+     RENAMED_S + b"template <class Vt> void S<Vt>::f() and requires (sizeof(Vt) > 1) { }\nVt y;", "ref-qualifier"),
+    (b"template <class T> X<T{}> f() { return T(); }", b"template <class Up> X<Up{}> f() { return T(); }",
+     "after the body"),
+    (b"template <class T> auto f() -> X<T{}[0]> { return T(); }",
+     b"template <class Up> auto f() -> X<Up{}[0]> { return T(); }", "after the body"),
+    (RENAMED_S + b"template <class T> S<T>::S() try : m(0) { } catch (T&) { }",
+     RENAMED_S + b"template <class Vt> S<Vt>::S() try : m(0) { } catch (T&) { }", "function-try-block"),
+    (b"template <class T> struct S { using Up = int; ~S(); };\ntemplate <class T> S<T>::compl S() { T y; }",
+     b"template <class T> struct S { using Up = int; ~S(); };\ntemplate <class Up> S<Up>::compl S() { Up y; }",
+     "out-of-line member of S"),
+    (b"template <class T>\n#if A\nint f(T);\n#else\nint f(T) { return 0; }\n#endif\n",
+     b"template <class Up>\n#if A\nint f(Up);\n#else\nint f(T) { return 0; }\n#endif\n", "# if A reaches the top level"),
+    (b"template <class T> int f(T x) {\n#include \"body.inc\"\n}",
+     b"template <class Up> int f(Up x) {\n#include \"body.inc\"\n}", "#include inside brackets"),
+    (b"template <class T>\n#include \"decl.inc\"\nint f(T);", b"template <class Up>\n#include \"decl.inc\"\nint f(Up);",
+     "# include inside the scope"),
+    (b"template <class T> int f(T x) {\n#if A\n}\n#endif\nreturn T(x); }",
+     b"template <class Up> int f(Up x) {\n#if A\n}\n#endif\nreturn T(x); }", "do not balance"),
+    (b"template <class T> T f(T x) {\n#if A\nreturn x;\n#else\nreturn T(1);\n#endif\n}",
+     b"template <class Up> Up f(Up x) {\n#if A\nreturn x;\n#else\nreturn Up(1);\n#endif\n}", None),
+    (b"template <class T> int f(T x) { if (x) { g();\n#if A\n} else if (h()) {\n#endif\n} return T(x); }",
+     b"template <class Up> int f(Up x) { if (x) { g();\n#if A\n} else if (h()) {\n#endif\n} return Up(x); }", None),
+    (b"#if A\ntemplate <class T> struct S { T a;\n#ifdef B\nint b;\n#endif\n};\n#endif\n",
+     b"#if A\ntemplate <class Up> struct S { Up a;\n#ifdef B\nint b;\n#endif\n};\n#endif\n", None),
+    (b"template <class T> int f(T x) { g();\n#if A\n} int k() {\n#endif\nreturn T(x); }",
+     b"template <class Up> int f(Up x) { g();\n#if A\n} int k() {\n#endif\nreturn T(x); }", "reaches the top level"),
+    (b"template <class T> struct S { void f();\n#if A\n}; struct S2 {\n#endif\nusing Up = int; };\n"
+     b"template <class T> void S<T>::f() { T y; }", b"template <class T> struct S { void f();\n#if A\n}; struct "
+     b"S2 {\n#endif\nusing Up = int; };\ntemplate <class Up> void S<Up>::f() { Up y; }", "top level of class S"),
+    (b"#define BODY { return 1; }\ntemplate <class T> int f() BODY int g() { return T(); }",
+     b"#define BODY { return 1; }\ntemplate <class Up> int f() BODY int g() { return Up(); }", "macro BODY at the top"),
+    (b"#define ID(x) x\n#define ID2 ID\ntemplate <class T> int f() ID2({ return 1; }) int g() { return T(); }",
+     b"#define ID(x) x\n#define ID2 ID\ntemplate <class Up> int f() ID2({ return 1; }) int g() { return Up(); }",
+     "macro ID2 at the top"),
+    (b"#define BASE : B\nstruct B { using Rv = int; };\ntemplate <class T> struct S BASE { T x; };",
+     b"#define BASE : B\nstruct B { using Rv = int; };\ntemplate <class Rv> struct S BASE { Rv x; };", "macro BASE"),
+    (b"template <class T, auto F = [](T a) { return a > 0; }, int N = int{3}>\n[[x::y({;})]] bool g(T x) "
+     b"{ return F(x); }", b"template <class Up, auto F = [](Up a) { return a > 0; }, int N = int{3}>\n[[x::y({;})]] "
+     b"bool g(Up x) { return F(x); }", None),
+    (b"#define INL(n) inline __attribute__((n))\ntemplate <class T> INL(hot) T f(T x) { return x; }",
+     b"#define INL(n) inline __attribute__((n))\ntemplate <class Up> INL(hot) Up f(Up x) { return x; }", None),
+    (b"template <class X> struct A { struct B { char c[100]; }; int f(); };\n"
+     b"template <class B> int A<B>::f() { return sizeof(B); }",
+     b"template <class X> struct A { struct B { char c[100]; }; int f(); };\n"
+     b"template <class Zt> int A<Zt>::f() { return sizeof(Zt); }", "out-of-line member of A"),
+    (RENAMED_ALIAS + b"template <class T> struct S : Al<T> { int g() { return sizeof(T); } };",
+     RENAMED_ALIAS + b"template <class Zt> struct S : Al<Zt> { int g() { return sizeof(Zt); } };", "may hide"),
+    (RENAMED_ALIAS.replace(b"Zt", b"T") + b"template <class T> struct S : Al<T> { int g() { return sizeof(T); } };",
+     RENAMED_ALIAS.replace(b"Zt", b"T") + b"template <class Zt> struct S : Al<Zt> { int g() { return sizeof(Zt); } };",
+     "may hide"),
+    (b"template <class T, class... Ts> struct S : public T, [[a]] virtual T::B, Ts... { int g() { return T(); } };",
+     b"template <class Up, class... Ups> struct S : public Up, [[a]] virtual Up::B, Ups... { int g() { return Up(); } };",
+     None),
+    (b"template <class Ab> struct S { [[Ab]] Ab e; int i; };", b"template <class Zt> struct S { [[Zt]] Zt e; int i; };",
+     "inside an attribute"),
+    (b"template <class T> struct S { int a __attribute__((aligned(sizeof(T)))); T b; };",
+     b"template <class Up> struct S { int a __attribute__((aligned(sizeof(Up)))); Up b; };", "inside an attribute"),
+    (b"#include <cassert>\ntemplate <class T> int f(int x) { (void)T(x); return 1; }",
+     b"#include <cassert>\ntemplate <class assert> int f(int x) { (void)assert(x); return 1; }", "assert is not"),
+    (b"template <class errno> int f() { return errno(); }", b"template <class En> int f() { return En(); }", "errno is"),
+    (b"template <int N> int f() { return N; }", b"template <int NB> int f() { return NB; }", "NB is not"),
+    (b"namespace a { template <class X> struct S { int f(); }; }\nnamespace b {\n"
+     b"template <class B> int S<B>::f() { return sizeof(B); } }", b"namespace a { template <class X> struct S "
+     b"{ int f(); }; }\nnamespace b {\ntemplate <class Zt> int S<Zt>::f() { return sizeof(Zt); } }",
+     "in this namespace"),
+    (b"namespace a {\n" + RENAMED_S + b"template <class T> void S<T>::f() { T x; }\n}",
+     b"namespace a {\n" + RENAMED_S + b"template <class Vt> void S<Vt>::f() { Vt x; }\n}", None),
+    (b"namespace [[d]] a {\n" + RENAMED_S + b"template <class T> void S<T>::f() { T x; }\n}",
+     b"namespace [[d]] a {\n" + RENAMED_S + b"template <class Vt> void S<Vt>::f() { Vt x; }\n}", "in this namespace"),
+    (b"#define CO } int k() {\ntemplate <class T> int f() { g(); CO return T(); }",
+     b"#define CO } int k() {\ntemplate <class Up> int f() { g(); CO return Up(); }", "unbalanced brackets"),
+    (b"struct S\n#include \"base.inc\"\n{ template <class T> int f() { return sizeof(T); } };",
+     b"struct S\n#include \"base.inc\"\n{ template <class Up> int f() { return sizeof(Up); } };",
+     "#include inside class S"),
+    (b"int N = 5, M = 7;\ntemplate <int N = 1 < 2> int f() { return N; }\nint g() { return N; }\nbool b = 3 > 2;",
+     b"int N = 5, M = 7;\ntemplate <int M = 1 < 2> int f() { return M; }\nint g() { return M; }\nbool b = 3 > 2;",
+     "cannot delimit the template head"),
+    (b"int a = 1, b = 2;\ntemplate <int N = a < b> int f() { return N; }\nint g() { return N; }\nbool c = 3 > 2;",
+     b"int a = 1, b = 2;\ntemplate <int M = a < b> int f() { return M; }\nint g() { return M; }\nbool c = 3 > 2;",
+     "cannot delimit the template head"),
+    (b"template <int N, class T = C<N < 4>> int f() { return sizeof(T); }\nint g() { return sizeof(T); }\nbool b = 3 > 2;",
+     b"template <int N, class Up = C<N < 4>> int f() { return sizeof(Up); }\nint g() { return sizeof(Up); }\n"
+     b"bool b = 3 > 2;", "cannot delimit the template head"),
+    (b"template <auto F = &X::operator()> int f() { return F(); }",
+     b"template <auto Gn = &X::operator()> int f() { return Gn(); }", "cannot delimit the template head"),
+    # a token of the head before its parameter's declaration names the outer entity
+    (b"struct Tp { char c[3]; }; struct Vv { char c[7]; };\ntemplate <class A = Tp, class Tp = int> int f() "
+     b"{ return sizeof(A); }", b"struct Tp { char c[3]; }; struct Vv { char c[7]; };\ntemplate <class A = Vv, "
+     b"class Vv = int> int f() { return sizeof(A); }", "Tp occurs in the head before Tp"),
+    (b"int N = 5, Mv = 9;\ntemplate <int A = N, int N = 2> int f() { return A; }",
+     b"int N = 5, Mv = 9;\ntemplate <int A = Mv, int Mv = 2> int f() { return A; }", "N occurs in the head before N"),
+    (b"template <class Tp, class A = Tp> int f() { return sizeof(A); }",
+     b"template <class Vv, class A = Vv> int f() { return sizeof(A); }", None),
+    # a '<' inside a template argument list of the head may be a less-than: `>>` would end it
+    (b"int a = 1, b = 2;\ntemplate <bool> struct C {};\ntemplate <class T = C<a < b>> int f() { return 0; }\n"
+     b"bool c = 3 > 2;", b"int a = 1, b = 2;\ntemplate <bool> struct C {};\ntemplate <class Up = C<a < b>> int f() "
+     b"{ return 0; }\nbool c = 3 > 2;", "cannot delimit the template head"),
+    (b"template <class T = A<B<int>>> int f() { return sizeof(T); }",
+     b"template <class Up = A<B<int>>> int f() { return sizeof(Up); }", "cannot delimit the template head"),
+    (b"template <class T = std::complex<float>, class L = tiers_t<T, int>> T f() { return T(); }",
+     b"template <class Up = std::complex<float>, class L = tiers_t<Up, int>> Up f() { return Up(); }", None),
+    # a conversion to a template-id and a parenthesised declarator name a member of S
+    (b"template <class> struct V {};\ntemplate <class T> struct S { using Up = int; operator V<int>(); };\n"
+     b"template <class T> S<T>::operator V<int>() { T x; return {}; }", b"template <class> struct V {};\ntemplate "
+     b"<class T> struct S { using Up = int; operator V<int>(); };\ntemplate <class Up> S<Up>::operator V<int>() "
+     b"{ Up x; return {}; }", "out-of-line member of S"),
+    (b"template <class> struct V {};\ntemplate <class T> struct S { operator V<int>(); };\n"
+     b"template <class T> S<T>::operator V<int>() { T x; return {}; }", b"template <class> struct V {};\ntemplate "
+     b"<class T> struct S { operator V<int>(); };\ntemplate <class Up> S<Up>::operator V<int>() { Up x; return {}; }",
+     None),
+    (b"template <class T> struct S { using Up = int; int f(); };\ntemplate <class T> int (S<T>::f)() "
+     b"{ return sizeof(T); }", b"template <class T> struct S { using Up = int; int f(); };\ntemplate <class Up> "
+     b"int (S<Up>::f)() { return sizeof(Up); }", "parenthesised declarator"),
+    (b"template <class T> int (f)(T x) { return sizeof(T); }",
+     b"template <class Up> int (f)(Up x) { return sizeof(Up); }", None),
+    # name shapes: a header outside the hashed files may make a lowercase name or one capital a macro
+    (b"#include <csignal>\ntemplate <class T> int f(int x) { return T(x); }",
+     b"#include <csignal>\ntemplate <class sigmask> int f(int x) { return sigmask(x); }", "sigmask is not"),
+    (b"template <class value> int f() { return value(); }", b"template <class Vt> int f() { return Vt(); }",
+     "value is not one capital"),
+    (b"template <class T> int f() { return T(); }", b"template <class I> int f() { return I(); }", "I is not"),
+    (b"template <class Real> int f() { return Real(); }", b"template <class Scalar> int f() { return Scalar(); }",
+     None),
+    # a lambda's trailing return type after an attribute or an attribute-only macro
+    (b"#define BODY __attribute__((always_inline))\ntemplate <class T> void f() { auto g = [&](int j) BODY -> T& "
+     b"{ return h<T>(j); }; auto k = [=]() __attribute__((hot)) [[gnu::cold]] noexcept -> T { return T(); }; }",
+     b"#define BODY __attribute__((always_inline))\ntemplate <class Up> void f() { auto g = [&](int j) BODY -> Up& "
+     b"{ return h<Up>(j); }; auto k = [=]() __attribute__((hot)) [[gnu::cold]] noexcept -> Up { return Up(); }; }",
+     None),
+    (b"#define BODY mutable p\ntemplate <class T> void f() { auto g = [&](int j) BODY -> T& { return h(j); }; }",
+     b"#define BODY mutable p\ntemplate <class Up> void f() { auto g = [&](int j) BODY -> Up& { return h(j); }; }",
+     "a member access"),
+    (b"template <class T> void f() { auto g = [&](int j) BODY -> T& { return h(j); }; }",
+     b"template <class Up> void f() { auto g = [&](int j) BODY -> Up& { return h(j); }; }", "a member access"),
+    (b"#ifdef X\n#define BODY [[gnu::hot]]\n#else\n#define BODY .p\n#endif\n"
+     b"template <class T> void f() { auto g = [&](int j) BODY -> T& { return h(j); }; }",
+     b"#ifdef X\n#define BODY [[gnu::hot]]\n#else\n#define BODY .p\n#endif\n"
+     b"template <class Up> void f() { auto g = [&](int j) BODY -> Up& { return h(j); }; }", "a member access"),
+    # bases that hide only integral_constant's members, and dependent template-id bases
+    (b"template <class T> struct Is : std::false_type {};\ntemplate <class R> struct Is<std::complex<R>> : "
+     b"std::true_type {};\ntemplate <class T> struct Fp : std::bool_constant<sizeof(T) == 4> { T x; };\n"
+     b"auto sz(P* p) -> std::size_t;",
+     b"template <class Scalar> struct Is : std::false_type {};\ntemplate <class Real> struct Is<std::complex<Real>> : "
+     b"std::true_type {};\ntemplate <class Scalar> struct Fp : std::bool_constant<sizeof(Scalar) == 4> { Scalar x; };\n"
+     b"auto sz(P* p) -> std::size_t;",
+     None),
+    (RENAMED_STD + b"template <class T> struct S : std::true_type { T x; }; }",
+     RENAMED_STD + b"template <class Up> struct S : std::true_type { Up x; }; }", "may hide"),
+    (b"template <class T, class P> struct Ca { using Up = int; };\ntemplate <class T> struct A : Ca<T, int> { T x; };\n"
+     b"template <class R> struct B : Ca<std::complex<R>, Ca<R, int>> { R y; };",
+     b"template <class T, class P> struct Ca { using Up = int; };\ntemplate <class Up> struct A : Ca<Up, int> "
+     b"{ Up x; };\ntemplate <class Real> struct B : Ca<std::complex<Real>, Ca<Real, int>> { Real y; };", None),
+    (b"template <class T> struct A : Ca<T, int> { T x; };\ntemplate <class T, class P> struct Ca { using Up = int; };",
+     b"template <class Up> struct A : Ca<Up, int> { Up x; };\ntemplate <class T, class P> struct Ca { using Up = int; };",
+     "may hide"),
+    (b"namespace n { template <class T> struct Ca { using Up = int; }; }\ntemplate <class T> struct A : n::Ca<int> "
+     b"{ T x; };", b"namespace n { template <class T> struct Ca { using Up = int; }; }\ntemplate <class Up> struct A : "
+     b"n::Ca<int> { Up x; };", "may hide"),
+    (b"template <template <class> class Ca> struct X {};\ntemplate <class T> struct A : Ca<T> { T x; };",
+     b"template <template <class> class Ca> struct X {};\ntemplate <class Up> struct A : Ca<Up> { Up x; };", "may hide"),
+    (RENAMED_TI + b"template <class T> struct Ti<long, T> : Ti<int, T> { T x; };",
+     RENAMED_TI + b"template <class Scalar> struct Ti<long, Scalar> : Ti<int, Scalar> { Scalar x; };", None),
+    (b"namespace l3 { template <int A> struct Geom {}; namespace cfg {\ntemplate <class T, int A> struct Tiled : "
+     b"Geom<A> { T x; }; } }", b"namespace l3 { template <int A> struct Geom {}; namespace cfg {\ntemplate <class Scalar, "
+     b"int A> struct Tiled : Geom<A> { Scalar x; }; } }", None),
+    (b"namespace l3 { template <int A> struct Geom {}; namespace cfg { template <int> using Geom = Base;\n"
+     b"template <class T, int A> struct Tiled : Geom<A> { T x; }; } }", b"namespace l3 { template <int A> struct Geom "
+     b"{}; namespace cfg { template <int> using Geom = Base;\ntemplate <class Scalar, int A> struct Tiled : Geom<A> "
+     b"{ Scalar x; }; } }", "may hide"),
+    (b"namespace l3 { template <int A> struct Geom {}; namespace cfg { using namespace other;\ntemplate <class T, int A> "
+     b"struct Tiled : Geom<A> { T x; }; } }", b"namespace l3 { template <int A> struct Geom {}; namespace cfg { using "
+     b"namespace other;\ntemplate <class Scalar, int A> struct Tiled : Geom<A> { Scalar x; }; } }", "may hide"),
+    # a '<' after std:: and a std template inside a head's argument list opens its own
+    (b"template <class M, class Re = Rt<std::remove_cv_t<typename M::value_type>>> Re f(M m) { return Re(); }",
+     b"template <class Mv, class Re = Rt<std::remove_cv_t<typename Mv::value_type>>> Re f(Mv m) { return Re(); }",
+     None),
+    (b"template <class M, class Re = Rt<std::my_t<typename M::value_type>>> Re f(M m) { return Re(); }",
+     b"template <class Mv, class Re = Rt<std::my_t<typename Mv::value_type>>> Re f(Mv m) { return Re(); }",
+     "cannot delimit the template head"),
+    # <cmath>'s classification names are functions; other library macros take no renamed argument
+    (b"template <class T> struct A { static bool isfinite(const T& a) { return sycl::isfinite(a); } };",
+     b"template <class Scalar> struct A { static bool isfinite(const Scalar& a) { return sycl::isfinite(a); } };",
+     None),
+    (b"template <class T> int f() { return offsetof(T, x); }", b"template <class Scalar> int f() "
+     b"{ return offsetof(Scalar, x); }", "macro call"),
+    # macros: parameters and bodies matter only where expanded or defined, a name only where in effect
+    (b"#define INST(T) template int f<T>();\ntemplate <class T> int f() { return sizeof(T); }\nINST(float)",
+     b"#define INST(T) template int f<T>();\ntemplate <class Scalar> int f() { return sizeof(Scalar); }\nINST(float)",
+     None),
+    (RENAMED_COL + b"#undef COL\ntemplate <class R> R h(R x) { return x; }",
+     RENAMED_COL + b"#undef COL\ntemplate <class Real> Real h(Real x) { return x; }", None),
+    (RENAMED_COL + b"template <class R> R h(R x) { COL(1) return x; }\n#undef COL",
+     RENAMED_COL + b"template <class Real> Real h(Real x) { COL(1) return x; }\n#undef COL", "macro COL"),
+    (b"#define CAT(a, b) a##b\n#define COL R\ntemplate <class R> R h(R x) { return CAT(CO, L)(x); }",
+     b"#define CAT(a, b) a##b\n#define COL R\ntemplate <class Real> Real h(Real x) { return CAT(CO, L)(x); }",
+     "macro CAT"),
+    (b"#define Real double\nReal g();\n#undef Real\ntemplate <class R> R h(R x) { return x; }",
+     b"#define Real double\nReal g();\n#undef Real\ntemplate <class Real> Real h(Real x) { return x; }", None),
+    (b"#define Real double\ntemplate <class R> R h(R x) { return x; }\n#undef Real",
+     b"#define Real double\ntemplate <class Real> Real h(Real x) { return x; }\n#undef Real", "in effect inside"),
+    (b"#define Real double\ntemplate <class R> R h(R x) { return x; }",
+     b"#define Real double\ntemplate <class Real> Real h(Real x) { return x; }", "beyond that file"),
+    (b"#define Real double\n#include \"x.hh\"\n#undef Real\ntemplate <class R> R h(R x) { return x; }",
+     b"#define Real double\n#include \"x.hh\"\n#undef Real\ntemplate <class Real> Real h(Real x) { return x; }",
+     "beyond that file"),
+    (b"#undef Real\ntemplate <class R> R h(R x) { return x; }",
+     b"#undef Real\ntemplate <class Real> Real h(Real x) { return x; }", "without an earlier #define"),
+    # a '[' after `operator`, `delete` or as `[[` starts no lambda: `-> T` there is a member access
+    (b"struct E { int T, Up; }; struct A { E* operator[](int); };\ntemplate <class T> int f(A& a) "
+     b"{ return a.operator[](0)->T; }", b"struct E { int T, Up; }; struct A { E* operator[](int); };\n"
+     b"template <class Up> int f(A& a) { return a.operator[](0)->Up; }", "a member access"),
+    (b"template <class T> void f(P* p) { delete [] (p)->T; }", b"template <class Up> void f(P* p) "
+     b"{ delete [] (p)->Up; }", "a member access"),
+    (b"template <class T> void f(P* p) { [[likely]] (p)->T = 7; }", b"template <class Up> void f(P* p) "
+     b"{ [[likely]] (p)->Up = 7; }", "a member access"),
+    (b"template <class T> T f() { return [](int k) -> T { return T(k); }(1) + g([&](int j) noexcept -> T "
+     b"{ return T(j); }); }", b"template <class Up> Up f() { return [](int k) -> Up { return Up(k); }(1) + "
+     b"g([&](int j) noexcept -> Up { return Up(j); }); }", None),
+    # a pasting macro may build any name, so it is never expanded in a renamed scope
+    (b"#define CAT(a, b) a##b\nstruct Up { static int v(); };\ntemplate <class T> int f() { return CAT(U, p)::v(); }",
+     b"#define CAT(a, b) a##b\nstruct Up { static int v(); };\ntemplate <class Up> int f() { return CAT(U, p)::v(); }",
+     "macro CAT"),
+    (b"#define UPNAME U##p\nstruct Up { static int v(); };\ntemplate <class T> int f() { return UPNAME::v(); }",
+     b"#define UPNAME U##p\nstruct Up { static int v(); };\ntemplate <class Up> int f() { return UPNAME::v(); }",
+     "macro UPNAME"),
+    (b"#define CAT(a, b) a##b\nint CAT(x, 1);\ntemplate <class T> int f() { return T(); }",
+     b"#define CAT(a, b) a##b\nint CAT(x, 1);\ntemplate <class Up> int f() { return Up(); }", None),
+    # pop_macro restores what #undef removed
+    (b'#define Up(x) (x + 41)\n#pragma push_macro("Up")\n#undef Up\n#pragma pop_macro("Up")\n'
+     b'template <class T> int f() { return T(1); }', b'#define Up(x) (x + 41)\n#pragma push_macro("Up")\n#undef Up\n'
+     b'#pragma pop_macro("Up")\ntemplate <class Up> int f() { return Up(1); }', "pop_macro"),
+    (b'#define Up(x) (x + 41)\n#pragma push_macro("Up")\n#undef Up\n_Pragma("pop_macro(\\"Up\\")")\n'
+     b'template <class T> int f() { return T(1); }', b'#define Up(x) (x + 41)\n#pragma push_macro("Up")\n#undef Up\n'
+     b'_Pragma("pop_macro(\\"Up\\")")\ntemplate <class Up> int f() { return Up(1); }', "pop_macro"),
+    (b"#define PRAGMA(x) _Pragma(#x)\ntemplate <class T> int f() { return T(1); }",
+     b"#define PRAGMA(x) _Pragma(#x)\ntemplate <class Up> int f() { return Up(1); }", "pop_macro"),
+    (b'#pragma push_macro("Wx")\n#pragma pop_macro("Wx")\n#define UNROLL _Pragma("unroll")\n'
+     b'template <class T> int f() { UNROLL for (;;) {} return T(1); }', b'#pragma push_macro("Wx")\n'
+     b'#pragma pop_macro("Wx")\n#define UNROLL _Pragma("unroll")\ntemplate <class Up> int f() '
+     b'{ UNROLL for (;;) {} return Up(1); }', None),
+    # a parenthesised declarator after its type: `Int (S<T>::v)` defines S's v, where S's Up hides
+    (RENAMED_INT + b"template <class T> Int (S<T>::v) = sizeof(T);",
+     RENAMED_INT + b"template <class Up> Int (S<Up>::v) = sizeof(Up);", "parenthesised declarator"),
+    (RENAMED_INT + b"template <class T> Int (S<T>::v){sizeof(T)};",
+     RENAMED_INT + b"template <class Up> Int (S<Up>::v){sizeof(Up)};", "parenthesised declarator"),
+    (RENAMED_INT + b"template <class T> [[maybe_unused]] Int (S<T>::v) = 1;\nT y;",
+     RENAMED_INT + b"template <class Up> [[maybe_unused]] Int (S<Up>::v) = 1;\nUp y;", "parenthesised declarator"),
+    (RENAMED_INT + b"template <class T> INL Int (S<T>::v) = 1;\nT y;",
+     RENAMED_INT + b"template <class Up> INL Int (S<Up>::v) = 1;\nUp y;", "parenthesised declarator"),
+    (RENAMED_S + b"template <class T> void S<T>::f(std::size_t n) { T x; }\ntemplate <class T> T const at(std::size_t "
+     b"i) { return T(i); }\ntemplate <class T> decltype(auto) g(std::size_t i) { return T(i); }\n"
+     b"template <class T> S(std::vector<T>) -> S<T>;\ntemplate <class T> Int h(std::size_t i) { return T(i); }",
+     RENAMED_S + b"template <class Vt> void S<Vt>::f(std::size_t n) { Vt x; }\ntemplate <class Vt> Vt const "
+     b"at(std::size_t i) { return Vt(i); }\ntemplate <class Vt> decltype(auto) g(std::size_t i) { return Vt(i); }\n"
+     b"template <class Vt> S(std::vector<Vt>) -> S<Vt>;\ntemplate <class Vt> Int h(std::size_t i) { return Vt(i); }",
+     None),
+    # the signature's spelling holds the parameters' names
+    (b"template <class T> void f() { puts(__PRETTY_FUNCTION__); }",
+     b"template <class Up> void f() { puts(__PRETTY_FUNCTION__); }", "__PRETTY_FUNCTION__ spells"),
+    (b"#define WHERE __PRETTY_FUNCTION__\ntemplate <class T> void f() { T x; puts(WHERE); }",
+     b"#define WHERE __PRETTY_FUNCTION__\ntemplate <class Up> void f() { Up x; puts(WHERE); }", "macro WHERE"),
+    (b"void log(std::source_location l = std::source_location::current());\ntemplate <class T> void f() { log(); T x; }",
+     b"void log(std::source_location l = std::source_location::current());\ntemplate <class Up> void f() "
+     b"{ log(); Up x; }", "source_location may spell"),
+    (b"template <class T> void f() { T x; puts(__func__); }", b"template <class Up> void f() { Up x; puts(__func__); }",
+     None),
+    (b"#include <cassert>\ntemplate <class T> void f(int n) { T x; assert(n > 0); }\nvoid g(int n) { assert(n); }",
+     b"#include <cassert>\ntemplate <class Up> void f(int n) { Up x; assert(n > 0); }\nvoid g(int n) { assert(n); }",
+     "assert spells"),
+    (b"#include <cassert>\nvoid g(int n) { assert(n); }\ntemplate <class T> void f(int n) { T x; }",
+     b"#include <cassert>\nvoid g(int n) { assert(n); }\ntemplate <class Up> void f(int n) { Up x; }", None),
+    # a specialization of integral_constant may give it any member
+    (b"namespace std { template <> struct integral_constant<My*, nullptr> { using Up = char; }; }\ntemplate <class T> "
+     b"struct S : std::integral_constant<My*, nullptr> { T x; };", b"namespace std { template <> struct "
+     b"integral_constant<My*, nullptr> { using Up = char; }; }\ntemplate <class Up> struct S : "
+     b"std::integral_constant<My*, nullptr> { Up x; };", "may hide"),
+    (b"template <> struct std::integral_constant<My*, nullptr> { using Up = char; };\ntemplate <class T> "
+     b"struct S : std::integral_constant<My*, nullptr> { T x; };", b"template <> struct std::integral_constant<My*, "
+     b"nullptr> { using Up = char; };\ntemplate <class Up> struct S : std::integral_constant<My*, nullptr> { Up x; };",
+     "may hide"),
+    (b"template <class T> int f() { return T(); }", b"template <class Value> int f() { return Value(); }",
+     "Value is not"),
+) + tuple((f"template <class T, {form}> int f() {{ return sizeof(W); }}".encode(),
+           f"template <class T, {form.replace('W', 'Qt')}> int f() {{ return sizeof(Qt); }}".encode(),
+           "W -> Qt is not a template parameter") for form in UNNAMED_FORMS)
+
+
+def renamed_self_test(d, run_line, cell, cands):
+    """--rehash-renamed on throwaway git repos (a pure rename, one with comment and whitespace edits,
+    a rename to a name the scope uses, an inconsistent one, a renamed local, an extra token, an
+    uncommitted change) and renamed_tokens on member access, macros, literals and the C++ lexicon."""
+    bad = []
+
+    def case(name):
+        repo = os.path.join(d, "renamed-" + name)
+        test_git(d, "init", "-q", repo)
+        test_put(repo, "tools/tune/posv_spec.cc", TEST_SPEC.format(k="src/a/k.cc", t="src/a/t.cc", extra="").encode())
+        test_put(repo, "src/a/k.cc", RENAMED_BASE_K)
+        test_put(repo, "src/a/t.cc", b"template <class T>\nT third(T x) { return x / 3; }\nint t;\n")
+        test_put(repo, "src/a/util.hh", b"int u;\n")
+        test_git(repo, "add", "-A")
+        test_git(repo, "commit", "-qm", "base")
+        base = {f: kernel_hash(family_paths(parse_kernel_block(read_spec_source("posv", repo)), f), repo) for f in cands}
+        test_put(repo, "src/a/k.cc", RENAMED_HEAD_K[name])
+        test_put(repo, "src/a/t.cc", b"template <class Real>\nReal third(Real x) { return x / 3; }\nint t;\n")
+        test_git(repo, "commit", "-qam", "rename")
+        rid = "20261001T000000-h-1"
+        lines = [run_line(rid, "2026-10-01"), cell(rid, "deep", 64, hashes=base),
+                 cell(rid, "deep", 128, hashes=dict(base, tiny="v1tiny")),
+                 {"kind": "rehash", "family": "tiny", "from": "v1tiny", "to": base["tiny"], "at": "x", "proof": "normalized"}]
+        path = os.path.join(d, f"renamed-{name}.jsonl")
+        with open(path, "w") as f:
+            f.write("".join(json.dumps(x) + "\n" for x in lines))
+        return repo, path, base
+
+    def expect(cond, what):
+        if not cond:
+            bad.append(f"self-test: --rehash-renamed: {what}")
+
+    for name in ("ok", "cosmetic"):
+        repo, path, base = case(name)
+        report, recs = rehash_renamed(path, "posv", "HEAD~1", repo=repo)
+        now = family_hashes(parse_kernel_block(read_spec_source("posv", repo)), cands, repo)
+        short = git_out(repo, "rev-parse", "--short=8", "HEAD~1").decode().strip()
+        why = {r["family"]: r["why"] for r in recs}
+        expect(sorted((r["family"], r["from"]) for r in recs) == sorted(
+            [("tiny", base["tiny"]), ("tiny", "v1tiny"), ("cta", base["cta"]), ("blocked", base["blocked"])])
+            and all(r["to"] == now[r["family"]] != base[r["family"]] and r["proof"] == f"renamed:{short}" for r in recs)
+            and why.get("tiny", "").startswith("3 template parameters renamed in 2 files")
+            and why.get("cta", "").startswith("2 template parameters renamed in 1 files"),
+            f"{name}: a template-parameter rename proves -> {report} {recs}")
+        expect(all(freshness(c, now) == "current" for c in read_ledger(path).cells), f"{name}: the records are current")
+        expect(rehash_renamed(path, "posv", "HEAD~1", repo=repo)[1] == [], f"{name}: a second run writes nothing")
+    with open(os.path.join(repo, "src", "a", "k.cc"), "ab") as f:
+        f.write(b"int dirty;\n")
+    try:
+        rehash_renamed(path, "posv", "HEAD~1", repo=repo, write=False)
+        expect(False, "an uncommitted change to a hashed file was accepted")
+    except SystemExit as e:
+        expect("uncommitted" in str(e), f"uncommitted change message {e}")
+    for name, want in (("used", "r occurs in the old scope"), ("inconsistent", "inconsistent rename"),
+                       ("nonparam", "r -> two is not a template parameter"), ("edit", "tokens")):
+        repo, path, _ = case(name)
+        report, recs = rehash_renamed(path, "posv", "HEAD~1", repo=repo)
+        expect(not recs and any("no proof" in r and want in r for r in report), f"{name} -> {report}")
+    for old, new, want in RENAMED_FIXTURES:
+        why = alpha_problem([("f.cc", old, new)])[0]
+        expect(why is None if want is None else why and want in why, f"alpha_problem({new!r}) -> {why}")
+    # another file's macros: an attribute macro defined there, a macro naming R expanded only there
+    core = b"#define BODY __attribute__((always_inline))\n" + RENAMED_COL + b"#undef COL\n"
+    lam = (b"template <class R> void f() { auto g = [&](int j) BODY -> R& { return h(j); }; }",
+           b"template <class Real> void f() { auto g = [&](int j) BODY -> Real& { return h(j); }; }")
+    why = [alpha_problem([("k.cc",) + lam] + ([("core.hh", core, core)] if two else []))[0] for two in (0, 1)]
+    expect(why[0] and "a member access" in why[0] and why[1] is None, f"BODY defined in another file -> {why}")
+    lexed = cxx_tokens(b"a>>=b; x // c\n/* d */ 'q' u8\"s\"_x R\"(p)\"\n %:define Q \\\n  1\n1'000.5e+3")
+    expect(lexed == [("id", "a"), ("punct", ">>="), ("id", "b"), ("punct", ";"), ("id", "x"), ("str", "'q'"),
+                     ("str", 'u8"s"_x'), ("str", 'R"(p)"'), ("pp", "%: define Q 1"), ("num", "1'000.5e+3")],
+           f"cxx_tokens -> {lexed}")
     return bad
 
 
@@ -1435,6 +3049,7 @@ def self_test():
                                    repo=repo, write=False)
         expect(ok, f"--rehash-sample accepts the emitted sample -> {msg}")
         bad += moved_self_test(d, run_line, cell, cands)
+        bad += renamed_self_test(d, run_line, cell, cands)
         # row kinds
         expect(row_kind_problems({"source": "ledger:x"}, [(("L",), [("a", None), ("b", 1.0)])]) != [], "mixed row")
         expect(row_kind_problems({"source": "x"}, [(("L",), [("a", None)])]) != [], "untimed row needs ledger:")
@@ -1453,8 +3068,11 @@ def main():
                     help="with --op and --device: rehash the stale families if this sample run agrees with the old records")
     ap.add_argument("--rehash-moved", metavar="BASE",
                     help="rehash every family whose sources only moved since commit BASE (all ledgers, or --op/--device)")
+    ap.add_argument("--rehash-renamed", metavar="BASE",
+                    help="rehash every family whose sources only renamed template parameters since commit BASE "
+                         "(all ledgers, or --op/--device)")
     ap.add_argument("--family", nargs="+", help="--rehash-sample: only these families")
-    ap.add_argument("--at", help="--rehash-sample, --rehash-moved: the commit to record (default HEAD)")
+    ap.add_argument("--at", help="--rehash-sample, --rehash-moved, --rehash-renamed: the commit to record (default HEAD)")
     ap.add_argument("--emit-sample", metavar="OUT",
                     help="with --op and --device: write a stratified --remeasure-keys file for a --rehash-sample run")
     ap.add_argument("--remeasure-out", metavar="FILE",
@@ -1480,10 +3098,13 @@ def main():
         ok, msg, _ = rehash_sample(path, args.op, args.rehash_sample, args.family, args.at)
         print("\n".join(msg))
         return 0 if ok else 1
-    if args.rehash_moved:
+    if args.rehash_moved or args.rehash_renamed:
+        if args.rehash_moved and args.rehash_renamed:
+            raise SystemExit("--rehash-moved and --rehash-renamed are separate proofs: run one at a time")
+        prove, base = (rehash_moved, args.rehash_moved) if args.rehash_moved else (rehash_renamed, args.rehash_renamed)
         refused = 0
         for (o, d), path in ledger_files(args.ledger, args.op, args.device):
-            report, lines = rehash_moved(path, o, args.rehash_moved, args.at)
+            report, lines = prove(path, o, base, args.at)
             refused += sum("no proof" in r for r in report)
             print(f"{o}.{d}: {len(lines)} rehash lines\n" + "".join(f"  {r}\n" for r in report), end="")
         return 1 if refused else 0
