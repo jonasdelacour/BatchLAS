@@ -140,8 +140,8 @@ per kernel (the tiny-solver tables were tuned unbounded) and re-pinned kernel ha
 
 Open outside the capped part loops. A `parallel_for` over a plain `sycl::range<3>` with the batch in
 dimension 0 is rounded up by DPC++ (`__pf_kernel_wrapper`), here to 65536, past CUDA's 65535 grid:
-pinned blocked gesvd (float, \f$n = 40\f$) aborts from batch 65505. Sites: `src/ops/gesvd/ormbr/ormbr.cc:169`,
-`src/kernels/common/larft_wy.hh:116`, `src/ops/orgqr/kernels/orgqr_blocked.cc:225,256`,
+pinned blocked gesvd (float, \f$n = 40\f$) aborts from batch 65505. Sites: `src/ops/gesvd/ormbr/ormbr.cc:171`,
+`src/kernels/common/larft_wy.hh:116`, `src/ops/orgqr/kernels/orgqr_blocked.cc:226,256`,
 `src/ops/syev/kernels/uplo_mirror.cc:28`, `src/ops/syev/sytrd/band_reduction.cc` (nine launches),
 `src/ops/syev/sytrd/sytrd_sy2sb.cc:125`. **Workaround:** the blocked geqrf, orgqr, ormqr, gesvd and
 syev (cta, blocked) part loops keep every part at `max_groups_yz / 2`; test
@@ -230,7 +230,7 @@ fixture also read an uninitialized dense reference on the host. Guards:
 Located to a line, not confirmed by a test.
 
 - **`gesvdj_cta` global rescale ignores columns 32..63 on the C=64 rung**
-  (`src/ops/gesvd/kernels/gesvdj_cta.cc:354`): overflow headroom is narrower than designed; see
+  (`src/ops/gesvd/kernels/gesvdj_cta.cc:356`): overflow headroom is narrower than designed; see
   [global power-of-two scaling](gesvd.md#gesvdj_cta-global-power-of-two-scaling).
 - Matrix containers and the environment parser are tracked on their pages:
   [matrix model](matrix-model.md#matrix-model-open-debts),
