@@ -111,13 +111,13 @@ namespace batchlas
     template <NormType NT, int WG, typename T, MatrixFormat MF>
     void norm_launch(Queue &ctx, const MatrixView<T, MF> &A, const Span<float_t<T>> norms, const std::uint8_t* mk) {
         const bool masked = mk != nullptr;  // a captured null pointer can read as non-null on AdaptiveCpp Metal
-        ctx -> submit([&](sycl::handler &cgh) {
+        ctx -> submit([&](sycl::handler& h) {
             auto [data, batch_size, rows, cols, ld, stride] =
                 std::make_tuple(A.data_ptr(), A.batch_size(), A.rows(), A.cols(), A.ld(), A.stride());
-            batchlas::impl::parallel_for<NormKernel<T, MF, NT, WG>>(cgh, sycl::nd_range<1>(size_t(batch_size) * WG, WG), [=](sycl::nd_item<1> item) {
-                const auto b = item.get_group_linear_id();
+            batchlas::impl::parallel_for<NormKernel<T, MF, NT, WG>>(h, sycl::nd_range<1>(size_t(batch_size) * WG, WG), [=](sycl::nd_item<1> it) {
+                const auto b = it.get_group_linear_id();
                 if (masked && !mk[b]) return;  // I1: uniform per work-group, before any barrier
-                const device::WorkGroup<WG> ex{item};
+                const device::WorkGroup<WG> ex{it};
                 const auto r = device::lange<NT>(ex, device::mat(data + b * stride, rows, cols, ld));
                 if (ex.leader()) norms[b] = r;
             });

@@ -147,9 +147,9 @@ Event syevx_direct(Queue& ctx,
 
             batchlas::impl::parallel_for<SyevxDirectSelectKernel<B, T, MFormat>>(h,
                 sycl::nd_range<1>(sycl::range<1>{static_cast<size_t>(batch_size) * wg}, sycl::range<1>{wg}),
-                [=](sycl::nd_item<1> item) {
-                    const device::RtGroup<> ex{item};
-                    const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
+                [=](sycl::nd_item<1> it) {
+                    const device::RtGroup<> ex{it};
+                    const int64_t bid = static_cast<int64_t>(it.get_group_linear_id());
                     if (masked && !mk[bid]) return;  // I1: uniform per work-group, before the barrier
                     const int nn = static_cast<int>(n);
                     // Truncation keeps the LOWEST `capacity`; `reverse` flips only what was kept;

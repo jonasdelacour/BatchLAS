@@ -297,11 +297,11 @@ namespace batchlas {
                                  int64_t n,
                                  int64_t batch,
                                  const MatrixView<T, MatrixFormat::Dense>& vh_out) {
-                ctx->submit([&](sycl::handler& cgh) {
+                ctx->submit([&](sycl::handler& h) {
                     auto Vh = vh_out.kernel_view();
                     const int64_t nn = n;
                     const T* src = v_src;
-                    batchlas::impl::parallel_for<GesvdVhKernel<T>>(cgh,
+                    batchlas::impl::parallel_for<GesvdVhKernel<T>>(h,
                         sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n * n)),
                         [=](sycl::id<2> id) {
                             const int64_t b = static_cast<int64_t>(id[0]);

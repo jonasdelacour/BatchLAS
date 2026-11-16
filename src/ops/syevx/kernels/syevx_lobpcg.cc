@@ -455,9 +455,9 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
             ctx->submit([&](sycl::handler& h) {
                 batchlas::impl::parallel_for<SyevxJacobiDiagonalKernel<B, T, MFormat>>(h,
                     sycl::nd_range<1>(sycl::range<1>{size_t(batch_size * wg)}, sycl::range<1>{wg}),
-                    [=](sycl::nd_item<1> item) {
-                        const device::RtGroup<> ex{item};
-                        const int bid = int(item.get_group_linear_id());
+                    [=](sycl::nd_item<1> it) {
+                        const device::RtGroup<> ex{it};
+                        const int bid = int(it.get_group_linear_id());
                         if (masked && !mk[bid]) return;  // I1, before the group reductions
                         const auto Ab = Akv.batch_item(bid);
                         // An absent CSR entry reads back as 0, which both the definiteness
@@ -1201,9 +1201,9 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                 ctx->submit([&](sycl::handler& h) {
                     batchlas::impl::parallel_for<SyevxReverseEigenvectorsKernel<B, T, MFormat>>(h,
                         sycl::nd_range<1>(sycl::range<1>{size_t(batch_size * 256)}, sycl::range<1>{size_t(256)}),
-                        [=](sycl::nd_item<1> item) {
-                            const device::WorkGroup<256> ex{item};
-                            const int64_t bid = int64_t(item.get_group_linear_id());
+                        [=](sycl::nd_item<1> it) {
+                            const device::WorkGroup<256> ex{it};
+                            const int64_t bid = int64_t(it.get_group_linear_id());
                             if (masked && !mk[bid]) return;  // I1
                             const auto Xb = device::mat(Xptr + bid * X_stride, int(nn), int(k), int(X_ld));
                             device::lacpy<device::Part::Full, Transpose::NoTrans, device::alg::Flat>(

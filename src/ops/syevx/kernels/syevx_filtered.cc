@@ -260,9 +260,9 @@ Event syevx_filtered(Queue& ctx,
             batchlas::impl::parallel_for<SyevxFilterBoundsPartialKernel<B, T, MFormat>>(h,
                 sycl::nd_range<1>(sycl::range<1>{static_cast<size_t>(batch) * rg * kBoundsWG},
                                   sycl::range<1>{kBoundsWG}),
-                [=](sycl::nd_item<1> item) {
-                    const device::WorkGroup<static_cast<int>(kBoundsWG)> ex{item};
-                    const size_t gid = item.get_group_linear_id();
+                [=](sycl::nd_item<1> it) {
+                    const device::WorkGroup<static_cast<int>(kBoundsWG)> ex{it};
+                    const size_t gid = it.get_group_linear_id();
                     const int b = static_cast<int>(gid / rg);
                     if (masked && !mk[b]) return;  // I1: the group is one item's, before the reduction
                     const size_t g = gid % rg;
@@ -289,9 +289,9 @@ Event syevx_filtered(Queue& ctx,
             batchlas::impl::parallel_for<SyevxFilterBoundsReduceKernel<B, T, MFormat>>(h,
                 sycl::nd_range<1>(sycl::range<1>{static_cast<size_t>(batch) * rwg},
                                   sycl::range<1>{static_cast<size_t>(rwg)}),
-                [=](sycl::nd_item<1> item) {
-                    const device::RtGroup<> ex{item};
-                    const int b = static_cast<int>(item.get_group_linear_id());
+                [=](sycl::nd_item<1> it) {
+                    const device::RtGroup<> ex{it};
+                    const int b = static_cast<int>(it.get_group_linear_id());
                     if (masked && !mk[b]) return;  // I1
                     // Partials are interleaved (lo, hi) pairs, one per row group.
                     const auto plo = device::vec(part + 2 * static_cast<size_t>(b) * rg, static_cast<int>(rg), 2);
@@ -377,9 +377,9 @@ Event syevx_filtered(Queue& ctx,
                 batchlas::impl::parallel_for<SyevxFilterResidualKernel<B, T, MFormat>>(h,
                     sycl::nd_range<1>(sycl::range<1>{static_cast<size_t>(batch) * wg},
                                       sycl::range<1>{static_cast<size_t>(wg)}),
-                    [=](sycl::nd_item<1> item) {
-                        const device::RtGroup<> ex{item};
-                        const int b = static_cast<int>(item.get_group_linear_id());
+                    [=](sycl::nd_item<1> it) {
+                        const device::RtGroup<> ex{it};
+                        const int b = static_cast<int>(it.get_group_linear_id());
                         // I1, before the reduction. "Converged" is the neutral flag: the host
                         // loop then stops on the active items alone.
                         if (masked && !mk[b]) {
@@ -658,9 +658,9 @@ Event syevx_filtered(Queue& ctx,
             batchlas::impl::parallel_for<SyevxFilterFinalizeKernel<B, T, MFormat>>(h,
                 sycl::nd_range<1>(sycl::range<1>{static_cast<size_t>(batch) * wg},
                                   sycl::range<1>{static_cast<size_t>(wg)}),
-                [=](sycl::nd_item<1> item) {
-                    const device::RtGroup<> ex{item};
-                    const int b = static_cast<int>(item.get_group_linear_id());
+                [=](sycl::nd_item<1> it) {
+                    const device::RtGroup<> ex{it};
+                    const int b = static_cast<int>(it.get_group_linear_id());
                     if (masked && !mk[b]) return;  // I1
                     const int n_ = static_cast<int>(nn), m_ = static_cast<int>(mm), k_ = static_cast<int>(kk);
                     // theta is ascending: the wanted block is its head, or its tail reversed.

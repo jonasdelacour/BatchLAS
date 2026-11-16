@@ -92,10 +92,10 @@ Event stebz(Queue& ctx,
 
         batchlas::impl::parallel_for<StebzKernel<B, T>>(h,
             sycl::nd_range<1>(sycl::range<1>{static_cast<size_t>(batch_size) * wg}, sycl::range<1>{wg}),
-            [=](sycl::nd_item<1> item) {
-                const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
+            [=](sycl::nd_item<1> it) {
+                const int64_t bid = static_cast<int64_t>(it.get_group_linear_id());
                 if (mask != nullptr && mask[bid] == 0) return;  // I1: before the first collective
-                const device::RtGroup<> ex{item};
+                const device::RtGroup<> ex{it};
                 const auto dv = device::vec(d.data_ptr() + bid * d.stride(), int(n), d.inc());
                 const auto ev = device::vec(e.data_ptr() + bid * e.stride(), int(n) - 1, e.inc());
                 const device::StebzOptions<T> p{value_range, il, iu, vl, vu, abstol, descending, max_iter};

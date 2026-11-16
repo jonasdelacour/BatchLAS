@@ -1361,12 +1361,12 @@ Event iluk_apply(Queue& ctx,
 
     constexpr int wg_size = 128;
     ctx->parallel_for<ILUKApplyKernel<B, T>>(
-        sycl::nd_range<1>(total_systems * wg_size, wg_size), [=](sycl::nd_item<1> item) {
-        const int linear = static_cast<int>(item.get_group(0));
+        sycl::nd_range<1>(total_systems * wg_size, wg_size), [=](sycl::nd_item<1> it) {
+        const int linear = static_cast<int>(it.get_group(0));
         const int b = linear / nrhs;
         const int col = linear % nrhs;
         if (masked && mask[b] == 0) return;  // I1: uniform per work-group, before any barrier
-        const device::WorkGroup<wg_size> ex{item};
+        const device::WorkGroup<wg_size> ex{it};
 
         // Thin launcher over the device iluk_apply. The operands are formed in the order the solve
         // reads them, so the kernel's capture layout (its parameter order) is the hand kernel's.

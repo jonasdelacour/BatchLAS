@@ -262,10 +262,10 @@ namespace batchlas {
 
                     batchlas::impl::parallel_for<OrthoNormalizeVector<B, T>>(h,
                         sycl::nd_range<1>(sycl::range<1>{size_t(batch_size * normalize_wg_size)}, sycl::range<1>{size_t(normalize_wg_size)}),
-                        [=](sycl::nd_item<1> item){
-                            auto bid = item.get_group_linear_id();
+                        [=](sycl::nd_item<1> it){
+                            auto bid = it.get_group_linear_id();
                             if (masked && !mk[bid]) return;  // uniform per work-group, before the reduction
-                            const device::RtGroup<> ex{item};
+                            const device::RtGroup<> ex{it};
                             const auto v = device::vec(Aptr + int64_t(bid) * A_stride + vbase, m, vstep);
                             device::detail::normalize(ex, v);  // the device ortho's CGS2 step
                         });
@@ -278,10 +278,10 @@ namespace batchlas {
 
             auto ATA_ptr = C.data_ptr();
             ctx -> submit([&](sycl::handler& h){
-                batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>{size_t(batch_size * k)}, sycl::range<1>{size_t(k)}), [=](sycl::nd_item<1> item) BATCHLAS_DEVICE_BODY {
-                    auto bid = item.get_group_linear_id();
+                batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>{size_t(batch_size * k)}, sycl::range<1>{size_t(k)}), [=](sycl::nd_item<1> it) BATCHLAS_DEVICE_BODY {
+                    auto bid = it.get_group_linear_id();
                     if (masked && !mk[bid]) return;
-                    const device::RtGroup<> ex{item};  // WG = k: item i owns C(i, i)
+                    const device::RtGroup<> ex{it};  // WG = k: item i owns C(i, i)
                     const auto d = device::vec(ATA_ptr + bid * ATA_stride, k, k + 1);  // diag(C)
                     // ||A||_F^2 = trace(A^H A) bounds ||A||_2^2; the shift scales with the Gram
                     // matrix, so with the square of the norm, in the real type's epsilon.
@@ -309,12 +309,12 @@ namespace batchlas {
             //Compute D = diag(A^H * A) ^-1/2
             ctx -> submit([&](sycl::handler& h) {
                 auto ATA_ptr = C.data_ptr();
-                batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>{size_t(batch_size * k)}, sycl::range<1>{size_t(k)}), [=](sycl::nd_item<1> item){
-                auto bid = item.get_group_linear_id();
+                batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>{size_t(batch_size * k)}, sycl::range<1>{size_t(k)}), [=](sycl::nd_item<1> it){
+                auto bid = it.get_group_linear_id();
                 // The SVQB scalings write only scratch (C, diags), so they take no item guard. A guard
                 // on the raw pointer skipped every item on AdaptiveCpp Metal (a captured null read
                 // as non-null), leaving stale diags.
-                const device::RtGroup<> ex{item};  // WG = k: one diagonal entry per item
+                const device::RtGroup<> ex{it};  // WG = k: one diagonal entry per item
                 // D = diag(A^H A)^(-1/2)
                 // Guard against exact / flushed-to-zero diagonals to avoid Inf/NaN from rsqrt(0).
                 // Keep the threshold extremely small so we don't distort legitimate (small) column norms.
@@ -330,9 +330,9 @@ namespace batchlas {
             ctx -> submit([&](sycl::handler& h){
                 auto D_local = sycl::local_accessor<float_t, 1>(sycl::range<1>(k), h);
                 auto ATA_ptr = C.data_ptr();
-                batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>{size_t(batch_size*k)}, sycl::range<1>{size_t(k)}), [=](sycl::nd_item<1> item){
-                auto bid = item.get_group_linear_id();
-                const device::RtGroup<> ex{item};  // WG = k: one row per item
+                batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>{size_t(batch_size*k)}, sycl::range<1>{size_t(k)}), [=](sycl::nd_item<1> it){
+                auto bid = it.get_group_linear_id();
+                const device::RtGroup<> ex{it};  // WG = k: one row per item
                 const auto d_slm = device::vec<device::Mem::Local>(util::get_raw_ptr(D_local), k);
                 const auto d_in = device::vec(diags.data() + bid * k, k);
                 device::for_each_owned_exact(ex, k, [&](int i) { d_slm(i) = d_in(i); });
@@ -347,9 +347,9 @@ namespace batchlas {
             ctx -> submit([&](sycl::handler& h){
                 auto D_local = sycl::local_accessor<float_t, 1>(sycl::range<1>(k), h);
                 auto C_ptr = C.data_ptr();
-                batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>{size_t(batch_size*k)}, sycl::range<1>{size_t(k)}), [=](sycl::nd_item<1> item){
-                auto bid = item.get_group_linear_id();
-                const device::RtGroup<> ex{item};  // WG = k: one row per item
+                batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>{size_t(batch_size*k)}, sycl::range<1>{size_t(k)}), [=](sycl::nd_item<1> it){
+                auto bid = it.get_group_linear_id();
+                const device::RtGroup<> ex{it};  // WG = k: one row per item
                 const auto d_slm = device::vec<device::Mem::Local>(util::get_raw_ptr(D_local), k);
                 const auto d_in = device::vec(diags.data() + bid * k, k);
                 device::for_each_owned_exact(ex, k, [&](int i) { d_slm(i) = d_in(i); });
@@ -372,10 +372,10 @@ namespace batchlas {
             auto A_ld = A.ld();
             auto Adata = A.data_ptr();
             auto wgs = std::min(get_kernel_max_wg_size<StridedCopyKernel<B, T>>(ctx), size_t(m * k));
-            ctx -> parallel_for<StridedCopyKernel<B,T>>(sycl::nd_range<1>(sycl::range<1>{size_t(batch_size * wgs)}, sycl::range<1>{size_t(wgs)}), [=](sycl::nd_item<1> item){
-                auto batch_idx = item.get_group().get_group_id()[0];
+            ctx -> parallel_for<StridedCopyKernel<B,T>>(sycl::nd_range<1>(sycl::range<1>{size_t(batch_size * wgs)}, sycl::range<1>{size_t(wgs)}), [=](sycl::nd_item<1> it){
+                auto batch_idx = it.get_group().get_group_id()[0];
                 if (masked && !mk[batch_idx]) return;
-                const device::RtGroup<> ex{item};
+                const device::RtGroup<> ex{it};
                 const auto Q = device::mat(output_basis.data() + batch_idx * m * k, m, k, m);
                 T* const a = Adata + batch_idx * A_stride;
                 // A := Q, or rows of A := Q^H (is_A_trans is uniform: one branch per launch)

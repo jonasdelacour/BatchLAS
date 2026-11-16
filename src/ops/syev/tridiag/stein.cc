@@ -99,10 +99,10 @@ Event stein(Queue& ctx,
         batchlas::impl::parallel_for<SteinIterateKernel<B, T>>(h,
             sycl::nd_range<1>(sycl::range<1>{static_cast<size_t>(batch_size) * wg_iter},
                               sycl::range<1>{wg_iter}),
-            [=](sycl::nd_item<1> item) {
-                const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
+            [=](sycl::nd_item<1> it) {
+                const int64_t bid = static_cast<int64_t>(it.get_group_linear_id());
                 if (mask != nullptr && mask[bid] == 0) return;  // I1: before the first collective
-                const device::RtGroup<> ex{item};
+                const device::RtGroup<> ex{it};
                 // Valid prefix for this item. Slots [kb, k) of w are undefined -- for a stebz
                 // value range the count is data-dependent and per item.
                 const int64_t raw = counts_ptr ? static_cast<int64_t>(counts_ptr[bid]) : k;
@@ -129,10 +129,10 @@ Event stein(Queue& ctx,
         batchlas::impl::parallel_for<SteinOrthoKernel<B, T>>(h,
             sycl::nd_range<1>(sycl::range<1>{static_cast<size_t>(batch_size) * wg_ortho},
                               sycl::range<1>{wg_ortho}),
-            [=](sycl::nd_item<1> item) {
-                const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
+            [=](sycl::nd_item<1> it) {
+                const int64_t bid = static_cast<int64_t>(it.get_group_linear_id());
                 if (mask != nullptr && mask[bid] == 0) return;  // I1: before the first collective
-                const device::RtGroup<> ex{item};
+                const device::RtGroup<> ex{it};
                 const auto dv = device::vec(d.data_ptr() + bid * d.stride(), int(n), d.inc());
                 const auto ev = device::vec(e.data_ptr() + bid * e.stride(), int(n) - 1, e.inc());
                 const auto Zb = device::mat(Zv.data() + bid * Zv.stride(), int(n), int(k), int(Zv.ld()));

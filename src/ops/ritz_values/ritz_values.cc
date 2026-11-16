@@ -71,10 +71,10 @@ namespace batchlas {
 
             batchlas::impl::parallel_for<RitzValuesKernel<B, T, MFormat>>(h,
                 sycl::nd_range<1>(global_size, local_size),
-                [=](sycl::nd_item<1> item) {
-                    const device::RtGroup<> ex{item};
+                [=](sycl::nd_item<1> it) {
+                    const device::RtGroup<> ex{it};
                     // Grid-stride loop over (item, column) pairs.
-                    for (size_t group_id = item.get_group(0); group_id < batch_size * k; group_id += item.get_group_range(0)) {
+                    for (size_t group_id = it.get_group(0); group_id < batch_size * k; group_id += it.get_group_range(0)) {
                         const int b = group_id / k;
                         const int j = group_id % k;
                         // Uniform per work-group (one (b, j) pair each), so the reductions stay matched.

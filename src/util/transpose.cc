@@ -17,7 +17,7 @@ namespace batchlas {
         detail::require_device_fp64<T>(ctx, "transpose");
         constexpr int TILE = 16;
         const std::uint8_t* mask = detail::mask_ptr(detail::call_mask("transpose", A, B));
-        ctx->submit([&](sycl::handler &cgh) {
+        ctx->submit([&](sycl::handler& h) {
             auto src = A.data_ptr();
             auto dst = B.data_ptr();
             auto rows = A.rows();
@@ -27,20 +27,20 @@ namespace batchlas {
             auto stride_src = A.stride();
             auto stride_dst = B.stride();
             auto batch_size = A.batch_size();
-            sycl::local_accessor<T, 2> tile(sycl::range<2>(TILE, TILE + 1), cgh);
+            sycl::local_accessor<T, 2> tile(sycl::range<2>(TILE, TILE + 1), h);
             size_t grid_x = (cols + TILE - 1) / TILE;
             size_t grid_y = (rows + TILE - 1) / TILE;
-            batchlas::impl::parallel_for<TransposeKernel<T, MF>>(cgh,
+            batchlas::impl::parallel_for<TransposeKernel<T, MF>>(h,
                 sycl::nd_range<3>(
                     sycl::range<3>(batch_size, grid_x * TILE, grid_y * TILE),
                     sycl::range<3>(1, TILE, TILE)),
-                [=](sycl::nd_item<3> item) {
-                    const device::Grid2D<TILE, TILE, 1> ex{item};
+                [=](sycl::nd_item<3> it) {
+                    const device::Grid2D<TILE, TILE, 1> ex{it};
                     const int b = ex.batch();
                     if (mask && !mask[b]) return;  // uniform per work-group: before the barrier
                     // B = A^T through a padded SLM tile that holds the A tile transposed.
                     const auto t = device::mat<device::Mem::Local>(util::get_raw_ptr(tile), TILE, TILE, TILE + 1);
-                    const int row0 = static_cast<int>(item.get_group(2)) * TILE, col0 = static_cast<int>(item.get_group(1)) * TILE;
+                    const int row0 = static_cast<int>(it.get_group(2)) * TILE, col0 = static_cast<int>(it.get_group(1)) * TILE;
                     device::tile_load_trans<TILE>(ex, device::mat(src + static_cast<size_t>(b) * stride_src, rows, cols, ld_src),
                                                     row0, col0, t);
                     ex.barrier();

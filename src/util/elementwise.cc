@@ -53,8 +53,8 @@ template <typename Name, typename F>
 Event launch_2d(Queue& ctx, int rows, int cols, int batch, const std::uint8_t* mask, F f) {
     if (rows == 0 || cols == 0 || batch == 0) return ctx.get_event();
     ctx->parallel_for<Name>(device::batched2d_range(batch, rows, cols, device::batched2d_shape(rows, cols)),
-                            [=](sycl::nd_item<3> item) {
-                                const device::Grid2D<> ex{item};
+                            [=](sycl::nd_item<3> it) {
+                                const device::Grid2D<> ex{it};
                                 ex.for_each_batch(batch, [&](int b) {
                                     if (mask && !mask[b]) return;
                                     f(ex, b);

@@ -21,13 +21,13 @@ Event permute(Queue& ctx, VectorView<T> data, VectorView<K> indices){
 
     ctx -> submit([&](sycl::handler& h) {
         auto temp_mem = sycl::local_accessor<T, 1>(sycl::range<1>(n), h);
-        batchlas::impl::parallel_for(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
-            auto bid = item.get_group_linear_id();
+        batchlas::impl::parallel_for(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> it) {
+            auto bid = it.get_group_linear_id();
             if (!data.active(bid)) return;  // I1: before the barrier, uniform per work-group
-            auto bdim = item.get_local_range()[0];
-            auto tid = item.get_local_linear_id();
+            auto bdim = it.get_local_range()[0];
+            auto tid = it.get_local_linear_id();
             for (int i = tid; i < n; i += bdim) temp_mem[i] = data(indices(i, bid), bid);
-            sycl::group_barrier(item.get_group());
+            sycl::group_barrier(it.get_group());
             for (int i = tid; i < n; i += bdim) data(i, bid) = temp_mem[i];
         });
     });
@@ -68,9 +68,9 @@ Event permuted_copy(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, c
         auto src_view = src.kernel_view();
         auto dst_view = dst.kernel_view();
         auto cols = src.cols();
-        batchlas::impl::parallel_for<PermutedCopyKernel<T, K>>(h, sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-            auto gid = item.get_global_linear_id();
-            for (int index = gid; index < total_work_items; index += item.get_global_range()[0]) {
+        batchlas::impl::parallel_for<PermutedCopyKernel<T, K>>(h, sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
+            auto gid = it.get_global_linear_id();
+            for (int index = gid; index < total_work_items; index += it.get_global_range()[0]) {
                 int batch_id = index / (cols * n);
                 int rem = index % (cols * n);
                 int col = rem / n;
@@ -102,12 +102,12 @@ Event permute(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& data, const 
         auto temp_indices = sycl::local_accessor<K, 1>(sycl::range<1>(n), h);
         auto temp_vec = sycl::local_accessor<T, 1>(sycl::range<1>(n), h);
         auto data_view = data.kernel_view();
-        batchlas::impl::parallel_for(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
-            auto cta = item.get_group();
-            auto bid = item.get_group_linear_id();
+        batchlas::impl::parallel_for(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> it) {
+            auto cta = it.get_group();
+            auto bid = it.get_group_linear_id();
             if (!data_view.active(bid)) return;  // I1
-            auto bdim = item.get_local_range()[0];
-            auto tid = item.get_local_linear_id();
+            auto bdim = it.get_local_range()[0];
+            auto tid = it.get_local_linear_id();
             K* batch_indices = indices.batch_item(bid).data_ptr();
             // Use cycle decomposition to perform in-place permutation of each column
             for (int i = tid; i < n; i += bdim)
@@ -164,12 +164,12 @@ Event argsort(Queue& ctx, VectorView<T> data, VectorView<K> indices, SortOrder o
         auto local_indices = sycl::local_accessor<K, 1>(sycl::range<1>(n), h);
         auto local_values = sycl::local_accessor<T, 1>(sycl::range<1>(n), h);
 
-        batchlas::impl::parallel_for(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
-            auto bid = item.get_group_linear_id();
+        batchlas::impl::parallel_for(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> it) {
+            auto bid = it.get_group_linear_id();
             if (!data.active(bid)) return;  // I1: an inactive item's order is never read
-            auto tid = item.get_local_linear_id();
-            auto bdim = item.get_local_range()[0];
-            auto cta = item.get_group();
+            auto tid = it.get_local_linear_id();
+            auto bdim = it.get_local_range()[0];
+            auto cta = it.get_group();
             K* batch_indices = indices.batch_item(bid).data_ptr();
 
             if (fill_indices) {

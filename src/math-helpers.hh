@@ -83,11 +83,11 @@ namespace batchlas::detail {
 
         template <typename T, typename Op = std::plus<T>>
         Event scan_inclusive_inplace(Queue& ctx, const Span<T>& data, Op op = Op()) {
-            ctx -> submit([&](sycl::handler& cgh) {
+            ctx -> submit([&](sycl::handler& h) {
                 auto max_wg_size = ctx.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE);
                 auto bsize = data.size() > max_wg_size ? max_wg_size : data.size();
-                batchlas::impl::parallel_for(cgh, sycl::nd_range<1>(sycl::range<1>(bsize), sycl::range<1>(bsize)), [=](sycl::nd_item<1> item) {
-                    auto cta = item.get_group();
+                batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>(bsize), sycl::range<1>(bsize)), [=](sycl::nd_item<1> it) {
+                    auto cta = it.get_group();
                     sycl::joint_inclusive_scan(cta, data.data(), data.data() + data.size(), data.data(), op);
                 });
             });

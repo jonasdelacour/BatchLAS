@@ -86,10 +86,10 @@ namespace batchlas {
         //Initial guess
         auto init = [&]{
             ctx -> submit([&](sycl::handler& h) {
-                batchlas::impl::parallel_for<InitKernel<B, T, MF>>(h, sycl::nd_range<1>(batch_size*wg_init, wg_init), [=](sycl::nd_item<1> item) {
-                    auto bid = item.get_group_linear_id();
+                batchlas::impl::parallel_for<InitKernel<B, T, MF>>(h, sycl::nd_range<1>(batch_size*wg_init, wg_init), [=](sycl::nd_item<1> it) {
+                    auto bid = it.get_group_linear_id();
                     if (masked && !mk[bid]) return;  // I1, before the group reduction
-                    const device::RtGroup<> ex{item};
+                    const device::RtGroup<> ex{it};
                     const auto v0 = device::vec(Vmem.data() + bid*(n+1)*n, n);
                     // Same start vector for every item: keyed on the row only.
                     device::for_each_owned(ex, n, [&](int i) { v0(i) = T(philox::uniform_unit<real_t>(42, 0, static_cast<std::uint64_t>(i))); });
