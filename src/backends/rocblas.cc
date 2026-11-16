@@ -81,7 +81,7 @@ Event gemm_vendor(Queue& ctx,
     return ctx.create_event_after_external_work();
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -116,7 +116,7 @@ Event gemv_vendor(Queue& ctx,
     return ctx.create_event_after_external_work();
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -158,7 +158,7 @@ Event trsm_vendor(Queue& ctx,
     return ctx.create_event_after_external_work();
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -194,7 +194,7 @@ Event syrk_vendor(Queue& ctx,
     return ctx.create_event_after_external_work();
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -232,7 +232,7 @@ Event syr2k_vendor(Queue& ctx,
     return ctx.create_event_after_external_work();
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -270,7 +270,7 @@ Event trmm_vendor(Queue& ctx,
     return ctx.create_event_after_external_work();
 }
 
-} // namespace backend
+}  // namespace backend
 
 // Add further solver routines analogous to cuBLAS implementations using rocSOLVER
 

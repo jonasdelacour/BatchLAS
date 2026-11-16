@@ -22,7 +22,7 @@ using namespace batchlas;
 
 namespace {
 
-} // namespace
+}  // namespace
 
 // ---------------------------------------------------------------------------
 // Level-plan shape. Host-only, no device: a bad leaf produces perfectly correct
@@ -119,7 +119,7 @@ void check_joint_exclusive_scan_on(Queue& ctx, const char* where) {
     }
 }
 
-} // namespace
+}  // namespace
 
 // The deflation kernel scans keep/exclude flags IN PLACE over n > its work-group width. AdaptiveCpp
 // 25.10's own joint_exclusive_scan writes result[i + 1] in the chunk that reads first[i], so every
@@ -813,7 +813,7 @@ void stedc_values_only_items(Vector<Real>& d, Vector<Real>& e, int n) {
         e(i, 3) = Real(std::cos(0.9 * i + 1.1));
     }
 }
-} // namespace
+}  // namespace
 
 TYPED_TEST(StedcTest, NoEigenVectorsMatchesReferenceOnPoisonedWorkspace) {
     using T = typename TestFixture::ScalarType;

@@ -306,4 +306,4 @@ Event syrk_triangular_tiles(Queue& ctx,
                 : launch_syrk_triangular_tiles<T, true, false, Conjugate>(ctx, A, C, alpha, beta, uplo);
 }
 
-} // namespace batchlas::backend::detail
+}  // namespace batchlas::backend::detail

@@ -63,4 +63,4 @@ inline constexpr int target_arch() {
 
 #endif
 
-} // namespace batchlas::sycl_impl
+}  // namespace batchlas::sycl_impl

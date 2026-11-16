@@ -50,7 +50,7 @@ inline size_t subset_w_sub_len(int64_t n, int64_t capacity, bool value_range) {
                        : static_cast<size_t>(capacity);
 }
 
-} // namespace
+}  // namespace
 
 template <Backend B, typename T, MatrixFormat MFormat>
 Event syevx_direct_subset(Queue& ctx,
@@ -509,4 +509,4 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
 #undef SYEVX_SUBSET_INSTANTIATE_FOR_BACKEND_TYPE
 #undef SYEVX_SUBSET_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

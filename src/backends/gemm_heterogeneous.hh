@@ -52,7 +52,7 @@ inline bool gemm_batch_dimensions_compatible(const MatrixView<T, MatrixFormat::D
     return true;
 }
 
-} // namespace batchlas::backend
+}  // namespace batchlas::backend
 
 namespace batchlas::backend::detail {
 
@@ -99,4 +99,4 @@ Event gemm_heterogeneous_loop(Queue& ctx,
     return ctx.create_event_after_external_work();
 }
 
-} // namespace batchlas::backend::detail
+}  // namespace batchlas::backend::detail

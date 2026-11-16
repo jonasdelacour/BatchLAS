@@ -145,4 +145,4 @@ Event expand_mirrored(Queue& ctx,
     return ctx.get_event();
 }
 
-} // namespace batchlas::backend::detail
+}  // namespace batchlas::backend::detail

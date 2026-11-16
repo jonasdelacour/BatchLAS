@@ -55,4 +55,4 @@ struct GenericBackend {
     static T reduce(const sycl::sub_group&, uint32_t, T v, Op) { return v; }
 };
 
-} // namespace batchlas::sgp
+}  // namespace batchlas::sgp

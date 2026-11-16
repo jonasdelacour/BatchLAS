@@ -155,7 +155,7 @@ struct SyevJacobiCtaConfig {
     static constexpr Backend BackendVal = B;
 };
 
-} // namespace
+}  // namespace
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 using SyevJacobiCtaTestTypes = ::testing::Types<

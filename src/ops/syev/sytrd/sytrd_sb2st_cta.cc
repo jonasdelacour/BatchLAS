@@ -172,7 +172,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
     return q.get_event();
 }
 
-} // namespace
+}  // namespace
 
 template <typename T>
 Event btrd_lower_inplace_subgroup_dispatch(Queue& q,
@@ -219,4 +219,4 @@ BATCHLAS_FOR_EACH_SYTRD_SB2ST_CTA_DISPATCH_TYPE(BTRD_LOWER_INPLACE_SUBGROUP_DISP
 
 #undef BTRD_LOWER_INPLACE_SUBGROUP_DISPATCH_INSTANTIATE
 
-} // namespace batchlas::detail
+}  // namespace batchlas::detail

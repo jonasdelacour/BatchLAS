@@ -81,7 +81,7 @@ void BM_GEMM_STEADY_HOST(minibench::State& state) {
     });
 }
 
-} // namespace
+}  // namespace
 
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_GEMM_STEADY_EVENT, GemmSteadyCampaignSizes);
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_GEMM_STEADY_HOST, GemmSteadyCampaignSizes);

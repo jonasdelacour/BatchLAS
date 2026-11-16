@@ -628,4 +628,4 @@ Event launch_register_128x128_k8(Queue& ctx,
     }
 }
 
-} // namespace batchlas::ops::gemm
+}  // namespace batchlas::ops::gemm

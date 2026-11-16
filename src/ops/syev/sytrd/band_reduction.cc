@@ -479,7 +479,7 @@ struct BandrBuffers {
     const std::uint8_t* mask;
 };
 
-} // namespace
+}  // namespace
 
 namespace {
 
@@ -1178,7 +1178,7 @@ Event sytrd_band_reduction_single_step_core(Queue& ctx,
     return ctx.get_event();
 }
 
-} // namespace
+}  // namespace
 
 namespace {
 
@@ -1375,7 +1375,7 @@ Event sytrd_band_reduction_bandr1_core(Queue& ctx,
     return ctx.get_event();
 }
 
-} // namespace
+}  // namespace
 
 template <Backend B, typename T>
 size_t sytrd_band_reduction_buffer_size(Queue& ctx,
@@ -1566,4 +1566,4 @@ BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(SYTRD_BAND_REDUCTION_ALL_INSTANTIATE)
 #undef SYTRD_BAND_REDUCTION_BUFFER_PARAMS_INSTANTIATE
 #undef SYTRD_BAND_REDUCTION_SINGLE_STEP_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

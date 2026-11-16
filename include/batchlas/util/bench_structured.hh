@@ -200,7 +200,7 @@ inline auto make_event_timed_kernel_ms(std::shared_ptr<batchlas::Queue> q, F&& k
 namespace detail {
 template <typename X>
 decltype(auto) kernel_arg(X& x);
-} // namespace detail
+}  // namespace detail
 
 namespace detail {
 
@@ -324,7 +324,7 @@ inline decltype(auto) kernel_arg(X& x) {
     return (x);
 }
 
-} // namespace detail
+}  // namespace detail
 
 template <typename T>
 inline auto pristine(T& t) {
@@ -399,7 +399,7 @@ inline auto Kernel(std::shared_ptr<batchlas::Queue> q, ManagedArgs&&... managed_
         std::make_tuple(detail::wrap_managed(std::forward<ManagedArgs>(managed_args))...)};
 }
 
-} // namespace bench
+}  // namespace bench
 
 template <typename F>
 inline double bench_time_region_ms(F&& f) {

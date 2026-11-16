@@ -113,4 +113,4 @@ template <typename T>
 }
 
 /// @}
-} // namespace batchlas::select
+}  // namespace batchlas::select

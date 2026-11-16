@@ -398,7 +398,7 @@ protected:
     }
 };
 
-} // namespace test_utils
+}  // namespace test_utils
 
 // EXPECT_VERIFY(T, Check::solve, n, value); EXPECT_VERIFY_SLACK(T, kind, n, value, Slack{factor, "reason"}).
 #define EXPECT_VERIFY(T, kind, n, value) EXPECT_TRUE(::test_utils::verify_pass<T>((kind), (n), (value)))

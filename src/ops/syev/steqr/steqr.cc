@@ -24,7 +24,7 @@ inline bool should_use_cta(const Queue& ctx, int64_t n) {
     return n > 0 && n <= 32 && ctx.device().type == DeviceType::GPU && ctx.device().supports_sub_group_size(32);
 }
 
-} // namespace
+}  // namespace
 
 template <Backend B, typename T>
 Event steqr_dispatch(Queue& ctx,
@@ -91,4 +91,4 @@ BATCHLAS_FOR_EACH_REAL_TYPE(STEQR_BUFFER_SIZE_INSTANTIATE)
 #undef STEQR_BUFFER_SIZE_INSTANTIATE
 #undef STEQR_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

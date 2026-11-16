@@ -621,7 +621,7 @@ void stress_run_case(Queue& ctx,
     if (check_cta_against_ref) expect_values(VectorView<Real>(cta.data(), n, batch), ref, norm2, n, std::nullopt, all);
 }
 
-} // namespace
+}  // namespace
 
 TYPED_TEST(SteqrTest, StressExtremeMagnitudesN32) {
     using T = typename TestFixture::ScalarType;

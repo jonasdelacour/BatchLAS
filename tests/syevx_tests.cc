@@ -449,7 +449,7 @@ inline bool syevx_algorithm_overridden_to_other(const char* pinned) {
     if (!v || !*v) return false;
     return std::string(v) != std::string(pinned);
 }
-} // namespace
+}  // namespace
 
 // Exercises the Direct (full syev + select) algorithm explicitly, including the
 // eigenvector output and both orderings. n > 64 with neigs/n = 0.25 lands in the
@@ -810,7 +810,7 @@ struct InstrumentationRun {
 
 constexpr float kInstrSentinel = -1.0f;
 
-} // namespace
+}  // namespace
 
 TEST(SyevxLobpcgInstrumentationTest, DeviceStagedHistoryMatchesHostReadPath) {
     if (syevx_algorithm_overridden_to_other("lobpcg")) GTEST_SKIP() << "algorithm forced via env";
@@ -1088,7 +1088,7 @@ SyevxPreconditioner legal_jacobi(bool find_largest) {
     return find_largest ? SyevxPreconditioner::JacobiShifted : SyevxPreconditioner::Jacobi;
 }
 
-} // namespace
+}  // namespace
 
 class SyevxJacobiTest : public ::testing::TestWithParam<bool> {};
 
@@ -1715,7 +1715,7 @@ void poison_eigenvector_buffer(Matrix<float, MatrixFormat::Dense>& V,
             for (int r = 0; r < n; ++r) V.view()(r, j, b) = 7.0f;
 }
 
-} // namespace
+}  // namespace
 
 TEST(SyevxDirectRangeTest, EndBlocksReproduceExtremalBitForBit) {
     // An index block touching an end takes the same code path with the same inputs
@@ -1983,7 +1983,7 @@ DirectRangeRun run_subset_range(Queue& ctx,
                           std::vector<int32_t>(m.begin(), m.end())};
 }
 
-} // namespace
+}  // namespace
 
 // An Index block that happens to touch an end must take the same code path with
 // the same inputs as the Extremal request that names it, so any difference at all
@@ -2502,7 +2502,7 @@ std::vector<IndexRangeParam> all_index_range_params() {
     return out;
 }
 
-} // namespace
+}  // namespace
 
 class SyevxIndexRangeTest : public ::testing::TestWithParam<IndexRangeParam> {};
 
@@ -2835,7 +2835,7 @@ SyevxAlgorithm pick_range(MatrixFormat format, SyevxAlgorithm requested, SyevxSe
                                   select);
 }
 
-} // namespace
+}  // namespace
 
 // Sparse has no dense fallback, and BOTH implemented sparse paths -- LOBPCG and
 // Filtered -- converge to an EXTREME of the spectrum by construction. Returning
@@ -3281,7 +3281,7 @@ static_assert(syevx_size_callable<Q, AV, Wv, Mv, size_t, JobType, AV, Pv>,
 static_assert(syevx_size_callable<Q, AV, Wv, Mv, size_t, JobType, AV>,
               "m-taking sizing with a defaulted params must be unambiguous");
 
-} // namespace
+}  // namespace
 
 // House rule: a bare `{}` in the trailing params position must select the SAME
 // overload as an explicit SyevxParams, on both forms. The previous incident in

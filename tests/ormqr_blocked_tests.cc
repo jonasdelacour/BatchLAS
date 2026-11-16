@@ -98,7 +98,7 @@ inline int32_t get_block_size_or_default(int32_t def) {
     }
     return def;
 }
-} // namespace
+}  // namespace
 
 // Float keeps the old entrywise 1e-5 against the reference ormqr. One entry of Q column j off by d moves
 // ||A0 - QR||_F / ||A0||_F by d ||R(j,:)|| / ||A0||_F, about d / sqrt(n) for an average row: 1.25e-6 at
@@ -559,4 +559,4 @@ TYPED_TEST(OrmqrBlockedTest, BlockedChunksFitAWorkspaceSizedAtLargerOperands) {
                   test_utils::ormqr_apply_error<T>(*this->ctx, A, p.tau_view(), C0, C, Side::Left, this->trans_h()));
 }
 
-} // namespace
+}  // namespace

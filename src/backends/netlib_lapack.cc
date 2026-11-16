@@ -110,7 +110,7 @@ Event submit_host_task(Queue& ctx, const char* /*label*/, F&& f) {
     });
     return Event(std::move(ev));
 }
-} // namespace detail
+}  // namespace detail
 
 namespace backend {
 
@@ -189,7 +189,7 @@ Event spmm_vendor(Queue& ctx,
     });
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -213,7 +213,7 @@ size_t spmm_vendor_buffer_size(Queue& ctx,
     return 0;
 }
 
-} // namespace backend
+}  // namespace backend
 
 // The netlib gemm IS the vendor implementation (the CBLAS call), hence gemm_vendor here.
 namespace backend {
@@ -284,7 +284,7 @@ Event gemm_vendor(Queue& ctx,
     });
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -341,7 +341,7 @@ Event gemv_vendor(Queue& ctx,
     });
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -468,7 +468,7 @@ Event trsm_vendor(Queue& ctx,
     });
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -516,7 +516,7 @@ Event symm_vendor(Queue& ctx,
     });
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -565,7 +565,7 @@ Event hemm_vendor(Queue& ctx,
     });
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -609,7 +609,7 @@ Event herk_vendor(Queue& ctx,
     });
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -655,7 +655,7 @@ Event her2k_vendor(Queue& ctx,
     });
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -697,7 +697,7 @@ Event syrk_vendor(Queue& ctx,
     });
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -744,7 +744,7 @@ Event syr2k_vendor(Queue& ctx,
     });
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -801,7 +801,7 @@ Event trmm_vendor(Queue& ctx,
     });
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -920,7 +920,7 @@ size_t sygvd_vendor_buffer_size(Queue& /*ctx*/, const MatrixView<T, MatrixFormat
 BATCHLAS_FOR_EACH_SCALAR_TYPE_1(NETLIB_SYGVD_OPS, Backend::NETLIB)
 #undef NETLIB_SYGVD_OPS
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -959,7 +959,7 @@ Event potrf_vendor(Queue& ctx,
     });
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -1163,7 +1163,7 @@ size_t gesvd_vendor_buffer_size(Queue& /*ctx*/,
     return static_cast<size_t>(0);
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -1212,7 +1212,7 @@ Event getrs_vendor(Queue& ctx,
     });
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -1228,7 +1228,7 @@ size_t getrs_vendor_buffer_size(Queue& ctx,
     return BumpAllocator::allocation_size<int>(ctx, A.rows() * A.batch_size());
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -1282,7 +1282,7 @@ Event getrf_vendor(Queue& ctx,
     return ctx.get_event();
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -1294,7 +1294,7 @@ size_t getrf_vendor_buffer_size(Queue& ctx,
     return BumpAllocator::allocation_size<int>(ctx, std::min(A.rows(), A.cols()) * A.batch_size());
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -1342,7 +1342,7 @@ Event getri_vendor(Queue& ctx,
     });
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -1354,7 +1354,7 @@ size_t getri_vendor_buffer_size(Queue& ctx,
     return BumpAllocator::allocation_size<int>(ctx, A.rows() * A.batch_size());
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -1386,7 +1386,7 @@ Event geqrf_vendor(Queue& ctx,
     });
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -1400,7 +1400,7 @@ size_t geqrf_vendor_buffer_size(Queue& ctx,
     return 0;
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -1433,7 +1433,7 @@ Event orgqr_vendor(Queue& ctx,
     });
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -1447,7 +1447,7 @@ size_t orgqr_vendor_buffer_size(Queue& ctx,
     return 0;
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -1504,7 +1504,7 @@ size_t ormqr_vendor_buffer_size(Queue& ctx,
     return static_cast<size_t>(0);
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -1518,7 +1518,7 @@ size_t potrf_vendor_buffer_size(Queue& ctx,
     return 0;
 }
 
-} // namespace backend
+}  // namespace backend
 
 // ONLY `backend::*_vendor` rows: a public-op row would duplicate src/ops/.
 // evidence: docs/design/runtime-internals.md#runtime-internals-vendor-tus-instantiate-only-vendor-symbols

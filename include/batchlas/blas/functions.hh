@@ -45,7 +45,7 @@
 
 namespace batchlas {
 
-} // namespace batchlas
+}  // namespace batchlas
 
 // Last: the option overloads name every positional declaration above.
 #include <batchlas/blas/options.hh>

@@ -92,6 +92,6 @@ int register_rocm_family_benchmarks = [] {
 }();
 #endif
 
-} // namespace
+}  // namespace
 
 MINI_BENCHMARK_MAIN();

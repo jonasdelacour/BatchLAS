@@ -547,7 +547,7 @@ void launch_wide_form(std::optional<Event>& out, Queue& ctx, const MatrixView<T,
             out = launch_wide_cfg<T, I, OA, OB>(ctx, A, B, C, alpha, beta);
     }
 }
-} // namespace
+}  // namespace
 
 // One half of a wide_configs row (Half 0: forms 0-4, Half 1: forms 5-8) or one reg_configs row, each
 // explicitly instantiated in exactly one generated shard TU (BATCHLAS_GEMM_SHARDS,
@@ -564,4 +564,4 @@ void gemm_reg_row(std::optional<Event>& out, Queue& ctx, const MatrixView<float,
                   const MatrixView<float, MatrixFormat::Dense>& B,
                   const MatrixView<float, MatrixFormat::Dense>& C, float alpha, float beta, bool ta, bool tb);
 
-} // namespace batchlas::ops::gemm
+}  // namespace batchlas::ops::gemm

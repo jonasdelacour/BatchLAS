@@ -22,7 +22,7 @@ inline bool is_missing_subgroup32_message(const std::string& msg) {
     return msg.find("subgroup size 32") != std::string::npos;
 }
 
-} // namespace
+}  // namespace
 
 #include <tests/test_support/storage.hh>
 #include <tests/test_utils.hh>

@@ -712,7 +712,7 @@ inline void validate_latrd_lower_panel_dims(const MatrixView<T, MatrixFormat::De
     }
 }
 
-} // namespace
+}  // namespace
 
 template <Backend B, typename T>
 Event latrd_lower_panel(Queue& ctx,
@@ -788,4 +788,4 @@ BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(LATRD_LOWER_PANEL_INSTANTIATE)
 
 #undef LATRD_LOWER_PANEL_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

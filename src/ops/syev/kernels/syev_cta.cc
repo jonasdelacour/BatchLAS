@@ -445,7 +445,7 @@ int syev_cta_chunk(Queue& ctx, int n, int batch) {
         tuning::SYEV_CTA_L2_CHUNK_PERCENT)), batch);
 }
 
-} // namespace
+}  // namespace
 
 template <Backend B, typename T>
 Event syev_cta(Queue& ctx,
@@ -504,4 +504,4 @@ size_t syev_cta_buffer_size(Queue& ctx,
 
 #undef SYEV_CTA_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

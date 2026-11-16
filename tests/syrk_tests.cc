@@ -218,7 +218,7 @@ void expect_triangle_respected(Queue& ctx,
     }
 }
 
-} // namespace
+}  // namespace
 
 TEST(SyrkCudaCustomTest, TriangularTilesLeaveTheOtherHalfUntouched) {
     Queue ctx;

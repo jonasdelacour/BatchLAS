@@ -79,4 +79,4 @@ BATCHLAS_INTERNAL_API Event trsm_native_blocked(Queue& ctx,
                                                 Diag diag,
                                                 TrsmTrailingGemm<T> trailing_gemm);
 
-} // namespace batchlas::ops::trsm
+}  // namespace batchlas::ops::trsm

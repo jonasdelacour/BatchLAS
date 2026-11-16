@@ -174,7 +174,7 @@ Event steqr_wg_impl(Queue& ctx,
     return ctx.get_event();
 }
 
-} // namespace
+}  // namespace
 
 // Single description of steqr_wg's workspace (as steqr_legacy_layout); see workspace_bytes() in
 // util/mempool.hh. Returns d, e, givens rotations, apply order, deflation indices and the scratch
@@ -330,4 +330,4 @@ BATCHLAS_FOR_EACH_REAL_TYPE(STEQR_WG_BUFFER_SIZE_INSTANTIATE)
 #undef STEQR_WG_BUFFER_SIZE_INSTANTIATE
 #undef STEQR_WG_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

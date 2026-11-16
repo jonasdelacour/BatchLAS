@@ -43,7 +43,7 @@ struct PlainVec {
 template <typename T, int N>
 using ColVec = std::conditional_t<detail::is_complex<T>::value, PlainVec<T, N>, sycl::vec<T, N>>;
 
-} // namespace detail
+}  // namespace detail
 
 template <typename T, size_t P, bool QL, bool Left, bool TransposeOrConj, bool Masked>
 class OrmQxCTAKernel;
@@ -497,4 +497,4 @@ BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(ORMQX_CTA_INSTANTIATE)
 
 #undef ORMQX_CTA_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

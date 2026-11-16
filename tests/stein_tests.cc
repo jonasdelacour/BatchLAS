@@ -94,7 +94,7 @@ protected:
 using RealTypes = ::testing::Types<float, double>;
 TYPED_TEST_SUITE(SteinTest, RealTypes);
 
-} // namespace
+}  // namespace
 
 // Well-separated spectrum: inverse iteration alone should suffice.
 TYPED_TEST(SteinTest, WellSeparatedSpectrum) {
@@ -190,7 +190,7 @@ struct CountsFixture {
     }
 };
 
-} // namespace
+}  // namespace
 
 // Per-item counts: item 0 wants all 8 vectors, item 1 wants only 3.
 // Item 1's slots 3..7 are deliberately poisoned with values a hair above its last

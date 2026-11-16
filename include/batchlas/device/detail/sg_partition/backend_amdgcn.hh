@@ -32,7 +32,7 @@ template <class T>
 inline constexpr bool word_arith_v =
     std::is_arithmetic_v<T> && !std::is_same_v<T, bool> && (sizeof(T) == 4 || sizeof(T) == 8);
 
-} // namespace amdgcn_detail
+}  // namespace amdgcn_detail
 
 template <uint32_t P, bool Masked>
 struct AmdgcnBackend {
@@ -77,4 +77,4 @@ struct AmdgcnBackend {
     }
 };
 
-} // namespace batchlas::sgp
+}  // namespace batchlas::sgp

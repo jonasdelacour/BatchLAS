@@ -195,7 +195,7 @@ template <typename T>
     return test_utils::verify_pass<T>(batchlas::verify::Check::values, n, spectra_error(got, ref), spectra_slack<T>());
 }
 
-} // namespace
+}  // namespace
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 using SytrdSb2stTestTypes = ::testing::Types<
@@ -769,7 +769,7 @@ inline int bandr1_count_steps_one_sweep(int n, int kd, int block_size, int d_per
     return steps;
 }
 
-} // namespace
+}  // namespace
 
 TYPED_TEST(SytrdSb2stTest, BandReductionOneSweepSpectrumPreservation) {
     using T = typename TestFixture::ScalarType;

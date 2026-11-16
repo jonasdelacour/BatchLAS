@@ -230,7 +230,7 @@ void bdsdc_repair_degenerate(Queue& ctx,
     });
 }
 
-} // namespace
+}  // namespace
 
 template <Backend B, typename T>
 Event bdsdc(Queue& ctx,
@@ -363,4 +363,4 @@ BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(BDSDC_INSTANTIATE)
 
 #undef BDSDC_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

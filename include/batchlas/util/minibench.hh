@@ -869,4 +869,4 @@ inline void SyevxCrossoverSizesNetlib(Benchmark* b) {
     }
 }
 
-} // namespace minibench
+}  // namespace minibench

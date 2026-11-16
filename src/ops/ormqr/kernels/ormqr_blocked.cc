@@ -55,7 +55,7 @@ inline void validate_ormqr_dims(const MatrixView<T, MatrixFormat::Dense>& a,
     }
 }
 
-} // namespace
+}  // namespace
 
 template <int NB>
 inline int resolved_nb(int32_t block_size) {
@@ -343,4 +343,4 @@ BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(ORMQR_BLOCKED_INSTANTIATE)
 
 #undef ORMQR_BLOCKED_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

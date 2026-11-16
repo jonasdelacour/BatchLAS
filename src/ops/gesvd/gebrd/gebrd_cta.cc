@@ -130,7 +130,7 @@ inline void gebrd_cta_impl(Queue& ctx,
     });
 }
 
-} // namespace
+}  // namespace
 
 template <Backend B, typename T>
 Event gebrd_cta(Queue& ctx,
@@ -198,4 +198,4 @@ BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(GEBRD_CTA_INSTANTIATE)
 
 #undef GEBRD_CTA_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

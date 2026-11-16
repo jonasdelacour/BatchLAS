@@ -127,4 +127,4 @@ inline RankShape validate_rank_2k(const char* op,
     return {n, k};
 }
 
-} // namespace batchlas::backend::shape
+}  // namespace batchlas::backend::shape

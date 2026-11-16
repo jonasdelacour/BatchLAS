@@ -114,7 +114,7 @@ inline decltype(auto) region(F&& f) {
     }
 }
 
-} // namespace sgp
+}  // namespace sgp
 
 template <size_t P, bool Masked = sgp::kMaskedByDefault>
 struct SubGroupPartition {
@@ -331,4 +331,4 @@ inline int32_t lockstep_max(SubGroupPartition<P, M> part, int32_t v) {
     }
 }
 
-} // namespace batchlas
+}  // namespace batchlas

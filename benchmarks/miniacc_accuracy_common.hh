@@ -267,4 +267,4 @@ inline void record_eigensolver_metrics(miniacc::State& state,
     }
 }
 
-} // namespace miniacc_acc
+}  // namespace miniacc_acc

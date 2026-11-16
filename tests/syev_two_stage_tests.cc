@@ -353,4 +353,4 @@ TYPED_TEST(SyevTwoStageTest, Sy2sbBandPreservesSpectrum) {
     }
 }
 
-} // namespace
+}  // namespace

@@ -224,7 +224,7 @@ void expect_route_respects_triangle(Queue& ctx,
     }
 }
 
-} // namespace
+}  // namespace
 
 TEST(Syr2kCudaCustomTest, TriangularTilesLeaveTheOtherHalfUntouched) {
     Queue ctx;

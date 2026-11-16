@@ -199,4 +199,4 @@ NORM_INSTANTIATE(double, MatrixFormat::Dense)
 NORM_INSTANTIATE(std::complex<float>, MatrixFormat::Dense)
 NORM_INSTANTIATE(std::complex<double>, MatrixFormat::Dense)
 
-} // namespace batchlas
+}  // namespace batchlas

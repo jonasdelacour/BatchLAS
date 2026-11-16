@@ -49,7 +49,7 @@ inline int32_t tuning_env_override(const EnvValue& captured, int32_t fallback) {
     return static_cast<int32_t>(parsed);
 }
 
-} // namespace detail
+}  // namespace detail
 
 inline constexpr int32_t ORMQR_BLOCK_SIZE_TINY = 16;
 inline constexpr int32_t ORMQR_BLOCK_SIZE_SMALL = 16;
@@ -506,4 +506,4 @@ inline int64_t blocked_chunk_items(int64_t batch, int64_t item_bytes, int64_t l2
     return batch >= 2 * chunk ? chunk : batch;
 }
 
-} // namespace batchlas::tuning
+}  // namespace batchlas::tuning

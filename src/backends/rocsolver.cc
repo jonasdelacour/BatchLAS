@@ -32,7 +32,7 @@ size_t potrf_vendor_buffer_size(Queue& ctx,
     return size;
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -63,7 +63,7 @@ Event potrf_vendor(Queue& ctx,
     return ctx.create_event_after_external_work();
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -96,7 +96,7 @@ Event geqrf_vendor(Queue& ctx,
     return ctx.create_event_after_external_work();
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -110,7 +110,7 @@ size_t geqrf_vendor_buffer_size(Queue& ctx,
     return 0;
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -172,7 +172,7 @@ size_t ormqr_vendor_buffer_size(Queue& ctx,
     return static_cast<size_t>(0);
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -204,7 +204,7 @@ Event orgqr_vendor(Queue& ctx,
     return ctx.create_event_after_external_work();
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -218,7 +218,7 @@ size_t orgqr_vendor_buffer_size(Queue& ctx,
     return 0;
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -256,7 +256,7 @@ Event getrf_vendor(Queue& ctx,
     return ctx.create_event_after_external_work();
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -266,7 +266,7 @@ size_t getrf_vendor_buffer_size(Queue& ctx,
     return BumpAllocator::allocation_size<int>(ctx, A.batch_size());
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -308,7 +308,7 @@ Event getrs_vendor(Queue& ctx,
     return ctx.create_event_after_external_work();
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -324,7 +324,7 @@ size_t getrs_vendor_buffer_size(Queue& ctx,
     return 0;
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -364,7 +364,7 @@ Event getri_vendor(Queue& ctx,
     return ctx.create_event_after_external_work();
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -374,7 +374,7 @@ size_t getri_vendor_buffer_size(Queue& ctx,
     return BumpAllocator::allocation_size<int>(ctx, A.batch_size());
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -449,7 +449,7 @@ size_t gesvd_vendor_buffer_size(Queue& /*ctx*/,
     throw batchlas::unsupported("gesvd_vendor_buffer_size (ROCSOLVER): not implemented");
 }
 
-} // namespace backend
+}  // namespace backend
 
 // ONLY `backend::*_vendor` rows: a public-op row would duplicate src/ops/.
 // evidence: docs/design/runtime-internals.md#runtime-internals-vendor-tus-instantiate-only-vendor-symbols

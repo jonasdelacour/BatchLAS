@@ -76,4 +76,4 @@ BATCHLAS_API size_t ormqr_blocked_buffer_size(Queue& ctx,
                                               Span<T> tau,
                                               int32_t block_size = 0);
 
-} // namespace batchlas
+}  // namespace batchlas

@@ -55,7 +55,7 @@ constexpr int kRowsPar = 32;          // window rows resident at once
 constexpr int kTpr = kWg / kRowsPar;  // lanes cooperating on one row/column
 static_assert(kTpr <= 32 && kRowsPar * kTpr == kWg);
 
-} // namespace
+}  // namespace
 
 // Single description of sytrd_sb2st_hh's workspace; see workspace_bytes() in
 // util/mempool.hh. The expanded working band is wider than the input band
@@ -629,5 +629,5 @@ BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(SB2ST_HH_INSTANTIATE)
 
 #undef SB2ST_HH_INSTANTIATE
 
-} // namespace detail
-} // namespace batchlas
+}  // namespace detail
+}  // namespace batchlas

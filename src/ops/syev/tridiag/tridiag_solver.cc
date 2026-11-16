@@ -264,4 +264,4 @@ BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(TRIDAG_INSTANTIATE)
 
 #undef TRIDAG_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

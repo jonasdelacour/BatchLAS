@@ -499,7 +499,7 @@ int syev_two_stage_chunk(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& a
         [&](int largest) { return syev_two_stage_ptr_bytes<T>(ctx, largest, batch); });
 }
 
-} // namespace
+}  // namespace
 
 template <Backend B, typename T>
 Event syev_two_stage(Queue& ctx,
@@ -578,4 +578,4 @@ BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(SYEV_TWO_STAGE_INSTANTIATE)
 
 #undef SYEV_TWO_STAGE_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

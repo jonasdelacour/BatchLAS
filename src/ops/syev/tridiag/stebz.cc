@@ -130,4 +130,4 @@ size_t stebz_buffer_size(Queue& ctx, size_t n, size_t batch_size, StebzParams<T>
 
 #undef STEBZ_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

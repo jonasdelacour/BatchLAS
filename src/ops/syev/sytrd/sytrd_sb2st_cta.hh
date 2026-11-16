@@ -46,6 +46,6 @@ BATCHLAS_FOR_EACH_SYTRD_SB2ST_CTA_DISPATCH_TYPE(BTRD_LOWER_INPLACE_SUBGROUP_DISP
 
 #undef BTRD_LOWER_INPLACE_SUBGROUP_DISPATCH_EXTERN
 
-} // namespace detail
+}  // namespace detail
 
-} // namespace batchlas
+}  // namespace batchlas

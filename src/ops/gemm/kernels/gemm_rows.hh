@@ -37,7 +37,7 @@ void gemm_reg_row(std::optional<Event>& out, Queue& ctx, const MatrixView<float,
         if (ta && tb) out = launch_reg_cfg<I, kTT>(ctx, A, B, C, alpha, beta);
 }
 
-} // namespace batchlas::ops::gemm
+}  // namespace batchlas::ops::gemm
 
 #define BATCHLAS_GEMM_WIDE_ROW_SPLIT(T, I, S, H)                                                       \
     template void batchlas::ops::gemm::gemm_wide_row<T, I, S, H>(                                      \

@@ -553,7 +553,7 @@ inline void SyevxSparseGapSizesNetlib(Benchmark* b) {
     }
 }
 
-} // namespace
+}  // namespace
 
 BATCHLAS_REGISTER_BENCHMARK(BM_SYEVX, SyevxBenchSizes);
 BATCHLAS_REGISTER_BENCHMARK(BM_SYEVX_Crossover, SyevxCrossoverSizes);

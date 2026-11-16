@@ -54,7 +54,7 @@ inline StedcParams<T> resolve_stedc_tuning(int64_t n, StedcParams<T> params, boo
     return params;
 }
 
-} // namespace
+}  // namespace
 
 // SYCL kernel class tags for profiling and naming (templated to avoid ODR violations)
 template <Backend B, typename T> class StedcModifyDiagonal;

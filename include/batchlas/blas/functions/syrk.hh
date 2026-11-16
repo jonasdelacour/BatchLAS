@@ -81,7 +81,7 @@ BATCHLAS_API Event syrk(Queue& ctx,
                         Uplo uplo,
                         Transpose transA);
 
-} // namespace batchlas
+}  // namespace batchlas
 
 namespace batchlas::backend {
 

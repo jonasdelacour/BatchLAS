@@ -1428,7 +1428,7 @@ int gesvd_blocked_chunk(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& a,
         tuning::GESVD_BLOCKED_L2_CHUNK_PERCENT)), batch);
 }
 
-} // namespace
+}  // namespace
 
 template <Backend B, typename T>
 Event gesvd_blocked(Queue& ctx,
@@ -1786,4 +1786,4 @@ BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(GESVD_BLOCKED_INSTANTIATE)
 
 #undef GESVD_BLOCKED_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

@@ -45,7 +45,7 @@ inline MatrixView<T, MatrixFormat::Dense> packed_copy_view(T* data,
                                               ptr_array);
 }
 
-} // namespace
+}  // namespace
 
 template <Backend B, typename T, MatrixFormat MFormat>
 Event syevx_direct(Queue& ctx,
@@ -247,4 +247,4 @@ size_t syevx_direct_buffer_size(Queue& ctx,
 #undef SYEVX_DIRECT_INSTANTIATE_FOR_BACKEND_TYPE
 #undef SYEVX_DIRECT_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

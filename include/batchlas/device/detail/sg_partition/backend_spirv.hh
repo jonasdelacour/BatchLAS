@@ -83,7 +83,7 @@ inline T clustered_scalar(T v) {
     }
 }
 
-} // namespace spirv_detail
+}  // namespace spirv_detail
 
 template <uint32_t P, bool Masked>
 struct SpirvBackend {
@@ -149,4 +149,4 @@ struct SpirvBackend {
     }
 };
 
-} // namespace batchlas::sgp
+}  // namespace batchlas::sgp

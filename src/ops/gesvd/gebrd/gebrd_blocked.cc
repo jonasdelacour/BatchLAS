@@ -225,7 +225,7 @@ Event gebrd_blocked_impl(Queue& ctx,
     return ctx.get_event();
 }
 
-} // namespace
+}  // namespace
 
 template <Backend B, typename T>
 Event gebrd_blocked(Queue& ctx,
@@ -288,4 +288,4 @@ BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(GEBRD_BLOCKED_INSTANTIATE)
 
 #undef GEBRD_BLOCKED_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

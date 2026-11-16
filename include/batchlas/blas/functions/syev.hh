@@ -130,7 +130,7 @@ BATCHLAS_API size_t syev_buffer_size(Queue& ctx,
                                      JobType jobtype,
                                      Uplo uplo);
 
-} // namespace batchlas
+}  // namespace batchlas
 
 namespace batchlas::backend {
 
@@ -176,7 +176,7 @@ BATCHLAS_API size_t syev_vendor_buffer_size(Queue& ctx,
                                             JobType jobtype,
                                             Uplo uplo);
 
-} // namespace batchlas::backend
+}  // namespace batchlas::backend
 
 namespace batchlas::ops::syev::detail {
 
@@ -206,7 +206,7 @@ BATCHLAS_API bool syev_supports_blocked(const Queue& ctx, const MatrixView<T, Ma
 template <typename T>
 BATCHLAS_API bool syev_supports_two_stage(const Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo);
 
-} // namespace batchlas::ops::syev::detail
+}  // namespace batchlas::ops::syev::detail
 
 namespace batchlas {
 

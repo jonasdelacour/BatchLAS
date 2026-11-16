@@ -356,7 +356,7 @@ inline void validate_sytrd_dims(const MatrixView<T, MatrixFormat::Dense>& a,
     }
 }
 
-} // namespace
+}  // namespace
 
 inline int resolved_nb_sytrd(int32_t block_size, int compiled_nb) {
     if (compiled_nb > 0) {
@@ -661,4 +661,4 @@ BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(SYTRD_BLOCKED_INSTANTIATE)
 
 #undef SYTRD_BLOCKED_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

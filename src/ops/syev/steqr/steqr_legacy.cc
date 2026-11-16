@@ -24,7 +24,7 @@ namespace {
 template <typename T> struct SteqrLegacyFrancisKernel {};
 template <typename T> struct SteqrLegacyRotationKernel {};
 
-} // namespace
+}  // namespace
 
 template <typename T>
 struct SteqrImplScratch {
@@ -421,4 +421,4 @@ BATCHLAS_FOR_EACH_REAL_TYPE(STEQR_LEGACY_BUFFER_SIZE_INSTANTIATE)
 #undef STEQR_LEGACY_INSTANTIATE_FOR_BACKEND
 #undef STEQR_LEGACY_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

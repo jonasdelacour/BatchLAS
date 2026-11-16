@@ -123,4 +123,4 @@ inline void triangular_tile_decode(int tile, int& bi, int& bj) {
     bj = tile - bi * (bi + 1) / 2;
 }
 
-} // namespace batchlas::backend::detail
+}  // namespace batchlas::backend::detail

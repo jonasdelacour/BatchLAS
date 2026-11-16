@@ -65,4 +65,4 @@ Event steqr_dispatch(Queue& ctx,
                      const MatrixView<T, MatrixFormat::Dense>& eigvects,
                      Span<int32_t> info = Span<int32_t>());
 
-} // namespace batchlas
+}  // namespace batchlas

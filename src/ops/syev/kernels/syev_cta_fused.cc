@@ -287,4 +287,4 @@ size_t syev_cta_fused_buffer_size(Queue& ctx,
 
 #undef SYEV_CTA_FUSED_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

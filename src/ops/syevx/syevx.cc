@@ -185,7 +185,7 @@ const char* syevx_select_name(SyevxSelect select) {
     }
 }
 
-} // namespace
+}  // namespace
 
 SyevxResolvedRange syevx_resolve_range(int64_t n,
                                        size_t neigs,
@@ -494,4 +494,4 @@ size_t syevx_buffer_size(Queue& ctx,
 #undef SYEVX_INSTANTIATE_FOR_BACKEND_TYPE
 #undef SYEVX_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

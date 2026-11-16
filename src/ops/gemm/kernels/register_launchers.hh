@@ -59,4 +59,4 @@ Event launch_reg(Queue& ctx,
                                  false, P.OpA, P.OpB>(ctx, A, B, C, alpha, beta, trace);
 }
 
-} // namespace batchlas::ops::gemm
+}  // namespace batchlas::ops::gemm

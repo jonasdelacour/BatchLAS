@@ -75,7 +75,7 @@ void refuse_over_budget(Queue& ctx, const char* who, std::int64_t bytes, int wg)
                std::to_string(budget));
 }
 
-} // namespace
+}  // namespace
 
 template <typename T>
 Event gemm_direct(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
@@ -228,4 +228,4 @@ template Event gemm_small<std::complex<double>>(Queue&, const MatrixView<std::co
                                                 const MatrixView<std::complex<double>, MatrixFormat::Dense>&,
                                                 std::complex<double>, std::complex<double>, Transpose, Transpose);
 
-} // namespace batchlas::ops::gemm
+}  // namespace batchlas::ops::gemm

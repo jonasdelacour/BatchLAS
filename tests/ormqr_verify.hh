@@ -54,4 +54,4 @@ double ormqr_q_error(batchlas::Queue& ctx, const batchlas::Matrix<T, batchlas::M
     return worst;
 }
 
-} // namespace test_utils
+}  // namespace test_utils

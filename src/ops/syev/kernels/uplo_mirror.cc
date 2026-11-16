@@ -19,7 +19,7 @@ namespace batchlas {
 
 namespace {
 template <Backend B, typename T> class UploMirrorUpperToLowerKernel;
-} // namespace
+}  // namespace
 
 template <Backend B, typename T>
 Event mirror_upper_to_lower(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& a) {
@@ -56,4 +56,4 @@ BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(UPLO_MIRROR_INSTANTIATE)
 
 #undef UPLO_MIRROR_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

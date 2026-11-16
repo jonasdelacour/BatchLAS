@@ -64,6 +64,6 @@ int register_cuda_family_benchmarks = [] {
 }();
 #endif
 
-} // namespace
+}  // namespace
 
 MINI_BENCHMARK_MAIN();

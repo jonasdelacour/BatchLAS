@@ -163,6 +163,6 @@ int register_cuda_heterogeneous_benchmarks = [] {
 }();
 #endif
 
-} // namespace
+}  // namespace
 
 MINI_BENCHMARK_MAIN();

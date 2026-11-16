@@ -184,7 +184,7 @@ inline W broadcast_fenced(Group g, W w, Id... id) {
     return r;
 }
 
-} // namespace detail
+}  // namespace detail
 
 /// @addtogroup api_internal_helpers
 /// @{
@@ -390,4 +390,4 @@ using sycl::shift_group_right;
 
 #endif
 
-} // namespace batchlas::portable
+}  // namespace batchlas::portable

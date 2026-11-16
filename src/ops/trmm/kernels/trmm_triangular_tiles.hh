@@ -376,4 +376,4 @@ Event trmm_triangular_tiles(Queue& ctx,
     return launch_trmm_triangular_tiles<T, 128>(ctx, A, B, C, alpha, uplo, transA, diag);
 }
 
-} // namespace batchlas::backend::detail
+}  // namespace batchlas::backend::detail

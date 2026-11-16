@@ -348,7 +348,7 @@ int run_selected(const Options& opt) {
     return 1;
 }
 
-} // namespace
+}  // namespace
 
 int main(int argc, char** argv) {
     auto opt = parse_args(argc, argv);

@@ -187,4 +187,4 @@ template size_t cond_buffer_size<back, fp, fmt>(\
 
 BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(COND_INSTANTIATE_FOR_TYPE)
 
-} // namespace batchlas
+}  // namespace batchlas

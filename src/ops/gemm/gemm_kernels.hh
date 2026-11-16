@@ -133,4 +133,4 @@ BATCHLAS_INTERNAL_API Event gemm_splitk(Queue& ctx, int tm, int tn, int tk, int 
                                         const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta,
                                         Transpose transA, Transpose transB);
 
-} // namespace batchlas::ops::gemm
+}  // namespace batchlas::ops::gemm

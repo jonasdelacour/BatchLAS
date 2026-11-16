@@ -138,7 +138,7 @@ inline constexpr bool kHasRedux = true;
 inline constexpr bool kHasRedux = false;
 #endif
 
-} // namespace nvptx_detail
+}  // namespace nvptx_detail
 
 // The primitives of a diverged warp: always the chunk mask. region() hands this
 // out once instead of testing convergence per word.
@@ -232,4 +232,4 @@ struct NvptxBackend {
     }
 };
 
-} // namespace batchlas::sgp
+}  // namespace batchlas::sgp

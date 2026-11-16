@@ -202,7 +202,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
     return batchlas::syev_buffer_size<B>(ctx, M, w, jobz, uplo);
 }
 
-} // namespace
+}  // namespace
 
     template <Backend B, typename T, MatrixFormat MFormat>
     Event syevx_lobpcg(Queue& ctx,

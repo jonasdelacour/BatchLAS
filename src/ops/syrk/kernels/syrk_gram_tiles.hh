@@ -310,4 +310,4 @@ Event syrk_gram_tiles(Queue& ctx,
     return dispatch(std::integral_constant<int, 128>{});
 }
 
-} // namespace batchlas::backend::detail
+}  // namespace batchlas::backend::detail

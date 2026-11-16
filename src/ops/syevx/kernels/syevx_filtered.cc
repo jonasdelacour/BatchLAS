@@ -74,7 +74,7 @@ inline uint32_t splitmix(uint32_t x) {
     return x ^ (x >> 16);
 }
 
-} // namespace
+}  // namespace
 
 template <Backend B, typename T, MatrixFormat MFormat>
 Event syevx_filtered(Queue& ctx,
@@ -782,4 +782,4 @@ size_t syevx_filtered_buffer_size(Queue& ctx,
 #undef SYEVX_FILTERED_INSTANTIATE_FOR_BACKEND_TYPE
 #undef SYEVX_FILTERED_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

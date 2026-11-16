@@ -297,4 +297,4 @@ size_t sort_buffer_size(Queue& ctx, Span<T> W, const MatrixView<T, MatrixFormat:
     return size;
 }
 
-} // namespace batchlas
+}  // namespace batchlas

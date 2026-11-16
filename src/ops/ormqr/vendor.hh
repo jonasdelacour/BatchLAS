@@ -32,4 +32,4 @@ std::size_t ormqr_vendor_buffer_size_or_throw(Args&&... args) {
     }
 }
 
-} // namespace batchlas::ops::ormqr::detail
+}  // namespace batchlas::ops::ormqr::detail

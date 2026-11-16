@@ -322,4 +322,4 @@ inline std::pair<size_t, size_t> compute_nd_range_sizes(size_t total_work,
 
 /// @}
 
-} // namespace batchlas
+}  // namespace batchlas

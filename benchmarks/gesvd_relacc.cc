@@ -341,7 +341,7 @@ void run_gesvd_relacc(miniacc::State& state) {
     }
 }
 
-} // namespace
+}  // namespace
 
 template <typename Real, Backend B>
 void ACC_GESVD_RELACC_BATCHLAS(miniacc::State& state) {

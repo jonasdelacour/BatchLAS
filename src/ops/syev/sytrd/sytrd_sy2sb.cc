@@ -298,7 +298,7 @@ void two_sided_update_lower(Queue& ctx,
     rank2k_lower_update<B, T>(ctx, V, Y, A22);
 }
 
-} // namespace
+}  // namespace
 
 template <Backend B, typename T>
 size_t sytrd_sy2sb_buffer_size(Queue& ctx,
@@ -485,4 +485,4 @@ BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(SYTRD_SY2SB_INSTANTIATE)
 
 #undef SYTRD_SY2SB_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

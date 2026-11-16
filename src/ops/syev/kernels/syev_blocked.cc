@@ -404,7 +404,7 @@ int syev_blocked_chunk(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& a, 
     }, [](int) { return std::size_t(0); });
 }
 
-} // namespace
+}  // namespace
 
 namespace ops::syev::detail {
 
@@ -480,4 +480,4 @@ BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(SYEV_BLOCKED_INSTANTIATE)
 
 #undef SYEV_BLOCKED_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

@@ -37,7 +37,7 @@ template <typename R>
 VectorView<R> lanczos_offdiagonals(R* betas, int n, int batch_size) {
     return VectorView<R>(betas, n - 1, batch_size, Inc{1}, Stride{n});
 }
-} // namespace
+}  // namespace
 
 template <Backend B, typename T, MatrixFormat MF>
 Event lanczos(Queue& ctx,

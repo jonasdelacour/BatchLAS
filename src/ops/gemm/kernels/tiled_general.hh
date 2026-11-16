@@ -92,4 +92,4 @@ Event launch_tiled_general(Queue& ctx,
     return ctx.get_event();
 }
 
-} // namespace batchlas::ops::gemm
+}  // namespace batchlas::ops::gemm

@@ -104,7 +104,7 @@ __attribute__((always_inline, convergent)) inline T redux(T v, Op) {
     __acpp_if_target_cuda(return nvptx_detail::redux_full(v, Op{});)
     return static_cast<T>(r);
 }
-} // namespace sscp_detail
+}  // namespace sscp_detail
 
 template <uint32_t P, bool Masked>
 struct SscpBackend {
@@ -170,4 +170,4 @@ BATCHLAS_UNROLL_FULL
     }
 };
 
-} // namespace batchlas::sgp
+}  // namespace batchlas::sgp

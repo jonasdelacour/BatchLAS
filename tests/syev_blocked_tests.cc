@@ -33,7 +33,7 @@ struct SyevBlockedConfig {
     static constexpr Backend BackendVal = B;
 };
 
-} // namespace
+}  // namespace
 
 using SyevBlockedTestTypes = typename test_utils::backend_types<SyevBlockedConfig>::type;
 

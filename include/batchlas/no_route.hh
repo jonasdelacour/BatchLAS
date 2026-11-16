@@ -139,4 +139,4 @@ private:
     ScalarKind scalar_;
 };
 
-} // namespace batchlas
+}  // namespace batchlas

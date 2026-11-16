@@ -143,7 +143,7 @@ void ACC_ORTHO_SVQB2(miniacc::State& state) {
     run_ortho_case<Real, B, OrthoAlgorithm::SVQB2>(state, "ortho_svqb2");
 }
 
-} // namespace
+}  // namespace
 
 BATCHLAS_REGISTER_ACCURACY(ACC_ORTHO_CHOL2, OrthogonalityMiniaccSizes);
 BATCHLAS_REGISTER_ACCURACY(ACC_ORTHO_CHOLESKY, OrthogonalityMiniaccSizes);

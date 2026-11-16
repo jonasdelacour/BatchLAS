@@ -53,7 +53,7 @@ Event spmm_vendor(Queue& ctx,
     return ctx.create_event_after_external_work();
 }
 
-} // namespace backend
+}  // namespace backend
 
 namespace backend {
 
@@ -85,7 +85,7 @@ size_t spmm_vendor_buffer_size(Queue& ctx,
     return size;
 }
 
-} // namespace backend
+}  // namespace backend
 
 // ONLY `backend::spmm_vendor` (CSR only), via raw BATCHLAS_INSTANTIATE: there is no _BACKEND_FORMAT_OP.
 // The public spmm is instantiated in src/ops/spmm/spmm.cc; naming it here would collide at link time.

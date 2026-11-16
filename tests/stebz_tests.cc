@@ -67,7 +67,7 @@ protected:
 using RealTypes = ::testing::Types<float, double>;
 TYPED_TEST_SUITE(StebzTest, RealTypes);
 
-} // namespace
+}  // namespace
 
 // Full spectrum must match the closed form exactly, for every batch item.
 TYPED_TEST(StebzTest, AllRangeMatchesClosedForm) {

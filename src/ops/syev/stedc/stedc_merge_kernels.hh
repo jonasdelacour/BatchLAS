@@ -56,4 +56,4 @@ void stedc_merge_dispatch(Queue& ctx,
                           int32_t* info,
                           int64_t info_nodes_per_item);
 
-} // namespace batchlas
+}  // namespace batchlas

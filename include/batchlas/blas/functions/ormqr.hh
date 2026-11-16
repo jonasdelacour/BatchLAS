@@ -132,7 +132,7 @@ BATCHLAS_API size_t ormqr_buffer_size(Queue& ctx,
                                       Span<T> tau,
                                       int32_t block_size_hint = 0);
 
-} // namespace batchlas
+}  // namespace batchlas
 
 namespace batchlas::backend {
 
@@ -173,7 +173,7 @@ BATCHLAS_API size_t ormqr_vendor_buffer_size(Queue& ctx,
                                              Transpose trans,
                                              Span<T> tau);
 
-} // namespace batchlas::backend
+}  // namespace batchlas::backend
 
 namespace batchlas {
 

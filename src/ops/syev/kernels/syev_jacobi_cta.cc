@@ -293,7 +293,7 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
     });
 }
 
-} // namespace
+}  // namespace
 
 template <Backend B, typename T>
 Event syev_jacobi_cta(Queue& ctx,
@@ -397,4 +397,4 @@ size_t syev_jacobi_cta_buffer_size(Queue& ctx,
 
 #undef SYEV_JACOBI_CTA_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

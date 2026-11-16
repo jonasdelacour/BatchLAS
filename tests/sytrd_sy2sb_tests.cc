@@ -76,7 +76,7 @@ struct SytrdSy2sbConfig {
     static constexpr Backend BackendVal = B;
 };
 
-} // namespace
+}  // namespace
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 using SytrdSy2sbTestTypes = ::testing::Types<SytrdSy2sbConfig<float, Backend::CUDA>, SytrdSy2sbConfig<double, Backend::CUDA>>;

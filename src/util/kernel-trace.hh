@@ -216,7 +216,7 @@ inline void flush() {
     f << "}\n";
 }
 
-} // namespace batchlas_kernel_trace
+}  // namespace batchlas_kernel_trace
 
 // Convenience macro: annotate a region; all queue submissions within may inherit the name.
 // Note: this is best-effort labeling; submissions without a scope will be labeled "sycl_submit".

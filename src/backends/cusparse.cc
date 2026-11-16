@@ -325,7 +325,7 @@ size_t spmm_vendor_buffer_size(Queue& ctx,
     return BumpAllocator::allocation_size<std::byte>(ctx, size);
 }
 
-} // namespace backend
+}  // namespace backend
 
 // Explicit instantiations: ONLY the `backend::`-qualified vendor entry
 // points. The public spmm / spmm_buffer_size definitions and their

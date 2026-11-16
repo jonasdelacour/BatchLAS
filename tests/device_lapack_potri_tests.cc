@@ -446,4 +446,4 @@ TYPED_TEST(DeviceLapackPotriTest, LaunchSizedGroupAuxOps) {
     }
 }
 
-} // namespace
+}  // namespace

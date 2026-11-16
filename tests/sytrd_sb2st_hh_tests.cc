@@ -382,4 +382,4 @@ TEST(Sb2stHhWaves, ReflectorsInAWaveAreDisjoint) {
     }
 }
 
-} // namespace
+}  // namespace

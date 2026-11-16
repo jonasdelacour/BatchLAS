@@ -497,7 +497,7 @@ constexpr std::array<GesvdJobCase, 4> kGesvdJobCases{{
     {SvdVectors::All, SvdVectors::All, "AA"},
 }};
 
-} // namespace
+}  // namespace
 
 TYPED_TEST(GesvdTest, BlockedProviderCoversAllJobCombinations) {
     using Scalar = typename TestFixture::Scalar;

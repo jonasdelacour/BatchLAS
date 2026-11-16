@@ -633,5 +633,5 @@ TYPED_TEST(GesvdjCtaTest, RotationsKeepRightVectorNormsUnbiased) {
     }
 }
 
-} // namespace
+}  // namespace
 #endif  // BATCHLAS_HAS_CUDA_BACKEND

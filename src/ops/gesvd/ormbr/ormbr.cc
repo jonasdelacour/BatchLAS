@@ -377,7 +377,7 @@ inline void validate_ormbr_dims(const MatrixView<T, MatrixFormat::Dense>& a,
     }
 }
 
-} // namespace
+}  // namespace
 
 template <Backend B, typename T>
 Event ormbr(Queue& ctx,
@@ -517,4 +517,4 @@ BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(ORMBR_INSTANTIATE)
 
 #undef ORMBR_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

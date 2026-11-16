@@ -3150,4 +3150,4 @@ BATCHLAS_API Event scale(Queue& ctx, const T& alpha, const MatrixView<T, MType>&
 template <typename T>
 BATCHLAS_API Event scale(Queue& ctx, const T& alpha, const VectorView<T>& vec_view);
 
-} // namespace batchlas
+}  // namespace batchlas

@@ -13,4 +13,4 @@ namespace batchlas {
 template <Backend B, typename T>
 Event mirror_upper_to_lower(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& a);
 
-} // namespace batchlas
+}  // namespace batchlas

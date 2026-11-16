@@ -118,5 +118,5 @@ BATCHLAS_INTERNAL_API Event unmqr_hb2st(Queue& ctx,
                                         Span<const int32_t> lens,
                                         Span<const int32_t> waves);
 
-} // namespace detail
-} // namespace batchlas
+}  // namespace detail
+}  // namespace batchlas

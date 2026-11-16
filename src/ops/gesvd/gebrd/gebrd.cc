@@ -58,7 +58,7 @@ Event gebd2_launch(Queue& ctx,
     return ctx.get_event();
 }
 
-} // namespace
+}  // namespace
 
 template <Backend B, typename T>
 Event gebrd_unblocked(Queue& ctx,
@@ -90,4 +90,4 @@ BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(GEBRD_INSTANTIATE)
 
 #undef GEBRD_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

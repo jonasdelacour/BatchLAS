@@ -32,4 +32,4 @@ std::size_t syev_vendor_buffer_size_or_throw(Args&&... args) {
     }
 }
 
-} // namespace batchlas::ops::syev::detail
+}  // namespace batchlas::ops::syev::detail

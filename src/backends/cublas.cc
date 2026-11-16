@@ -989,7 +989,7 @@ size_t getri_vendor_buffer_size(Queue& ctx,
         return BumpAllocator::allocation_size<int>(ctx, batch_size);
     }
 
-} // namespace backend
+}  // namespace backend
 
 // Template instantiations for cuBLAS functions (MatrixView version)
 // Explicit instantiations. Signatures live in the `sig` namespace beside each

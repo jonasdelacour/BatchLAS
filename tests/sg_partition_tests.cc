@@ -799,4 +799,4 @@ void isolation_all() {
 TEST(SgPartition, ChunkIsolationSG16) { isolation_all<16>(); }
 TEST(SgPartition, ChunkIsolationSG32) { isolation_all<32>(); }
 
-} // namespace
+}  // namespace

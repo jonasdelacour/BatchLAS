@@ -157,7 +157,7 @@ int run_one(const std::string& dump_dir,
     return 0;
 }
 
-} // namespace
+}  // namespace
 
 int main(int argc, char** argv) {
 #if !BATCHLAS_HAS_CUDA_BACKEND

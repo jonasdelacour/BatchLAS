@@ -87,7 +87,7 @@ void BM_GEMM_TRANSPOSE(minibench::State& state) {
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 
-} // namespace
+}  // namespace
 
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_GEMM_TRANSPOSE, GemmTransposeSizes);
 

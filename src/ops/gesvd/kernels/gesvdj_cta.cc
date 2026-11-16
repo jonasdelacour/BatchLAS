@@ -622,7 +622,7 @@ void validate_gesvdj_dims(const MatrixView<T, MatrixFormat::Dense>& a,
     }
 }
 
-} // namespace
+}  // namespace
 
 template <Backend B, typename T>
 Event gesvdj_cta(Queue& ctx,
@@ -757,4 +757,4 @@ size_t gesvdj_cta_buffer_size(Queue& ctx,
 
 #undef GESVDJ_CTA_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

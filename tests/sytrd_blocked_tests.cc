@@ -88,7 +88,7 @@ struct SytrdBlockedConfig {
     static constexpr Backend BackendVal = B;
 };
 
-} // namespace
+}  // namespace
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 using SytrdBlockedTestTypes = ::testing::Types<SytrdBlockedConfig<float, Backend::CUDA>, SytrdBlockedConfig<double, Backend::CUDA>>;

@@ -273,5 +273,5 @@ TYPED_TEST(BdsdcTest, AllZeros) {
     this->run_and_check(dh, eh, n, batch, /*vectors=*/true, "all-zeros");
 }
 
-} // namespace
+}  // namespace
 #endif  // BATCHLAS_HAS_CUDA_BACKEND

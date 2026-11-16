@@ -86,7 +86,7 @@ BATCHLAS_API Event her2k(Queue& ctx,
                          Uplo uplo,
                          Transpose transA);
 
-} // namespace batchlas
+}  // namespace batchlas
 
 namespace batchlas::backend {
 

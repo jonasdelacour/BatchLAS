@@ -116,4 +116,4 @@ BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(STEDC_MERGE_INSTANTIATE)
 
 #undef STEDC_MERGE_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

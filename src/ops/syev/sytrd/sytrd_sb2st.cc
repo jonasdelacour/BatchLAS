@@ -398,7 +398,7 @@ Event btrd_lower_inplace(Queue& q,
     return q.get_event();
 }
 
-} // namespace
+}  // namespace
 
 template <typename T>
 struct Sb2stWorkspace {
@@ -578,4 +578,4 @@ BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(SYTRD_SB2ST_INSTANTIATE)
 
 #undef SYTRD_SB2ST_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

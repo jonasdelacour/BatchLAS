@@ -258,7 +258,7 @@ BATCHLAS_API size_t gesvd_buffer_size(Queue& ctx,
                                       SvdVectors jobvh,
                                       Uplo hermitian_uplo);
 
-} // namespace batchlas
+}  // namespace batchlas
 
 namespace batchlas::backend {
 
@@ -319,7 +319,7 @@ BATCHLAS_API size_t gesvd_vendor_buffer_size(Queue& ctx,
                                              SvdVectors jobu,
                                              SvdVectors jobvh);
 
-} // namespace batchlas::backend
+}  // namespace batchlas::backend
 
 namespace batchlas {
 

@@ -199,4 +199,4 @@ size_t stein_buffer_size(Queue& ctx, size_t n, size_t k, size_t batch_size, Stei
 
 #undef STEIN_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

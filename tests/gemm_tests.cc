@@ -197,7 +197,7 @@ void run_forced_sycl_gemm_kernel_check(Queue& ctx,
     ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(ctx, A, transA, B, transB, C0, C, alpha, beta, k, tol_scale));
 }
 
-} // namespace
+}  // namespace
 
 template <typename T, Backend B>
 struct TestConfig {

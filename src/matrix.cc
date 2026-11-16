@@ -2869,4 +2869,4 @@ template const std::complex<double>& MatrixView<std::complex<double>, MatrixForm
 template const std::array<float, 2>& MatrixView<std::array<float, 2>, MatrixFormat::Dense>::at<MatrixFormat::Dense>(int, int, int) const;
 template const std::array<double, 2>& MatrixView<std::array<double, 2>, MatrixFormat::Dense>::at<MatrixFormat::Dense>(int, int, int) const;
 
-} // namespace batchlas
+}  // namespace batchlas

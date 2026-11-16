@@ -72,7 +72,7 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
     return !detail::any_nonzero(fail_flags.data(), batch);
 }
 
-} // namespace
+}  // namespace
 
 // Single description of bdsqr's workspace; see workspace_bytes() in
 // util/mempool.hh.
@@ -225,4 +225,4 @@ BATCHLAS_FOR_EACH_REAL_TYPE(BDSQR_BUFFER_INSTANTIATE)
 #undef BDSQR_INSTANTIATE
 #undef BDSQR_BUFFER_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

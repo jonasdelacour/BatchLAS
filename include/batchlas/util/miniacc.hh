@@ -866,4 +866,4 @@ inline int MiniAccMain(int argc, char** argv) {
         return miniacc::MiniAccMain(argc, argv); \
     }
 
-} // namespace miniacc
+}  // namespace miniacc
