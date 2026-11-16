@@ -370,17 +370,17 @@ inline void validate_dense_active_dims(int rows_capacity,
 
     if (active_rows.size() != static_cast<std::size_t>(batch_size) ||
         active_cols.size() != static_cast<std::size_t>(batch_size)) {
-        throw batchlas::invalid_argument("set_active_dims: Dense heterogeneous metadata must provide rows and cols for every batch item");
+        throw batchlas::invalid_argument("active_dims: Dense heterogeneous metadata must provide rows and cols for every batch item");
     }
 
     for (int batch_index = 0; batch_index < batch_size; ++batch_index) {
         const int rows = active_rows[batch_index];
         const int cols = active_cols[batch_index];
         if (rows < 0 || cols < 0) {
-            throw batchlas::invalid_argument("set_active_dims: Dense heterogeneous metadata cannot contain negative dimensions");
+            throw batchlas::invalid_argument("active_dims: Dense heterogeneous metadata cannot contain negative dimensions");
         }
         if (rows > rows_capacity || cols > cols_capacity) {
-            throw batchlas::invalid_argument("set_active_dims: Dense heterogeneous metadata exceeds the matrix storage capacity");
+            throw batchlas::invalid_argument("active_dims: Dense heterogeneous metadata exceeds the matrix storage capacity");
         }
     }
 }
