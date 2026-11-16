@@ -1804,7 +1804,7 @@ TYPED_TEST(GesvdTest, EmptyInfoSpanChangesNeitherAnswerNorWorkspace) {
 //
 // max_sweeps = 2, not 1, and the reason is the termination rule: gesvdj_cta
 // requires TWO CONSECUTIVE zero-rotation sweeps before it will call an item
-// converged (gesvdj_cta.cc:733-737, whose comment explains that one is a silent
+// converged (gesvdj_cta.cc:736-740, whose comment explains that one is a silent
 // wrong answer). At a cap of 1 NOTHING can converge, so "the items reporting
 // info == 0 are still correct" would be vacuously true. At 2 the diagonal items
 // converge and the dense ones do not, which is the mixed outcome this case needs

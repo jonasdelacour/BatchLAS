@@ -340,7 +340,7 @@ TEST(NoRoute, IsUnsupported) {
 // THE REGRESSION THESE CATCH -- the proof.
 //
 // Take MatrixViewRejectsShortLeadingDimension below and revert its site
-// (src/matrix.cc:1878) to `std::invalid_argument`, the pre-migration spelling.
+// (src/matrix.cc:1880) to `std::invalid_argument`, the pre-migration spelling.
 // Reading the assertions in expect_three_way_catch against that:
 //
 //   * r.specific -- the handler is `catch (const batchlas::invalid_argument&)`
@@ -365,7 +365,7 @@ TEST(NoRoute, IsUnsupported) {
 // ---------------------------------------------------------------------------
 
 TEST(ErrorModelSites, MatrixViewRejectsShortLeadingDimension) {
-    // src/matrix.cc:1878 -- "leading dimension N is smaller than the row count M".
+    // src/matrix.cc:1880 -- "leading dimension N is smaller than the row count M".
     // Pure host validation inside the MatrixView constructor: the buffer is
     // described, never read.
     std::vector<float> buffer(64, 0.0f);
@@ -379,7 +379,7 @@ TEST(ErrorModelSites, MatrixViewRejectsShortLeadingDimension) {
 }
 
 TEST(ErrorModelSites, MatrixViewElementAccessOutOfRange) {
-    // src/matrix.cc:1982 / :2006 -- MatrixView::at(row, col, batch), reached
+    // src/matrix.cc:1984 / :2006 -- MatrixView::at(row, col, batch), reached
     // through operator(). Two of the 5 sites that stay on std::out_of_range's
     // side of the hierarchy so Python element access keeps raising IndexError.
     std::vector<float> buffer(64, 0.0f);

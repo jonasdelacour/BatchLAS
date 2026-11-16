@@ -116,7 +116,7 @@ form has a bound of the same form by its own analysis [2, §19.5].
 
 ## geqrf: kernels and routing
 
-`tuned/geqrf.<device>.txt` ranks the routes; `can_run` ([`src/ops/geqrf/can_run.hh:28-44`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/geqrf/can_run.hh#L28-L44)) admits the
+`tuned/geqrf.<device>.txt` ranks the routes; `can_run` ([`src/ops/geqrf/can_run.hh:28-45`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/geqrf/can_run.hh#L28-L44)) admits the
 correct ones. No route takes a heterogeneous batch; native routes need a GPU and sub-group size 32.
 
 | Route | `can_run` adds | Kernel and mapping |
@@ -169,7 +169,7 @@ Q_{:,1:n} = H_1 H_2 \cdots H_n \begin{bmatrix} I_n \\ 0 \end{bmatrix}.
 \f]
 
 - `blocked`: \f$C \leftarrow I_{m \times n}\f$, then the routed `ormqr` (Left, NoTrans), then
-  \f$A \leftarrow C\f$ ([`src/ops/orgqr/kernels/orgqr_blocked.cc:229-240`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/orgqr/kernels/orgqr_blocked.cc#L229-L240), [`:248`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/orgqr/kernels/orgqr_blocked.cc#L248), [`:261-273`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/orgqr/kernels/orgqr_blocked.cc#L261-L273));
+  \f$A \leftarrow C\f$ ([`src/ops/orgqr/kernels/orgqr_blocked.cc:230-241`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/orgqr/kernels/orgqr_blocked.cc#L229-L240), [`:248`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/orgqr/kernels/orgqr_blocked.cc#L248), [`:261-273`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/orgqr/kernels/orgqr_blocked.cc#L261-L273));
   \f$n_b\f$ as `geqrf` ([`:40-53`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/orgqr/kernels/orgqr_blocked.cc#L40-L53)).
 - Each block updates all \f$n\f$ columns of \f$C\f$; `zungqr` skips the zero block of \f$[I_n; 0]\f$.
 - `can_run` ([`src/ops/orgqr/orgqr.cc:41-54`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/orgqr/orgqr.cc#L41-L54)): `blocked` needs a GPU and \f$n \le m\f$; `vendor` a

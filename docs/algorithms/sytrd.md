@@ -93,14 +93,14 @@ half of the \f$\tfrac43 n^3\f$ flops [3].
 
 | Piece | Variant | Where chosen |
 | --- | --- | --- |
-| \f$n \le 32\f$, sub-group 32 | `sytrd_cta` (above) | [`sytrd_blocked.cc:656-660`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_blocked.cc#L656-L660) |
-| \f$n \le 64\f$, non-native backend, float (any type if forced), \f$n(n{+}1)\f$ fit in local memory | local-memory `sytd2` | [`sytrd_blocked.cc:662-700`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_blocked.cc#L662-L700) |
+| \f$n \le 32\f$, sub-group 32 | `sytrd_cta` (above) | [`sytrd_blocked.cc:659-663`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_blocked.cc#L656-L660) |
+| \f$n \le 64\f$, non-native backend, float (any type if forced), \f$n(n{+}1)\f$ fit in local memory | local-memory `sytd2` | [`sytrd_blocked.cc:665-700`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_blocked.cc#L662-L700) |
 | panel | one work-group per matrix; grid kernel when \f$m \ge\f$ `latrd_grid_min_n` (768) and more than one group fits | [`latrd_lower_panel.cc:60-64`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/latrd_lower_panel.cc#L61-L65), [`1097-1102`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/latrd_lower_panel.cc#L1097-L1102) |
-| trailing \f$n_2 \le 128\f$ | fused into the panel ([`latrd_lower_panel.cc:443-468`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/latrd_lower_panel.cc#L444-L469)) or `update_vw_lower_small_legacy` ([`sytrd_blocked.cc:120-172`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_blocked.cc#L120-L172)) | [`sytrd_blocked.cc:739`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_blocked.cc#L739), [`:758-763`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_blocked.cc#L758-L763) |
+| trailing \f$n_2 \le 128\f$ | fused into the panel ([`latrd_lower_panel.cc:443-468`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/latrd_lower_panel.cc#L444-L469)) or `update_vw_lower_small_legacy` ([`sytrd_blocked.cc:120-173`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_blocked.cc#L120-L172)) | [`sytrd_blocked.cc:739`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_blocked.cc#L739), [`:758-763`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_blocked.cc#L758-L763) |
 | trailing \f$n_2 > 128\f$ | `syr2k`/`her2k` (float, cfloat with a batched route), else two `gemm` | [`sytrd_blocked.cc:764-812`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_blocked.cc#L764-L812) |
 
 `restore_tridiag_lower` copies \f$d\f$ out and writes the stored \f$t_i\f$ back to both
-off-diagonals ([`sytrd_blocked.cc:554-561`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_blocked.cc#L554-L561)).
+off-diagonals ([`sytrd_blocked.cc:557-564`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_blocked.cc#L554-L561)).
 
 ## sytrd: dense to band (sy2sb)
 
@@ -110,7 +110,7 @@ panel width \f$p_k = \min(k_d, n-i-k_d+1)\f$:
 
 1. QR of the block below the band, \f$A(i{+}k_d{:}n,\, i{:}i{+}p_k{-}1) = Q R\f$, with
    \f$Q = I - V \mathcal{T} V^H\f$ in compact WY form [6]
-   ([`src/ops/syev/sytrd/sytrd_sy2sb.cc:437`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_sy2sb.cc#L439); \f$\mathcal{T}\f$ by `larft`, [`:286-288`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_sy2sb.cc#L286-L288)).
+   ([`src/ops/syev/sytrd/sytrd_sy2sb.cc:438`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_sy2sb.cc#L439); \f$\mathcal{T}\f$ by `larft`, [`:286-288`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_sy2sb.cc#L286-L288)).
 2. Two-sided update \f$A_{22} \leftarrow Q^H A_{22} Q\f$, \f$A_{22} = A(i{+}k_d{:}n, i{+}k_d{:}n)\f$,
    reading the lower triangle only:
 
@@ -120,7 +120,7 @@ Y \leftarrow Y - \tfrac12 V\big(\mathcal{T}^H V^H Y\big), \qquad
 A_{22} \leftarrow A_{22} - V Y^H - Y V^H
 \f]
 
-   ([`sytrd_sy2sb.cc:288-296`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_sy2sb.cc#L289-L297): four `gemm`, one `symm`/`hemm`, then `syr2k`/`her2k`).
+   ([`sytrd_sy2sb.cc:289-297`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_sy2sb.cc#L289-L297): four `gemm`, one `symm`/`hemm`, then `syr2k`/`her2k`).
 3. A short last panel (\f$p_k < k_d\f$) also applies \f$Q^H\f$ to columns
    \f$i{+}p_k{:}i{+}k_d{-}1\f$ ([`:444-449`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_sy2sb.cc#L444-L449)); LAPACK gets the same by factoring the full
    \f$(n{-}i{-}k_d{+}1) \times k_d\f$ block [8].
