@@ -15,8 +15,10 @@ using namespace batchlas;
 
 // SYEVX benchmark operating on dense symmetric matrices
 
+namespace {
+
 template <typename T, Backend B>
-static void BM_SYEVX(minibench::State& state) {
+void BM_SYEVX(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const size_t neigs = state.range(2);
@@ -62,7 +64,7 @@ static void BM_SYEVX(minibench::State& state) {
 // This is the sweep that replaced the flop-count thresholds with measured ones.
 // evidence: docs/perf/syevx.md#syevx-the-first-gpu-crossover-measurement-superseded-baseline
 template <typename T, Backend B>
-static void BM_SYEVX_Crossover(minibench::State& state) {
+void BM_SYEVX_Crossover(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const size_t neigs = state.range(2);
@@ -111,7 +113,7 @@ static void BM_SYEVX_Crossover(minibench::State& state) {
 // until now that sweep lived outside the repo. Keeping it here is what makes the
 // thresholds reproducible.
 template <typename T, Backend B>
-static void BM_SYEVX_CrossoverVectors(minibench::State& state) {
+void BM_SYEVX_CrossoverVectors(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const size_t neigs = state.range(2);
@@ -193,8 +195,6 @@ static void BM_SYEVX_CrossoverVectors(minibench::State& state) {
 // algorithms degrade for DIFFERENT reasons as the gap closes -- LOBPCG stalls,
 // Chebyshev needs a higher degree per outer iteration -- and a single
 // well-separated operating point would hide exactly that divergence.
-
-namespace {
 
 enum SparseConfig : int {
     kFilteredLargest    = 0,
@@ -330,10 +330,8 @@ double sparse_eig_error(Queue& q, int n, size_t neigs, int config, float boost) 
     return err;
 }
 
-}  // namespace
-
 template <typename T, Backend B>
-static void BM_SYEVX_SparseImpl(minibench::State& state) {
+void BM_SYEVX_SparseImpl(minibench::State& state) {
     const int n = state.range(0);
     const size_t batch = static_cast<size_t>(state.range(1));
     const size_t neigs = static_cast<size_t>(state.range(2));
@@ -389,7 +387,7 @@ static void BM_SYEVX_SparseImpl(minibench::State& state) {
 // benchmarks/syevx_acc.cc already uses for sparse eigensolver accuracy work --
 // so this sweep varies shape alone.
 template <typename T, Backend B>
-static void BM_SYEVX_SparseShape(minibench::State& state) {
+void BM_SYEVX_SparseShape(minibench::State& state) {
     BM_SYEVX_SparseImpl<T, B>(state);
 }
 
@@ -399,7 +397,7 @@ static void BM_SYEVX_SparseShape(minibench::State& state) {
 // accuracy column rather than the timing one.
 // evidence: docs/perf/syevx.md#syevx-the-diagonal-boost-gap-sweep-and-lobpcg-stagnation
 template <typename T, Backend B>
-static void BM_SYEVX_SparseGap(minibench::State& state) {
+void BM_SYEVX_SparseGap(minibench::State& state) {
     BM_SYEVX_SparseImpl<T, B>(state);
 }
 
@@ -428,7 +426,7 @@ static void BM_SYEVX_SparseGap(minibench::State& state) {
 // there would be nothing to compare -- and the back-transform is the term whose
 // position-independence is the non-obvious half of the claim.
 template <typename T, Backend B>
-static void BM_SYEVX_RangePosition(minibench::State& state) {
+void BM_SYEVX_RangePosition(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const size_t neigs = state.range(2);
@@ -471,8 +469,6 @@ static void BM_SYEVX_RangePosition(minibench::State& state) {
                     });
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
-
-namespace {
 
 // One (n, batch) AT SATURATION and nothing else. n = 1024, batch = 128 is
 // exactly syevx.cc's kSyevxSubsetMinN / kSyevxSubsetMinWork corner, i.e. the

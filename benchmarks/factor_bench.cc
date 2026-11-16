@@ -69,25 +69,33 @@
 #include <vector>
 
 using namespace batchlas;
+
+namespace {
+
 // The vendor arm is whichever vendor library this build links: cuSOLVER/cuBLAS on
 // CUDA, rocSOLVER/rocBLAS on ROCm. Backend::SYCL (AdaptiveCpp Metal) has no vendor arm,
 // and no double kernels without device fp64.
 #if BATCHLAS_HAS_CUDA_BACKEND
-static constexpr Backend BE = Backend::CUDA;
+constexpr Backend BE = Backend::CUDA;
 #define FACTOR_BENCH_FP64 1
 #elif BATCHLAS_HAS_ROCM_BACKEND
-static constexpr Backend BE = Backend::ROCM;
+constexpr Backend BE = Backend::ROCM;
 #define FACTOR_BENCH_FP64 1
 #elif BATCHLAS_HAS_SYCL_BACKEND
-static constexpr Backend BE = Backend::SYCL;
+constexpr Backend BE = Backend::SYCL;
 #define FACTOR_BENCH_FP64 BATCHLAS_HAS_DEVICE_FP64
 #endif
 
-static double warm_s() { const char* e = std::getenv("WARM_S"); return e ? std::atof(e) : 1.5; }
-static int ld_pad()    { const char* e = std::getenv("LD_PAD"); return e ? std::atoi(e) : 0; }
+double warm_s() { const char* e = std::getenv("WARM_S"); return e ? std::atof(e) : 1.5; }
+int ld_pad()    { const char* e = std::getenv("LD_PAD"); return e ? std::atoi(e) : 0; }
+
+}  // namespace
 
 struct Stat { double med = 0, mean = 0, relsd = 0; };
-static Stat stat_of(std::vector<double> v) {
+
+namespace {
+
+Stat stat_of(std::vector<double> v) {
     if (v.empty()) return {};
     std::sort(v.begin(), v.end());
     Stat s;
@@ -101,13 +109,17 @@ static Stat stat_of(std::vector<double> v) {
     return s;
 }
 
+}  // namespace
+
 // ------------------------------------------------------------- route pins
 enum class OpKind { potrf, getrf, getrs, geqrf, orgqr, gesv, posv };
 
-// P2: the FUSED ops have no vendor arm of their own -- see composed_pins below.
-static bool is_solve_op(OpKind k) { return k == OpKind::gesv || k == OpKind::posv; }
+namespace {
 
-static const char* pin_variable(OpKind k) {
+// P2: the FUSED ops have no vendor arm of their own -- see composed_pins below.
+bool is_solve_op(OpKind k) { return k == OpKind::gesv || k == OpKind::posv; }
+
+const char* pin_variable(OpKind k) {
     switch (k) {
         case OpKind::potrf: return "BATCHLAS_POTRF_ROUTE";
         case OpKind::getrf: return "BATCHLAS_GETRF_ROUTE";
@@ -122,14 +134,14 @@ static const char* pin_variable(OpKind k) {
 
 // The leaf A/B variable per op; nullptr for an op with no leaf seam, which makes an
 // `/leaf=` arm on that op a loud no-op rather than a quiet one.
-static const char* leaf_variable(OpKind op) {
+const char* leaf_variable(OpKind op) {
     switch (op) {
         case OpKind::getrf: return "BATCHLAS_GETRF_LEAF";
         case OpKind::geqrf: return "BATCHLAS_GEQRF_LEAF";
         default: return nullptr;
     }
 }
-static const char* op_text(OpKind k) {
+const char* op_text(OpKind k) {
     switch (k) {
         case OpKind::potrf: return "potrf";
         case OpKind::getrf: return "getrf";
@@ -152,7 +164,7 @@ static const char* op_text(OpKind k) {
 // It is queried INSIDE the ScopedEnvVar scope on purpose: settings() is a pre-main
 // snapshot, and only ScopedEnvVar's reload_settings() makes the pin readable at all.
 template <typename Choice>
-static bool select_pin_parsed(OpKind k) {
+bool select_pin_parsed(OpKind k) {
     const char* raw = settings().routing.route(op_text(k)).get();
     if (raw == nullptr) return false;
     std::string text = raw;
@@ -161,7 +173,7 @@ static bool select_pin_parsed(OpKind k) {
     return select::parse<Choice>(text).has_value();
 }
 
-static bool pin_parsed_now(OpKind k) {
+bool pin_parsed_now(OpKind k) {
     switch (k) {
         case OpKind::potrf: return select_pin_parsed<ops::potrf::PotrfChoice>(k);
         case OpKind::getrf: return select_pin_parsed<ops::getrf::GetrfChoice>(k);
@@ -173,6 +185,8 @@ static bool pin_parsed_now(OpKind k) {
     }
     return false;
 }
+
+}  // namespace
 
 // ------------------------------------------------------------- one arm
 struct Arm {
@@ -191,6 +205,8 @@ struct Arm {
     bool refused = false;  // a pin this shape cannot run: the arm is reported, never timed
 };
 
+namespace {
+
 // P4 needs an A/B the route pin cannot express: both arms are the SAME route
 // (native blocked getrf) and differ only in which panel leaf the driver calls, which
 // is BATCHLAS_GETRF_LEAF. An arm named "blocked/leaf=reg" pins both, for that arm's
@@ -208,7 +224,7 @@ struct Arm {
 // `pin_parsed_now` still proves the OUTER pin landed.
 // A potrf or getrf pin the shape cannot run throws, so `composed` pins tiny only inside its
 // ceiling (16 for cdouble) and the best runnable native tier above it; trsm `cta` likewise.
-static std::vector<std::pair<std::string, std::string>>
+std::vector<std::pair<std::string, std::string>>
 composed_pins(OpKind op, const std::string& arm_name, bool potrf_tiny_fits, bool trsm_cta_fits,
               bool getrf_tiny_fits) {
     if (op == OpKind::gesv) {
@@ -237,10 +253,12 @@ composed_pins(OpKind op, const std::string& arm_name, bool potrf_tiny_fits, bool
 // the fused tiny kernel inside its window, the composition above it. Pinning "native"
 // to `blocked` measured a composition the library never selects at n <= 32 and put
 // posv at 0.25-0.62x where the shipped fused kernel wins 1.1-6.9x.
-static std::string solve_outer_pin(const std::string& arm_name) {
+std::string solve_outer_pin(const std::string& arm_name) {
     if (arm_name == "vendor" || arm_name == "composed") return "blocked";
     return arm_name;
 }
+
+}  // namespace
 
 struct ArmEnv {
     ScopedEnvVar route;
@@ -255,7 +273,9 @@ struct ArmEnv {
     }
 };
 
-static void flag(Arm& a, const char* why) {
+namespace {
+
+void flag(Arm& a, const char* why) {
     a.bad = 1;
     if (!a.reason.empty()) a.reason += "+";
     a.reason += why;
@@ -263,7 +283,7 @@ static void flag(Arm& a, const char* why) {
 
 // A refused pin (std::invalid_argument from choose()) costs only that arm, never the cell.
 // The message goes in a CSV field, so its commas and quotes are replaced.
-static void refuse(Arm& a, const std::invalid_argument& e) {
+void refuse(Arm& a, const std::invalid_argument& e) {
     std::string why = std::string("pin refused: ") + e.what();
     for (char& ch : why)
         if (ch == ',') ch = ';';
@@ -272,7 +292,7 @@ static void refuse(Arm& a, const std::invalid_argument& e) {
     flag(a, why.c_str());
 }
 
-static void gate(Arm& a, bool residual_within_bound, int reps) {
+void gate(Arm& a, bool residual_within_bound, int reps) {
     if (!std::isfinite(a.residual)) flag(a, "residual_nonfinite");
     else if (!residual_within_bound) flag(a, "residual");
     if (!std::isfinite(a.extra)) flag(a, "extra_nonfinite");
@@ -280,6 +300,8 @@ static void gate(Arm& a, bool residual_within_bound, int reps) {
     if (reps > 1 && a.st.relsd > 0.10) flag(a, "relsd");
     if (a.bad == 0) a.reason = "ok";
 }
+
+}  // namespace
 
 struct Cfg {
     OpKind op = OpKind::potrf;
@@ -302,9 +324,11 @@ struct Cfg {
     int mask = 0;
 };
 
-static Uplo up_of(const Cfg& c) { return c.upper ? Uplo::Upper : Uplo::Lower; }
+namespace {
 
-static void emit(const Cfg& c, const Arm& a, std::FILE* csv) {
+Uplo up_of(const Cfg& c) { return c.upper ? Uplo::Upper : Uplo::Lower; }
+
+void emit(const Cfg& c, const Arm& a, std::FILE* csv) {
     char buf[2048];
     std::snprintf(buf, sizeof(buf),
                   "%s,%s,%d,%d,%d,%d,%s,%s,%d,%.6f,%.6f,%.4f,%d,%.3e,%.3e,%d,%d,%s\n",
@@ -318,7 +342,7 @@ static void emit(const Cfg& c, const Arm& a, std::FILE* csv) {
 
 // ------------------------------------------------------------- driver
 template <typename T>
-static int run(const Cfg& c) {
+int run(const Cfg& c) {
 #if !BATCHLAS_HAS_GPU_BACKEND
     (void)c;
     throw batchlas::unsupported("factor_bench measures a GPU backend; this build has none");
@@ -641,6 +665,8 @@ static int run(const Cfg& c) {
     return rc;
 #endif
 }
+
+}  // namespace
 
 // ------------------------------------------------------------- main
 int main(int argc, char** argv) {

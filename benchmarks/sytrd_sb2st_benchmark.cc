@@ -44,10 +44,8 @@ inline void SytrdSb2stBenchSizes(Benchmark* b) {
     }
 }
 
-} // namespace
-
 template <typename T, Backend B>
-static void BM_SYTRD_SB2ST(minibench::State& state) {
+void BM_SYTRD_SB2ST(minibench::State& state) {
 #if BATCHLAS_HAS_CUDA_BACKEND
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
@@ -113,7 +111,7 @@ static void BM_SYTRD_SB2ST(minibench::State& state) {
 }
 
 template <typename T, Backend B>
-static void BM_SYTRD_BAND_REDUCTION(minibench::State& state) {
+void BM_SYTRD_BAND_REDUCTION(minibench::State& state) {
 #if BATCHLAS_HAS_CUDA_BACKEND
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
@@ -175,6 +173,8 @@ static void BM_SYTRD_BAND_REDUCTION(minibench::State& state) {
     (void)state;
 #endif
 }
+
+}  // namespace
 
 BATCHLAS_BENCH_CUDA_ALL_TYPES(BM_SYTRD_SB2ST, SytrdSb2stBenchSizes);
 BATCHLAS_BENCH_CUDA_ALL_TYPES(BM_SYTRD_BAND_REDUCTION, SytrdSb2stBenchSizes);

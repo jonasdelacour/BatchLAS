@@ -55,14 +55,12 @@ inline void OrmqrBlockedBenchSizesNetlib(Benchmark* b) {
     }
 }
 
-} // namespace
-
 // Batched blocked ORMQR (LARFT+GEMM WY) benchmark.
 //
 // This benchmarks the blocked implementation directly (ormqr_blocked) while still
 // supporting batched inputs by looping over batch items (matching backend behavior).
 template <typename T, Backend B>
-static void BM_ORMQR_BLOCKED(minibench::State& state) {
+void BM_ORMQR_BLOCKED(minibench::State& state) {
     const int n = state.range(0);
     const int batch = state.range(1);
     const Side side = parse_side(state.range(2));
@@ -126,6 +124,8 @@ static void BM_ORMQR_BLOCKED(minibench::State& state) {
     state.SetMetric("GFLOPS", gflops_nominal, minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_ORMQR_BLOCKED, OrmqrBlockedBenchSizes);
 

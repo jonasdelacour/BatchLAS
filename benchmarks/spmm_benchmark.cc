@@ -227,19 +227,19 @@ void run_spmm(minibench::State& state) {
 // --------------------------------------------------------------- registered families
 
 template <typename T, Backend Bk>
-static void BM_SPMM_Cells(minibench::State& state) { run_spmm<T, Bk, Arm::Warm>(state); }
+void BM_SPMM_Cells(minibench::State& state) { run_spmm<T, Bk, Arm::Warm>(state); }
 
 template <typename T, Backend Bk>
-static void BM_SPMM_Grid(minibench::State& state) { run_spmm<T, Bk, Arm::Warm>(state); }
+void BM_SPMM_Grid(minibench::State& state) { run_spmm<T, Bk, Arm::Warm>(state); }
 
 template <typename T, Backend Bk>
-static void BM_SPMM_Lanczos(minibench::State& state) { run_spmm<T, Bk, Arm::Warm>(state); }
+void BM_SPMM_Lanczos(minibench::State& state) { run_spmm<T, Bk, Arm::Warm>(state); }
 
 template <typename T, Backend Bk>
-static void BM_SPMM_ColdCells(minibench::State& state) { run_spmm<T, Bk, Arm::Cold>(state); }
+void BM_SPMM_ColdCells(minibench::State& state) { run_spmm<T, Bk, Arm::Cold>(state); }
 
 template <typename T, Backend Bk>
-static void BM_SPMM_ColdLanczos(minibench::State& state) { run_spmm<T, Bk, Arm::Cold>(state); }
+void BM_SPMM_ColdLanczos(minibench::State& state) { run_spmm<T, Bk, Arm::Cold>(state); }
 
 // ------------------------------------------------------------------------- sizers
 

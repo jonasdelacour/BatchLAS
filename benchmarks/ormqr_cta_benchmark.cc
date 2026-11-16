@@ -24,11 +24,9 @@ inline void OrmqrCtaBenchSizes(Benchmark* b) {
     }
 }
 
-} // namespace
-
 // Batched ORMQR-CTA benchmark
 template <typename T, Backend B>
-static void BM_ORMQR_CTA(minibench::State& state) {
+void BM_ORMQR_CTA(minibench::State& state) {
 #if BATCHLAS_HAS_CUDA_BACKEND
     const int n = static_cast<int>(state.range(0));
     const int batch = static_cast<int>(state.range(1));
@@ -99,6 +97,8 @@ static void BM_ORMQR_CTA(minibench::State& state) {
     (void)state;
 #endif
 }
+
+}  // namespace
 
 // Register size/batch combinations at static-init time
 BATCHLAS_BENCH_CUDA_ALL_TYPES(BM_ORMQR_CTA, OrmqrCtaBenchSizes);

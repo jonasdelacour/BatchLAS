@@ -43,10 +43,8 @@ void announce(const char* op) {
     }
 }
 
-}  // namespace
-
 template <typename T, Backend B>
-static void BM_SYTRS(minibench::State& state) {
+void BM_SYTRS(minibench::State& state) {
     announce("sytrs");
     const int n = int(state.range(0)), nrhs = int(state.range(1)), batch = int(state.range(2));
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
@@ -66,7 +64,7 @@ static void BM_SYTRS(minibench::State& state) {
 }
 
 template <typename T, Backend B>
-static void BM_SYSV(minibench::State& state) {
+void BM_SYSV(minibench::State& state) {
     announce("sysv");
     const int n = int(state.range(0)), nrhs = int(state.range(1)), batch = int(state.range(2));
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
@@ -79,6 +77,8 @@ static void BM_SYSV(minibench::State& state) {
     state.SetMetric("GFLOPS", double(batch) * 1e-9 * (double(n) * n * n / 3.0 + 2.0 * n * n * nrhs), minibench::Rate);
     state.SetMetric("Time (us) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 // n 8..512, nrhs {1, 4, 16, 64}, batch {128, 1024, 8192}; cells over 4 GB of complex<float> operands
 // (A, B and B's pristine copy) are dropped, so every type runs the same grid.

@@ -6,8 +6,10 @@
 
 using namespace batchlas;
 
+namespace {
+
 template <typename Benchmark>
-static void StedcBenchSizes(Benchmark* b) {
+void StedcBenchSizes(Benchmark* b) {
     // 320 and 640 are here deliberately. This sweep used to register only
     // powers of two, where the level planner lands on leaf == threshold exactly
     // -- so the leaf-width cliff that cost syev 3.25x at n=320 was structurally
@@ -26,7 +28,7 @@ static void StedcBenchSizes(Benchmark* b) {
 }
 
 template <typename Benchmark>
-static void StedcBenchSizesNetlib(Benchmark* b) {
+void StedcBenchSizesNetlib(Benchmark* b) {
     for (int n : {32, 64, 128}) {
         for (int batch : {1, 8, 32}) {
             b->Args({n, batch, 32, static_cast<int>(StedcMergeVariant::Baseline), 0, 0,
@@ -37,7 +39,7 @@ static void StedcBenchSizesNetlib(Benchmark* b) {
 
 // Batched STEDC benchmark
 template <typename T, Backend B>
-static void BM_STEDC(minibench::State& state) {
+void BM_STEDC(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const size_t rec_threshold = state.range(2);
@@ -90,6 +92,8 @@ static void BM_STEDC(minibench::State& state) {
                     kernel);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 
 

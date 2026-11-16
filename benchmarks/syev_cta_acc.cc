@@ -87,12 +87,12 @@ void run_syev_cta(miniacc::State& state, const char* impl_name) {
     }
 }
 
-} // namespace
-
 template <typename Real, Backend B>
-static void ACC_SYEV_CTA(miniacc::State& state) {
+void ACC_SYEV_CTA(miniacc::State& state) {
     run_syev_cta<Real, B>(state, "syev_cta");
 }
+
+}  // namespace
 
 template <typename Benchmark>
 void EigensolverSizesNetlib(Benchmark* b) {

@@ -11,9 +11,11 @@
 // Helper function to generate random matrix data
 using namespace batchlas;
 
+namespace {
+
 // Single matrix GEQRF benchmark
 template<typename T, Backend B>
-static void BM_GEQRF(minibench::State& state) {
+void BM_GEQRF(minibench::State& state) {
     const size_t m = state.range(0);
     const size_t n = state.range(1);
     const size_t batch_size = state.range(2);
@@ -38,6 +40,8 @@ static void BM_GEQRF(minibench::State& state) {
     state.SetMetric("Time (µs) / matrix", (1.0 / batch_size) * 1e6, minibench::Reciprocal);
 
 }
+
+}  // namespace
 
 
 

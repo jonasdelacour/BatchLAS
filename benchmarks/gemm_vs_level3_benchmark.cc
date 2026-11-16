@@ -165,9 +165,9 @@ void configure_gram(minibench::State& state) {
 }
 
 template <typename T, Backend B>
-static void BM_Gram_gemm(minibench::State& state) { configure_gram<T, B, false>(state); }
+void BM_Gram_gemm(minibench::State& state) { configure_gram<T, B, false>(state); }
 template <typename T, Backend B>
-static void BM_Gram_syrk(minibench::State& state) { configure_gram<T, B, true>(state); }
+void BM_Gram_syrk(minibench::State& state) { configure_gram<T, B, true>(state); }
 
 // ================================== Trailing: A22 -= V W^H + W V^H  (sytrd)
 
@@ -213,11 +213,11 @@ void configure_trailing(minibench::State& state) {
 }
 
 template <typename T, Backend B>
-static void BM_Trailing_gemm2(minibench::State& state) { configure_trailing<T, B, 0>(state); }
+void BM_Trailing_gemm2(minibench::State& state) { configure_trailing<T, B, 0>(state); }
 template <typename T, Backend B>
-static void BM_Trailing_syr2k(minibench::State& state) { configure_trailing<T, B, 1>(state); }
+void BM_Trailing_syr2k(minibench::State& state) { configure_trailing<T, B, 1>(state); }
 template <typename T, Backend B>
-static void BM_Trailing_syr2k_sym(minibench::State& state) { configure_trailing<T, B, 2>(state); }
+void BM_Trailing_syr2k_sym(minibench::State& state) { configure_trailing<T, B, 2>(state); }
 
 // ============================ TW: W2 = T^H W1, T upper triangular (ormqr/ormbr)
 
@@ -264,15 +264,15 @@ void configure_tw(minibench::State& state) {
 }
 
 template <typename T, Backend B>
-static void BM_TW_gemm(minibench::State& state) { configure_tw<T, B, false>(state); }
+void BM_TW_gemm(minibench::State& state) { configure_tw<T, B, false>(state); }
 template <typename T, Backend B>
-static void BM_TW_trmm(minibench::State& state) { configure_tw<T, B, true>(state); }
+void BM_TW_trmm(minibench::State& state) { configure_tw<T, B, true>(state); }
 
 // Same operation, same code, shapes chosen from the other side of the ridge.
 template <typename T, Backend B>
-static void BM_Square_gemm(minibench::State& state) { configure_tw<T, B, false>(state); }
+void BM_Square_gemm(minibench::State& state) { configure_tw<T, B, false>(state); }
 template <typename T, Backend B>
-static void BM_Square_trmm(minibench::State& state) { configure_tw<T, B, true>(state); }
+void BM_Square_trmm(minibench::State& state) { configure_tw<T, B, true>(state); }
 
 }  // namespace
 

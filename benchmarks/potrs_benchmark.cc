@@ -27,7 +27,9 @@ inline void PotrsSizesNetlib(Benchmark* b) {
             for (int bs : {16, 128}) b->Args({n, nrhs, bs});
 }
 
-static void potrs_announce_route_env() {
+namespace {
+
+void potrs_announce_route_env() {
     static bool done = false;
     if (done) return;
     done = true;
@@ -37,7 +39,7 @@ static void potrs_announce_route_env() {
 }
 
 template <typename T, Backend B, Uplo U>
-static void BM_POTRS_Body(minibench::State& state) {
+void BM_POTRS_Body(minibench::State& state) {
     potrs_announce_route_env();
     const int n = static_cast<int>(state.range(0));
     const int nrhs = static_cast<int>(state.range(1));
@@ -61,9 +63,11 @@ static void BM_POTRS_Body(minibench::State& state) {
 }
 
 template <typename T, Backend B>
-static void BM_POTRS(minibench::State& s) { BM_POTRS_Body<T, B, Uplo::Lower>(s); }
+void BM_POTRS(minibench::State& s) { BM_POTRS_Body<T, B, Uplo::Lower>(s); }
 template <typename T, Backend B>
-static void BM_POTRS_Upper(minibench::State& s) { BM_POTRS_Body<T, B, Uplo::Upper>(s); }
+void BM_POTRS_Upper(minibench::State& s) { BM_POTRS_Body<T, B, Uplo::Upper>(s); }
+
+}  // namespace
 
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_POTRS, PotrsSizes);
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_POTRS_Upper, PotrsSizes);

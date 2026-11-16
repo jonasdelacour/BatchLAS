@@ -708,22 +708,22 @@ void run_sparse_syevx_iluk(miniacc::State& state, const char* impl_name) {
 }
 
 template <typename Real, Backend B>
-static void ACC_SYEVX_SPARSE_BASELINE(miniacc::State& state) {
+void ACC_SYEVX_SPARSE_BASELINE(miniacc::State& state) {
     run_sparse_syevx_iluk<-1, Real, B>(state, "syevx_sparse_baseline");
 }
 
 template <typename Real, Backend B>
-static void ACC_SYEVX_SPARSE_ILUK_K2(miniacc::State& state) {
+void ACC_SYEVX_SPARSE_ILUK_K2(miniacc::State& state) {
     run_sparse_syevx_iluk<2, Real, B>(state, "syevx_sparse_iluk_k2");
 }
 
 template <typename Real, Backend B>
-static void ACC_SYEVX_SPARSE_ILUK_K3(miniacc::State& state) {
+void ACC_SYEVX_SPARSE_ILUK_K3(miniacc::State& state) {
     run_sparse_syevx_iluk<3, Real, B>(state, "syevx_sparse_iluk_k3");
 }
 
 template <typename Real, Backend B>
-static void ACC_SYEVX_SPARSE_ILUK_K4(miniacc::State& state) {
+void ACC_SYEVX_SPARSE_ILUK_K4(miniacc::State& state) {
     run_sparse_syevx_iluk<4, Real, B>(state, "syevx_sparse_iluk_k4");
 }
 

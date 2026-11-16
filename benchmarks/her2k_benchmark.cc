@@ -6,6 +6,8 @@
 
 using namespace batchlas;
 
+namespace {
+
 // As herk_benchmark: no batched vendor HER2K exists, so the per-batch loop over
 // cublasCher2k/cublasZher2k is reached from this same binary with
 // BATCHLAS_HER2K_ROUTE=vendor, and gemm_benchmark gives the equal-work floor.
@@ -15,7 +17,7 @@ using namespace batchlas;
 // against a literal reading of the formula, and is why this route can beat the
 // vendor by more than herk's does.
 template <typename T, Backend B>
-static void BM_HER2K(minibench::State& state) {
+void BM_HER2K(minibench::State& state) {
     using real_t = typename base_type<T>::type;
     const size_t n = state.range(0);
     const size_t k = state.range(1);
@@ -42,6 +44,8 @@ static void BM_HER2K(minibench::State& state) {
                     minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 BATCHLAS_REGISTER_BENCHMARK_COMPLEX_TYPES(BM_HER2K, CubeBatchSizes);
 

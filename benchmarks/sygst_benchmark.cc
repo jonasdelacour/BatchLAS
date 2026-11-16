@@ -6,11 +6,13 @@
 
 using namespace batchlas;
 
+namespace {
+
 // sygst from potrf's factor of a random SPD B (factored once, untimed). ARGS: n batch itype uplo
 // (uplo 0 = Lower, 1 = Upper). Pin a family with BATCHLAS_SYGST_ROUTE (blocked:nb=32, twosided, ...).
 // evidence: docs/perf/sygvd.md#sygst-measured
 template <typename T, Backend B>
-static void BM_SYGST(minibench::State& state) {
+void BM_SYGST(minibench::State& state) {
     const int n = static_cast<int>(state.range(0));
     const int batch = static_cast<int>(state.range(1));
     const int itype = static_cast<int>(state.range(2));
@@ -31,6 +33,8 @@ static void BM_SYGST(minibench::State& state) {
     state.SetMetric("GFLOPS", static_cast<double>(batch) * 1e-9 * static_cast<double>(n) * n * n, minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 template <typename Benchmark>
 inline void SygstSizes(Benchmark* b) {

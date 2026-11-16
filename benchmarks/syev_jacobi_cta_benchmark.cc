@@ -30,10 +30,8 @@ inline void SyevJacobiCtaBenchSizes(Benchmark* b) {
     }
 }
 
-} // namespace
-
 template <typename T, Backend B>
-static void BM_SYEV_JACOBI_CTA(minibench::State& state) {
+void BM_SYEV_JACOBI_CTA(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const JobType jobz = parse_jobz(static_cast<int>(state.range(2)));
@@ -66,7 +64,7 @@ static void BM_SYEV_JACOBI_CTA(minibench::State& state) {
 
 // Same grid, tridiagonalization-based path, for a direct comparison.
 template <typename T, Backend B>
-static void BM_SYEV_CTA_TRIDIAG_REF(minibench::State& state) {
+void BM_SYEV_CTA_TRIDIAG_REF(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const JobType jobz = parse_jobz(static_cast<int>(state.range(2)));
@@ -98,6 +96,8 @@ static void BM_SYEV_CTA_TRIDIAG_REF(minibench::State& state) {
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * flops), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 BATCHLAS_BENCH_CUDA_ALL_TYPES(BM_SYEV_JACOBI_CTA, SyevJacobiCtaBenchSizes);

@@ -271,12 +271,12 @@ void run_gesvd_blocked_acc(miniacc::State& state) {
     }
 }
 
-} // namespace
-
 template <typename Real, Backend B>
-static void ACC_GESVD_BLOCKED(miniacc::State& state) {
+void ACC_GESVD_BLOCKED(miniacc::State& state) {
     run_gesvd_blocked_acc<Real, B>(state);
 }
+
+}  // namespace
 
 template <typename Benchmark>
 void GesvdAccSizesNetlib(Benchmark* b) {

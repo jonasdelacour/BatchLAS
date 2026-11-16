@@ -39,7 +39,7 @@ namespace {
 // the relative-accuracy property, and this routine is deliberately simple and
 // independent of the kernel under test.
 // ---------------------------------------------------------------------------
-static std::vector<double> reference_jacobi_eigenvalues(const std::vector<double>& A_in, int n) {
+std::vector<double> reference_jacobi_eigenvalues(const std::vector<double>& A_in, int n) {
     std::vector<double> A = A_in; // column-major n x n
     const double tol = double(n) * std::numeric_limits<double>::epsilon();
 
@@ -95,9 +95,9 @@ static std::vector<double> reference_jacobi_eigenvalues(const std::vector<double
 // column-equilibrated matrix stays ~kappa(M), which is precisely the regime
 // where Jacobi's relative-accuracy bound bites and a tridiagonalizing method
 // loses the small eigenvalues.
-static void make_graded_spd(int n, int grade, unsigned seed,
-                            std::vector<double>& out_double,
-                            std::vector<float>& out_float) {
+void make_graded_spd(int n, int grade, unsigned seed,
+                     std::vector<double>& out_double,
+                     std::vector<float>& out_float) {
     std::minstd_rand rng(seed);
     std::uniform_int_distribution<int> dist(-16, 16);
 
@@ -130,9 +130,9 @@ static void make_graded_spd(int n, int grade, unsigned seed,
 
 // Random symmetric matrix with dyadic entries, so it is represented exactly in
 // both float and double and the two precisions see identical input.
-static void make_dyadic_symmetric(int n, unsigned seed,
-                                  std::vector<double>& out_double,
-                                  std::vector<float>& out_float) {
+void make_dyadic_symmetric(int n, unsigned seed,
+                           std::vector<double>& out_double,
+                           std::vector<float>& out_float) {
     std::minstd_rand rng(seed);
     std::uniform_int_distribution<int> dist(-1024, 1024);
 

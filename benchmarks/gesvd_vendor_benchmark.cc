@@ -59,11 +59,9 @@ inline SvdVectors parse_job(int v) {
     return (v == 0) ? SvdVectors::None : SvdVectors::All;
 }
 
-} // namespace
-
 // cuSOLVER gesvdjBatched.
 template <typename T, Backend B>
-static void BM_GESVD_CUSOLVER_JACOBI(minibench::State& state) {
+void BM_GESVD_CUSOLVER_JACOBI(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const SvdVectors jobu = parse_job(static_cast<int>(state.range(2)));
@@ -101,7 +99,7 @@ static void BM_GESVD_CUSOLVER_JACOBI(minibench::State& state) {
 
 // BatchLAS native CTA path (gebrd_cta -> normal-equation tridiagonal -> steqr_cta).
 template <typename T, Backend B>
-static void BM_GESVD_BATCHLAS_CTA(minibench::State& state) {
+void BM_GESVD_BATCHLAS_CTA(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const SvdVectors jobu = parse_job(static_cast<int>(state.range(2)));
@@ -138,7 +136,7 @@ static void BM_GESVD_BATCHLAS_CTA(minibench::State& state) {
 // BatchLAS one-sided Jacobi (gesvdj_cta) -- same algorithm class as
 // gesvdjBatched, so this is the like-for-like row.
 template <typename T, Backend B>
-static void BM_GESVD_BATCHLAS_JACOBI(minibench::State& state) {
+void BM_GESVD_BATCHLAS_JACOBI(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const SvdVectors jobu = parse_job(static_cast<int>(state.range(2)));
@@ -173,6 +171,8 @@ static void BM_GESVD_BATCHLAS_JACOBI(minibench::State& state) {
     state.SetMetric("Matrices/s", static_cast<double>(batch), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / static_cast<double>(batch)) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 #if BATCHLAS_HAS_CUSOLVER  // the vendor row needs the library, not just the CUDA backend
 BATCHLAS_BENCH_CUDA(BM_GESVD_CUSOLVER_JACOBI, GesvdVendorBenchSizes)

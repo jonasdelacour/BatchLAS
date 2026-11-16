@@ -5,9 +5,11 @@
 
 using namespace batchlas;
 
+namespace {
+
 // Single ORGQR benchmark
 template <typename T, Backend B>
-static void BM_ORGQR(minibench::State& state) {
+void BM_ORGQR(minibench::State& state) {
     const size_t m = state.range(0);
     const size_t n = state.range(1);
     const size_t batch = state.range(2);
@@ -35,6 +37,8 @@ static void BM_ORGQR(minibench::State& state) {
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 
 }
+
+}  // namespace
 
 
 BATCHLAS_REGISTER_BENCHMARK(BM_ORGQR, SquareBatchSizes);

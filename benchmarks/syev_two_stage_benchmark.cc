@@ -38,10 +38,8 @@ inline void BaselineSizes(minibench::Benchmark* b) {
     b->Args({2048, 32, 0});
 }
 
-} // namespace
-
 template <typename T, Backend B>
-static void BM_SYEV_TWO_STAGE(minibench::State& state) {
+void BM_SYEV_TWO_STAGE(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const int kd = static_cast<int>(state.range(2));
@@ -73,7 +71,7 @@ static void BM_SYEV_TWO_STAGE(minibench::State& state) {
 }
 
 template <typename T, Backend B>
-static void BM_SYEV_BLOCKED_BASELINE(minibench::State& state) {
+void BM_SYEV_BLOCKED_BASELINE(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
 
@@ -92,6 +90,8 @@ static void BM_SYEV_BLOCKED_BASELINE(minibench::State& state) {
                     });
     state.SetMetric("Time (ms)", 1.0, minibench::Reciprocal);
 }
+
+}  // namespace
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 MINI_BENCHMARK_REGISTER_SIZES((BM_SYEV_TWO_STAGE<float, batchlas::Backend::CUDA>), Sizes);

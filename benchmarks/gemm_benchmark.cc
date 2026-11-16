@@ -8,6 +8,8 @@
 
 using namespace batchlas;
 
+namespace {
+
 // beta was hardcoded to 1 here. It has to be settable, because beta is not a
 // detail of the epilogue -- it decides whether C is READ at all, and a kernel
 // can look completely different on the two sides of that. One kernel in this
@@ -17,7 +19,7 @@ using namespace batchlas;
 //
 // Env rather than a fifth range arg so the registered size sets keep working
 // unchanged: BATCHLAS_BENCH_BETA=0 or 1 (default 1, the prior behaviour).
-static double bench_beta() {
+double bench_beta() {
     if (const char* p = std::getenv("BATCHLAS_BENCH_BETA")) {
         return std::atof(p);
     }
@@ -28,7 +30,7 @@ static double bench_beta() {
 // It is not an exotic one: a panel is a sub-view carrying its parent's ld, so
 // unaligned ld is what BatchLAS's own factorisations hand to gemm. Default 0
 // keeps the prior behaviour (ld == rows).
-static int bench_ld_pad() {
+int bench_ld_pad() {
     if (const char* p = std::getenv("BATCHLAS_BENCH_LD_PAD")) {
         return std::atoi(p);
     }
@@ -39,7 +41,7 @@ static int bench_ld_pad() {
 // costs the time" is answerable without three separate benchmarks. Unset means
 // "whatever BATCHLAS_BENCH_LD_PAD says", so every existing script keeps its
 // meaning exactly.
-static int bench_ld_pad_for(const char* var) {
+int bench_ld_pad_for(const char* var) {
     if (const char* p = std::getenv(var)) {
         return std::atoi(p);
     }
@@ -59,7 +61,7 @@ static int bench_ld_pad_for(const char* var) {
 // Deterministic and independent of `ld`, so the values a kernel sees do not
 // change when the padding does -- that is the whole point.
 template <typename T>
-static Matrix<T> bench_padded(size_t rows, size_t cols, size_t batch, int ld) {
+Matrix<T> bench_padded(size_t rows, size_t cols, size_t batch, int ld) {
     Matrix<T> M(static_cast<int>(rows), static_cast<int>(cols),
                 static_cast<int>(batch), ld);
     auto host = M.data();
@@ -73,7 +75,7 @@ static Matrix<T> bench_padded(size_t rows, size_t cols, size_t batch, int ld) {
 }
 
 template <typename T, Backend B>
-static void BM_GEMM_IMPL(minibench::State& state) {
+void BM_GEMM_IMPL(minibench::State& state) {
     const size_t m = state.range(0);
     const size_t n = state.range(1);
     const size_t k = state.range(2);
@@ -108,14 +110,16 @@ static void BM_GEMM_IMPL(minibench::State& state) {
 
 // Batched GEMM benchmark
 template <typename T, Backend B>
-static void BM_GEMM(minibench::State& state) {
+void BM_GEMM(minibench::State& state) {
     BM_GEMM_IMPL<T, B>(state);
 }
 
 template <typename T, Backend B>
-static void BM_GEMM_FIXED128(minibench::State& state) {
+void BM_GEMM_FIXED128(minibench::State& state) {
     BM_GEMM_IMPL<T, B>(state);
 }
+
+}  // namespace
 
 
 

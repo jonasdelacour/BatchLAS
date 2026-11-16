@@ -6,13 +6,15 @@
 
 using namespace batchlas;
 
+namespace {
+
 // There is no batched vendor HEMM to compare against -- cuBLAS ships only the
 // single-matrix cublasChemm/cublasZhemm. The per-batch loop over those is the
 // route this same binary takes with BATCHLAS_EXPAND_MAX_BYTES=0, so running it
 // twice measures both implementations without a second benchmark, and
 // gemm_benchmark at the same complex type and shape gives the equal-work floor.
 template <typename T, Backend B>
-static void BM_HEMM(minibench::State& state) {
+void BM_HEMM(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(3);
 
@@ -35,6 +37,8 @@ static void BM_HEMM(minibench::State& state) {
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * n * n * n), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 BATCHLAS_REGISTER_BENCHMARK_COMPLEX_TYPES(BM_HEMM, CubeBatchSizes);
 

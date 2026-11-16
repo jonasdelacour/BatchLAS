@@ -57,7 +57,7 @@ void register_family_variant_benchmark(const char* benchmark_name, const char* k
 }
 
 #if BATCHLAS_HAS_CUDA_BACKEND
-static int register_cuda_family_benchmarks = []() {
+int register_cuda_family_benchmarks = []() {
     register_family_variant_benchmark<Backend::CUDA>("BM_GEMM_128x64x32_large<float, Backend::CUDA>", "reg:m=128:n=64:k=32:u=4");
     register_family_variant_benchmark<Backend::CUDA>("BM_GEMM_128x64x32_large_u2<float, Backend::CUDA>", "reg:m=128:n=64:k=32:u=2");
     return 0;

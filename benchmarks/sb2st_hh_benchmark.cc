@@ -23,10 +23,8 @@ inline void Sizes(minibench::Benchmark* b) {
     b->Args({1024, 256, 32});
 }
 
-} // namespace
-
 template <typename T, Backend B>
-static void BM_SB2ST_HH_CHASE(minibench::State& state) {
+void BM_SB2ST_HH_CHASE(minibench::State& state) {
     using Real = typename base_type<T>::type;
     const int n = static_cast<int>(state.range(0));
     const int batch = static_cast<int>(state.range(1));
@@ -57,7 +55,7 @@ static void BM_SB2ST_HH_CHASE(minibench::State& state) {
 }
 
 template <typename T, Backend B>
-static void BM_SB2ST_HH_BACK(minibench::State& state) {
+void BM_SB2ST_HH_BACK(minibench::State& state) {
     const int n = static_cast<int>(state.range(0));
     const int batch = static_cast<int>(state.range(1));
     const int kd = static_cast<int>(state.range(2));
@@ -97,6 +95,8 @@ static void BM_SB2ST_HH_BACK(minibench::State& state) {
     state.SetMetric("Time (ms)", 1.0, minibench::Reciprocal);
     state.SetMetric("T(µs)/matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 MINI_BENCHMARK_REGISTER_SIZES((BM_SB2ST_HH_CHASE<float, batchlas::Backend::CUDA>), Sizes);

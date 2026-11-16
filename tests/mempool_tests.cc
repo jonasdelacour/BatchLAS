@@ -694,10 +694,12 @@ TEST_F(BumpAllocatorTest, QueueVsDeviceConsistency) {
 
 // ---- sizing mode -----------------------------------------------------------
 
+namespace {
+
 // Replays an allocation sequence against whichever pool it is handed. This is
 // the shape every converted *_buffer_size / implementation pair takes: one
 // layout function, called once in sizing mode and once for real.
-static void replay_layout(BumpAllocator& pool, const Device& device) {
+void replay_layout(BumpAllocator& pool, const Device& device) {
     const size_t n = 97;      // deliberately not a multiple of any alignment
     const size_t batch = 5;
     pool.allocate<float>(device, n * n * batch);
@@ -712,6 +714,8 @@ static void replay_layout(BumpAllocator& pool, const Device& device) {
     // that is the case where "bytes consumed" and "bytes required" diverge.
     pool.allocate<float>(device, 5);
 }
+
+}  // namespace
 
 // The contract: a real pool given required_bytes() satisfies the same sequence.
 //

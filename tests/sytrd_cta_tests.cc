@@ -107,7 +107,7 @@ void ref_sytd2_upper(std::vector<Real>& a, int n, std::vector<Real>& d, std::vec
 }
 
 template <typename Real>
-static std::vector<Real> extract_host_matrix_colmajor(const Matrix<Real, MatrixFormat::Dense>& A, int n) {
+std::vector<Real> extract_host_matrix_colmajor(const Matrix<Real, MatrixFormat::Dense>& A, int n) {
     std::vector<Real> out(static_cast<std::size_t>(n) * static_cast<std::size_t>(n));
     auto v = A.view();
     for (int j = 0; j < n; ++j) {

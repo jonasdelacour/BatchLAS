@@ -68,14 +68,14 @@ void configure_steady_gemm(minibench::State& state, TimerFactory&& timer_factory
 }
 
 template <typename T, Backend B>
-static void BM_GEMM_STEADY_EVENT(minibench::State& state) {
+void BM_GEMM_STEADY_EVENT(minibench::State& state) {
     configure_steady_gemm<T, B>(state, [](std::shared_ptr<Queue> q, auto kernel_once) {
         return bench::make_event_timed_kernel_ms(std::move(q), std::move(kernel_once));
     });
 }
 
 template <typename T, Backend B>
-static void BM_GEMM_STEADY_HOST(minibench::State& state) {
+void BM_GEMM_STEADY_HOST(minibench::State& state) {
     configure_steady_gemm<T, B>(state, [](std::shared_ptr<Queue> q, auto kernel_once) {
         return make_host_timed_kernel_ms(std::move(q), std::move(kernel_once));
     });

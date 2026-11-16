@@ -5,13 +5,22 @@
 #include <batchlas/backend_config.h>
 #include <benchmarks/bench_utils.hh>
 
-static int last_arg = 0;
-static void dummy_bench(minibench::State& state) { last_arg = state.range(0); }
+namespace {
+
+int last_arg = 0;
+void dummy_bench(minibench::State& state) { last_arg = state.range(0); }
+
+}  // namespace
+
 MINI_BENCHMARK_REGISTER_SIZES((dummy_bench), [](auto* b){ b->Args({1}); });
 
+namespace {
+
 // Benchmarks used for backend/type filtering
-static int called_fc = 0;
-static int called_dn = 0;
+int called_fc = 0;
+int called_dn = 0;
+
+}  // namespace
 
 template <typename T, batchlas::Backend B>
 static void typed_bench(minibench::State&) {}

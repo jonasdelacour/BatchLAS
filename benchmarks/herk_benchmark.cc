@@ -6,6 +6,8 @@
 
 using namespace batchlas;
 
+namespace {
+
 // There is no batched vendor HERK to compare against -- cuBLAS ships only the
 // single-matrix cublasCherk/cublasZherk. The per-batch loop over those is the
 // route this same binary takes with BATCHLAS_HERK_ROUTE=vendor, so running it
@@ -17,7 +19,7 @@ using namespace batchlas;
 // does twice that arithmetic -- it computes both triangles of the product and
 // keeps one -- which is exactly what the rate is meant to expose.
 template <typename T, Backend B>
-static void BM_HERK(minibench::State& state) {
+void BM_HERK(minibench::State& state) {
     using real_t = typename base_type<T>::type;
     const size_t n = state.range(0);
     const size_t k = state.range(1);
@@ -42,6 +44,8 @@ static void BM_HERK(minibench::State& state) {
                     minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 BATCHLAS_REGISTER_BENCHMARK_COMPLEX_TYPES(BM_HERK, CubeBatchSizes);
 

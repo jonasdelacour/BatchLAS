@@ -6,8 +6,10 @@
 
 using namespace batchlas;
 
+namespace {
+
 template <typename T, Backend B>
-static void BM_SYRK(minibench::State& state) {
+void BM_SYRK(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t k = state.range(1);
     const size_t batch = state.range(3);
@@ -31,6 +33,8 @@ static void BM_SYRK(minibench::State& state) {
                     minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 BATCHLAS_REGISTER_BENCHMARK(BM_SYRK, CubeBatchSizes);
 

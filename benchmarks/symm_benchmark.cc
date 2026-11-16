@@ -6,8 +6,10 @@
 
 using namespace batchlas;
 
+namespace {
+
 template <typename T, Backend B>
-static void BM_SYMM(minibench::State& state) {
+void BM_SYMM(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(3);
 
@@ -30,6 +32,8 @@ static void BM_SYMM(minibench::State& state) {
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * n * n * n), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 BATCHLAS_REGISTER_BENCHMARK(BM_SYMM, CubeBatchSizes);
 

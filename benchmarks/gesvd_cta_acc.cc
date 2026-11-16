@@ -271,12 +271,12 @@ void run_gesvd_cta_acc(miniacc::State& state) {
     }
 }
 
-} // namespace
-
 template <typename Real, Backend B>
-static void ACC_GESVD_CTA(miniacc::State& state) {
+void ACC_GESVD_CTA(miniacc::State& state) {
     run_gesvd_cta_acc<Real, B>(state);
 }
+
+}  // namespace
 
 BATCHLAS_ACC_CUDA_ALL_TYPES(ACC_GESVD_CTA, GesvdCtaAccSizes)
 

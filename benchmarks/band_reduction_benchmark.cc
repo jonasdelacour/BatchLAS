@@ -115,13 +115,11 @@ inline void BandReductionBenchSizesNetlib(Benchmark* b) {
     }
 }
 
-} // namespace
-
 // Unified benchmark:
 // - mode=phase (default): run one sweep only
 // - mode=sequence: run a sequence of sweep configurations
 template <typename T, Backend B>
-static void BM_BAND_REDUCTION(minibench::State& state) {
+void BM_BAND_REDUCTION(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t kd = state.range(1);
     const size_t batch = state.range(2);
@@ -180,6 +178,8 @@ static void BM_BAND_REDUCTION(minibench::State& state) {
     state.SetMetric("GFLOPS", total_flops * 1e-9, minibench::Rate);
     state.SetMetric("T(µs)/matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 // Register benchmarks
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_BAND_REDUCTION, BandReductionBenchSizes);

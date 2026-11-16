@@ -7,13 +7,15 @@
 
 using namespace batchlas;
 
+namespace {
+
 // Batched STEQR benchmark
 // Args:
 //   [n, batch]
 //   [n, batch, n_sweeps, transpose]
 //   [n, batch, n_sweeps, wg_multiplier, shift_kind]
 template <typename T, Backend B>
-static void BM_STEQR(minibench::State& state) {
+void BM_STEQR(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const size_t n_sweeps = state.range(2) > 0 ? state.range(2) : 10;
@@ -69,6 +71,8 @@ static void BM_STEQR(minibench::State& state) {
     state.SetMetric("GFLOPS", total_flops * 1e-9, minibench::Rate);
     state.SetMetric("T(µs)/matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 
 

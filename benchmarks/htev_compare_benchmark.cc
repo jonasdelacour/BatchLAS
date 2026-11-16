@@ -28,12 +28,10 @@ inline void HtevDxCompareBenchSizesNetlib(Benchmark* b) {
     HtevDxCompareBenchSizes(b);
 }
 
-} // namespace
-
 // ── STEQR ────────────────────────────────────────────────────────────────────
 
 template <typename T, Backend B>
-static void BM_HTEV_STEQR(minibench::State& state) {
+void BM_HTEV_STEQR(minibench::State& state) {
     const size_t n     = state.range(0);
     const size_t batch = state.range(1);
 
@@ -69,7 +67,7 @@ static void BM_HTEV_STEQR(minibench::State& state) {
 // ── STEDC ────────────────────────────────────────────────────────────────────
 
 template <typename T, Backend B>
-static void BM_HTEV_STEDC(minibench::State& state) {
+void BM_HTEV_STEDC(minibench::State& state) {
     const size_t n     = state.range(0);
     const size_t batch = state.range(1);
 
@@ -108,6 +106,8 @@ static void BM_HTEV_STEDC(minibench::State& state) {
 
     state.SetMetric("Time (µs) / matrix", (1.0 / static_cast<double>(batch)) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 // ── Registration ─────────────────────────────────────────────────────────────
 

@@ -29,13 +29,13 @@ using namespace batchlas;
 namespace {
 
 template <typename T>
-static void dense_from_lower_band_work(const std::vector<T>& ABw,
-                                       std::vector<T>& A,
-                                       int n,
-                                       int kd_work,
-                                       int batch,
-                                       int ldab,
-                                       int lda) {
+void dense_from_lower_band_work(const std::vector<T>& ABw,
+                                std::vector<T>& A,
+                                int n,
+                                int kd_work,
+                                int batch,
+                                int ldab,
+                                int lda) {
     // ABw layout matches the device band layout: rows = kd_work+1, cols = n, batch stride = ldab*n
     for (int b = 0; b < batch; ++b) {
         T* A_b = A.data() + static_cast<size_t>(b) * static_cast<size_t>(lda) * static_cast<size_t>(n);

@@ -139,7 +139,7 @@ void run_heterogeneous_variant(minibench::State& state,
 }
 
 #if BATCHLAS_HAS_CUDA_BACKEND
-static int register_cuda_heterogeneous_benchmarks = []() {
+int register_cuda_heterogeneous_benchmarks = []() {
     HeterogeneousGemmSizes(minibench::RegisterBenchmark(
         "BM_GEMM_heterogeneous_vendor<float, Backend::CUDA>",
         [](minibench::State& state) {

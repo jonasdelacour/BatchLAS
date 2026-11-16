@@ -6,9 +6,11 @@
 
 using namespace batchlas;
 
+namespace {
+
 // Single ORMQR benchmark
 template <typename T, Backend B>
-static void BM_ORMQR(minibench::State& state) {
+void BM_ORMQR(minibench::State& state) {
     const size_t m = state.range(0);
     const size_t n = state.range(1);
     const size_t batch = state.range(2);
@@ -41,6 +43,8 @@ static void BM_ORMQR(minibench::State& state) {
 
     //Appendix C https://www.netlib.org/lapack/lawnspdf/lawn18.pdf
 }
+
+}  // namespace
 
 
 

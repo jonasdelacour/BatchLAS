@@ -87,12 +87,12 @@ void run_steqr_cta(miniacc::State& state, const char* impl_name) {
     }
 }
 
-} // namespace
-
 template <typename Real, Backend B>
-static void ACC_STEQR_CTA(miniacc::State& state) {
+void ACC_STEQR_CTA(miniacc::State& state) {
     run_steqr_cta<Real, B>(state, "steqr_cta");
 }
+
+}  // namespace
 
 template <typename Benchmark>
 void EigensolverSizesNetlib(Benchmark* b) {

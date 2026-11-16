@@ -54,7 +54,7 @@ inline void GemmTransposeSizesNetlib(minibench::Benchmark* b) {
 }
 
 template <typename T, Backend B>
-static void BM_GEMM_TRANSPOSE(minibench::State& state) {
+void BM_GEMM_TRANSPOSE(minibench::State& state) {
     const size_t m = state.range(0);
     const size_t n = state.range(1);
     const size_t k = state.range(2);

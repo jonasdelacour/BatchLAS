@@ -22,11 +22,9 @@ inline void SytrdCtaBenchSizes(Benchmark* b) {
     }
 }
 
-} // namespace
-
 // Batched SYTRD-CTA benchmark
 template <typename T, Backend B>
-static void BM_SYTRD_CTA(minibench::State& state) {
+void BM_SYTRD_CTA(minibench::State& state) {
 #if BATCHLAS_HAS_CUDA_BACKEND
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
@@ -58,6 +56,8 @@ static void BM_SYTRD_CTA(minibench::State& state) {
     (void)state;
 #endif
 }
+
+}  // namespace
 
 // Register size/batch combinations at static-init time
 BATCHLAS_BENCH_CUDA(BM_SYTRD_CTA, SytrdCtaBenchSizes);

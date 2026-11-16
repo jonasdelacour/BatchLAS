@@ -44,11 +44,9 @@ inline Uplo parse_uplo(int v) {
     return (v == 0) ? Uplo::Lower : Uplo::Upper;
 }
 
-} // namespace
-
 // Symmetric eigenvalue decomposition benchmark
 template <typename T, Backend B>
-static void BM_SYEV(minibench::State& state) {
+void BM_SYEV(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const int sytrd_block_size = static_cast<int>(state.range(2));
@@ -94,6 +92,8 @@ static void BM_SYEV(minibench::State& state) {
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * flops), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_SYEV, SyevBenchSizes);

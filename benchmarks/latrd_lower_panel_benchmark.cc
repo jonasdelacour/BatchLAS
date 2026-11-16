@@ -19,10 +19,8 @@ inline void LatrdLowerPanelBenchSizes(Benchmark* b) {
     }
 }
 
-} // namespace
-
 template <typename T, Backend B>
-static void BM_LATRD_LOWER_PANEL(minibench::State& state) {
+void BM_LATRD_LOWER_PANEL(minibench::State& state) {
 #if BATCHLAS_HAS_CUDA_BACKEND
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
@@ -69,6 +67,8 @@ static void BM_LATRD_LOWER_PANEL(minibench::State& state) {
     (void)state;
 #endif
 }
+
+}  // namespace
 
 BATCHLAS_BENCH_CUDA_ALL_TYPES(BM_LATRD_LOWER_PANEL, LatrdLowerPanelBenchSizes);
 
