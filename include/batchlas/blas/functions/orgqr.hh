@@ -20,27 +20,27 @@ namespace batchlas {
 // Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
 // src/util/template-instantiations.hh. Keep in sync with the declarations below.
 namespace sig {
-template <typename T>
+template <typename Scalar>
 using orgqr = Event(Queue&,
-                    const MatrixView<T, MatrixFormat::Dense>&,
-                    Span<T>, Span<std::byte>);
+                    const MatrixView<Scalar, MatrixFormat::Dense>&,
+                    Span<Scalar>, Span<std::byte>);
 
-template <typename T>
+template <typename Scalar>
 using orgqr_buffer_size = size_t(Queue&,
-                                 const MatrixView<T, MatrixFormat::Dense>&,
-                                 Span<T>);
+                                 const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                 Span<Scalar>);
 
 // Vendor signatures are spelled out, not aliased: a vendor parameter list can differ.
-template <typename T>
+template <typename Scalar>
 using orgqr_vendor = Event(Queue&,
-                           const MatrixView<T, MatrixFormat::Dense>&,
-                           Span<T>,
+                           const MatrixView<Scalar, MatrixFormat::Dense>&,
+                           Span<Scalar>,
                            Span<std::byte>);
 
-template <typename T>
+template <typename Scalar>
 using orgqr_vendor_buffer_size = size_t(Queue&,
-                                        const MatrixView<T, MatrixFormat::Dense>&,
-                                        Span<T>);
+                                        const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                        Span<Scalar>);
 }  // namespace sig
 
 /// @brief Validates the arguments of the positional orgqr() entry point.
@@ -48,21 +48,20 @@ using orgqr_vendor_buffer_size = size_t(Queue&,
 /// Checks only non-negative extents. \f$n \le m\f$ is not checked: an \f$n > m\f$ view passes
 /// the vendor kernel's `can_run` (the only one that admits it, src/ops/orgqr/orgqr.cc) and is
 /// then rejected by the vendor library. The length of `tau` is checked by the option overloads.
-/// @tparam T  scalar type of the matrix
+/// @tparam Scalar  scalar type of the matrix
 /// @param[in] A  batch of \f$m \times n\f$ matrices whose extents are checked; not modified
 /// @throws batchlas::invalid_argument on negative extents
 /// @ingroup api_qr_lowlevel
 // Deliberately no n <= m check: rejecting such a view is a user-visible behaviour change.
 // evidence: docs/design/vendor-independence.md#positional-validators-reject-only-what-no-route-can-serve
-template <typename T>
-inline void orgqr_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
+template <typename Scalar>
+inline void orgqr_validate_params(const MatrixView<Scalar, MatrixFormat::Dense>& A) {
     if (A.rows() < 0 || A.cols() < 0) {
         throw batchlas::invalid_argument(
             "orgqr: Matrix dimensions cannot be negative (rows=" +
             std::to_string(A.rows()) + ", cols=" + std::to_string(A.cols()) + ")");
     }
 }
-
 
 /// @brief Batched formation of the first \f$n\f$ columns of \f$Q\f$ from geqrf() output.
 ///
@@ -74,7 +73,7 @@ inline void orgqr_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
 ///
 /// Asynchronous: A is readable after the returned event is waited on.
 /// @tparam B  backend; the backend-deducing overload takes it from `ctx.backend()`
-/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @tparam Scalar  scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in]     ctx        queue the kernels are enqueued on
 /// @param[in,out] A          batch of \f$m \times n\f$ geqrf() outputs, \f$m \ge n\f$; read for the
 ///                           reflectors below the diagonal, overwritten with \f$Q\f$
@@ -90,33 +89,32 @@ inline void orgqr_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
 ///         blocked kernel needs a GPU queue, a homogeneous batch and \f$n \le m\f$)
 ///         and the vendor library was not built in
 /// @ingroup api_qr
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event orgqr(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A,
-                         Span<T> tau,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         Span<Scalar> tau,
                          Span<std::byte> workspace);
 
 /// @brief Workspace, in bytes, that orgqr() needs for this shape on this queue.
 /// @tparam B  backend; the backend-deducing overload takes it from `ctx.backend()`
-/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @tparam Scalar  scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in] ctx  queue orgqr() will run on
 /// @param[in] A    batch of \f$m \times n\f$ geqrf() outputs; only its shape is read
 /// @param[in] tau  the reflector-scalar span that will be passed to orgqr(); not written
 /// @return the minimum `workspace` size in bytes for orgqr() with these arguments
 /// @ingroup api_qr_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t orgqr_buffer_size(Queue& ctx,
-                                      const MatrixView<T, MatrixFormat::Dense>& A,
-                                      Span<T> tau);
+                                      const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                      Span<Scalar> tau);
 
 }  // namespace batchlas
-
 
 namespace batchlas::backend {
 
 /// @brief Vendor arm of orgqr(); called by the public orgqr(), not by users.
 /// @tparam B  backend whose vendor library runs the call
-/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @tparam Scalar  scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in]     ctx        queue the vendor calls are enqueued on
 /// @param[in,out] A          batch of \f$m \times n\f$ geqrf() outputs; overwritten with \f$Q\f$
 /// @param[in]     tau        reflector scalars \f$\tau_i\f$ from geqrf(); not modified
@@ -126,25 +124,24 @@ namespace batchlas::backend {
 /// @ingroup api_dispatch
 // Declaration only: the public orgqr lives in src/ops/orgqr/orgqr.cc.
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event orgqr_vendor(Queue& ctx,
-                                const MatrixView<T, MatrixFormat::Dense>& A,
-                                Span<T> tau,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                Span<Scalar> tau,
                                 Span<std::byte> workspace);
-
 
 /// @brief Workspace query of the vendor arm of orgqr().
 /// @tparam B  backend whose vendor library runs the call
-/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @tparam Scalar  scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in] ctx  queue the vendor arm will run on
 /// @param[in] A    batch of \f$m \times n\f$ geqrf() outputs; only its shape is read
 /// @param[in] tau  the reflector-scalar span that will be passed to orgqr_vendor(); not written
 /// @return the minimum `workspace` size in bytes for orgqr_vendor()
 /// @ingroup api_dispatch
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t orgqr_vendor_buffer_size(Queue& ctx,
-                                             const MatrixView<T, MatrixFormat::Dense>& A,
-                                             Span<T> tau);
+                                             const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                             Span<Scalar> tau);
 
 }  // namespace batchlas::backend
 

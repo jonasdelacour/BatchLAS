@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /// @file
@@ -24,10 +25,10 @@ namespace batchlas {
 // Signature alias for explicit instantiation; see BATCHLAS_INSTANTIATE in
 // src/util/template-instantiations.hh. Keep in sync with the declaration below.
 namespace sig {
-template <typename T>
+template <typename Scalar>
 using potrs = Event(Queue&,
-                    const MatrixView<T, MatrixFormat::Dense>&,
-                    const MatrixView<T, MatrixFormat::Dense>&,
+                    const MatrixView<Scalar, MatrixFormat::Dense>&,
+                    const MatrixView<Scalar, MatrixFormat::Dense>&,
                     Uplo);
 }  // namespace sig
 
@@ -35,15 +36,15 @@ using potrs = Event(Queue&,
 ///
 /// Checks non-negative extents, a square A, `B.rows() == A.rows()`, equal batch sizes and a
 /// valid @p uplo.
-/// @tparam T  scalar type of the operands
+/// @tparam Scalar  scalar type of the operands
 /// @param[in] A     batch of \f$n \times n\f$ Cholesky factors, as passed to potrs()
 /// @param[in] B     batch of \f$n \times \mathit{nrhs}\f$ right-hand sides, as passed to potrs()
 /// @param[in] uplo  triangle of A that holds the factor; must be `Uplo::Lower` or `Uplo::Upper`
 /// @throws batchlas::invalid_argument if any check fails
 /// @ingroup api_factorizations_lowlevel
-template <typename T>
-inline void potrs_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
-                                  const MatrixView<T, MatrixFormat::Dense>& B,
+template <typename Scalar>
+inline void potrs_validate_params(const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                  const MatrixView<Scalar, MatrixFormat::Dense>& B,
                                   Uplo uplo) {
     if (A.rows() < 0 || A.cols() < 0 || B.rows() < 0 || B.cols() < 0) {
         throw batchlas::invalid_argument(
@@ -83,7 +84,7 @@ inline void potrs_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 ///
 /// Asynchronous: B is readable after the returned event is waited on.
 /// @tparam Back  backend; the backend-deducing overload takes it from `ctx.backend()`
-/// @tparam T     scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @tparam Scalar     scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in]     ctx   queue the kernels are enqueued on
 /// @param[in]     A     batch of \f$n \times n\f$ Cholesky factors from potrf() or posv(); not modified
 /// @param[in,out] B     batch of \f$n \times \mathit{nrhs}\f$ right-hand sides; overwritten with the solution \f$X\f$
@@ -92,10 +93,10 @@ inline void potrs_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 /// @throws batchlas::invalid_argument if potrs_validate_params() rejects the call
 /// @throws batchlas::internal_error for \f$n < 1\f$ or \f$\mathit{nrhs} < 1\f$ in a non-empty batch (a batch of 0 is a no-op) and for a heterogeneous batch
 /// @ingroup api_factorizations
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 BATCHLAS_API Event potrs(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A,
-                         const MatrixView<T, MatrixFormat::Dense>& B,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& B,
                          Uplo uplo);
 
 BATCHLAS_DISPATCH_ON_QUEUE(potrs)

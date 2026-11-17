@@ -28,14 +28,14 @@ namespace {
 
 namespace I = ops::getri;
 
-template <typename T>
+template <typename Scalar>
 struct GetriProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     int n, batch, ld;
     std::size_t stride;
-    UnifiedVector<T> A0, LU, A, C0, C;
-    UnifiedVector<T*> pA0, pLU, pA, pC0, pC;
+    UnifiedVector<Scalar> A0, LU, A, C0, C;
+    UnifiedVector<Scalar*> pA0, pLU, pA, pC0, pC;
     MV A0v, LUv, Av, C0v, Cv;
     UnifiedVector<std::int64_t> piv;
     UnifiedVector<std::int32_t> info;
@@ -52,13 +52,13 @@ struct GetriProblem {
         (void)A0v.fill_random_pivoted(q, 12345);
         (void)MV::copy(q, LUv, A0v);
         (void)C0v.fill(q, MV::make(1e4, -1e4));
-        UnifiedVector<std::byte> fws(std::max<std::size_t>(1, getrf_buffer_size<kBackend, T>(q, LUv)));
-        (void)getrf<kBackend, T>(q, LUv, piv.to_span(), fws.to_span(), info.to_span());
+        UnifiedVector<std::byte> fws(std::max<std::size_t>(1, getrf_buffer_size<kBackend, Scalar>(q, LUv)));
+        (void)getrf<kBackend, Scalar>(q, LUv, piv.to_span(), fws.to_span(), info.to_span());
         q.wait();
         for (int b = 0; b < batch; ++b)
             if (info[std::size_t(b)] != 0) throw batchlas::convergence_error("getri input: getrf reported a singular item");
     }
-    std::size_t workspace() { return getri_buffer_size<kBackend, T>(q, Av); }
+    std::size_t workspace() { return getri_buffer_size<kBackend, Scalar>(q, Av); }
     void reset() {  // A is read only, restored anyway so one arm cannot corrupt the next one's input
         (void)MV::copy(q, Av, LUv);
         (void)MV::copy(q, Cv, C0v);
@@ -68,7 +68,7 @@ struct GetriProblem {
         for (int b = 0; b < batch; ++b) info[std::size_t(b)] = 0;
     }
     void run(Span<std::byte> ws) {
-        (void)getri<kBackend, T>(q, Av, Cv, piv.to_span(), ws, info.to_span());
+        (void)getri<kBackend, Scalar>(q, Av, Cv, piv.to_span(), ws, info.to_span());
         q.wait();
     }
     std::pair<double, int> verify() {
@@ -99,19 +99,36 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
-            "src/sycl/kernel_attrs.hh",
-            "src/sycl/sscp_target.hh",
+            "include/batchlas/device/detail/kernel_attrs.hh",
+            "include/batchlas/device/detail/sscp_target.hh",
             // family: blocked
             "src/ops/getri/kernels/getri_blocked.cc",
             // common
             "src/ops/getri/getri_native.hh",
             "src/ops/getri/choice.hh",
+            "include/batchlas/util/group-collectives.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn_core.hh",
+            "include/batchlas/device/detail/sg_partition/backend_generic.hh",
+            "include/batchlas/device/detail/sg_partition/backend_nvptx.hh",
+            "include/batchlas/device/detail/sg_partition/backend_spirv.hh",
+            "include/batchlas/device/detail/sg_partition/backend_sscp.hh",
+            "include/batchlas/device/detail/sg_partition/sg_partition.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin
         // common "src/ops/getri/getri.cc"
         // blocked calls the public trsm: its native kernels count too.
         // family: blocked "src/ops/trsm/kernels/trsm_native.cc" "src/ops/trsm/trsm_native.hh" "src/ops/trsm/kernels/trsm_sg_left.cc" "src/ops/trsm/trsm_canonical.hh" "src/ops/trsm/choice.hh"
+        // The include/batchlas/device/ headers each family's kernels include.
+        // family: blocked "include/batchlas/device.hh" "include/batchlas/device/arith.hh"
+        // family: blocked "include/batchlas/device/core.hh" "include/batchlas/device/exec.hh"
+        // family: blocked "include/batchlas/device/grid.hh" "include/batchlas/device/interop.hh"
+        // family: blocked "include/batchlas/device/lapack_aux.hh" "include/batchlas/device/level1.hh"
+        // family: blocked "include/batchlas/device/level2.hh" "include/batchlas/device/level3.hh"
+        // family: blocked "include/batchlas/device/operand.hh" "include/batchlas/device/reduce.hh"
+        // family: blocked "include/batchlas/device/scalar.hh" "include/batchlas/device/tier.hh"
+        // family: blocked "include/batchlas/device/view.hh" "include/batchlas/device/workspace.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/getri_spec.cc"; }

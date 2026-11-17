@@ -13,9 +13,9 @@ using SymmPin = batchlas::select::ScopedPin<batchlas::ops::symm::SymmChoice>;
 
 using namespace batchlas;
 
-template <typename T, Backend B>
+template <typename Real, Backend B>
 struct SymmConfig {
-    using ScalarType = T;
+    using ScalarType = Real;
     static constexpr Backend BackendVal = B;
 };
 
@@ -179,7 +179,7 @@ TEST(SymmCudaCustomTest, ForcedExpandPathOrdersExpansionOnOutOfOrderQueue) {
     if (ordered.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "CUDA custom symm test requires a GPU device";
     }
-    Queue ctx(ordered.device(), test_utils::native_gpu_backend, /*in_order=*/false);
+    Queue ctx(ordered.device(), test_utils::kNativeGpuBackend, /*in_order=*/false);
 
     const int n = 192;
     const int batch = 8;

@@ -48,8 +48,8 @@ namespace {
 namespace sk = batchlas::ops::syrk;
 using C = sk::SyrkChoice;
 using Pin = select::ScopedPin<C>;
-template <typename T>
-using MVof = MatrixView<T, MatrixFormat::Dense>;
+template <typename Real>
+using MVof = MatrixView<Real, MatrixFormat::Dense>;
 
 template <typename T>
 bool same_bits(T a, T b) {
@@ -81,40 +81,40 @@ std::string name(const C& c, const Spec& s) { return select::to_string(c) + " " 
 // A and C live in one buffer of a large finite poison, at padded lds and strides that are not
 // ld * cols. C's other triangle, the ld pads and the gaps hold the poison; syrk may write only
 // C's `uplo` triangle.
-template <typename T>
+template <typename Real>
 struct Prob {
     Spec s;
-    T alpha = T(1.25), beta = T(-0.75);
+    Real alpha = Real(1.25), beta = Real(-0.75);
     Region a, c;
-    UnifiedVector<T> mem;
-    UnifiedVector<T> mem0;
-    UnifiedVector<T*> aptr, cptr;
+    UnifiedVector<Real> mem;
+    UnifiedVector<Real> mem0;
+    UnifiedVector<Real*> aptr, cptr;
 
-    MVof<T> A() { return {mem.data() + a.off, a.rows, a.cols, a.ld, a.stride, s.batch, aptr.data()}; }
-    MVof<T> Cv() { return {mem.data() + c.off, s.n, s.n, c.ld, c.stride, s.batch, cptr.data()}; }
+    MVof<Real> A() { return {mem.data() + a.off, a.rows, a.cols, a.ld, a.stride, s.batch, aptr.data()}; }
+    MVof<Real> Cv() { return {mem.data() + c.off, s.n, s.n, c.ld, c.stride, s.batch, cptr.data()}; }
     std::size_t ai(int it, int i, int j) const { return a.off + std::size_t(it) * a.stride + std::size_t(j) * a.ld + i; }
     std::size_t ci(int it, int i, int j) const { return c.off + std::size_t(it) * c.stride + std::size_t(j) * c.ld + i; }
     bool ref(int i, int j) const { return s.uplo == Uplo::Lower ? i >= j : i <= j; }
 };
 
-template <typename T>
-T poison() {
-    return T(4096.5);
+template <typename Real>
+Real poison() {
+    return Real(4096.5);
 }
 
-template <typename T>
-Prob<T> make_prob(const Spec& s) {
-    Prob<T> p;
+template <typename Real>
+Prob<Real> make_prob(const Spec& s) {
+    Prob<Real> p;
     p.s = s;
     const int ar = s.trans == Transpose::NoTrans ? s.n : s.k, ac = s.trans == Transpose::NoTrans ? s.k : s.n;
     p.a = {0, ar, ac, ar + 3, (ar + 3) * ac + 5};
     p.c = {std::size_t(p.a.stride) * s.batch + 11, s.n, s.n, s.n + 2, (s.n + 2) * s.n + 7};
     const std::size_t total = p.c.off + std::size_t(p.c.stride) * s.batch + 13;
-    p.mem = UnifiedVector<T>(total, poison<T>());
-    p.aptr = UnifiedVector<T*>(s.batch, nullptr);
-    p.cptr = UnifiedVector<T*>(s.batch, nullptr);
+    p.mem = UnifiedVector<Real>(total, poison<Real>());
+    p.aptr = UnifiedVector<Real*>(s.batch, nullptr);
+    p.cptr = UnifiedVector<Real*>(s.batch, nullptr);
     std::mt19937 gen(s.seed);
-    std::uniform_real_distribution<T> u(T(-1), T(1));
+    std::uniform_real_distribution<Real> u(Real(-1), Real(1));
     const int reps = s.period > 0 ? std::min(s.period, s.batch) : s.batch;
     for (int it = 0; it < s.batch; ++it) {
         const int r = it % reps;
@@ -130,9 +130,9 @@ Prob<T> make_prob(const Spec& s) {
 
 // Worst componentwise backward error over C's triangle of C = alpha op(A) op(A)^T + beta C0 on
 // @p items, through the library, from the pristine copy.
-template <typename T>
-double rel_error(Queue& ctx, const Prob<T>& p, std::span<const int> items) {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Real>
+double rel_error(Queue& ctx, const Prob<Real>& p, std::span<const int> items) {
+    using MV = MatrixView<Real, MatrixFormat::Dense>;
     const Spec& s = p.s;
     const MV A0(p.mem0.data() + p.a.off, p.a.rows, p.a.cols, p.a.ld, p.a.stride, s.batch);
     const MV C0(p.mem0.data() + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, s.batch);
@@ -146,8 +146,8 @@ double rel_error(Queue& ctx, const Prob<T>& p, std::span<const int> items) {
 // The checked items' triangles against the host reference, every element outside them bit for
 // bit (A, the pads, C's other triangle), and for a repeating batch every item's C bit-identical
 // to its representative's.
-template <typename T>
-::testing::AssertionResult correct(Queue& ctx, const Prob<T>& p, bool record = true) {
+template <typename Real>
+::testing::AssertionResult correct(Queue& ctx, const Prob<Real>& p, bool record = true) {
     const Spec& s = p.s;
     std::vector<int> items;
     if (s.period > 0) for (int it = 0; it < std::min(s.period, s.batch); ++it) items.push_back(it);
@@ -155,10 +155,10 @@ template <typename T>
     else items = {0, 1, s.batch / 2, s.batch - 1};
     const double e = rel_error(ctx, p, items);
     // record = false: results expected to be wrong must not enter the calibration.
-    if (!(record ? batchlas::verify::pass<T>(batchlas::verify::Check::blas, s.k, e)
-                 : batchlas::verify::within<T>(batchlas::verify::Check::blas, s.k, e)))
+    if (!(record ? batchlas::verify::pass<Real>(batchlas::verify::Check::blas, s.k, e)
+                 : batchlas::verify::within<Real>(batchlas::verify::Check::blas, s.k, e)))
         return ::testing::AssertionFailure() << "worst backward error over " << items.size() << " items " << e << " exceeds "
-                                             << batchlas::verify::bound<T>(batchlas::verify::Check::blas, s.k);
+                                             << batchlas::verify::bound<Real>(batchlas::verify::Check::blas, s.k);
     std::vector<char> owned(p.mem.size(), 0);
     for (int it = 0; it < s.batch; ++it)
         for (int j = 0; j < s.n; ++j)
@@ -176,8 +176,8 @@ template <typename T>
     return ::testing::AssertionSuccess();
 }
 
-template <typename T>
-bool untouched(const Prob<T>& p) {
+template <typename Real>
+bool untouched(const Prob<Real>& p) {
     for (std::size_t e = 0; e < p.mem.size(); ++e)
         if (!same_bits(p.mem[e], p.mem0[e])) return false;
     return true;
@@ -277,9 +277,9 @@ void expect_heterogeneous_has_no_route(Queue& ctx) {
             for (int i = 0; i < n; ++i) ASSERT_EQ(Cm(i, j, b), T(1)) << "a refused call wrote C";
 }
 
-template <typename T, Backend B>
+template <typename Real, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Real;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types_filtered<Cfg, false>::type;

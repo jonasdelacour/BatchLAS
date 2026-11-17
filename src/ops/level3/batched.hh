@@ -28,20 +28,20 @@
 
 namespace batchlas::ops::level3 {
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
 /// Items [first, first + count) of a homogeneous view: same extents, ld and stride, and the
 /// matching slice of its batch mask (MatrixView::batch_range), so a chunk's launch skips its holes.
-template <typename T>
-MV<T> batch_range(const MV<T>& v, int first, int count) {
+template <typename Scalar>
+MV<Scalar> batch_range(const MV<Scalar>& v, int first, int count) {
     return v.batch_range(first, count);
 }
 
 /// `v` carrying the call's batch mask `m` (empty: `v` as it is), so a launch over scratch in place
 /// of the operand that brought the mask still hands it on. A broadcast operand stays unmasked.
-template <typename T>
-MV<T> adopt_mask(const MV<T>& v, Span<const std::uint8_t> m) {
+template <typename Scalar>
+MV<Scalar> adopt_mask(const MV<Scalar>& v, Span<const std::uint8_t> m) {
     return m.empty() || static_cast<std::size_t>(v.batch_size()) != m.size() ? v : v.with_batch_mask(m);
 }
 
@@ -70,14 +70,14 @@ Event for_each_chunk(Queue& q, int batch, int chunk, F&& f) {
 /// conjugate transposes of each other, so one gemm and a mirrored read give her2k both terms.
 /// The other triangle is neither read nor written; the diagonal is real on exit, and its
 /// imaginary part is not an input (\f$\beta\f$ is real and \f$C = C^H\f$).
-template <typename T, bool TwoSided>
-Event fold_hermitian(Queue& q, const MV<T>& C, const MV<T>& P, float_t<T> beta, Uplo uplo) {
-    using real_t = float_t<T>;
+template <typename Scalar, bool TwoSided>
+Event fold_hermitian(Queue& q, const MV<Scalar>& C, const MV<Scalar>& P, float_t<Scalar> beta, Uplo uplo) {
+    using real_t = float_t<Scalar>;
     const int n = C.rows();
     const int batch = C.batch_size();
     const bool lower = uplo == Uplo::Lower;
-    T* dst = C.data_ptr();
-    const T* src = P.data_ptr();
+    Scalar* dst = C.data_ptr();
+    const Scalar* src = P.data_ptr();
     const int ldc = C.ld();
     const int ldp = P.ld();
     const std::size_t stride_c = static_cast<std::size_t>(C.stride());
@@ -98,17 +98,18 @@ Event fold_hermitian(Queue& q, const MV<T>& C, const MV<T>& P, float_t<T> beta, 
         const int b = static_cast<int>(item.get_group(0));
         if (mask != nullptr && mask[b] == 0) return;
         const std::size_t p_base = static_cast<std::size_t>(b) * stride_p;
-        T value = src[p_base + static_cast<std::size_t>(j) * ldp + i];
+        Scalar value = src[p_base + static_cast<std::size_t>(j) * ldp + i];
         if constexpr (TwoSided) {
-            const T mirrored = src[p_base + static_cast<std::size_t>(i) * ldp + j];
-            value = T(value.real() + mirrored.real(), value.imag() - mirrored.imag());
+            const Scalar mirrored = src[p_base + static_cast<std::size_t>(i) * ldp + j];
+            value = Scalar(value.real() + mirrored.real(), value.imag() - mirrored.imag());
         }
-        T* c = dst + static_cast<std::size_t>(b) * stride_c + static_cast<std::size_t>(j) * ldc + i;
+        Scalar* c = dst + static_cast<std::size_t>(b) * stride_c + static_cast<std::size_t>(j) * ldc + i;
         if (beta != real_t(0)) {
-            const T prev = *c;
-            value = T(value.real() + beta * prev.real(), i == j ? value.imag() : value.imag() + beta * prev.imag());
+            const Scalar prev = *c;
+            value = Scalar(value.real() + beta * prev.real(),
+                           i == j ? value.imag() : value.imag() + beta * prev.imag());
         }
-        *c = i == j ? T(value.real(), real_t(0)) : value;
+        *c = i == j ? Scalar(value.real(), real_t(0)) : value;
     });
     return q.get_event();
 }
@@ -118,58 +119,61 @@ Event fold_hermitian(Queue& q, const MV<T>& C, const MV<T>& P, float_t<T> beta, 
 /// \f$\alpha B A + \beta C\f$ (Right). Chunked so each chunk's scratch fits; @pre expansion_chunk >= 1.
 // The scratch is a lease on the queue's arena, not a Matrix: a managed allocation migrates on first
 // touch (an order of magnitude over the gemm at n=512 batch=512) and would be freed while enqueued.
-template <Backend B, typename T, bool Conjugate>
-Event expand_gemm(Queue& q, const MV<T>& A, const MV<T>& Bm_, const MV<T>& C_, T alpha, T beta, Side side,
+template <Backend B, typename Scalar, bool Conjugate>
+Event expand_gemm(Queue& q, const MV<Scalar>& A, const MV<Scalar>& Bm_, const MV<Scalar>& C_, Scalar alpha, Scalar beta,
+                  Side side,
                   Uplo uplo) {
     const auto mask = batchlas::detail::call_mask(Conjugate ? "hemm" : "symm", A, Bm_, C_);
-    const MV<T> Bm = adopt_mask(Bm_, mask), C = adopt_mask(C_, mask);  // the gemm sees scratch, not A
+    const MV<Scalar> Bm = adopt_mask(Bm_, mask), C = adopt_mask(C_, mask);  // the gemm sees scratch, not A
     const int k = A.rows(), batch = A.batch_size();
-    const int ld = backend::detail::expanded_ld<T>(k);
-    const int chunk = backend::detail::expansion_chunk<T>(q, k, batch, grid_chunk<B>(q));
-    auto ws = q.workspace(backend::detail::expanded_workspace_bytes<T>(q, k, chunk));
+    const int ld = backend::detail::expanded_ld<Scalar>(k);
+    const int chunk = backend::detail::expansion_chunk<Scalar>(q, k, batch, grid_chunk<B>(q));
+    auto ws = q.workspace(backend::detail::expanded_workspace_bytes<Scalar>(q, k, chunk));
     BumpAllocator pool(ws.span());
-    auto storage = pool.allocate<T>(q, std::size_t(ld) * std::size_t(k) * std::size_t(chunk));
+    auto storage = pool.allocate<Scalar>(q, std::size_t(ld) * std::size_t(k) * std::size_t(chunk));
     return for_each_chunk(q, batch, chunk, [&](int first, int count) {
-        const MV<T> full(storage.data(), k, k, ld, ld * k, count);
+        const MV<Scalar> full(storage.data(), k, k, ld, ld * k, count);
         Event expansion;
         {
             BATCHLAS_KERNEL_TRACE_SCOPE(Conjugate ? "hemm.expand" : "symm.expand");
-            expansion = backend::detail::expand_mirrored<T, Conjugate>(q, full, batch_range(A, first, count), uplo);
+            expansion = backend::detail::expand_mirrored<Scalar, Conjugate>(q, full, batch_range(A, first, count),
+                                                                            uplo);
         }
         // An out-of-order queue orders nothing between the expansion and a vendor gemm's stream.
         if (!q.in_order()) expansion.wait();
-        const MV<T> Bc = batch_range(Bm, first, count), Cc = batch_range(C, first, count);
+        const MV<Scalar> Bc = batch_range(Bm, first, count), Cc = batch_range(C, first, count);
         if (side == Side::Left)
-            return gemm<B, T>(q, full, Bc, Cc, alpha, beta, Transpose::NoTrans, Transpose::NoTrans,
-                              ComputePrecision::Default);
-        return gemm<B, T>(q, Bc, full, Cc, alpha, beta, Transpose::NoTrans, Transpose::NoTrans,
-                          ComputePrecision::Default);
+            return gemm<B, Scalar>(q, full, Bc, Cc, alpha, beta, Transpose::NoTrans, Transpose::NoTrans,
+                                   ComputePrecision::Default);
+        return gemm<B, Scalar>(q, Bc, full, Cc, alpha, beta, Transpose::NoTrans, Transpose::NoTrans,
+                               ComputePrecision::Default);
     });
 }
 
 /// herk (TwoSided = false, Bop = A) and her2k (true): one gemm of \f$\mathrm{op}(A)\,\mathrm{op}(\mathtt{Bop})^H\f$ over the whole
 /// \f$n \times n\f$ product into scratch, then fold_hermitian. The gemm cannot target C: it would write both
 /// triangles. Chunked as expand_gemm; @pre expansion_chunk >= 1.
-template <Backend B, typename T, bool TwoSided>
-Event gemm_fold(Queue& q, const MV<T>& A_, const MV<T>& Bop_, const MV<T>& C_, T alpha, float_t<T> beta, Uplo uplo,
+template <Backend B, typename Scalar, bool TwoSided>
+Event gemm_fold(Queue& q, const MV<Scalar>& A_, const MV<Scalar>& Bop_, const MV<Scalar>& C_, Scalar alpha,
+                float_t<Scalar> beta, Uplo uplo,
                 Transpose transA) {
     // The gemm writes scratch and the fold sees C alone: each must carry the mask whoever brought it.
     const auto mask = batchlas::detail::call_mask(TwoSided ? "her2k" : "herk", A_, Bop_, C_);
-    const MV<T> A = adopt_mask(A_, mask), Bop = adopt_mask(Bop_, mask), C = adopt_mask(C_, mask);
+    const MV<Scalar> A = adopt_mask(A_, mask), Bop = adopt_mask(Bop_, mask), C = adopt_mask(C_, mask);
     const int n = C.rows(), batch = C.batch_size();
-    const int ld = backend::detail::expanded_ld<T>(n);
-    const int chunk = backend::detail::expansion_chunk<T>(q, n, batch, grid_chunk<B>(q));
-    auto ws = q.workspace(backend::detail::expanded_workspace_bytes<T>(q, n, chunk));
+    const int ld = backend::detail::expanded_ld<Scalar>(n);
+    const int chunk = backend::detail::expansion_chunk<Scalar>(q, n, batch, grid_chunk<B>(q));
+    auto ws = q.workspace(backend::detail::expanded_workspace_bytes<Scalar>(q, n, chunk));
     BumpAllocator pool(ws.span());
-    auto storage = pool.allocate<T>(q, std::size_t(ld) * std::size_t(n) * std::size_t(chunk));
+    auto storage = pool.allocate<Scalar>(q, std::size_t(ld) * std::size_t(n) * std::size_t(chunk));
     const Transpose transB = transA == Transpose::NoTrans ? Transpose::ConjTrans : Transpose::NoTrans;
     return for_each_chunk(q, batch, chunk, [&](int first, int count) {
-        const MV<T> product(storage.data(), n, n, ld, ld * n, count);
-        Event g = gemm<B, T>(q, batch_range(A, first, count), batch_range(Bop, first, count), product, alpha, T(0),
-                             transA, transB, ComputePrecision::Default);
+        const MV<Scalar> product(storage.data(), n, n, ld, ld * n, count);
+        Event g = gemm<B, Scalar>(q, batch_range(A, first, count), batch_range(Bop, first, count), product, alpha,
+                                  Scalar(0), transA, transB, ComputePrecision::Default);
         if (!q.in_order()) g.wait();  // the vendor gemm runs on the native stream
         BATCHLAS_KERNEL_TRACE_SCOPE(TwoSided ? "her2k.fold" : "herk.fold");
-        return fold_hermitian<T, TwoSided>(q, batch_range(C, first, count), product, beta, uplo);
+        return fold_hermitian<Scalar, TwoSided>(q, batch_range(C, first, count), product, beta, uplo);
     });
 }
 

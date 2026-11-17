@@ -52,28 +52,31 @@ struct DeviceMask {
     Span<const std::uint8_t> span() const { return {ptr, static_cast<std::size_t>(batch)}; }
 };
 
-template <typename T>
-T poison(std::size_t k) {
+template <typename Scalar>
+Scalar poison(std::size_t k) {
     const double re = 1000.0 + 0.25 * static_cast<double>(k % 4093);
-    if constexpr (is_std_complex_v<T>) return T(batchlas::float_t<T>(re), batchlas::float_t<T>(-0.5 * re));
-    else return T(re);
+    if constexpr (is_std_complex_v<Scalar>) return Scalar(batchlas::float_t<Scalar>(re),
+                                                          batchlas::float_t<Scalar>(-0.5 * re));
+    else return Scalar(re);
 }
 
-template <typename T>
-void fill_poison(const MatrixView<T>& A, std::size_t salt = 0) {
+template <typename Scalar>
+void fill_poison(const MatrixView<Scalar>& A, std::size_t salt = 0) {
     auto d = A.data();
-    for (std::size_t k = 0; k < d.size(); ++k) d[k] = poison<T>(k + salt);
+    for (std::size_t k = 0; k < d.size(); ++k) d[k] = poison<Scalar>(k + salt);
 }
 
-template <typename T>
-std::vector<T> snapshot(const MatrixView<T>& A) { return std::vector<T>(A.data().begin(), A.data().end()); }
+template <typename Scalar>
+std::vector<Scalar> snapshot(const MatrixView<Scalar>& A) { return std::vector<Scalar>(A.data().begin(),
+                                                                                       A.data().end()); }
 
 template <typename T>
 bool item_bytes_equal(const T* a, const T* b, std::size_t n) { return std::memcmp(a, b, n * sizeof(T)) == 0; }
 
 // Inactive item b: its whole stride range equals the poisoned input. Active: equals the unmasked run.
-template <typename T>
-void expect_masked_items(const std::vector<T>& before, const std::vector<T>& unmasked, const MatrixView<T>& got,
+template <typename Scalar>
+void expect_masked_items(const std::vector<Scalar>& before, const std::vector<Scalar>& unmasked,
+                         const MatrixView<Scalar>& got,
                          bool all_active, const char* what) {
     const std::size_t stride = static_cast<std::size_t>(got.stride());
     const auto d = got.data();
@@ -88,30 +91,30 @@ void expect_masked_items(const std::vector<T>& before, const std::vector<T>& unm
     }
 }
 
-template <typename T>
-using MatOp = std::function<void(Queue&, const MatrixView<T>&)>;
+template <typename Scalar>
+using MatOp = std::function<void(Queue&, const MatrixView<Scalar>&)>;
 
 // Runs op on a poisoned strided batch unmasked, then masked (device-only mask), and compares.
-template <typename T>
-void check_utility(Queue& ctx, const MatOp<T>& op, const char* what, int rows, int cols, bool packed = false) {
+template <typename Scalar>
+void check_utility(Queue& ctx, const MatOp<Scalar>& op, const char* what, int rows, int cols, bool packed = false) {
     const int ld = packed ? rows : rows + 3;
     const int stride = packed ? rows * cols : ld * cols + 5;
     for (bool all_active : {false, true}) {
-        Matrix<T> ref(rows, cols, kBatch, ld, stride);
-        Matrix<T> got(rows, cols, kBatch, ld, stride);
-        fill_poison<T>(ref);
-        fill_poison<T>(got);
-        const auto before = snapshot<T>(got);
+        Matrix<Scalar> ref(rows, cols, kBatch, ld, stride);
+        Matrix<Scalar> got(rows, cols, kBatch, ld, stride);
+        fill_poison<Scalar>(ref);
+        fill_poison<Scalar>(got);
+        const auto before = snapshot<Scalar>(got);
         op(ctx, ref.view());
         ctx.wait();
         DeviceMask mask(ctx, kBatch, all_active);
         op(ctx, got.view().with_batch_mask(mask.span()));
         ctx.wait();
-        expect_masked_items<T>(before, snapshot<T>(ref), got, all_active, what);
+        expect_masked_items<Scalar>(before, snapshot<Scalar>(ref), got, all_active, what);
     }
 }
 
-template <typename T>
+template <typename Scalar>
 class BatchMaskUtilities : public ::testing::Test {
 protected:
     Queue ctx{Device::default_device()};

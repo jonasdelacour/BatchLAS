@@ -23,15 +23,15 @@ namespace {
 
 namespace V = ops::gemv;
 
-template <typename T>
+template <typename Scalar>
 struct GemvProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     Transpose trans;
     int out, red, batch, rows, cols, lda, sx, sy;
     std::size_t sa;
-    T alpha, beta;
-    UnifiedVector<T> A, X, Y0, Y;
+    Scalar alpha, beta;
+    UnifiedVector<Scalar> A, X, Y0, Y;
 
     GemvProblem(Queue& q_, Transpose t, int out_, int red_, int batch_, int pad)
         : q(q_), trans(t), out(out_), red(red_), batch(batch_), rows(t == Transpose::NoTrans ? out_ : red_),
@@ -45,8 +45,8 @@ struct GemvProblem {
         q.wait();
     }
     MV Av() { return MV(A.data(), rows, cols, lda, int(sa), batch); }
-    VectorView<T> xv() { return VectorView<T>(X.data(), red, batch, 1, sx); }
-    VectorView<T> yv(UnifiedVector<T>& y) { return VectorView<T>(y.data(), out, batch, 1, sy); }
+    VectorView<Scalar> xv() { return VectorView<Scalar>(X.data(), red, batch, 1, sx); }
+    VectorView<Scalar> yv(UnifiedVector<Scalar>& y) { return VectorView<Scalar>(y.data(), out, batch, 1, sy); }
     void reset() {  // beta != 0 accumulates into y
         (void)MV::copy(q, MV(Y.data(), sy, 1, sy, sy, batch), MV(Y0.data(), sy, 1, sy, sy, batch));
         q.wait();
@@ -59,7 +59,7 @@ struct GemvProblem {
     }
     void clear_info() {}
     void run(Span<std::byte>) {
-        (void)gemv<kBackend, T>(q, Av(), xv(), yv(Y), alpha, beta, trans);
+        (void)gemv<kBackend, Scalar>(q, Av(), xv(), yv(Y), alpha, beta, trans);
         q.wait();
     }
     std::pair<double, int> verify() {
@@ -89,12 +89,36 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
-            "src/sycl/kernel_attrs.hh",
-            "src/sycl/sscp_target.hh",
+            "include/batchlas/device/detail/kernel_attrs.hh",
+            "include/batchlas/device/detail/sscp_target.hh",
             // cta and direct are both in gemv_native.cc: common only.
             "src/ops/gemv/kernels/gemv_native.cc",
             "src/ops/gemv/gemv_native.hh",
             "src/ops/gemv/choice.hh",
+            "include/batchlas/device.hh",
+            "include/batchlas/device/arith.hh",
+            "include/batchlas/device/core.hh",
+            "include/batchlas/device/exec.hh",
+            "include/batchlas/device/grid.hh",
+            "include/batchlas/device/interop.hh",
+            "include/batchlas/device/lapack_aux.hh",
+            "include/batchlas/device/level1.hh",
+            "include/batchlas/device/level2.hh",
+            "include/batchlas/device/level3.hh",
+            "include/batchlas/device/operand.hh",
+            "include/batchlas/device/reduce.hh",
+            "include/batchlas/device/scalar.hh",
+            "include/batchlas/device/tier.hh",
+            "include/batchlas/device/view.hh",
+            "include/batchlas/device/workspace.hh",
+            "include/batchlas/util/group-collectives.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn_core.hh",
+            "include/batchlas/device/detail/sg_partition/backend_generic.hh",
+            "include/batchlas/device/detail/sg_partition/backend_nvptx.hh",
+            "include/batchlas/device/detail/sg_partition/backend_spirv.hh",
+            "include/batchlas/device/detail/sg_partition/backend_sscp.hh",
+            "include/batchlas/device/detail/sg_partition/sg_partition.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin

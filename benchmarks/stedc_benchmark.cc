@@ -6,8 +6,10 @@
 
 using namespace batchlas;
 
+namespace {
+
 template <typename Benchmark>
-static void StedcBenchSizes(Benchmark* b) {
+void StedcBenchSizes(Benchmark* b) {
     // 320 and 640 are here deliberately. This sweep used to register only
     // powers of two, where the level planner lands on leaf == threshold exactly
     // -- so the leaf-width cliff that cost syev 3.25x at n=320 was structurally
@@ -26,7 +28,7 @@ static void StedcBenchSizes(Benchmark* b) {
 }
 
 template <typename Benchmark>
-static void StedcBenchSizesNetlib(Benchmark* b) {
+void StedcBenchSizesNetlib(Benchmark* b) {
     for (int n : {32, 64, 128}) {
         for (int batch : {1, 8, 32}) {
             b->Args({n, batch, 32, static_cast<int>(StedcMergeVariant::Baseline), 0, 0,
@@ -36,8 +38,8 @@ static void StedcBenchSizesNetlib(Benchmark* b) {
 }
 
 // Batched STEDC benchmark
-template <typename T, Backend B>
-static void BM_STEDC(minibench::State& state) {
+template <typename Real, Backend B>
+void BM_STEDC(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const size_t rec_threshold = state.range(2);
@@ -51,10 +53,10 @@ static void BM_STEDC(minibench::State& state) {
     const auto algorithm = static_cast<StedcAlgorithm>(state.range(6));
     JobType jobz = JobType::EigenVectors;
 
-    auto diags = Vector<T>::random(n, batch);
-    auto off_diags = Vector<T>::random(n - 1, batch);
+    auto diags = Vector<Real>::random(n, batch);
+    auto off_diags = Vector<Real>::random(n - 1, batch);
 
-    StedcParams<T> params;
+    StedcParams<Real> params;
     params.recursion_threshold = rec_threshold;
     params.merge_variant = merge_variant;
     params.secular_threads_per_root = threads_per_root;
@@ -62,8 +64,8 @@ static void BM_STEDC(minibench::State& state) {
     params.algorithm = algorithm;
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    auto eigvals = Vector<T>::zeros(n, batch);
-    auto eigvects = Matrix<T>::Identity(n, batch);
+    auto eigvals = Vector<Real>::zeros(n, batch);
+    auto eigvects = Matrix<Real>::Identity(n, batch);
     UnifiedVector<std::byte> ws(stedc_buffer_size(*q, n, batch, jobz, params));
 
     auto kernel = [q](auto& diags,
@@ -71,11 +73,11 @@ static void BM_STEDC(minibench::State& state) {
                             auto& eigvals,
                             auto& ws,
                             JobType jobz,
-                            StedcParams<T> params,
+                            StedcParams<Real> params,
                             auto& eigvects) {
-        auto d = static_cast<VectorView<T>>(diags);
-        auto e = static_cast<VectorView<T>>(off_diags);
-        auto w = static_cast<VectorView<T>>(eigvals);
+        auto d = static_cast<VectorView<Real>>(diags);
+        auto e = static_cast<VectorView<Real>>(off_diags);
+        auto w = static_cast<VectorView<Real>>(eigvals);
         auto Z = eigvects.view();
         return stedc(*q, d, e, w, ws.to_span(), jobz, params, Z);
     };
@@ -91,7 +93,7 @@ static void BM_STEDC(minibench::State& state) {
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 
-
+}  // namespace
 
 // Register size/batch combinations at static‑init time using macro
 

@@ -6,8 +6,10 @@
 
 using namespace batchlas;
 
+namespace {
+
 template <typename T, Backend B>
-static void BM_Ortho(minibench::State& state) {
+void BM_Ortho(minibench::State& state) {
     const size_t m = state.range(0);
     const size_t n = state.range(1);
     const size_t batch = state.range(2);
@@ -15,7 +17,7 @@ static void BM_Ortho(minibench::State& state) {
 
     // arg4 SELECTS THE TRSM SIDE, and without it half of trsm's routing table
     // is unreachable from the only caller that exercises it end to end.
-    // ortho.cc:206,290 pick `is_A_trans ? Side::Left : Side::Right`, and
+    // ortho.cc:205,290 pick `is_A_trans ? Side::Left : Side::Right`, and
     // is_A_trans is just transA != NoTrans -- so a benchmark hardcoding NoTrans
     // measures Side::Right exclusively. The float Side::Left window is real
     // traffic for anyone calling ortho on row-vectors, and it had no
@@ -37,6 +39,8 @@ static void BM_Ortho(minibench::State& state) {
                         });
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 // The registered grid keeps arg4 = 0, so every historical row means exactly
 // what it did before. Side::Left is reached by passing args explicitly.

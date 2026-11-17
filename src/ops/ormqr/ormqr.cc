@@ -28,20 +28,20 @@ namespace ops::ormqr {
 
 using select::overloaded;
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
 // C's extent that Q does not act on: its columns for Side::Left, its rows for Side::Right.
-template <typename T>
-std::int64_t rhs_count(const MV<T>& C, Side side) {
+template <typename Scalar>
+std::int64_t rhs_count(const MV<Scalar>& C, Side side) {
     return side == Side::Left ? C.cols() : C.rows();
 }
 
-template <typename T>
-select::Key key_of(const MV<T>& A, const MV<T>& C, Side side, Transpose trans) {
+template <typename Scalar>
+select::Key key_of(const MV<Scalar>& A, const MV<Scalar>& C, Side side, Transpose trans) {
     const char* t = trans == Transpose::NoTrans ? "N" : (trans == Transpose::Trans ? "T" : "C");
     return {{"side", side == Side::Left ? "L" : "R"}, {"trans", t}, {"m", A.rows()},
-            {"k", std::min(A.rows(), A.cols())}, {"q", rhs_count<T>(C, side)}, {"batch", A.batch_size()}};
+            {"k", std::min(A.rows(), A.cols())}, {"q", rhs_count<Scalar>(C, side)}, {"batch", A.batch_size()}};
 }
 
 // Correctness only (R3). Neither family serves complex Trans: ormqr_blocked throws `unsupported`
@@ -50,11 +50,11 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Side side, Transpose trans) {
 // each item at the top-level extents (no heterogeneous A or C). No batch term: the sub-ops run a
 // batch past 65535 as slices, vendor-free too (known-defects #16). Masked: Blocked and NETLIB's host
 // loop skip an inactive item; a strided vendor call cannot.
-template <Backend B, typename T>
-bool can_run(const OrmqrChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& C, Side side,
+template <Backend B, typename Scalar>
+bool can_run(const OrmqrChoice& c, const select::Device& d, const MV<Scalar>& A, const MV<Scalar>& C, Side side,
              Transpose trans) {
     const bool masked = ::batchlas::detail::any_batch_mask(A, C);
-    const bool defined = !(is_std_complex_v<T> && trans == Transpose::Trans) && !A.is_heterogeneous() &&
+    const bool defined = !(is_std_complex_v<Scalar> && trans == Transpose::Trans) && !A.is_heterogeneous() &&
                          !C.is_heterogeneous();
     return std::visit(overloaded{
         [&](Blocked) { return defined && d.is_gpu; },
@@ -64,9 +64,9 @@ bool can_run(const OrmqrChoice& c, const select::Device& d, const MV<T>& A, cons
 
 // Complex Trans has no kernel anywhere, so it is an argument error, thrown before choose() so
 // that no pin and no vendor-free build reports it as a routing miss.
-template <typename T>
+template <typename Scalar>
 void throw_if_undefined(Transpose trans, const char* who) {
-    if (is_std_complex_v<T> && trans == Transpose::Trans)
+    if (is_std_complex_v<Scalar> && trans == Transpose::Trans)
         throw batchlas::invalid_argument(std::string(who) + ": Transpose::Trans of a complex Q is not an ormqr "
                                          "operation (unmqr takes N or C); use Transpose::ConjTrans");
 }
@@ -74,8 +74,8 @@ void throw_if_undefined(Transpose trans, const char* who) {
 // Blocked's WY width: a positive hint (a caller that knows its reflector count) clamped to
 // [1, k], else the tuning table keyed on A.rows(). Derived from A alone, so sizing and the call
 // agree.
-template <typename T>
-std::int32_t block_size(const MV<T>& A, std::int32_t hint) {
+template <typename Scalar>
+std::int32_t block_size(const MV<Scalar>& A, std::int32_t hint) {
     const std::int32_t k = static_cast<std::int32_t>(std::min(A.rows(), A.cols()));
     if (hint > 0) return std::max<std::int32_t>(1, std::min<std::int32_t>(hint, std::max<std::int32_t>(1, k)));
     return tuning::ormqr_block_size_for_n(static_cast<std::int32_t>(A.rows()));
@@ -83,41 +83,45 @@ std::int32_t block_size(const MV<T>& A, std::int32_t hint) {
 
 // The vendor's spelling: real ormqr takes N or T only (cuSOLVER status 3 on C), and for a real
 // Q, ConjTrans is Trans.
-template <typename T>
+template <typename Scalar>
 Transpose vendor_trans(Transpose trans) {
-    return !is_std_complex_v<T> && trans == Transpose::ConjTrans ? Transpose::Trans : trans;
+    return !is_std_complex_v<Scalar> && trans == Transpose::ConjTrans ? Transpose::Trans : trans;
 }
 
 // Exactly the chosen family's need (R5).
-template <Backend B, typename T>
-std::size_t workspace(Queue& q, const OrmqrChoice& c, const MV<T>& A, const MV<T>& C, Side side, Transpose trans,
-                      Span<T> tau, std::int32_t hint) {
+template <Backend B, typename Scalar>
+std::size_t workspace(Queue& q, const OrmqrChoice& c, const MV<Scalar>& A, const MV<Scalar>& C, Side side,
+                      Transpose trans,
+                      Span<Scalar> tau, std::int32_t hint) {
     return std::visit(overloaded{
-        [&](Blocked) { return ormqr_blocked_buffer_size<B, T>(q, A, C, side, trans, tau, block_size<T>(A, hint)); },
+        [&](Blocked) { return ormqr_blocked_buffer_size<B, Scalar>(q, A, C, side, trans, tau,
+                                                                   block_size<Scalar>(A, hint)); },
         [&](Vendor) -> std::size_t {
-            return ops::ormqr::detail::ormqr_vendor_buffer_size_or_throw<B, T>(q, A, C, side, vendor_trans<T>(trans),
-                                                                                  tau);
+            return ops::ormqr::detail::ormqr_vendor_buffer_size_or_throw<B, Scalar>(q, A, C, side,
+                                                                                    vendor_trans<Scalar>(trans), tau);
         },
     }, c);
 }
 
-template <Backend B, typename T>
-Event launch(Queue& q, const OrmqrChoice& c, const MV<T>& A, const MV<T>& C, Side side, Transpose trans,
-             Span<T> tau, Span<std::byte> ws, std::int32_t hint) {
+template <Backend B, typename Scalar>
+Event launch(Queue& q, const OrmqrChoice& c, const MV<Scalar>& A, const MV<Scalar>& C, Side side, Transpose trans,
+             Span<Scalar> tau, Span<std::byte> ws, std::int32_t hint) {
     return std::visit(overloaded{
-        [&](Blocked) { return ormqr_blocked<B, T>(q, A, C, side, trans, tau, ws, block_size<T>(A, hint)); },
+        [&](Blocked) { return ormqr_blocked<B, Scalar>(q, A, C, side, trans, tau, ws, block_size<Scalar>(A, hint)); },
         [&](Vendor) {
-            return ops::ormqr::detail::ormqr_vendor_or_throw<B, T>(q, A, C, side, vendor_trans<T>(trans), tau, ws);
+            return ops::ormqr::detail::ormqr_vendor_or_throw<B, Scalar>(q, A, C, side, vendor_trans<Scalar>(trans), tau,
+                                                                        ws);
         },
     }, c);
 }
 
 }  // namespace ops::ormqr
 
-template <Backend Back, typename T>
-Event ormqr(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A_, const MatrixView<T, MatrixFormat::Dense>& C_,
-            Side side, Transpose trans, Span<T> tau, Span<std::byte> workspace, int32_t block_size_hint) {
-    ops::ormqr::throw_if_undefined<T>(trans, "ormqr");
+template <Backend Back, typename Scalar>
+Event ormqr(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A_, const MatrixView<Scalar,
+            MatrixFormat::Dense>& C_,
+            Side side, Transpose trans, Span<Scalar> tau, Span<std::byte> workspace, int32_t block_size_hint) {
+    ops::ormqr::throw_if_undefined<Scalar>(trans, "ormqr");
     // Both operands carry the call's mask whichever brought it, so the family's views see it.
     const auto mask = ::batchlas::detail::call_mask("ormqr", A_, C_);
     const bool adopt = !mask.empty() && A_.batch_size() == C_.batch_size();
@@ -128,34 +132,35 @@ Event ormqr(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A_, const Matr
     // The coverage row's key (m, n = A's extents, k = reflectors); select::run adds the backend.
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = std::min(A.rows(), A.cols()),
                                 .batch = A.batch_size(), .transA = trans, .side = side};
-    const select::Key key = ops::ormqr::key_of<T>(A, C, side, trans);
-    return select::run<Back, T>(
-        ops::ormqr::spec, ctx, key, ops::ormqr::candidates<T>(),
-        [&](const auto& c, const auto& d) { return ops::ormqr::can_run<Back, T>(c, d, A, C, side, trans); }, shape, key,
+    const select::Key key = ops::ormqr::key_of<Scalar>(A, C, side, trans);
+    return select::run<Back, Scalar>(
+        ops::ormqr::spec, ctx, key, ops::ormqr::candidates<Scalar>(),
+        [&](const auto& c,
+            const auto& d) { return ops::ormqr::can_run<Back, Scalar>(c, d, A, C, side, trans); }, shape, key,
         [&](const auto& c) {
             // Blocked fits its batch part to the workspace it holds (a caller sized at a larger shape
             // may hold less than this shape's part) and throws workspace_error itself below one item.
             if (std::holds_alternative<ops::ormqr::Vendor>(c) &&
-                workspace.size() < ops::ormqr::workspace<Back, T>(ctx, c, A, C, side, trans, tau, block_size_hint))
+                workspace.size() < ops::ormqr::workspace<Back, Scalar>(ctx, c, A, C, side, trans, tau, block_size_hint))
                 throw batchlas::workspace_error("ormqr: insufficient workspace for chosen provider");
             // Both families sequence several launches.
             return select::on_in_order_queue(ctx, [&](Queue& q) {
-                return ops::ormqr::launch<Back, T>(q, c, A, C, side, trans, tau, workspace, block_size_hint);
+                return ops::ormqr::launch<Back, Scalar>(q, c, A, C, side, trans, tau, workspace, block_size_hint);
             });
         });
 }
 
-template <Backend Back, typename T>
-size_t ormqr_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                         const MatrixView<T, MatrixFormat::Dense>& C, Side side, Transpose trans, Span<T> tau,
+template <Backend Back, typename Scalar>
+size_t ormqr_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& C, Side side, Transpose trans, Span<Scalar> tau,
                          int32_t block_size_hint) {
-    ops::ormqr::throw_if_undefined<T>(trans, "ormqr_buffer_size");
+    ops::ormqr::throw_if_undefined<Scalar>(trans, "ormqr_buffer_size");
     (void)::batchlas::detail::call_mask("ormqr_buffer_size", A, C);
     if (A.batch_size() == 0) return 0;
-    const auto c = select::pick<Back, T>(
-        ops::ormqr::spec, ctx, ops::ormqr::key_of<T>(A, C, side, trans), ops::ormqr::candidates<T>(),
-        [&](const auto& k, const auto& d) { return ops::ormqr::can_run<Back, T>(k, d, A, C, side, trans); });
-    return ops::ormqr::workspace<Back, T>(ctx, c, A, C, side, trans, tau, block_size_hint);
+    const auto c = select::pick<Back, Scalar>(
+        ops::ormqr::spec, ctx, ops::ormqr::key_of<Scalar>(A, C, side, trans), ops::ormqr::candidates<Scalar>(),
+        [&](const auto& k, const auto& d) { return ops::ormqr::can_run<Back, Scalar>(k, d, A, C, side, trans); });
+    return ops::ormqr::workspace<Back, Scalar>(ctx, c, A, C, side, trans, tau, block_size_hint);
 }
 
 #define ORMQR_INSTANTIATE(B_, fp) \

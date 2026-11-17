@@ -33,8 +33,9 @@ import tempfile
 
 FATBIN_MAGIC = b"\x50\xed\x55\xba"
 
-# Callee names that must never survive as an out-of-line call.
-BANNED_CALLEE = re.compile(r"__spirv_|__clc_|__mux_|_Z\d+__spirv")
+# Callee names that must never survive as an out-of-line call: SPIR-V builtins, and the
+# Annex G complex multiply/divide runtime calls (an inner-loop libcall per complex op).
+BANNED_CALLEE = re.compile(r"__spirv_|__clc_|__mux_|_Z\d+__spirv|^__(mul|div)[sd]c3$")
 
 # Mangled-name fragments of kernels that must be present AND call-free. A kernel
 # that is renamed or moved to another library turns the check red instead of
@@ -201,7 +202,8 @@ def check(libs, cuobjdump, verbose):
             top = sorted(set(callees), key=callees.count, reverse=True)[:3]
             print(f"  {len(callees):6d} {lib} {name[:110]} -> {', '.join(top)}")
         print("Likely cause: an icpx build without -ffp-model=precise "
-              "(see docs/developer/agent-guide.md Known Pitfalls).")
+              "(see docs/developer/agent-guide.md Known Pitfalls); for __mulsc3/__divdc3 and kin, "
+              "std::complex * or / that the device link did not inline.")
     return status
 
 
@@ -217,6 +219,7 @@ SELF_TEST_PTX = """
 	call.uni (retval0), _Z15__spirv_ocl_fmafff, (param0, param1, param2);
 	} // callseq 0
 	@%p1 call.uni _Z22__spirv_ControlBarrierjjj, (param0, param1, param2);
+	call.uni (retval0), __mulsc3, (param0, param1, param2, param3);
 	ret;
 }
 .extern .func (.param .b32 func_retval0) vprintf(.param .b64 fmt, .param .b64 args);
@@ -255,10 +258,11 @@ def self_test():
     via = ["_Z6helperv", "_Z6helperv", "_Z7helper2v",
            "_Z7helper2v", "_Z28__spirv_BuiltInLocalInvocationIdv"]
     ok = (set(got) == {"_ZTS3Bad", "_ZTS4Good", "_ZTS9ViaHelper"}
-          and got["_ZTS3Bad"] == ["_Z15__spirv_ocl_fmafff", "_Z22__spirv_ControlBarrierjjj"]
+          and got["_ZTS3Bad"] == ["_Z15__spirv_ocl_fmafff", "_Z22__spirv_ControlBarrierjjj", "__mulsc3"]
           and got["_ZTS4Good"] == ["vprintf"]
           and got["_ZTS9ViaHelper"] == via
-          and all(BANNED_CALLEE.search(c) for c in got["_ZTS3Bad"]))
+          and all(BANNED_CALLEE.search(c) for c in got["_ZTS3Bad"])
+          and not BANNED_CALLEE.search("my__mulsc3_helper"))
     blob = FATBIN_MAGIC + struct.pack("<HHQ", 1, 16, 4) + b"abcd"
     ok = ok and [len(b) for b in fatbins_from_bytes(b"xx" + blob + b"yy" + blob)] == [20, 20]
     print("check_device_calls self-test:", "ok" if ok else f"FAILED {got}")

@@ -89,6 +89,20 @@ if(NOT BATCHLAS_SYCL_IMPL_ACPP)
         ${CMAKE_CURRENT_SOURCE_DIR}/ops/herk/herk.cc
         ${CMAKE_CURRENT_SOURCE_DIR}/ops/her2k/her2k.cc
         PROPERTIES COMPILE_OPTIONS "-mllvm;-pragma-unroll-threshold=262144")
+    # The register-tiled gemm body calls its stage lambdas through gemm-components_v2.hh's kloop, so
+    # SemaSYCL force-inlines the whole body at stage 1; the tuned kernel kept it inlinehint (it called
+    # a local lambda directly). Off for the reg shards keeps their SASS. evidence: potri_cta.cc
+    set_source_files_properties(
+        ${PROJECT_BINARY_DIR}/generated/gemm/gemm_reg_0.cc
+        ${PROJECT_BINARY_DIR}/generated/gemm/gemm_reg_1.cc
+        PROPERTIES COMPILE_OPTIONS "-fno-sycl-force-inline-kernel-lambda")
+    # potri_cta's kernel lambda calls no lambda directly since its device LA v2 port, so DPC++ would
+    # force-inline it into the entry at stage 1; the hand-written kernel stayed a function of its own
+    # until device link (SemaSYCL takes its first lambda callee as the body). Keep that schedule:
+    # force-inlined, trti2's write-back moves (STS +8, total -5%) and fails the strict SASS gate.
+    set_source_files_properties(
+        ${CMAKE_CURRENT_SOURCE_DIR}/ops/potri/kernels/potri_cta.cc
+        PROPERTIES COMPILE_OPTIONS "-fno-sycl-force-inline-kernel-lambda")
 endif()
 
 foreach(_obj ${BATCHLAS_OBJECT_LIBS})

@@ -44,7 +44,6 @@ bool phased(const CellRecord& r, const std::set<std::string>& runs, Tier tier, c
     return phased(r, runs) && r.tier == tier && (mode.empty() || r.phases.mode == mode);
 }
 
-
 // Ledger records grouped by their non-integer fields; within a group the integer fields give the
 // log distance. The phase history is kProtocol's cells with phases (a fallback cell is no sample).
 class TimeIndex {

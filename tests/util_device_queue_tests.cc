@@ -84,7 +84,7 @@ TEST(DeviceTest, DeviceProperties) {
         EXPECT_FALSE(device.get_name().empty());
         EXPECT_FALSE(device.get_vendor() == Vendor::OTHER);
     } catch (const std::exception& e) {
-        GTEST_SKIP() << "Skipping device property tests due to no devices available";
+        GTEST_SKIP() << "skipping device property tests due to no devices available";
     }
 }
 
@@ -121,7 +121,7 @@ TEST(QueueTest, DeviceConstruction) {
             EXPECT_FALSE(queue.in_order());
         });
     } catch (const std::exception& e) {
-        GTEST_SKIP() << "Skipping queue tests due to no devices available";
+        GTEST_SKIP() << "skipping queue tests due to no devices available";
     }
 }
 
@@ -146,7 +146,7 @@ TEST(QueueTest, MoveOperations) {
             EXPECT_EQ(queue3.device().type, device.type);
         });
     } catch (const std::exception& e) {
-        GTEST_SKIP() << "Skipping queue tests due to no devices available";
+        GTEST_SKIP() << "skipping queue tests due to no devices available";
     }
 }
 
@@ -158,7 +158,7 @@ TEST(QueueTest, GetEvent) {
             Event event = queue.get_event();
         });
     } catch (const std::exception& e) {
-        GTEST_SKIP() << "Skipping event tests due to no devices available";
+        GTEST_SKIP() << "skipping event tests due to no devices available";
     }
 }
 
@@ -171,7 +171,7 @@ TEST(QueueTest, EnqueueEvent) {
             queue.enqueue(event);
         });
     } catch (const std::exception& e) {
-        GTEST_SKIP() << "Skipping enqueue tests due to no devices available";
+        GTEST_SKIP() << "skipping enqueue tests due to no devices available";
     }
 }
 
@@ -188,7 +188,7 @@ TEST(QueueTest, EnqueueMultipleEvents) {
             queue.enqueue(events);
         });
     } catch (const std::exception& e) {
-        GTEST_SKIP() << "Skipping enqueue tests due to no devices available";
+        GTEST_SKIP() << "skipping enqueue tests due to no devices available";
     }
 }
 
@@ -201,7 +201,7 @@ TEST(QueueTest, WaitAndThrow) {
             queue.wait_and_throw();
         });
     } catch (const std::exception& e) {
-        GTEST_SKIP() << "Skipping wait tests due to no devices available";
+        GTEST_SKIP() << "skipping wait tests due to no devices available";
     }
 }
 

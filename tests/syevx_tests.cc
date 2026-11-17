@@ -38,13 +38,13 @@ struct Spectrum {
     double norm2 = 0;
 };
 
-// At the top of every TEST body that reaches a LapackeSpectrum, also through a helper (a skip inside
+// At the top of every TEST body that reaches a lapacke_spectrum, also through a helper (a skip inside
 // a helper only returns from the helper): without LAPACKE there is no reference, so the case skips.
 #define SYEVX_REQUIRE_LAPACKE() \
     do { if (!BATCHLAS_VERIFY_HAVE_LAPACKE) GTEST_SKIP() << "no host LAPACKE reference in this build"; } while (0)
 
-template <typename T>
-Spectrum LapackeSpectrum(const MatrixView<T, MatrixFormat::Dense>& A) {
+template <typename Scalar>
+Spectrum lapacke_spectrum(const MatrixView<Scalar, MatrixFormat::Dense>& A) {
     Spectrum s;
     s.w.resize(static_cast<size_t>(A.batch_size()));
     for (int b = 0; b < A.batch_size(); ++b) {
@@ -67,8 +67,8 @@ std::vector<std::vector<double>> Extremal(const Spectrum& s, int k, bool largest
 // Item b's want[b].size() values at W + b * stride against want[b], at Check::values (n = the
 // order) scaled by norm2; an item with nothing wanted is skipped.
 template <typename T>
-void ExpectValues(const T* W, int stride, const std::vector<std::vector<double>>& want, double norm2, int n,
-                  std::optional<verify::Slack> slack = std::nullopt) {
+void expect_values(const T* W, int stride, const std::vector<std::vector<double>>& want, double norm2, int n,
+                   std::optional<verify::Slack> slack = std::nullopt) {
     double err = 0;
     for (size_t b = 0; b < want.size(); ++b) {
         if (want[b].empty()) continue;
@@ -82,8 +82,8 @@ void ExpectValues(const T* W, int stride, const std::vector<std::vector<double>>
 // For every item with count[b] > 0: columns [0, count[b]) of V and the values at W + b * stride are
 // eigenpairs of the ORIGINAL A (eigen_residual, n = the order; orthogonality_rotations, n = count[b]).
 template <typename T>
-void ExpectPairs(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& V, const T* W,
-                 int stride, const std::vector<int>& count, std::optional<verify::Slack> slack = std::nullopt) {
+void expect_pairs(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& V, const T* W,
+                  int stride, const std::vector<int>& count, std::optional<verify::Slack> slack = std::nullopt) {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     const int n = A.rows();
     for (int b = 0; b < A.batch_size(); ++b) {
@@ -100,24 +100,24 @@ void ExpectPairs(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const 
     }
 }
 
-template <typename R>
-std::vector<double> ClosedForm(const std::vector<R>& lam, int first, int count, bool reverse = false) {
+template <typename Real>
+std::vector<double> closed_form(const std::vector<Real>& lam, int first, int count, bool reverse = false) {
     std::vector<double> out(lam.begin() + first, lam.begin() + first + count);
     if (reverse) std::reverse(out.begin(), out.end());
     return out;
 }
 
-template <typename R>
-double MaxAbs(const std::vector<R>& lam) {
+template <typename Real>
+double max_abs(const std::vector<Real>& lam) {
     double m = 0;
-    for (R l : lam) m = verify::nanmax(m, std::fabs(double(l)));
+    for (Real l : lam) m = verify::nanmax(m, std::fabs(double(l)));
     return m;
 }
 
 // Backend::SYCL on a GPU with no fp64 (Metal) has no complex<double>: run the
 // complex<double> cases on the host backend there, unchanged elsewhere.
 std::shared_ptr<Queue> complex_double_queue(const std::shared_ptr<Queue>& gpu) {
-    if constexpr (test_utils::native_gpu_lacks_fp64) return std::make_shared<Queue>(Device("cpu"));
+    if constexpr (test_utils::kNativeGpuLacksFp64) return std::make_shared<Queue>(Device("cpu"));
     else return gpu;
 }
 
@@ -134,14 +134,14 @@ protected:
         W_data = UnifiedVector<float>(rows * batch_size);
 
         // Set up CSR format data for symmetric matrices with known eigenvalues
-        setupCSRMatrices();
+        setup_csr_matrices();
     }
 
     void TearDown() override {
     }
 
     // Set up CSR matrices with known eigenvalues
-    void setupCSRMatrices() {
+    void setup_csr_matrices() {
         // For each batch, create a sparse symmetric matrix with known eigenvalues
         // We'll use a simple tridiagonal matrix with known eigenvalues
 
@@ -158,8 +158,6 @@ protected:
         csr_col_indices.resize(total_nnz * batch_size);
         csr_row_offsets.resize((rows + 1) * batch_size);
 
-
-
         for (int b = 0; b < batch_size; ++b) {
             int base_idx = b * nnz_per_matrix;
             int base_row_ptr = b * (rows + 1);
@@ -168,7 +166,7 @@ protected:
             csr_row_offsets[base_row_ptr] = 0;  // Each batch matrix starts at 0
 
             int nnz_count = 0;
-            //Pre-computed Hessian of the C20 fullerene potential
+            // Pre-computed Hessian of the C20 fullerene potential
             std::array<float, 60*30> Avals = {
                 467.283, 0.000186032, -110.893, -184.505, 32.8416, 7.14737, -184.505, -32.8418, 7.14751, -131.095, -3.61167e-06, 130.224, 11.5192, -9.2696, -3.96905, -10.1164, -33.6383, 1.68713, 15.0079, 4.16187, -14.5311, -10.1165, 33.6384, 1.68711, 11.5193, 9.2696, -3.96906, 15.0078, -4.16194, -14.5312, 0.000186032, 551.997, 0.000310918, 83.1742, -222.201, 55.5253, -83.1743, -222.201, -55.5255, -8.67248e-06, -166.104, 1.55717e-05, 7.1753, -6.38028, -3.32003, 7.97274, 25.2092, -0.353045, 23.5979, 10.4255, -25.9265, -7.97279, 25.2092, 0.353043, -7.1754, -6.38037, 3.32008, -23.5978, 10.4254, 25.9264, -110.893, 0.000310918, 406.836, 55.0163, -10.3607, -103.94, 55.0165, 10.3604, -103.94, 34.4854, -7.25407e-05, -213.448, -25.059, 28.6987, 12.4979, -1.1574, -1.27729, 2.54408, 9.40371, 2.17753, -7.79633, -1.15741, 1.27731, 2.54423, -25.0591, -28.6987, 12.4979, 9.40358, -2.17751, -7.79625, 330.214, -0.000191346, -42.3564, -131.095, -8.67248e-06, 34.4854, -95.1882, -5.41977, 10.3579, -95.1882, 5.41984, 10.3579, -5.28651, -3.80906, 19.5504, 0.690935, -21.5233, -19.6449, 0.224137, 16.1862, -6.32783, -5.28656, 3.8091, 19.5504, 0.224171, -16.1862, -6.32784, 0.690949, 21.5234, -19.6449, -0.000191346, 551.997, -3.16855e-05, -3.61167e-06, -166.104, -7.25407e-05, -86.86, -222.201, -49.5619, 86.86, -222.201, 49.5619, 12.6358, 10.4255, -32.701, -0.239174, -6.38013, -7.90226, -3.24978, 25.2092, -7.28899, -12.6357, 10.4255, 32.7009, 3.24976, 25.2091, 7.28898, 0.239205, -6.38016, 7.90232, -42.3564, -3.16855e-05, 543.907, 130.224, 1.55717e-05, -213.448, -37.5114, -34.0083, -193.257, -37.5114, 34.0083, -193.257, -4.38401, -2.74882, 12.4979, 1.44487, 21.1254, 23.3261, -3.4832, 29.5161, -7.7963, -4.3841, 2.7489, 12.498, -3.48322, -29.5161, -7.79631, 1.44492, -21.1254, 23.3261, 406.838, -105.464, 34.267, -95.1882, 86.86, -37.5114, -143.19, 16.648, -27.8993, -182.952, 33.9358, 20.7521, 15.0078, -23.5978, 9.40358, 4.33918, -0.612875, 3.40455, -12.1008, 17.3671, 20.5379, 8.5966, -10.642, 11.2482, -4.05554, -14.3302, -35.0377, 2.70461, -0.164353, 0.834938, -105.464, 475.373, 24.8964, 5.41984, -222.201, 34.0083, 16.648, -154.009, -20.27, 115.376, -134.437, -46.1846, -4.16194, 10.4254, -2.17751, -17.0578, 0.799764, -37.947, -3.91707, 6.41154, 5.1539, 10.6421, -14.2858, 17.9401, 2.11474, 9.19448, 14.9642, -19.6003, 22.7287, 9.61626, 34.267, 24.8964, 543.906, 10.3579, 49.5619, -193.257, -105.353, -76.5437, -213.448, 50.337, -5.46455, -193.257, -14.5312, 25.9264, -7.79625, 5.16253, 0.353012, 12.4979, -13.5861, 16.2415, 23.3261, 11.2483, -17.9401, 23.3261, 1.93105, 4.80077, 12.4979, 20.1671, -21.8316, -7.79627, 530.818, -65.1803, -13.0889, -182.952, 115.376, 50.337, -237.192, -40.7201, -43.9354, -162.761, 10.2891, 10.6565, 0.690949, 0.239205, 1.44492, 19.0214, -2.85781, 4.97684, 6.33101, -16.4106, 37.1419, 26.6252, -11.828, -8.88766, -12.1008, 3.91708, -13.5861, 11.5192, 7.1753, -25.059, -65.1803, 351.392, -40.2834, 33.9358, -134.437, -5.46455, 40.7201, -80.1965, 25.1664, 10.2891, -134.438, 32.7976, 21.5234, -6.38016, -21.1254, -22.2938, 6.41191, -8.27054, 0.0343012, -1.19207, 8.48838, 7.60796, -1.19192, -3.76571, -17.3671, 6.41157, -16.2415, -9.2696, -6.38028, 28.6987, -13.0889, -40.2834, 543.907, 20.7521, -46.1846, -193.257, -43.9354, -25.1664, -193.257, 40.2415, 123.85, -213.448, -19.6449, 7.90232, 23.3261, -29.1479, 5.80824, -7.7963, 1.25957, -5.01896, 12.498, 26.9951, -12.4337, -7.79631, 20.5379, -5.15391, 23.3261, -3.96905, -3.32003, 12.4979, 543.908, -24.8967, -34.2676, -162.761, 10.2891, 40.2415, -252.697, -61.0172, -50.5991, -184.505, 83.1742, 55.0163, 2.70461, -19.6003, 20.1671, -4.05556, -2.11475, 1.93107, 29.3788, -20.8057, 0.857094, 19.0214, 22.2938, -29.1479, 14.2929, 0.04166, 0.185582, -5.28651, 12.6358, -4.38401, -24.8967, 475.373, -105.465, 10.2891, -134.438, 123.85, -10.6847, -154.008, 23.956, 32.8416, -222.201, -10.3607, -0.164353, 22.7287, -21.8316, 14.3302, 9.19449, -4.80079, 20.8056, -14.2862, 1.49543, 2.85781, 6.4119, -5.80822, -41.5695, 0.799756, 1.71366, -3.80906, 10.4255, -2.74882, -34.2676, -105.465, 406.836, 10.6565, 32.7976, -213.448, 26.8545, 49.1222, -103.94, 7.14737, 55.5253, -103.94, 0.834938, 9.61626, -7.79627, -35.0377, -14.9642, 12.498, 0.857125, -1.49547, 2.54428, 4.97685, 8.27055, -7.79632, -1.57241, -0.706041, 2.54419, 19.5504, -32.701, 12.4979, 496.551, 40.2839, 89.7141, -252.697, -10.6847, 26.8545, -143.19, -16.648, -105.353, -142.36, -25.1663, -38.4193, -10.1165, -7.97279, -1.15741, 26.6252, -7.60794, 26.9951, 4.33922, -17.0578, 5.16249, 6.33101, 0.0343012, 1.25957, 0.224104, 3.24975, -3.48315, 14.2929, 41.5696, -1.57242, 40.2839, 522.729, -65.1813, -61.0172, -154.008, 49.1222, -16.648, -154.009, 76.5437, 25.1663, -264.346, -40.7197, 33.6384, 25.2092, 1.27731, 11.828, -1.1919, 12.4338, -0.612872, 0.799761, 0.353012, -16.4106, -1.19207, -5.01896, -16.1862, 25.2092, -29.5161, -0.0416718, 0.799741, 0.706041, 89.7141, -65.1813, 406.836, -50.5991, 23.956, -103.94, -27.8993, 20.2701, -213.448, -38.4194, 40.7198, -103.94, 1.68711, 0.353043, 2.54423, -8.88768, 3.7657, -7.79632, 3.40452, -37.9471, 12.4979, 37.1419, 8.48838, 12.498, -6.32779, 7.28897, -7.79628, 0.185587, -1.71366, 2.54429, 496.551, -40.2839, 89.714, -142.36, 25.1663, -38.4194, -143.19, 16.648, -105.353, -252.697, 10.6847, 26.8546, 14.2929, -41.5695, -1.57241, 0.224107, -3.24976, -3.48317, 6.33095, -0.0342829, 1.25955, 4.33922, 17.0578, 5.16249, 26.6252, 7.60793, 26.9951, -10.1164, 7.97274, -1.1574, -40.2839, 522.729, 65.1812, -25.1663, -264.346, 40.7198, 16.648, -154.009, -76.5437, 61.0172, -154.008, -49.1222, 0.04166, 0.799756, -0.706041, 16.1862, 25.2092, 29.5161, 16.4107, -1.19205, 5.01896, 0.612868, 0.79974, -0.353017, -11.828, -1.19191, -12.4337, -33.6383, 25.2092, -1.27729, 89.714, 65.1812, 406.836, -38.4193, -40.7197, -103.94, -27.8993, -20.27, -213.448, -50.599, -23.9561, -103.94, 0.185582, 1.71366, 2.54419, -6.32779, -7.28897, -7.79627, 37.1418, -8.48835, 12.4979, 3.40452, 37.947, 12.4979, -8.88768, -3.7657, -7.79632, 1.68713, -0.353045, 2.54408, 543.908, 24.8968, -34.2678, -252.697, 61.0172, -50.599, -162.761, -10.289, 40.2414, -184.505, -83.1743, 55.0165, 14.2929, -0.0416718, 0.185587, 19.0214, -22.2938, -29.1478, -5.28656, -12.6357, -4.3841, -4.05549, 2.11469, 1.93105, 2.70463, 19.6003, 20.1671, 29.3788, 20.8056, 0.857125, 24.8968, 475.373, 105.465, 10.6847, -154.008, -23.9561, -10.289, -134.438, -123.85, -32.8418, -222.201, 10.3604, 41.5696, 0.799741, -1.71366, -2.85781, 6.41193, 5.80824, 3.8091, 10.4255, 2.7489, -14.3302, 9.19443, 4.80081, 0.164287, 22.7287, 21.8317, -20.8057, -14.2862, -1.49547, -34.2678, 105.465, 406.835, 26.8546, -49.1222, -103.94, 10.6566, -32.7975, -213.448, 7.14751, -55.5255, -103.94, -1.57242, 0.706041, 2.54429, 4.97683, -8.27055, -7.7963, 19.5504, 32.7009, 12.498, -35.0377, 14.9642, 12.4979, 0.834974, -9.61632, -7.7963, 0.857094, 1.49543, 2.54428, 530.818, 65.18, -13.0888, -162.761, -10.289, 10.6566, -237.192, 40.7202, -43.9355, -182.952, -115.376, 50.337, 11.5193, -7.1754, -25.0591, -12.1007, -3.91705, -13.5861, 26.6252, 11.828, -8.88762, 6.33095, 16.4107, 37.1418, 19.0214, 2.8578, 4.97685, 0.690935, -0.239174, 1.44487, 65.18, 351.393, 40.2831, -10.289, -134.438, -32.7975, -40.7201, -80.1966, -25.1663, -33.9358, -134.437, 5.46461, 9.2696, -6.38037, -28.6987, 17.3671, 6.41153, 16.2415, -7.60795, -1.19191, 3.76569, -0.0342829, -1.19205, -8.48835, 22.2938, 6.4119, 8.27056, -21.5233, -6.38013, 21.1254, -13.0888, 40.2831, 543.906, 40.2414, -123.85, -213.448, -43.9354, 25.1664, -193.257, 20.7521, 46.1846, -193.257, -3.96906, 3.32008, 12.4979, 20.538, 5.15389, 23.3261, 26.9951, 12.4337, -7.79629, 1.25955, 5.01896, 12.4979, -29.1479, -5.8082, -7.79631, -19.6449, -7.90226, 23.3261, 406.838, 105.464, 34.2668, -182.952, -33.9358, 20.7521, -143.19, -16.648, -27.8992, -95.1882, -86.86, -37.5114, 2.70463, 0.164287, 0.834974, -4.0556, 14.3302, -35.0377, 8.5966, 10.6421, 11.2483, -12.1008, -17.3671, 20.5379, 4.3392, 0.612873, 3.40452, 15.0079, 23.5979, 9.40371, 105.464, 475.373, -24.8963, -115.376, -134.437, 46.1846, -16.6479, -154.009, 20.2699, -5.41977, -222.201, -34.0083, 19.6003, 22.7287, -9.61632, -2.11478, 9.19453, -14.9642, -10.642, -14.2858, -17.9401, 3.9171, 6.41155, -5.15393, 17.0578, 0.799706, 37.947, 4.16187, 10.4255, 2.17753, 34.2668, -24.8963, 543.907, 50.337, 5.46461, -193.257, -105.353, 76.5436, -213.448, 10.3579, -49.5619, -193.257, 20.1671, 21.8317, -7.7963, 1.93106, -4.80074, 12.4979, 11.2482, 17.9401, 23.3261, -13.5861, -16.2415, 23.3261, 5.16253, -0.353032, 12.4979, -14.5311, -25.9265, -7.79633, 496.551, 40.2838, 89.7141, -143.19, -16.6479, -105.353, -252.697, -10.6847, 26.8545, -142.36, -25.1662, -38.4195, 0.224171, 3.24976, -3.48322, 6.33104, 0.0343216, 1.25959, 14.293, 41.5695, -1.5724, 26.6252, -7.60795, 26.9951, -10.1165, -7.97282, -1.1574, 4.33918, -17.0578, 5.16253, 40.2838, 522.729, -65.181, -16.648, -154.009, 76.5436, -61.0172, -154.008, 49.1222, 25.1663, -264.346, -40.7198, -16.1862, 25.2091, -29.5161, -16.4106, -1.19211, -5.01897, -0.0416719, 0.799728, 0.706046, 11.828, -1.19191, 12.4337, 33.6384, 25.2092, 1.27728, -0.612875, 0.799764, 0.353012, 89.7141, -65.181, 406.836, -27.8992, 20.2699, -213.448, -50.5991, 23.956, -103.94, -38.4195, 40.7197, -103.94, -6.32784, 7.28898, -7.79631, 37.1418, 8.48836, 12.4979, 0.185589, -1.71363, 2.54422, -8.88762, 3.76569, -7.79629, 1.6871, 0.353036, 2.54423, 3.40455, -37.947, 12.4979, 496.551, -40.284, 89.7143, -142.36, 25.1663, -38.4195, -252.697, 10.6847, 26.8545, -143.19, 16.648, -105.353, 4.3392, 17.0578, 5.16253, -10.1165, 7.97279, -1.1574, 26.6252, 7.60796, 26.9951, 14.293, -41.5695, -1.57245, 6.33099, -0.0343014, 1.25956, 0.224137, -3.24978, -3.4832, -40.284, 522.729, 65.1813, -25.1662, -264.346, 40.7197, 61.0172, -154.008, -49.1222, 16.648, -154.009, -76.5437, 0.612873, 0.799706, -0.353032, -33.6383, 25.2092, -1.2773, -11.828, -1.19192, -12.4337, 0.0416647, 0.799745, -0.706053, 16.4106, -1.19207, 5.01895, 16.1862, 25.2092, 29.5161, 89.7143, 65.1813, 406.836, -38.4195, -40.7198, -103.94, -50.5991, -23.956, -103.94, -27.8993, -20.27, -213.448, 3.40452, 37.947, 12.4979, 1.68713, -0.353053, 2.54419, -8.88766, -3.76571, -7.79631, 0.18558, 1.71367, 2.54418, 37.1418, -8.48838, 12.4979, -6.32783, -7.28899, -7.7963, 543.908, 24.8967, -34.2677, -252.697, 61.0172, -50.5991, -184.505, -83.1742, 55.0164, -162.761, -10.289, 40.2414, -4.05554, 2.11474, 1.93105, 29.3788, 20.8056, 0.857112, 2.70462, 19.6003, 20.1671, 14.293, -0.0416719, 0.185589, -5.28654, -12.6358, -4.38407, 19.0214, -22.2938, -29.1479, 24.8967, 475.373, 105.465, 10.6847, -154.008, -23.956, -32.8417, -222.201, 10.3606, -10.289, -134.438, -123.85, -14.3302, 9.19448, 4.80077, -20.8056, -14.2862, -1.49545, 0.164319, 22.7287, 21.8317, 41.5695, 0.799728, -1.71363, 3.80909, 10.4255, 2.74887, -2.85781, 6.41191, 5.80824, -34.2677, 105.465, 406.836, 26.8545, -49.1222, -103.94, 7.14743, -55.5254, -103.94, 10.6566, -32.7975, -213.448, -35.0377, 14.9642, 12.4979, 0.85712, 1.49545, 2.54426, 0.834957, -9.6163, -7.79629, -1.5724, 0.706046, 2.54422, 19.5504, 32.701, 12.4979, 4.97684, -8.27054, -7.7963, 530.818, 65.1801, -13.0888, -162.761, -10.289, 10.6566, -182.952, -115.376, 50.3369, -237.192, 40.7201, -43.9354, 6.33099, 16.4106, 37.1418, 0.690957, -0.239207, 1.44491, 19.0214, 2.85781, 4.97685, 11.5193, -7.17535, -25.059, 26.6252, 11.828, -8.88768, -12.1008, -3.91707, -13.5861, 65.1801, 351.393, 40.2832, -10.289, -134.438, -32.7975, -33.9358, -134.437, 5.46459, -40.7201, -80.1965, -25.1664, -0.0343014, -1.19207, -8.48838, -21.5234, -6.38018, 21.1254, 22.2938, 6.4119, 8.27055, 9.26959, -6.38032, -28.6987, -7.60794, -1.1919, 3.7657, 17.3671, 6.41154, 16.2415, -13.0888, 40.2832, 543.907, 40.2414, -123.85, -213.448, 20.7521, 46.1846, -193.257, -43.9354, 25.1664, -193.257, 1.25956, 5.01895, 12.4979, -19.6449, -7.90234, 23.3261, -29.1479, -5.80822, -7.79632, -3.96905, 3.32005, 12.4979, 26.9951, 12.4338, -7.79632, 20.5379, 5.1539, 23.3261, 406.838, 105.464, 34.2671, -182.952, -33.9358, 20.7521, -95.1882, -86.86, -37.5114, -143.19, -16.648, -27.8993, -12.1008, -17.3671, 20.5379, 15.0079, 23.5979, 9.40365, 4.33922, 0.612868, 3.40452, 2.70462, 0.164319, 0.834957, 8.59664, 10.6421, 11.2482, -4.05556, 14.3302, -35.0377, 105.464, 475.373, -24.8964, -115.376, -134.437, 46.1846, -5.41982, -222.201, -34.0083, -16.648, -154.009, 20.2701, 3.91708, 6.41157, -5.15391, 4.16193, 10.4255, 2.17754, 17.0578, 0.79974, 37.947, 19.6003, 22.7287, -9.6163, -10.6421, -14.2859, -17.9401, -2.11475, 9.19449, -14.9642, 34.2671, -24.8964, 543.906, 50.3369, 5.46459, -193.257, 10.3579, -49.5619, -193.257, -105.353, 76.5437, -213.448, -13.5861, -16.2415, 23.3261, -14.5312, -25.9264, -7.79629, 5.16249, -0.353017, 12.4979, 20.1671, 21.8317, -7.79629, 11.2482, 17.9401, 23.3262, 1.93107, -4.80079, 12.498, 330.214, -1.59815e-06, -42.3566, -95.1882, -5.41982, 10.3579, -131.095, -8.99612e-06, 34.4855, -95.1883, 5.41978, 10.3579, 0.224104, -16.1862, -6.32779, -5.28654, 3.80909, 19.5504, 0.690954, 21.5234, -19.6449, 0.690957, -21.5234, -19.6449, -5.28653, -3.80907, 19.5504, 0.224107, 16.1862, -6.32779, -1.59815e-06, 551.997, 3.88715e-05, -86.86, -222.201, -49.5619, -4.10112e-06, -166.104, -2.1165e-05, 86.86, -222.201, 49.5619, 3.24975, 25.2092, 7.28897, -12.6358, 10.4255, 32.701, 0.239219, -6.38017, 7.90233, -0.239207, -6.38018, -7.90234, 12.6358, 10.4255, -32.701, -3.24976, 25.2092, -7.28897, -42.3566, 3.88715e-05, 543.907, -37.5114, -34.0083, -193.257, 130.224, -2.7682e-05, -213.448, -37.5114, 34.0082, -193.257, -3.48315, -29.5161, -7.79628, -4.38407, 2.74887, 12.4979, 1.44493, -21.1254, 23.3261, 1.44491, 21.1254, 23.3261, -4.38406, -2.74885, 12.4979, -3.48317, 29.5161, -7.79627, 406.838, -105.464, 34.2671, -95.1883, 86.86, -37.5114, -182.952, 33.9359, 20.7521, -143.19, 16.648, -27.8993, 8.59664, -10.6421, 11.2482, 2.70461, -0.164355, 0.834941, -4.05549, -14.3302, -35.0377, 15.0078, -23.5979, 9.40365, -12.1007, 17.3671, 20.538, 4.33922, -0.612872, 3.40452, -105.464, 475.373, 24.8965, 5.41978, -222.201, 34.0082, 115.376, -134.437, -46.1846, 16.648, -154.009, -20.27, 10.6421, -14.2859, 17.9401, -19.6003, 22.7287, 9.61628, 2.11469, 9.19443, 14.9642, -4.16192, 10.4254, -2.17753, -3.91705, 6.41153, 5.15389, -17.0578, 0.799761, -37.9471, 34.2671, 24.8965, 543.907, 10.3579, 49.5619, -193.257, 50.3369, -5.46454, -193.257, -105.353, -76.5437, -213.448, 11.2482, -17.9401, 23.3262, 20.1671, -21.8317, -7.79628, 1.93105, 4.80081, 12.4979, -14.5311, 25.9264, -7.79629, -13.5861, 16.2415, 23.3261, 5.16249, 0.353012, 12.4979, 530.818, -65.1803, -13.0888, -182.952, 115.376, 50.3369, -162.761, 10.2891, 10.6566, -237.192, -40.7201, -43.9354, 26.6252, -11.828, -8.88768, 11.5193, 7.17533, -25.0591, -12.1008, 3.9171, -13.5861, 0.690954, 0.239219, 1.44493, 6.33104, -16.4106, 37.1418, 19.0214, -2.85781, 4.97683, -65.1803, 351.393, -40.2834, 33.9359, -134.437, -5.46454, 10.2891, -134.438, 32.7976, 40.7202, -80.1966, 25.1664, 7.60793, -1.19191, -3.7657, -9.26961, -6.3803, 28.6987, -17.3671, 6.41155, -16.2415, 21.5234, -6.38017, -21.1254, 0.0343216, -1.19211, 8.48836, -22.2938, 6.41193, -8.27055, -13.0888, -40.2834, 543.907, 20.7521, -46.1846, -193.257, 40.2414, 123.85, -213.448, -43.9355, -25.1663, -193.257, 26.9951, -12.4337, -7.79632, -3.96904, -3.32003, 12.4979, 20.5379, -5.15393, 23.3261, -19.6449, 7.90233, 23.3261, 1.25959, -5.01897, 12.4979, -29.1478, 5.80824, -7.7963, 543.908, -24.8967, -34.2676, -162.761, 10.2891, 40.2414, -184.505, 83.1742, 55.0164, -252.697, -61.0172, -50.5991, 19.0214, 22.2938, -29.1479, -5.28653, 12.6358, -4.38406, 14.293, 0.0416647, 0.18558, 2.70461, -19.6003, 20.1671, 29.3788, -20.8056, 0.85712, -4.0556, -2.11478, 1.93106, -24.8967, 475.373, -105.465, 10.2891, -134.438, 123.85, 32.8417, -222.201, -10.3606, -10.6847, -154.008, 23.956, 2.8578, 6.4119, -5.8082, -3.80907, 10.4255, -2.74885, -41.5695, 0.799745, 1.71367, -0.164355, 22.7287, -21.8317, 20.8056, -14.2862, 1.49545, 14.3302, 9.19453, -4.80074, -34.2676, -105.465, 406.836, 10.6566, 32.7976, -213.448, 7.14743, 55.5254, -103.94, 26.8545, 49.1222, -103.94, 4.97685, 8.27056, -7.79631, 19.5504, -32.701, 12.4979, -1.57245, -0.706053, 2.54418, 0.834941, 9.61628, -7.79628, 0.857112, -1.49545, 2.54426, -35.0377, -14.9642, 12.4979, 467.283, 5.61103e-05, -110.893, -184.505, 32.8417, 7.14743, -131.095, -4.10112e-06, 130.224, -184.505, -32.8417, 7.14743, -10.1165, 33.6384, 1.6871, 15.0078, -4.16192, -14.5311, 11.5193, 9.26959, -3.96905, 11.5193, -9.26961, -3.96904, 15.0079, 4.16193, -14.5312, -10.1165, -33.6383, 1.68713, 5.61103e-05, 551.997, -2.72747e-05, 83.1742, -222.201, 55.5254, -8.99612e-06, -166.104, -2.7682e-05, -83.1742, -222.201, -55.5254, -7.97282, 25.2092, 0.353036, -23.5979, 10.4254, 25.9264, -7.17535, -6.38032, 3.32005, 7.17533, -6.3803, -3.32003, 23.5979, 10.4255, -25.9264, 7.97279, 25.2092, -0.353053, -110.893, -2.72747e-05, 406.836, 55.0164, -10.3606, -103.94, 34.4855, -2.1165e-05, -213.448, 55.0164, 10.3606, -103.94, -1.1574, 1.27728, 2.54423, 9.40365, -2.17753, -7.79629, -25.059, -28.6987, 12.4979, -25.0591, 28.6987, 12.4979, 9.40365, 2.17754, -7.79629, -1.1574, -1.2773, 2.54419,
             };
@@ -178,7 +176,6 @@ protected:
 
             // Fill the tridiagonal matrix
             for (int i = 0; i < rows; ++i) {
-
 
                 csr_row_offsets[base_row_ptr + i + 1] = 30*(i+1);  // Cumulative count for this matrix
             }
@@ -210,8 +207,7 @@ protected:
     UnifiedVector<int> csr_col_indices;
     UnifiedVector<int> csr_row_offsets;
 
-
-    void printMatrix(UnifiedVector<float>& matrix_data, int rows, int cols, int ld){
+    void print_matrix(UnifiedVector<float>& matrix_data, int rows, int cols, int ld) {
         for (int i = 0; i < cols; ++i) {
             for (int j = 0; j < rows; ++j) {
                 std::cout << matrix_data[i * ld + j] << " ";
@@ -242,15 +238,15 @@ TEST_F(SyevxOperationsTest, RandomMatrix) {
 
     auto syevx_workspace = UnifiedVector<std::byte>(syevx_buffer_size(
         *ctx, dense, W_lobpcg, neig, JobType::NoEigenVectors, MatrixView<float, MatrixFormat::Dense>(), params));
-    ctx ->wait();
+    ctx->wait();
 
     (void)syevx(
         *ctx, dense, W_lobpcg, neig, syevx_workspace, JobType::NoEigenVectors, MatrixView<float, MatrixFormat::Dense>(), params);
     ctx->wait();
 
     SYEVX_REQUIRE_LAPACKE();
-    const auto ref = LapackeSpectrum(dense);
-    ExpectValues(W_lobpcg.data(), neig, Extremal(ref, neig, true), ref.norm2, n);
+    const auto ref = lapacke_spectrum(dense);
+    expect_values(W_lobpcg.data(), neig, Extremal(ref, neig, true), ref.norm2, n);
 }
 // Test SYEVX operation with sparse matrix
 TEST_F(SyevxOperationsTest, SyevxMatrixView) {
@@ -287,8 +283,8 @@ TEST_F(SyevxOperationsTest, SyevxMatrixView) {
     // Against LAPACKE of the dense copy (was: 1087.76, a rounded value, to 0.1).
     const MatrixView<float, MatrixFormat::Dense> A_dense(A_data.data(), rows, rows, ld, rows * ld, batch_size);
     SYEVX_REQUIRE_LAPACKE();
-    const auto ref = LapackeSpectrum(A_dense);
-    ExpectValues(W_data.data(), neig, Extremal(ref, neig, true), ref.norm2, rows);
+    const auto ref = lapacke_spectrum(A_dense);
+    expect_values(W_data.data(), neig, Extremal(ref, neig, true), ref.norm2, rows);
 }
 TEST_F(SyevxOperationsTest, ToeplitzEigenpairs) {
     constexpr int n = 200;
@@ -310,7 +306,6 @@ TEST_F(SyevxOperationsTest, ToeplitzEigenpairs) {
     params.find_largest = true;
     params.iterations = 30;
 
-
     size_t buf_size = syevx_buffer_size(*ctx, A_view, W, neig, JobType::EigenVectors, V, params);
     UnifiedVector<std::byte> workspace(buf_size);
 
@@ -324,9 +319,9 @@ TEST_F(SyevxOperationsTest, ToeplitzEigenpairs) {
     std::sort(expected.begin(), expected.end(), std::greater<float>());
 
     // Closed form; the Ritz-value checks of V became eigen_residual + orthogonality_rotations.
-    const std::vector<std::vector<double>> want(batch, ClosedForm(expected, 0, neig));
-    ExpectValues(W.data(), neig, want, MaxAbs(expected), n);
-    ExpectPairs(*ctx, dense, V, W.data(), neig, std::vector<int>(batch, neig));
+    const std::vector<std::vector<double>> want(batch, closed_form(expected, 0, neig));
+    expect_values(W.data(), neig, want, max_abs(expected), n);
+    expect_pairs(*ctx, dense, V, W.data(), neig, std::vector<int>(batch, neig));
 }
 
 TEST_F(SyevxOperationsTest, ComplexToeplitzEigenpairs) {
@@ -339,7 +334,7 @@ TEST_F(SyevxOperationsTest, ComplexToeplitzEigenpairs) {
 
     auto dense = Matrix<std::complex<double>, MatrixFormat::Dense>::TriDiagToeplitz(n, a, b, c, batch);
 
-    //auto A_CSR = dense.convert_to<MatrixFormat::CSR>();
+    // auto A_CSR = dense.convert_to<MatrixFormat::CSR>();
     auto A_view = dense.view();
 
     UnifiedVector<double> W(neig * batch);  // Eigenvalues are real for Hermitian matrices
@@ -367,8 +362,8 @@ TEST_F(SyevxOperationsTest, ComplexToeplitzEigenpairs) {
 
     std::vector<double> lam(n);
     for (int k = 0; k < n; ++k) lam[k] = expected[k].real();
-    const std::vector<std::vector<double>> want(batch, ClosedForm(lam, 0, neig));
-    ExpectValues(W.data(), neig, want, MaxAbs(lam), n);
+    const std::vector<std::vector<double>> want(batch, closed_form(lam, 0, neig));
+    expect_values(W.data(), neig, want, max_abs(lam), n);
 }
 
 TEST_F(SyevxOperationsTest, ComplexShiftInverToeplitzEigenpairs) {
@@ -393,7 +388,7 @@ TEST_F(SyevxOperationsTest, ComplexShiftInverToeplitzEigenpairs) {
 
     auto shift = expected[neig] + std::complex<double>(1.0f);
 
-    //Shift the matrices:
+    // Shift the matrices:
     for (int b = 0; b < batch; ++b) {
         for (int i = 0; i < n; ++i) {
             dense.at(i, i, b) -= shift.real();  // Shift diagonal elements
@@ -402,7 +397,7 @@ TEST_F(SyevxOperationsTest, ComplexShiftInverToeplitzEigenpairs) {
 
     auto shift_inv = inv(*q, dense);
     q->wait();
-    //Adjust expectation to the shift inverted
+    // Adjust expectation to the shift inverted
     for (auto& val : expected) {
         val = 1.0 / (val - shift);
     }
@@ -426,8 +421,8 @@ TEST_F(SyevxOperationsTest, ComplexShiftInverToeplitzEigenpairs) {
 
     std::vector<double> lam(n);
     for (int k = 0; k < n; ++k) lam[k] = expected[k].real();
-    const std::vector<std::vector<double>> want(batch, ClosedForm(lam, 0, neig));
-    ExpectValues(W.data(), neig, want, MaxAbs(lam), n);
+    const std::vector<std::vector<double>> want(batch, closed_form(lam, 0, neig));
+    expect_values(W.data(), neig, want, max_abs(lam), n);
     /* std::cout << "LOBPCG Computed eigenvalues (shifted): " << W.subspan(0, neig) << std::endl;
 
     auto syev_buffer = syev_buffer_size(*q, shift_inv, W, JobType::NoEigenVectors, Uplo::Lower);
@@ -444,7 +439,6 @@ TEST_F(SyevxOperationsTest, ComplexShiftInverToeplitzEigenpairs) {
     std::cout << "Closed Form Computed eigenvalues (shifted): " << expected << std::endl; */
 }
 
-
 namespace {
 // BATCHLAS_SYEVX_ALGORITHM takes precedence over SyevxParams::method (matching the
 // BATCHLAS_<OP>_ROUTE convention), so a test that pins one algorithm cannot run
@@ -455,7 +449,7 @@ inline bool syevx_algorithm_overridden_to_other(const char* pinned) {
     if (!v || !*v) return false;
     return std::string(v) != std::string(pinned);
 }
-} // namespace
+}  // namespace
 
 // Exercises the Direct (full syev + select) algorithm explicitly, including the
 // eigenvector output and both orderings. n > 64 with neigs/n = 0.25 lands in the
@@ -487,8 +481,8 @@ TEST_P(SyevxDirectTest, MatchesVendorSyevAndProducesValidEigenpairs) {
     ctx->wait();
 
     SYEVX_REQUIRE_LAPACKE();
-    const auto ref = LapackeSpectrum(A);
-    ExpectValues(W.data(), neig, Extremal(ref, neig, find_largest), ref.norm2, n);
+    const auto ref = lapacke_spectrum(A);
+    expect_values(W.data(), neig, Extremal(ref, neig, find_largest), ref.norm2, n);
     for (int b = 0; b < batch; ++b) {
         // Ordering must be monotone in the requested direction.
         for (int i = 1; i < neig; ++i) {
@@ -501,7 +495,7 @@ TEST_P(SyevxDirectTest, MatchesVendorSyevAndProducesValidEigenpairs) {
     }
 
     // Against A after the call: also proves syevx left A unmodified.
-    ExpectPairs(*ctx, A, V, W.data(), neig, std::vector<int>(batch, neig));
+    expect_pairs(*ctx, A, V, W.data(), neig, std::vector<int>(batch, neig));
 }
 
 INSTANTIATE_TEST_SUITE_P(FindLargestAndSmallest,
@@ -516,7 +510,7 @@ INSTANTIATE_TEST_SUITE_P(FindLargestAndSmallest,
 // both JobType values.
 class SyevxDirectSubsetTest : public ::testing::TestWithParam<std::tuple<bool, bool>> {};
 
-void CheckDirectSubset(int n, int batch, int neig, bool find_largest, bool want_vectors) {
+void check_direct_subset(int n, int batch, int neig, bool find_largest, bool want_vectors) {
     SCOPED_TRACE(::testing::Message() << "n=" << n << " batch=" << batch << " neig=" << neig
                                       << " find_largest=" << find_largest
                                       << " want_vectors=" << want_vectors);
@@ -539,8 +533,8 @@ void CheckDirectSubset(int n, int batch, int neig, bool find_largest, bool want_
         *ctx, A, W.to_span(), neig, ws, jobz, V_view, params);
     ctx->wait();
 
-    const auto ref = LapackeSpectrum(A);
-    ExpectValues(W.data(), neig, Extremal(ref, neig, find_largest), ref.norm2, n);
+    const auto ref = lapacke_spectrum(A);
+    expect_values(W.data(), neig, Extremal(ref, neig, find_largest), ref.norm2, n);
     for (int b = 0; b < batch; ++b) {
         for (int i = 1; i < neig; ++i) {
             if (find_largest) EXPECT_GE(W[b * neig + i - 1], W[b * neig + i]);
@@ -562,7 +556,7 @@ void CheckDirectSubset(int n, int batch, int neig, bool find_largest, bool want_
 TEST_P(SyevxDirectSubsetTest, MatchesReferenceSyev) {
     if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
     SYEVX_REQUIRE_LAPACKE();
-    CheckDirectSubset(96, 3, 8, std::get<0>(GetParam()), std::get<1>(GetParam()));
+    check_direct_subset(96, 3, 8, std::get<0>(GetParam()), std::get<1>(GetParam()));
 }
 
 // The stage-2 Householder chase schedule depends on (n, kd), so sizes that are
@@ -577,7 +571,7 @@ TEST_P(SyevxDirectSubsetTest, AwkwardSizesStayAccurate) {
     const bool want_vectors = std::get<1>(GetParam());
     for (int n : {5, 17, 33, 64, 65, 97, 130}) {
         const int neig = std::min(n, 6);
-        CheckDirectSubset(n, 2, neig, find_largest, want_vectors);
+        check_direct_subset(n, 2, neig, find_largest, want_vectors);
     }
 }
 
@@ -587,7 +581,7 @@ TEST_P(SyevxDirectSubsetTest, AwkwardSizesStayAccurate) {
 TEST_P(SyevxDirectSubsetTest, FullSpectrumThroughSubsetPath) {
     if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
     SYEVX_REQUIRE_LAPACKE();
-    CheckDirectSubset(40, 2, 40, std::get<0>(GetParam()), std::get<1>(GetParam()));
+    check_direct_subset(40, 2, 40, std::get<0>(GetParam()), std::get<1>(GetParam()));
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -607,7 +601,7 @@ INSTANTIATE_TEST_SUITE_P(
 // proves nothing about whether it is one of the *wanted* pairs.
 class SyevxFilteredTest : public ::testing::TestWithParam<std::tuple<bool, bool>> {};
 
-void CheckFiltered(int n, int batch, int neig, bool find_largest, bool want_vectors) {
+void check_filtered(int n, int batch, int neig, bool find_largest, bool want_vectors) {
     SCOPED_TRACE(::testing::Message() << "n=" << n << " batch=" << batch << " neig=" << neig
                                       << " find_largest=" << find_largest
                                       << " want_vectors=" << want_vectors);
@@ -632,8 +626,8 @@ void CheckFiltered(int n, int batch, int neig, bool find_largest, bool want_vect
         *ctx, A, W.to_span(), neig, ws, jobz, V_view, params);
     ctx->wait();
 
-    const auto ref = LapackeSpectrum(A);
-    ExpectValues(W.data(), neig, Extremal(ref, neig, find_largest), ref.norm2, n);
+    const auto ref = lapacke_spectrum(A);
+    expect_values(W.data(), neig, Extremal(ref, neig, find_largest), ref.norm2, n);
     for (int b = 0; b < batch; ++b) {
         for (int i = 1; i < neig; ++i) {
             if (find_largest) EXPECT_GE(W[b * neig + i - 1], W[b * neig + i]);
@@ -642,20 +636,20 @@ void CheckFiltered(int n, int batch, int neig, bool find_largest, bool want_vect
     }
 
     if (!want_vectors) return;
-    ExpectPairs(*ctx, A, V, W.data(), neig, std::vector<int>(batch, neig));
+    expect_pairs(*ctx, A, V, W.data(), neig, std::vector<int>(batch, neig));
 }
 
 TEST_P(SyevxFilteredTest, MatchesReferenceSyev) {
     if (syevx_algorithm_overridden_to_other("filtered")) GTEST_SKIP() << "algorithm forced via env";
     SYEVX_REQUIRE_LAPACKE();
-    CheckFiltered(64, 3, 4, std::get<0>(GetParam()), std::get<1>(GetParam()));
+    check_filtered(64, 3, 4, std::get<0>(GetParam()), std::get<1>(GetParam()));
 }
 
 TEST_P(SyevxFilteredTest, SmallFractionOfSpectrum) {
     if (syevx_algorithm_overridden_to_other("filtered")) GTEST_SKIP() << "algorithm forced via env";
     SYEVX_REQUIRE_LAPACKE();
     // k/n = 2%, the band Tier 3 exists to serve.
-    CheckFiltered(150, 2, 3, std::get<0>(GetParam()), std::get<1>(GetParam()));
+    check_filtered(150, 2, 3, std::get<0>(GetParam()), std::get<1>(GetParam()));
 }
 
 // The scaled recurrence exists so that high degrees do not overflow. A degree
@@ -737,8 +731,8 @@ TEST_P(SyevxLobpcgVectorsTest, EigenpairsAreConsistent) {
     ctx->wait();
 
     SYEVX_REQUIRE_LAPACKE();
-    const auto ref = LapackeSpectrum(A);
-    ExpectValues(W.data(), neig, Extremal(ref, neig, find_largest), ref.norm2, n);
+    const auto ref = lapacke_spectrum(A);
+    expect_values(W.data(), neig, Extremal(ref, neig, find_largest), ref.norm2, n);
     for (int b = 0; b < batch; ++b) {
         // Ordering: largest-first for find_largest, ascending otherwise.
         for (int i = 1; i < neig; ++i) {
@@ -748,7 +742,7 @@ TEST_P(SyevxLobpcgVectorsTest, EigenpairsAreConsistent) {
     }
     // The load-bearing check: column j must be an eigenvector for W[j], not for some other
     // member of the returned block.
-    ExpectPairs(*ctx, A, V, W.data(), neig, std::vector<int>(batch, neig));
+    expect_pairs(*ctx, A, V, W.data(), neig, std::vector<int>(batch, neig));
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -781,8 +775,8 @@ TEST(SyevxLobpcgBufferSize, NoVendorQueryUnlessOptedIn) {
         ctx.wait();
     }
     SYEVX_REQUIRE_LAPACKE();
-    const auto ref = LapackeSpectrum(A);
-    ExpectValues(W.data(), neig, Extremal(ref, neig, params.find_largest), ref.norm2, n);
+    const auto ref = lapacke_spectrum(A);
+    expect_values(W.data(), neig, Extremal(ref, neig, params.find_largest), ref.norm2, n);
 
     if constexpr (select::solver_vendor_available<Backend::CUDA>) {
         if (ctx.device().get_vendor() != Vendor::NVIDIA) return;
@@ -816,7 +810,7 @@ struct InstrumentationRun {
 
 constexpr float kInstrSentinel = -1.0f;
 
-} // namespace
+}  // namespace
 
 TEST(SyevxLobpcgInstrumentationTest, DeviceStagedHistoryMatchesHostReadPath) {
     if (syevx_algorithm_overridden_to_other("lobpcg")) GTEST_SKIP() << "algorithm forced via env";
@@ -1008,13 +1002,13 @@ namespace {
 // scales the diagonal against the off-diagonal noise; a large spread is the regime
 // a diagonal preconditioner is supposed to serve, a spread of 0 is a plain random
 // symmetric matrix where it should do little.
-Matrix<float, MatrixFormat::Dense> MakeGradedSymmetric(int n, int batch, float spread,
-                                                       unsigned seed = 12345u) {
+Matrix<float, MatrixFormat::Dense> make_graded_symmetric(int n, int batch, float spread,
+                                                         unsigned seed = 12345u) {
     Matrix<float, MatrixFormat::Dense> A(n, n, batch);
     // Deterministic: an iteration-count comparison across two runs is only
     // meaningful on identical input.
     unsigned state = seed;
-    auto next = [&]() {
+    auto next = [&] {
         state = state * 1664525u + 1013904223u;
         return (float(state >> 8) / float(1u << 24)) - 0.5f;  // [-0.5, 0.5)
     };
@@ -1039,10 +1033,10 @@ struct JacobiRunResult {
 };
 
 template <MatrixFormat MFormat, typename AView>
-JacobiRunResult RunLobpcg(Queue& ctx, const AView& A_view, int n, int batch, int neig,
-                          bool find_largest, SyevxPreconditioner precond,
-                          Matrix<float, MatrixFormat::Dense>* V = nullptr,
-                          float tol = 1e-6f, size_t max_iters = 200) {
+JacobiRunResult run_lobpcg(Queue& ctx, const AView& A_view, int n, int batch, int neig,
+                           bool find_largest, SyevxPreconditioner precond,
+                           Matrix<float, MatrixFormat::Dense>* V = nullptr,
+                           float tol = 1e-6f, size_t max_iters = 200) {
     SyevxParams<float> params;
     params.method = SyevxAlgorithm::LOBPCG;
     params.preconditioner_type = precond;
@@ -1073,28 +1067,28 @@ JacobiRunResult RunLobpcg(Queue& ctx, const AView& A_view, int n, int batch, int
 }
 
 // Full LAPACKE spectrum of A, ascending.
-Spectrum ReferenceSpectrum(const Matrix<float, MatrixFormat::Dense>& A) { return LapackeSpectrum(A); }
+Spectrum ReferenceSpectrum(const Matrix<float, MatrixFormat::Dense>& A) { return lapacke_spectrum(A); }
 
 // The neig extremal values (stride neig) against the LAPACKE spectrum at Check::values.
-void CheckAgainstReference(const std::vector<float>& W, const Spectrum& ref, int n, int neig, bool find_largest,
-                           std::optional<verify::Slack> slack = std::nullopt) {
-    ExpectValues(W.data(), neig, Extremal(ref, neig, find_largest), ref.norm2, n, slack);
+void check_against_reference(const std::vector<float>& W, const Spectrum& ref, int n, int neig, bool find_largest,
+                             std::optional<verify::Slack> slack = std::nullopt) {
+    expect_values(W.data(), neig, Extremal(ref, neig, find_largest), ref.norm2, n, slack);
 }
 
 // Every returned pair against the ORIGINAL A rather than anything the solver produced.
-void CheckResiduals(Queue& ctx, const Matrix<float, MatrixFormat::Dense>& A, const Matrix<float, MatrixFormat::Dense>& V,
-                    const std::vector<float>& W, int batch, int neig, std::optional<verify::Slack> slack = std::nullopt) {
-    ExpectPairs(ctx, A, V, W.data(), neig, std::vector<int>(batch, neig), slack);
+void check_residuals(Queue& ctx, const Matrix<float, MatrixFormat::Dense>& A, const Matrix<float, MatrixFormat::Dense>& V,
+                     const std::vector<float>& W, int batch, int neig, std::optional<verify::Slack> slack = std::nullopt) {
+    expect_pairs(ctx, A, V, W.data(), neig, std::vector<int>(batch, neig), slack);
 }
 
 // Unshifted diag(A)^{-1} approximates A^{-1} and is rejected for the largest end;
 // the shifted form is legal at both. The correctness tests want whichever is
 // applicable so that both kernels are exercised.
-SyevxPreconditioner LegalJacobi(bool find_largest) {
+SyevxPreconditioner legal_jacobi(bool find_largest) {
     return find_largest ? SyevxPreconditioner::JacobiShifted : SyevxPreconditioner::Jacobi;
 }
 
-} // namespace
+}  // namespace
 
 class SyevxJacobiTest : public ::testing::TestWithParam<bool> {};
 
@@ -1104,16 +1098,16 @@ TEST_P(SyevxJacobiTest, DenseMatchesReferenceSyev) {
     constexpr int n = 120, batch = 2, neig = 4;
 
     auto ctx = std::make_shared<Queue>(Device::default_device(), true);
-    auto A = MakeGradedSymmetric(n, batch, 60.0f);
+    auto A = make_graded_symmetric(n, batch, 60.0f);
     ctx->wait();
 
     Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
-    auto run = RunLobpcg<MatrixFormat::Dense>(*ctx, A, n, batch, neig, find_largest,
-                                              LegalJacobi(find_largest), &V);
+    auto run = run_lobpcg<MatrixFormat::Dense>(*ctx, A, n, batch, neig, find_largest,
+                                               legal_jacobi(find_largest), &V);
     SYEVX_REQUIRE_LAPACKE();
     const auto W_ref = ReferenceSpectrum(A);
-    CheckAgainstReference(run.W, W_ref, n, neig, find_largest);
-    CheckResiduals(*ctx, A, V, run.W, batch, neig);
+    check_against_reference(run.W, W_ref, n, neig, find_largest);
+    check_residuals(*ctx, A, V, run.W, batch, neig);
 }
 
 TEST_P(SyevxJacobiTest, CsrMatchesReferenceSyev) {
@@ -1122,19 +1116,19 @@ TEST_P(SyevxJacobiTest, CsrMatchesReferenceSyev) {
     constexpr int n = 120, batch = 2, neig = 4;
 
     auto ctx = std::make_shared<Queue>(Device::default_device(), true);
-    auto A = MakeGradedSymmetric(n, batch, 60.0f);
+    auto A = make_graded_symmetric(n, batch, 60.0f);
     auto A_csr = A.convert_to<MatrixFormat::CSR>();
     ctx->wait();
 
     Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
-    auto run = RunLobpcg<MatrixFormat::CSR>(*ctx, A_csr, n, batch, neig, find_largest,
-                                            LegalJacobi(find_largest), &V);
+    auto run = run_lobpcg<MatrixFormat::CSR>(*ctx, A_csr, n, batch, neig, find_largest,
+                                             legal_jacobi(find_largest), &V);
     SYEVX_REQUIRE_LAPACKE();
     const auto W_ref = ReferenceSpectrum(A);
-    CheckAgainstReference(run.W, W_ref, n, neig, find_largest);
+    check_against_reference(run.W, W_ref, n, neig, find_largest);
     // Residual against the dense original: the CSR view is a conversion of it, so
     // this also checks that the CSR diagonal search found the right entries.
-    CheckResiduals(*ctx, A, V, run.W, batch, neig);
+    check_residuals(*ctx, A, V, run.W, batch, neig);
 }
 
 // A structurally sparse matrix whose diagonal entries are not the first entry of
@@ -1153,12 +1147,12 @@ TEST_P(SyevxJacobiTest, CsrWithUnsortedDiagonalPosition) {
     ctx->wait();
 
     Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
-    auto run = RunLobpcg<MatrixFormat::CSR>(*ctx, A_csr, n, batch, neig, find_largest,
-                                            LegalJacobi(find_largest), &V);
+    auto run = run_lobpcg<MatrixFormat::CSR>(*ctx, A_csr, n, batch, neig, find_largest,
+                                             legal_jacobi(find_largest), &V);
     SYEVX_REQUIRE_LAPACKE();
     const auto W_ref = ReferenceSpectrum(A);
-    CheckAgainstReference(run.W, W_ref, n, neig, find_largest);
-    CheckResiduals(*ctx, A, V, run.W, batch, neig);
+    check_against_reference(run.W, W_ref, n, neig, find_largest);
+    check_residuals(*ctx, A, V, run.W, batch, neig);
 }
 
 INSTANTIATE_TEST_SUITE_P(FindLargestAndSmallest, SyevxJacobiTest, ::testing::Values(true, false),
@@ -1178,19 +1172,19 @@ TEST_P(SyevxProjectedSyevRouteTest, SmallestDenseMatchesReferenceSyev) {
     constexpr int n = 120, batch = 2, neig = 4;
     if (Device::get_devices(DeviceType::GPU).empty()) GTEST_SKIP() << "native syev families are GPU-only";
     auto ctx = std::make_shared<Queue>(Device::default_device(), true);
-    auto A = MakeGradedSymmetric(n, batch, 60.0f);
+    auto A = make_graded_symmetric(n, batch, 60.0f);
     ctx->wait();
     Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
     JacobiRunResult run;
     {
         const ScopedEnvVar pin("BATCHLAS_SYEV_ROUTE", GetParam());
-        run = RunLobpcg<MatrixFormat::Dense>(*ctx, A, n, batch, neig, false,
-                                             SyevxPreconditioner::Jacobi, &V);
+        run = run_lobpcg<MatrixFormat::Dense>(*ctx, A, n, batch, neig, false,
+                                              SyevxPreconditioner::Jacobi, &V);
     }
     SYEVX_REQUIRE_LAPACKE();
     const auto W_ref = ReferenceSpectrum(A);
-    CheckAgainstReference(run.W, W_ref, n, neig, false);
-    CheckResiduals(*ctx, A, V, run.W, batch, neig);
+    check_against_reference(run.W, W_ref, n, neig, false);
+    check_residuals(*ctx, A, V, run.W, batch, neig);
 }
 
 INSTANTIATE_TEST_SUITE_P(Pinned, SyevxProjectedSyevRouteTest,
@@ -1206,7 +1200,7 @@ INSTANTIATE_TEST_SUITE_P(Pinned, SyevxProjectedSyevRouteTest,
 // evidence: docs/perf/syevx.md#lobpcg-the-accuracy-pin-on-the-projected-syev
 namespace {
 // n -> "<choice>" or "<choice> pinned" -> count, over the top-level "syev float" trace lines.
-std::map<int, std::map<std::string, int>> SyevTraceCounts(const std::string& err) {
+std::map<int, std::map<std::string, int>> syev_trace_counts(const std::string& err) {
     std::map<int, std::map<std::string, int>> out;
     std::istringstream in(err);
     for (std::string line; std::getline(in, line);) {
@@ -1247,7 +1241,7 @@ TEST(SyevxProjectedSyevPin, CtaFusedAtOrBelow32EvenWhenTheTableRanksTheVendorFir
         ~Restore() { select::testing::use_embedded_tables(); }
     } restore;
     select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
-    auto A = MakeGradedSymmetric(n, batch, 60.0f);
+    auto A = make_graded_symmetric(n, batch, 60.0f);
     ctx->wait();
     SYEVX_REQUIRE_LAPACKE();
     const auto W_ref = ReferenceSpectrum(A);
@@ -1257,11 +1251,11 @@ TEST(SyevxProjectedSyevPin, CtaFusedAtOrBelow32EvenWhenTheTableRanksTheVendorFir
         const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
         Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
         ::testing::internal::CaptureStderr();
-        const auto run = RunLobpcg<MatrixFormat::Dense>(*ctx, A, n, batch, neig, false,
-                                                        SyevxPreconditioner::Jacobi, &V);
+        const auto run = run_lobpcg<MatrixFormat::Dense>(*ctx, A, n, batch, neig, false,
+                                                         SyevxPreconditioner::Jacobi, &V);
         const std::string err = ::testing::internal::GetCapturedStderr();
-        CheckAgainstReference(run.W, W_ref, n, neig, false);
-        return std::pair{SyevTraceCounts(err), err};
+        check_against_reference(run.W, W_ref, n, neig, false);
+        return std::pair{syev_trace_counts(err), err};
     };
     const std::string table_pick = select::device_of<kGpu>(*ctx, select::Lib::solver).has_vendor ? "vendor" : "blocked";
 
@@ -1296,20 +1290,20 @@ TEST(SyevxJacobiIterations, HelpsOnGradedMatrix) {
     if (syevx_algorithm_overridden_to_other("lobpcg")) GTEST_SKIP() << "algorithm forced via env";
     constexpr int n = 200, batch = 1, neig = 4;
     auto ctx = std::make_shared<Queue>(Device::default_device(), true);
-    auto A = MakeGradedSymmetric(n, batch, 400.0f);
+    auto A = make_graded_symmetric(n, batch, 400.0f);
     ctx->wait();
 
     // A tolerance both runs can actually reach in single precision, so that the
     // comparison is between two converged solves and not between two runs that both
     // hit the iteration cap.
     const float tol = 1e-4f;
-    const auto plain = RunLobpcg<MatrixFormat::Dense>(*ctx, A, n, batch, neig, false,
-                                                      SyevxPreconditioner::None, nullptr, tol);
-    const auto jac = RunLobpcg<MatrixFormat::Dense>(*ctx, A, n, batch, neig, false,
-                                                    SyevxPreconditioner::Jacobi, nullptr, tol);
+    const auto plain = run_lobpcg<MatrixFormat::Dense>(*ctx, A, n, batch, neig, false,
+                                                       SyevxPreconditioner::None, nullptr, tol);
+    const auto jac = run_lobpcg<MatrixFormat::Dense>(*ctx, A, n, batch, neig, false,
+                                                     SyevxPreconditioner::Jacobi, nullptr, tol);
     SYEVX_REQUIRE_LAPACKE();
     const auto W_ref = ReferenceSpectrum(A);
-    CheckAgainstReference(jac.W, W_ref, n, neig, false);
+    check_against_reference(jac.W, W_ref, n, neig, false);
 
     EXPECT_LE(jac.iterations * 2, plain.iterations)
         << "Jacobi did not halve the iteration count on a strongly graded matrix: "
@@ -1326,17 +1320,17 @@ TEST(SyevxJacobiIterations, DegradesGracefullyOnRandomSymmetric) {
     if (syevx_algorithm_overridden_to_other("lobpcg")) GTEST_SKIP() << "algorithm forced via env";
     constexpr int n = 200, batch = 1, neig = 4;
     auto ctx = std::make_shared<Queue>(Device::default_device(), true);
-    auto A = MakeGradedSymmetric(n, batch, 0.0f);
+    auto A = make_graded_symmetric(n, batch, 0.0f);
     ctx->wait();
 
     const float tol = 1e-4f;
-    const auto plain = RunLobpcg<MatrixFormat::Dense>(*ctx, A, n, batch, neig, false,
-                                                      SyevxPreconditioner::None, nullptr, tol);
-    const auto jac = RunLobpcg<MatrixFormat::Dense>(*ctx, A, n, batch, neig, false,
-                                                    SyevxPreconditioner::Jacobi, nullptr, tol);
+    const auto plain = run_lobpcg<MatrixFormat::Dense>(*ctx, A, n, batch, neig, false,
+                                                       SyevxPreconditioner::None, nullptr, tol);
+    const auto jac = run_lobpcg<MatrixFormat::Dense>(*ctx, A, n, batch, neig, false,
+                                                     SyevxPreconditioner::Jacobi, nullptr, tol);
     SYEVX_REQUIRE_LAPACKE();
     const auto W_ref = ReferenceSpectrum(A);
-    CheckAgainstReference(jac.W, W_ref, n, neig, false);
+    check_against_reference(jac.W, W_ref, n, neig, false);
     EXPECT_EQ(jac.iterations, plain.iterations)
         << "an indefinite diag(A) should have disabled the preconditioner entirely: "
         << jac.iterations << " vs " << plain.iterations;
@@ -1368,13 +1362,13 @@ TEST(SyevxJacobiIterations, ShiftedIsANoOpOnConstantDiagonal) {
     constexpr int check_every = 4;
     const ScopedEnvVar interval("BATCHLAS_SYEVX_CHECK_EVERY", "4");
     for (bool find_largest : {false, true}) {
-        const auto plain = RunLobpcg<MatrixFormat::CSR>(*ctx, A_csr, n, batch, neig,
-                                                        find_largest, SyevxPreconditioner::None,
-                                                        nullptr, tol);
-        const auto shifted = RunLobpcg<MatrixFormat::CSR>(*ctx, A_csr, n, batch, neig,
-                                                          find_largest,
-                                                          SyevxPreconditioner::JacobiShifted,
-                                                          nullptr, tol);
+        const auto plain = run_lobpcg<MatrixFormat::CSR>(*ctx, A_csr, n, batch, neig,
+                                                         find_largest, SyevxPreconditioner::None,
+                                                         nullptr, tol);
+        const auto shifted = run_lobpcg<MatrixFormat::CSR>(*ctx, A_csr, n, batch, neig,
+                                                           find_largest,
+                                                           SyevxPreconditioner::JacobiShifted,
+                                                           nullptr, tol);
         EXPECT_LE(std::abs(shifted.iterations - plain.iterations), check_every)
             << "constant-diagonal shifted Jacobi changed the iteration count (find_largest="
             << find_largest << "): " << shifted.iterations << " vs " << plain.iterations;
@@ -1419,18 +1413,18 @@ TEST(SyevxJacobiIterations, DISABLED_IterationSweep) {
     for (const auto& c : cases) {
         for (int n : {64, 128, 256, 512}) {
             for (int neig : {2, 8, 16}) {
-                auto A = MakeGradedSymmetric(n, 1, c.spread);
+                auto A = make_graded_symmetric(n, 1, c.spread);
                 ctx->wait();
                 for (bool find_largest : {false, true}) {
-                    const auto none = RunLobpcg<MatrixFormat::Dense>(
+                    const auto none = run_lobpcg<MatrixFormat::Dense>(
                         *ctx, A, n, 1, neig, find_largest, SyevxPreconditioner::None,
                         nullptr, tol, cap);
                     // Unshifted Jacobi is rejected for the largest end; report it only
                     // where it is legal.
-                    const int jac_iters = find_largest ? 0 : RunLobpcg<MatrixFormat::Dense>(
+                    const int jac_iters = find_largest ? 0 : run_lobpcg<MatrixFormat::Dense>(
                         *ctx, A, n, 1, neig, find_largest, SyevxPreconditioner::Jacobi,
                         nullptr, tol, cap).iterations;
-                    const auto shi = RunLobpcg<MatrixFormat::Dense>(
+                    const auto shi = run_lobpcg<MatrixFormat::Dense>(
                         *ctx, A, n, 1, neig, find_largest,
                         SyevxPreconditioner::JacobiShifted, nullptr, tol, cap);
                     emit(c.name, n, neig, find_largest, none.iterations, jac_iters,
@@ -1446,13 +1440,13 @@ TEST(SyevxJacobiIterations, DISABLED_IterationSweep) {
             auto A_csr = A.convert_to<MatrixFormat::CSR>();
             ctx->wait();
             for (bool find_largest : {false, true}) {
-                const auto none = RunLobpcg<MatrixFormat::CSR>(
+                const auto none = run_lobpcg<MatrixFormat::CSR>(
                     *ctx, A_csr, n, 1, neig, find_largest, SyevxPreconditioner::None,
                     nullptr, tol, cap);
-                const int jac_iters = find_largest ? 0 : RunLobpcg<MatrixFormat::CSR>(
+                const int jac_iters = find_largest ? 0 : run_lobpcg<MatrixFormat::CSR>(
                     *ctx, A_csr, n, 1, neig, find_largest, SyevxPreconditioner::Jacobi,
                     nullptr, tol, cap).iterations;
-                const auto shi = RunLobpcg<MatrixFormat::CSR>(
+                const auto shi = run_lobpcg<MatrixFormat::CSR>(
                     *ctx, A_csr, n, 1, neig, find_largest,
                     SyevxPreconditioner::JacobiShifted, nullptr, tol, cap);
                 emit("csr-tridiag", n, neig, find_largest, none.iterations, jac_iters,
@@ -1467,7 +1461,7 @@ TEST(SyevxJacobiIterations, DISABLED_IterationSweep) {
 TEST(SyevxJacobiValidation, RejectsInconsistentPreconditionerRequests) {
     constexpr int n = 96, batch = 1, neig = 3;
     auto ctx = std::make_shared<Queue>(Device::default_device(), true);
-    auto A = MakeGradedSymmetric(n, batch, 10.0f);
+    auto A = make_graded_symmetric(n, batch, 10.0f);
     auto A_csr = A.convert_to<MatrixFormat::CSR>();
     ctx->wait();
     UnifiedVector<float> W(neig * batch);
@@ -1598,9 +1592,9 @@ DirectRangeRun RunDirectRange(Queue& ctx,
     const auto Vv = V ? V->view() : MatrixView<float, MatrixFormat::Dense>();
 
     auto ws = UnifiedVector<std::byte>(
-        syevx_direct_buffer_size<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+        syevx_direct_buffer_size<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
             ctx, A, W.to_span(), static_cast<size_t>(capacity), jobz, Vv, params));
-    (void)syevx_direct<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+    (void)syevx_direct<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
         ctx, A, W.to_span(), m.to_span(), static_cast<size_t>(capacity), ws, jobz,
         Vv, params);
     ctx.wait();
@@ -1616,7 +1610,7 @@ DirectRangeRun RunDirectRange(Queue& ctx,
 // conjugate (complex): every dense path reads Uplo::Lower only and mirrors it, so
 // an unequal pair means syevx is solving a different matrix than the formula
 // describes. Never parameterize these tests over sub != super.
-std::vector<float> ToeplitzSpectrumAscending(int n, float diag, float s) {
+std::vector<float> toeplitz_spectrum_ascending(int n, float diag, float s) {
     std::vector<float> lam(n);
     for (int j = 1; j <= n; ++j) {
         lam[n - j] = diag + 2.0f * std::abs(s) * std::cos(float(j) * float(M_PI) / float(n + 1));
@@ -1626,10 +1620,10 @@ std::vector<float> ToeplitzSpectrumAscending(int n, float diag, float s) {
 
 // Per-item spectra that genuinely disagree: item b's diagonal sits around 10*b,
 // so one fixed value interval catches a different count in every batch item.
-Matrix<float, MatrixFormat::Dense> MakeShiftedPerItem(int n, int batch, unsigned seed = 4242u) {
+Matrix<float, MatrixFormat::Dense> make_shifted_per_item(int n, int batch, unsigned seed = 4242u) {
     Matrix<float, MatrixFormat::Dense> A(n, n, batch);
     unsigned state = seed;
-    auto next = [&]() {
+    auto next = [&] {
         state = state * 1664525u + 1013904223u;
         return (float(state >> 8) / float(1u << 24)) - 0.5f;
     };
@@ -1666,7 +1660,7 @@ Matrix<float, MatrixFormat::Dense> MakeShiftedPerItem(int n, int batch, unsigned
 // ---------------------------------------------------------------------------
 
 // Item b's eigenvalues at ascending positions [il, iu], reversed if asked.
-std::vector<double> ExpectedIndexBlock(const Spectrum& W_ref, int b, int il, int iu, bool reverse) {
+std::vector<double> expected_index_block(const Spectrum& W_ref, int b, int il, int iu, bool reverse) {
     const auto first = W_ref.w[b].begin();
     std::vector<double> out(first + il, first + iu + 1);
     if (reverse) std::reverse(out.begin(), out.end());
@@ -1674,7 +1668,7 @@ std::vector<double> ExpectedIndexBlock(const Spectrum& W_ref, int b, int il, int
 }
 
 // Every eigenvalue of item b in (vl, vu], ascending. Its SIZE is the oracle for m[b].
-std::vector<double> ExpectedValueBlock(const Spectrum& W_ref, int b, float vl, float vu) {
+std::vector<double> expected_value_block(const Spectrum& W_ref, int b, float vl, float vu) {
     const auto& w = W_ref.w[b];
     const auto lo = std::upper_bound(w.begin(), w.end(), double(vl));
     const auto hi = std::upper_bound(w.begin(), w.end(), double(vu));
@@ -1694,9 +1688,9 @@ std::vector<double> ExpectedValueBlock(const Spectrum& W_ref, int b, float vl, f
 // Note the asymmetry with W, which stays UNTOUCHED past m[b] on both paths and is
 // asserted that way elsewhere with the kUntouched sentinel. Both halves are
 // documented on `syevx`; neither is an implementation detail.
-void ExpectUnusedColumnsAreZero(const Matrix<float, MatrixFormat::Dense>& V,
-                                int n, int batch, int capacity,
-                                const std::vector<int32_t>& m) {
+void expect_unused_columns_are_zero(const Matrix<float, MatrixFormat::Dense>& V,
+                                    int n, int batch, int capacity,
+                                    const std::vector<int32_t>& m) {
     for (int b = 0; b < batch; ++b) {
         for (int j = std::min(m[b], capacity); j < capacity; ++j) {
             for (int r = 0; r < n; ++r) {
@@ -1712,16 +1706,16 @@ void ExpectUnusedColumnsAreZero(const Matrix<float, MatrixFormat::Dense>& V,
 
 // Fills V with a finite sentinel before a call, so that "this column was written"
 // is an assertion rather than an assumption. Freshly allocated device memory is
-// often already zero, which would make ExpectUnusedColumnsAreZero pass against a
+// often already zero, which would make expect_unused_columns_are_zero pass against a
 // path that writes nothing at all.
-void PoisonEigenvectorBuffer(Matrix<float, MatrixFormat::Dense>& V,
-                             int n, int cols, int batch) {
+void poison_eigenvector_buffer(Matrix<float, MatrixFormat::Dense>& V,
+                               int n, int cols, int batch) {
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < cols; ++j)
             for (int r = 0; r < n; ++r) V.view()(r, j, b) = 7.0f;
 }
 
-} // namespace
+}  // namespace
 
 TEST(SyevxDirectRangeTest, EndBlocksReproduceExtremalBitForBit) {
     // An index block touching an end takes the same code path with the same inputs
@@ -1784,9 +1778,9 @@ TEST(SyevxDirectRangeTest, DescendingInteriorBlockIsTheAscendingBlockReversed) {
 }
 
 TEST(SyevxDirectRangeTest, ValueRangeCountAndValuesAgainstClosedForm) {
-    // TriDiagToeplitz with EQUAL off-diagonals: see ToeplitzSpectrumAscending.
+    // TriDiagToeplitz with EQUAL off-diagonals: see toeplitz_spectrum_ascending.
     constexpr int n = 64, batch = 2;
-    const auto lam = ToeplitzSpectrumAscending(n, 0.0f, 1.0f);
+    const auto lam = toeplitz_spectrum_ascending(n, 0.0f, 1.0f);
 
     // Boundaries in the middle third, where the gaps are ~2*pi/(n+1); at the ends
     // they collapse as O(1/n^2) and a boundary there is not unambiguous.
@@ -1818,14 +1812,14 @@ TEST(SyevxDirectRangeTest, ValueRangeCountAndValuesAgainstClosedForm) {
                 << "slot beyond m[b] was written, batch " << b << " slot " << i;
         }
     }
-    ExpectValues(run.W.data(), capacity, std::vector<std::vector<double>>(batch, ClosedForm(lam, p, expected)), MaxAbs(lam), n);
+    expect_values(run.W.data(), capacity, std::vector<std::vector<double>>(batch, closed_form(lam, p, expected)), max_abs(lam), n);
     // W's stride is the capacity, deliberately larger than the count.
-    ExpectPairs(*ctx, A, V, run.W.data(), capacity, std::vector<int>(batch, expected));
+    expect_pairs(*ctx, A, V, run.W.data(), capacity, std::vector<int>(batch, expected));
 }
 
 TEST(SyevxDirectRangeTest, ValueRangeEmptyAndFullIntervals) {
     constexpr int n = 32, batch = 2;
-    const auto lam = ToeplitzSpectrumAscending(n, 0.0f, 1.0f);
+    const auto lam = toeplitz_spectrum_ascending(n, 0.0f, 1.0f);
     auto ctx = std::make_shared<Queue>(Device::default_device());
     auto A = Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(n, 0.0f, 1.0f, 1.0f, batch);
     ctx->wait();
@@ -1848,12 +1842,12 @@ TEST(SyevxDirectRangeTest, ValueRangeEmptyAndFullIntervals) {
     params.vu = lam[n - 1] + 1.0f;
     const auto full = RunDirectRange(*ctx, A, batch, n, params, JobType::NoEigenVectors);
     for (int b = 0; b < batch; ++b) EXPECT_EQ(full.m[b], n);
-    ExpectValues(full.W.data(), n, std::vector<std::vector<double>>(batch, ClosedForm(lam, 0, n)), MaxAbs(lam), n);
+    expect_values(full.W.data(), n, std::vector<std::vector<double>>(batch, closed_form(lam, 0, n)), max_abs(lam), n);
 }
 
 TEST(SyevxDirectRangeTest, ValueRangeOverflowReportsTrueCountAndKeepsLowest) {
     constexpr int n = 64, batch = 2, capacity = 5;
-    const auto lam = ToeplitzSpectrumAscending(n, 0.0f, 1.0f);
+    const auto lam = toeplitz_spectrum_ascending(n, 0.0f, 1.0f);
     constexpr int p = 20, q = 39;  // 20 eigenvalues, capacity 5
     const float vl = 0.5f * (lam[p - 1] + lam[p]);
     const float vu = 0.5f * (lam[q] + lam[q + 1]);
@@ -1878,7 +1872,7 @@ TEST(SyevxDirectRangeTest, ValueRangeOverflowReportsTrueCountAndKeepsLowest) {
         // Truncation keeps the LOWEST `capacity` of the interval regardless of the requested
         // order; `order` only flips them within what was kept.
         const bool desc = order == SortOrder::Descending;
-        ExpectValues(run.W.data(), capacity, std::vector<std::vector<double>>(batch, ClosedForm(lam, p, capacity, desc)), MaxAbs(lam), n);
+        expect_values(run.W.data(), capacity, std::vector<std::vector<double>>(batch, closed_form(lam, p, capacity, desc)), max_abs(lam), n);
     }
 }
 
@@ -1888,7 +1882,7 @@ TEST(SyevxDirectRangeTest, ValueRangeBatchItemsDisagreeOnCount) {
     // in full plus a handful of item 1.
     constexpr int n = 32, batch = 3;
     auto ctx = std::make_shared<Queue>(Device::default_device());
-    auto A = MakeShiftedPerItem(n, batch);
+    auto A = make_shifted_per_item(n, batch);
     ctx->wait();
     SYEVX_REQUIRE_LAPACKE();
     const auto W_ref = ReferenceSpectrum(A);
@@ -1900,19 +1894,19 @@ TEST(SyevxDirectRangeTest, ValueRangeBatchItemsDisagreeOnCount) {
     params.vu = 10.5f;
 
     Matrix<float, MatrixFormat::Dense> V(n, n, batch);
-    PoisonEigenvectorBuffer(V, n, n, batch);
+    poison_eigenvector_buffer(V, n, n, batch);
     const auto run = RunDirectRange(*ctx, A, batch, n, params, JobType::EigenVectors, &V);
 
     std::vector<std::vector<double>> want(batch);
     for (int b = 0; b < batch; ++b) {
         SCOPED_TRACE(::testing::Message() << "batch " << b);
-        want[b] = ExpectedValueBlock(W_ref, b, params.vl, params.vu);
+        want[b] = expected_value_block(W_ref, b, params.vl, params.vu);
         EXPECT_EQ(run.m[b], static_cast<int32_t>(want[b].size()));
         for (size_t i = want[b].size(); i < size_t(n); ++i) {
             EXPECT_EQ(run.W[b * n + i], kUntouched) << "slot " << i;
         }
     }
-    ExpectValues(run.W.data(), n, want, W_ref.norm2, n);
+    expect_values(run.W.data(), n, want, W_ref.norm2, n);
     // The counts must genuinely differ, or this test proves nothing.
     EXPECT_EQ(run.m[0], n);
     EXPECT_LT(run.m[1], n);
@@ -1921,7 +1915,7 @@ TEST(SyevxDirectRangeTest, ValueRangeBatchItemsDisagreeOnCount) {
     // Same contract as the DirectSubset suite asserts, on the path that had to be
     // taught it: V's poisoned columns past m[b] come back exactly zero. Item 2
     // finds nothing at all, so for it this covers the whole of V.
-    ExpectUnusedColumnsAreZero(V, n, batch, n, run.m);
+    expect_unused_columns_are_zero(V, n, batch, n, run.m);
 }
 
 TEST(SyevxDirectRangeTest, CapacityAboveNIsClampedNotRejected) {
@@ -1945,7 +1939,7 @@ TEST(SyevxDirectRangeTest, CapacityAboveNIsClampedNotRejected) {
         EXPECT_EQ(run.m[b], n);
         for (int i = n; i < capacity; ++i) EXPECT_EQ(run.W[b * capacity + i], kUntouched);
     }
-    ExpectValues(run.W.data(), capacity, W_ref.w, W_ref.norm2, n);
+    expect_values(run.W.data(), capacity, W_ref.w, W_ref.norm2, n);
 }
 
 // ---------------------------------------------------------------------------
@@ -1966,21 +1960,21 @@ TEST(SyevxDirectRangeTest, CapacityAboveNIsClampedNotRejected) {
 // ---------------------------------------------------------------------------
 namespace {
 
-DirectRangeRun RunSubsetRange(Queue& ctx,
-                              const Matrix<float, MatrixFormat::Dense>& A,
-                              int batch,
-                              int capacity,
-                              const SyevxParams<float>& params,
-                              JobType jobz,
-                              Matrix<float, MatrixFormat::Dense>* V = nullptr) {
+DirectRangeRun run_subset_range(Queue& ctx,
+                                const Matrix<float, MatrixFormat::Dense>& A,
+                                int batch,
+                                int capacity,
+                                const SyevxParams<float>& params,
+                                JobType jobz,
+                                Matrix<float, MatrixFormat::Dense>* V = nullptr) {
     UnifiedVector<float> W(static_cast<size_t>(std::max(capacity, 1)) * batch, kUntouched);
     UnifiedVector<int32_t> m(static_cast<size_t>(batch), -1);
     const auto Vv = V ? V->view() : MatrixView<float, MatrixFormat::Dense>();
 
     auto ws = UnifiedVector<std::byte>(
-        syevx_direct_subset_buffer_size<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+        syevx_direct_subset_buffer_size<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
             ctx, A, W.to_span(), static_cast<size_t>(capacity), jobz, Vv, params));
-    (void)syevx_direct_subset<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+    (void)syevx_direct_subset<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
         ctx, A, W.to_span(), m.to_span(), static_cast<size_t>(capacity), ws, jobz,
         Vv, params);
     ctx.wait();
@@ -1989,7 +1983,7 @@ DirectRangeRun RunSubsetRange(Queue& ctx,
                           std::vector<int32_t>(m.begin(), m.end())};
 }
 
-} // namespace
+}  // namespace
 
 // An Index block that happens to touch an end must take the same code path with
 // the same inputs as the Extremal request that names it, so any difference at all
@@ -2013,7 +2007,7 @@ TEST(SyevxDirectSubsetRangeTest, EndBlocksReproduceExtremalBitForBit) {
         SyevxParams<float> extremal;
         extremal.find_largest = find_largest;
         Matrix<float, MatrixFormat::Dense> V_ext(n, k, batch);
-        const auto ext = RunSubsetRange(*ctx, A, batch, k, extremal, JobType::EigenVectors, &V_ext);
+        const auto ext = run_subset_range(*ctx, A, batch, k, extremal, JobType::EigenVectors, &V_ext);
 
         SyevxParams<float> indexed;
         indexed.select = SyevxSelect::Index;
@@ -2021,7 +2015,7 @@ TEST(SyevxDirectSubsetRangeTest, EndBlocksReproduceExtremalBitForBit) {
         indexed.iu = find_largest ? (n - 1) : (k - 1);
         indexed.order = find_largest ? SortOrder::Descending : SortOrder::Ascending;
         Matrix<float, MatrixFormat::Dense> V_idx(n, k, batch);
-        const auto idx = RunSubsetRange(*ctx, A, batch, k, indexed, JobType::EigenVectors, &V_idx);
+        const auto idx = run_subset_range(*ctx, A, batch, k, indexed, JobType::EigenVectors, &V_idx);
 
         for (int b = 0; b < batch; ++b) {
             EXPECT_EQ(ext.m[b], k);
@@ -2053,11 +2047,11 @@ TEST(SyevxDirectSubsetRangeTest, DescendingInteriorBlockIsTheAscendingBlockRever
 
     Matrix<float, MatrixFormat::Dense> V_asc(n, k, batch);
     params.order = SortOrder::Ascending;
-    const auto asc = RunSubsetRange(*ctx, A, batch, k, params, JobType::EigenVectors, &V_asc);
+    const auto asc = run_subset_range(*ctx, A, batch, k, params, JobType::EigenVectors, &V_asc);
 
     Matrix<float, MatrixFormat::Dense> V_desc(n, k, batch);
     params.order = SortOrder::Descending;
-    const auto desc = RunSubsetRange(*ctx, A, batch, k, params, JobType::EigenVectors, &V_desc);
+    const auto desc = run_subset_range(*ctx, A, batch, k, params, JobType::EigenVectors, &V_desc);
 
     for (int b = 0; b < batch; ++b) {
         for (int i = 0; i < k; ++i) {
@@ -2075,9 +2069,9 @@ TEST(SyevxDirectSubsetRangeTest, DescendingInteriorBlockIsTheAscendingBlockRever
 
 TEST(SyevxDirectSubsetRangeTest, ValueRangeCountAndValuesAgainstClosedForm) {
     if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
-    // TriDiagToeplitz with EQUAL off-diagonals: see ToeplitzSpectrumAscending.
+    // TriDiagToeplitz with EQUAL off-diagonals: see toeplitz_spectrum_ascending.
     constexpr int n = 64, batch = 2;
-    const auto lam = ToeplitzSpectrumAscending(n, 0.0f, 1.0f);
+    const auto lam = toeplitz_spectrum_ascending(n, 0.0f, 1.0f);
 
     // Boundaries in the middle third, where the gaps are widest; at the ends they
     // collapse as O(1/n^2) and the count would not be unambiguous.
@@ -2098,8 +2092,8 @@ TEST(SyevxDirectSubsetRangeTest, ValueRangeCountAndValuesAgainstClosedForm) {
 
     constexpr int capacity = 16;
     Matrix<float, MatrixFormat::Dense> V(n, capacity, batch);
-    PoisonEigenvectorBuffer(V, n, capacity, batch);
-    const auto run = RunSubsetRange(*ctx, A, batch, capacity, params, JobType::EigenVectors, &V);
+    poison_eigenvector_buffer(V, n, capacity, batch);
+    const auto run = run_subset_range(*ctx, A, batch, capacity, params, JobType::EigenVectors, &V);
 
     const int expected = q - p + 1;
     for (int b = 0; b < batch; ++b) {
@@ -2109,9 +2103,9 @@ TEST(SyevxDirectSubsetRangeTest, ValueRangeCountAndValuesAgainstClosedForm) {
                 << "slot beyond m[b] was written, batch " << b << " slot " << i;
         }
     }
-    ExpectValues(run.W.data(), capacity, std::vector<std::vector<double>>(batch, ClosedForm(lam, p, expected)), MaxAbs(lam), n);
-    ExpectUnusedColumnsAreZero(V, n, batch, capacity, run.m);
-    ExpectPairs(*ctx, A, V, run.W.data(), capacity, std::vector<int>(batch, expected));
+    expect_values(run.W.data(), capacity, std::vector<std::vector<double>>(batch, closed_form(lam, p, expected)), max_abs(lam), n);
+    expect_unused_columns_are_zero(V, n, batch, capacity, run.m);
+    expect_pairs(*ctx, A, V, run.W.data(), capacity, std::vector<int>(batch, expected));
 }
 
 // The shape the whole per-item-count machinery exists for: one call in which the
@@ -2122,7 +2116,7 @@ TEST(SyevxDirectSubsetRangeTest, ValueRangeBatchItemsDisagreeOnCount) {
     if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
     constexpr int n = 32, batch = 3;
     auto ctx = std::make_shared<Queue>(Device::default_device(), true);
-    auto A = MakeShiftedPerItem(n, batch);
+    auto A = make_shifted_per_item(n, batch);
     ctx->wait();
     SYEVX_REQUIRE_LAPACKE();
     const auto W_ref = ReferenceSpectrum(A);
@@ -2133,37 +2127,37 @@ TEST(SyevxDirectSubsetRangeTest, ValueRangeBatchItemsDisagreeOnCount) {
     params.vu = 10.5f;
 
     Matrix<float, MatrixFormat::Dense> V(n, n, batch);
-    PoisonEigenvectorBuffer(V, n, n, batch);
-    const auto run = RunSubsetRange(*ctx, A, batch, n, params, JobType::EigenVectors, &V);
+    poison_eigenvector_buffer(V, n, n, batch);
+    const auto run = run_subset_range(*ctx, A, batch, n, params, JobType::EigenVectors, &V);
 
     std::vector<int> expected(batch, 0);
     std::vector<std::vector<double>> want(batch);
     for (int b = 0; b < batch; ++b) {
         SCOPED_TRACE(::testing::Message() << "batch " << b);
-        want[b] = ExpectedValueBlock(W_ref, b, params.vl, params.vu);
+        want[b] = expected_value_block(W_ref, b, params.vl, params.vu);
         expected[b] = static_cast<int>(want[b].size());
         EXPECT_EQ(run.m[b], expected[b]);
         for (size_t i = want[b].size(); i < size_t(n); ++i) {
             EXPECT_EQ(run.W[b * n + i], kUntouched) << "slot " << i;
         }
     }
-    ExpectValues(run.W.data(), n, want, W_ref.norm2, n);
+    expect_values(run.W.data(), n, want, W_ref.norm2, n);
     // The counts must genuinely differ, or this test proves nothing.
     EXPECT_EQ(run.m[0], n);
     EXPECT_GT(run.m[1], 0);
     EXPECT_LT(run.m[1], n);
     EXPECT_EQ(run.m[2], 0);
 
-    ExpectUnusedColumnsAreZero(V, n, batch, n, run.m);
+    expect_unused_columns_are_zero(V, n, batch, n, run.m);
 
     // Residuals on the valid prefix only, against the ORIGINAL A.
-    ExpectPairs(*ctx, A, V, run.W.data(), n, expected);
+    expect_pairs(*ctx, A, V, run.W.data(), n, expected);
 }
 
 TEST(SyevxDirectSubsetRangeTest, ValueRangeOverflowReportsTrueCountAndKeepsLowest) {
     if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
     constexpr int n = 64, batch = 2, capacity = 5;
-    const auto lam = ToeplitzSpectrumAscending(n, 0.0f, 1.0f);
+    const auto lam = toeplitz_spectrum_ascending(n, 0.0f, 1.0f);
     constexpr int p = 20, q = 39;  // 20 eigenvalues in the interval, capacity 5
     const float vl = 0.5f * (lam[p - 1] + lam[p]);
     const float vu = 0.5f * (lam[q] + lam[q + 1]);
@@ -2179,14 +2173,14 @@ TEST(SyevxDirectSubsetRangeTest, ValueRangeOverflowReportsTrueCountAndKeepsLowes
 
     for (const auto order : {SortOrder::Ascending, SortOrder::Descending}) {
         params.order = order;
-        const auto run = RunSubsetRange(*ctx, A, batch, capacity, params, JobType::NoEigenVectors);
+        const auto run = run_subset_range(*ctx, A, batch, capacity, params, JobType::NoEigenVectors);
         for (int b = 0; b < batch; ++b) {
             EXPECT_EQ(run.m[b], q - p + 1) << "batch " << b;
         }
         // Truncation keeps the LOWEST `capacity` of the interval regardless of the requested
         // order; `order` only flips them within what was kept.
         const bool desc = order == SortOrder::Descending;
-        ExpectValues(run.W.data(), capacity, std::vector<std::vector<double>>(batch, ClosedForm(lam, p, capacity, desc)), MaxAbs(lam), n);
+        expect_values(run.W.data(), capacity, std::vector<std::vector<double>>(batch, closed_form(lam, p, capacity, desc)), max_abs(lam), n);
     }
 }
 
@@ -2228,7 +2222,7 @@ TEST(SyevxDirectSubsetRangeTest, ValueRangeWorkspaceMirrorsTheWidenedStebzBuffer
     MatrixView<float, MatrixFormat::Dense> A_dummy(nullptr, n, n, n,
                                                    static_cast<int64_t>(n) * n, batch);
     const auto size_of = [&](const SyevxParams<float>& p) {
-        return syevx_direct_subset_buffer_size<test_utils::gpu_backend, float,
+        return syevx_direct_subset_buffer_size<test_utils::kGpuBackend, float,
                                                MatrixFormat::Dense>(
             *ctx, A_dummy, W.to_span(), static_cast<size_t>(capacity),
             JobType::EigenVectors, V, p);
@@ -2253,7 +2247,7 @@ TEST(SyevxDirectSubsetRangeTest, ValueRangeWorkspaceMirrorsTheWidenedStebzBuffer
 TEST(SyevxDirectSubsetRangeTest, ValueRangeEmptyAndFullIntervals) {
     if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
     constexpr int n = 32, batch = 2, capacity = 8;
-    const auto lam = ToeplitzSpectrumAscending(n, 0.0f, 1.0f);
+    const auto lam = toeplitz_spectrum_ascending(n, 0.0f, 1.0f);
     auto ctx = std::make_shared<Queue>(Device::default_device(), true);
     auto A = Matrix<float, MatrixFormat::Dense>::TriDiagToeplitz(n, 0.0f, 1.0f, 1.0f, batch);
     ctx->wait();
@@ -2266,9 +2260,9 @@ TEST(SyevxDirectSubsetRangeTest, ValueRangeEmptyAndFullIntervals) {
     params.vl = lam[n - 1] + 1.0f;
     params.vu = lam[n - 1] + 2.0f;
     Matrix<float, MatrixFormat::Dense> V_empty(n, capacity, batch);
-    PoisonEigenvectorBuffer(V_empty, n, capacity, batch);
-    const auto empty = RunSubsetRange(*ctx, A, batch, capacity, params,
-                                      JobType::EigenVectors, &V_empty);
+    poison_eigenvector_buffer(V_empty, n, capacity, batch);
+    const auto empty = run_subset_range(*ctx, A, batch, capacity, params,
+                                        JobType::EigenVectors, &V_empty);
     for (int b = 0; b < batch; ++b) {
         EXPECT_EQ(empty.m[b], 0) << "batch " << b;
         for (int i = 0; i < capacity; ++i) {
@@ -2277,14 +2271,14 @@ TEST(SyevxDirectSubsetRangeTest, ValueRangeEmptyAndFullIntervals) {
     }
     // With m == 0 every column is unused, so the whole of V must be exact zero --
     // the strongest form of the contract the uniform-width back-transforms rely on.
-    ExpectUnusedColumnsAreZero(V_empty, n, batch, capacity, empty.m);
+    expect_unused_columns_are_zero(V_empty, n, batch, capacity, empty.m);
 
     // Everything in the interval, with the capacity exactly saturated.
     params.vl = lam[0] - 1.0f;
     params.vu = lam[n - 1] + 1.0f;
-    const auto full = RunSubsetRange(*ctx, A, batch, n, params, JobType::NoEigenVectors);
+    const auto full = run_subset_range(*ctx, A, batch, n, params, JobType::NoEigenVectors);
     for (int b = 0; b < batch; ++b) EXPECT_EQ(full.m[b], n) << "batch " << b;
-    ExpectValues(full.W.data(), n, std::vector<std::vector<double>>(batch, ClosedForm(lam, 0, n)), MaxAbs(lam), n);
+    expect_values(full.W.data(), n, std::vector<std::vector<double>>(batch, closed_form(lam, 0, n)), max_abs(lam), n);
 }
 
 // Direct and DirectSubset compute the count by genuinely different means -- a
@@ -2295,7 +2289,7 @@ TEST(SyevxDirectSubsetRangeTest, ValueRangeEmptyAndFullIntervals) {
 TEST(SyevxDirectSubsetRangeTest, AgreesWithDirectOnTheSameValueRange) {
     if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
     constexpr int n = 64, batch = 2, capacity = 24;
-    const auto lam = ToeplitzSpectrumAscending(n, 0.0f, 1.0f);
+    const auto lam = toeplitz_spectrum_ascending(n, 0.0f, 1.0f);
     constexpr int p = 22, q = 40;
     const float vl = 0.5f * (lam[p - 1] + lam[p]);
     const float vu = 0.5f * (lam[q] + lam[q + 1]);
@@ -2310,7 +2304,7 @@ TEST(SyevxDirectSubsetRangeTest, AgreesWithDirectOnTheSameValueRange) {
     params.vu = vu;
 
     const auto d = RunDirectRange(*ctx, A, batch, capacity, params, JobType::NoEigenVectors);
-    const auto s = RunSubsetRange(*ctx, A, batch, capacity, params, JobType::NoEigenVectors);
+    const auto s = run_subset_range(*ctx, A, batch, capacity, params, JobType::NoEigenVectors);
 
     // Two results of the code under test (Direct vs DirectSubset), not a reference.
     std::vector<std::vector<double>> direct(batch);
@@ -2319,7 +2313,7 @@ TEST(SyevxDirectSubsetRangeTest, AgreesWithDirectOnTheSameValueRange) {
         EXPECT_EQ(s.m[b], d.m[b]) << "paths disagree on m, batch " << b;
         direct[b].assign(d.W.begin() + b * capacity, d.W.begin() + b * capacity + std::max(0, std::min(d.m[b], capacity)));
     }
-    ExpectValues(s.W.data(), capacity, direct, MaxAbs(lam), n);
+    expect_values(s.W.data(), capacity, direct, max_abs(lam), n);
 }
 
 // The unused-column contract, asserted across the routing boundary rather than
@@ -2339,7 +2333,7 @@ TEST(SyevxDirectSubsetRangeTest, AgreesWithDirectOnTheSameValueRange) {
 TEST(SyevxDirectSubsetRangeTest, BothPathsZeroTheSameUnusedColumns) {
     if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
     constexpr int n = 48, batch = 2, capacity = 20;
-    const auto lam = ToeplitzSpectrumAscending(n, 0.0f, 1.0f);
+    const auto lam = toeplitz_spectrum_ascending(n, 0.0f, 1.0f);
     // Boundaries in wide mid-spectrum gaps, so both paths must agree on m exactly
     // (see BoundaryOnAnEigenvalueMayDisagreeByOne for the case where they need not).
     constexpr int p = 18, q = 25;
@@ -2355,21 +2349,21 @@ TEST(SyevxDirectSubsetRangeTest, BothPathsZeroTheSameUnusedColumns) {
 
     Matrix<float, MatrixFormat::Dense> V_direct(n, capacity, batch);
     Matrix<float, MatrixFormat::Dense> V_subset(n, capacity, batch);
-    PoisonEigenvectorBuffer(V_direct, n, capacity, batch);
-    PoisonEigenvectorBuffer(V_subset, n, capacity, batch);
+    poison_eigenvector_buffer(V_direct, n, capacity, batch);
+    poison_eigenvector_buffer(V_subset, n, capacity, batch);
 
     const auto d = RunDirectRange(*ctx, A, batch, capacity, params, JobType::EigenVectors,
                                   &V_direct);
-    const auto s = RunSubsetRange(*ctx, A, batch, capacity, params, JobType::EigenVectors,
-                                  &V_subset);
+    const auto s = run_subset_range(*ctx, A, batch, capacity, params, JobType::EigenVectors,
+                                    &V_subset);
 
     for (int b = 0; b < batch; ++b) {
         ASSERT_EQ(d.m[b], q - p + 1) << "batch " << b;
         ASSERT_EQ(s.m[b], d.m[b]) << "the two paths disagree on m, batch " << b;
         ASSERT_LT(d.m[b], capacity) << "the case is vacuous unless some columns go unused";
     }
-    ExpectUnusedColumnsAreZero(V_direct, n, batch, capacity, d.m);
-    ExpectUnusedColumnsAreZero(V_subset, n, batch, capacity, s.m);
+    expect_unused_columns_are_zero(V_direct, n, batch, capacity, d.m);
+    expect_unused_columns_are_zero(V_subset, n, batch, capacity, s.m);
 }
 
 // The documented tolerance, asserted rather than hoped for: a boundary placed
@@ -2403,7 +2397,7 @@ TEST(SyevxDirectSubsetRangeTest, BothPathsZeroTheSameUnusedColumns) {
 TEST(SyevxDirectSubsetRangeTest, BoundaryOnAnEigenvalueMayDisagreeByOne) {
     if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
     constexpr int n = 64, batch = 2, capacity = 24;
-    const auto lam = ToeplitzSpectrumAscending(n, 0.0f, 1.0f);
+    const auto lam = toeplitz_spectrum_ascending(n, 0.0f, 1.0f);
     constexpr int p = 22, q = 40;
 
     auto ctx = std::make_shared<Queue>(Device::default_device(), true);
@@ -2416,7 +2410,7 @@ TEST(SyevxDirectSubsetRangeTest, BoundaryOnAnEigenvalueMayDisagreeByOne) {
     params.vu = lam[q];                        // ON an eigenvalue: ambiguous by one
 
     const auto d = RunDirectRange(*ctx, A, batch, capacity, params, JobType::NoEigenVectors);
-    const auto s = RunSubsetRange(*ctx, A, batch, capacity, params, JobType::NoEigenVectors);
+    const auto s = run_subset_range(*ctx, A, batch, capacity, params, JobType::NoEigenVectors);
 
     std::vector<std::vector<double>> want(batch);
     for (int b = 0; b < batch; ++b) {
@@ -2430,10 +2424,10 @@ TEST(SyevxDirectSubsetRangeTest, BoundaryOnAnEigenvalueMayDisagreeByOne) {
 
         // The values themselves are NOT ambiguous: whatever each path returned is
         // the ascending block starting at p, and the two agree where they overlap.
-        want[b] = ClosedForm(lam, p, std::max(0, std::min({d.m[b], s.m[b], capacity})));
+        want[b] = closed_form(lam, p, std::max(0, std::min({d.m[b], s.m[b], capacity})));
     }
-    ExpectValues(d.W.data(), capacity, want, MaxAbs(lam), n);
-    ExpectValues(s.W.data(), capacity, want, MaxAbs(lam), n);
+    expect_values(d.W.data(), capacity, want, max_abs(lam), n);
+    expect_values(s.W.data(), capacity, want, max_abs(lam), n);
 }
 
 // ---------------------------------------------------------------------------
@@ -2447,24 +2441,24 @@ TEST(SyevxDirectSubsetRangeTest, BoundaryOnAnEigenvalueMayDisagreeByOne) {
 // assertion instead of an assumption; it has its own failure mode, since the
 // values-only path skips stein entirely.
 //
-// Every case is checked against the host-side oracle (ExpectedIndexBlock over
+// Every case is checked against the host-side oracle (expected_index_block over
 // ReferenceSpectrum), never against the other path, so a shared bug cannot hide.
 // ---------------------------------------------------------------------------
 namespace {
 
 enum class RangePath { Direct, DirectSubset };
 
-const char* PathName(RangePath p) {
+const char* path_name(RangePath p) {
     return p == RangePath::Direct ? "Direct" : "DirectSubset";
 }
 
-DirectRangeRun RunRange(RangePath path, Queue& ctx,
-                        const Matrix<float, MatrixFormat::Dense>& A,
-                        int batch, int capacity, const SyevxParams<float>& params,
-                        JobType jobz, Matrix<float, MatrixFormat::Dense>* V = nullptr) {
+DirectRangeRun run_range(RangePath path, Queue& ctx,
+                         const Matrix<float, MatrixFormat::Dense>& A,
+                         int batch, int capacity, const SyevxParams<float>& params,
+                         JobType jobz, Matrix<float, MatrixFormat::Dense>* V = nullptr) {
     return path == RangePath::Direct
                ? RunDirectRange(ctx, A, batch, capacity, params, jobz, V)
-               : RunSubsetRange(ctx, A, batch, capacity, params, jobz, V);
+               : run_subset_range(ctx, A, batch, capacity, params, jobz, V);
 }
 
 struct IndexRangeCase {
@@ -2482,7 +2476,7 @@ struct IndexRangeParam {
     IndexRangeCase c;
 };
 
-std::vector<IndexRangeParam> AllIndexRangeParams() {
+std::vector<IndexRangeParam> all_index_range_params() {
     // n <= 128 and batch <= 4 throughout: these are correctness tests, and the
     // host-side residual check is O(n^2 * k * batch) scalar code.
     const IndexRangeCase cases[] = {
@@ -2508,7 +2502,7 @@ std::vector<IndexRangeParam> AllIndexRangeParams() {
     return out;
 }
 
-} // namespace
+}  // namespace
 
 class SyevxIndexRangeTest : public ::testing::TestWithParam<IndexRangeParam> {};
 
@@ -2537,8 +2531,8 @@ TEST_P(SyevxIndexRangeTest, MatchesTheHostSelectedReferenceBlock) {
     params.order = c.order;
 
     Matrix<float, MatrixFormat::Dense> V(c.n, k, c.batch);
-    const auto run = RunRange(p.path, *ctx, A, c.batch, k, params, p.jobz,
-                              want_vectors ? &V : nullptr);
+    const auto run = run_range(p.path, *ctx, A, c.batch, k, params, p.jobz,
+                               want_vectors ? &V : nullptr);
     SYEVX_REQUIRE_LAPACKE();
     const auto W_ref = ReferenceSpectrum(A);
 
@@ -2550,7 +2544,7 @@ TEST_P(SyevxIndexRangeTest, MatchesTheHostSelectedReferenceBlock) {
         // An index block's count is static and known on the host, which is the
         // whole reason the m-less overload stays legal for Index.
         ASSERT_EQ(run.m[b], k);
-        want[b] = ExpectedIndexBlock(W_ref, b, c.il, c.iu, reverse);
+        want[b] = expected_index_block(W_ref, b, c.il, c.iu, reverse);
         ASSERT_EQ(static_cast<int>(want[b].size()), k);
         // The requested order is honoured, not merely close to it.
         for (int i = 1; i < k; ++i) {
@@ -2559,14 +2553,14 @@ TEST_P(SyevxIndexRangeTest, MatchesTheHostSelectedReferenceBlock) {
         }
     }
 
-    ExpectValues(run.W.data(), k, want, W_ref.norm2, c.n);
-    if (want_vectors) CheckResiduals(*ctx, A, V, run.W, c.batch, k);
+    expect_values(run.W.data(), k, want, W_ref.norm2, c.n);
+    if (want_vectors) check_residuals(*ctx, A, V, run.W, c.batch, k);
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    PathsAndJobTypes, SyevxIndexRangeTest, ::testing::ValuesIn(AllIndexRangeParams()),
+    PathsAndJobTypes, SyevxIndexRangeTest, ::testing::ValuesIn(all_index_range_params()),
     [](const ::testing::TestParamInfo<IndexRangeParam>& info) {
-        return std::string(PathName(info.param.path)) +
+        return std::string(path_name(info.param.path)) +
                (info.param.jobz == JobType::EigenVectors ? "Vectors" : "ValuesOnly") +
                info.param.c.name;
     });
@@ -2586,18 +2580,18 @@ TEST(SyevxRangeValidationTest, RejectsMalformedRanges) {
     // batch alone), so one sizing call with the defaults covers every case below.
     const SyevxParams<float> defaults;
     UnifiedVector<std::byte> ws(std::max<size_t>(
-        syevx_buffer_size<test_utils::gpu_backend>(
+        syevx_buffer_size<test_utils::kGpuBackend>(
             *ctx, A, W.to_span(), 8, JobType::NoEigenVectors,
             MatrixView<float, MatrixFormat::Dense>(), defaults),
         1));
 
     auto size_call = [&](const SyevxParams<float>& p, size_t neigs) {
-        return syevx_buffer_size<test_utils::gpu_backend>(
+        return syevx_buffer_size<test_utils::kGpuBackend>(
             *ctx, A, W.to_span(), neigs, JobType::NoEigenVectors,
             MatrixView<float, MatrixFormat::Dense>(), p);
     };
     auto solve_call = [&](const SyevxParams<float>& p, size_t neigs) {
-        return syevx<test_utils::gpu_backend>(
+        return syevx<test_utils::kGpuBackend>(
             *ctx, A, W.to_span(), neigs, ws.to_span(), JobType::NoEigenVectors,
             MatrixView<float, MatrixFormat::Dense>(), p);
     };
@@ -2649,7 +2643,7 @@ TEST(SyevxRangeValidationTest, RejectsMalformedRanges) {
         // not observable in the return type, so this pair of assertions is what
         // proves the resolution went where it was meant to.
         UnifiedVector<int32_t> m(static_cast<size_t>(batch), -1);
-        EXPECT_NO_THROW((void)syevx<test_utils::gpu_backend>(
+        EXPECT_NO_THROW((void)syevx<test_utils::kGpuBackend>(
             *ctx, A, W.to_span(), m.to_span(), size_t(8), ws.to_span(),
             JobType::NoEigenVectors, MatrixView<float, MatrixFormat::Dense>(), p));
         ctx->wait();
@@ -2657,7 +2651,7 @@ TEST(SyevxRangeValidationTest, RejectsMalformedRanges) {
         // A short `m` is an out-of-bounds device write with no host-side
         // diagnostic, so it is rejected before any device work.
         UnifiedVector<int32_t> m_short(0);
-        EXPECT_THROW((void)syevx<test_utils::gpu_backend>(
+        EXPECT_THROW((void)syevx<test_utils::kGpuBackend>(
                          *ctx, A, W.to_span(), m_short.to_span(), size_t(8),
                          ws.to_span(), JobType::NoEigenVectors,
                          MatrixView<float, MatrixFormat::Dense>(), p),
@@ -2689,19 +2683,19 @@ TEST(SyevxRangeValidationTest, SolverEntryPointsRejectMalformedRangesThemselves)
     const SyevxParams<float> defaults;
 
     UnifiedVector<std::byte> ws_direct(
-        syevx_direct_buffer_size<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+        syevx_direct_buffer_size<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
             *ctx, A, W.to_span(), size_t(k), JobType::NoEigenVectors, no_V, defaults));
     UnifiedVector<std::byte> ws_subset(
-        syevx_direct_subset_buffer_size<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+        syevx_direct_subset_buffer_size<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
             *ctx, A, W.to_span(), size_t(k), JobType::NoEigenVectors, no_V, defaults));
 
     auto direct = [&](const SyevxParams<float>& p) {
-        return syevx_direct<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+        return syevx_direct<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
             *ctx, A, W.to_span(), m.to_span(), size_t(k), ws_direct.to_span(),
             JobType::NoEigenVectors, no_V, p);
     };
     auto subset = [&](const SyevxParams<float>& p) {
-        return syevx_direct_subset<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+        return syevx_direct_subset<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
             *ctx, A, W.to_span(), m.to_span(), size_t(k), ws_subset.to_span(),
             JobType::NoEigenVectors, no_V, p);
     };
@@ -2786,26 +2780,26 @@ TEST(SyevxRangeValidationTest, SolverEntryPointsKeepTheirMLessOverloads) {
 
         if (!subset_path) {
             UnifiedVector<std::byte> ws(
-                syevx_direct_buffer_size<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+                syevx_direct_buffer_size<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
                     *ctx, A, W_m.to_span(), size_t(k), JobType::NoEigenVectors, no_V,
                     params));
-            (void)syevx_direct<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+            (void)syevx_direct<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
                 *ctx, A, W_m.to_span(), m.to_span(), size_t(k), ws.to_span(),
                 JobType::NoEigenVectors, no_V, params);
             // The m-less form: eight arguments, no `m`.
-            (void)syevx_direct<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+            (void)syevx_direct<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
                 *ctx, A, W_plain.to_span(), size_t(k), ws.to_span(),
                 JobType::NoEigenVectors, no_V, params);
         } else {
             UnifiedVector<std::byte> ws(
-                syevx_direct_subset_buffer_size<test_utils::gpu_backend, float,
+                syevx_direct_subset_buffer_size<test_utils::kGpuBackend, float,
                                                 MatrixFormat::Dense>(
                     *ctx, A, W_m.to_span(), size_t(k), JobType::NoEigenVectors, no_V,
                     params));
-            (void)syevx_direct_subset<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+            (void)syevx_direct_subset<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
                 *ctx, A, W_m.to_span(), m.to_span(), size_t(k), ws.to_span(),
                 JobType::NoEigenVectors, no_V, params);
-            (void)syevx_direct_subset<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+            (void)syevx_direct_subset<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
                 *ctx, A, W_plain.to_span(), size_t(k), ws.to_span(),
                 JobType::NoEigenVectors, no_V, params);
         }
@@ -2841,7 +2835,7 @@ SyevxAlgorithm pick_range(MatrixFormat format, SyevxAlgorithm requested, SyevxSe
                                   select);
 }
 
-} // namespace
+}  // namespace
 
 // Sparse has no dense fallback, and BOTH implemented sparse paths -- LOBPCG and
 // Filtered -- converge to an EXTREME of the spectrum by construction. Returning
@@ -2991,10 +2985,10 @@ TEST(SyevxRangeRoutingTest, EnvironmentDegradeAppliesToSizingAndSolvingAlike) {
 
     ScopedEnvVar env("BATCHLAS_SYEVX_ALGORITHM", "lobpcg");
     size_t bytes = 0;
-    ASSERT_NO_THROW(bytes = syevx_buffer_size<test_utils::gpu_backend>(
+    ASSERT_NO_THROW(bytes = syevx_buffer_size<test_utils::kGpuBackend>(
         *ctx, A, W.to_span(), size_t(k), JobType::NoEigenVectors, no_V, params));
     UnifiedVector<std::byte> ws(std::max<size_t>(bytes, 1));
-    ASSERT_NO_THROW((void)syevx<test_utils::gpu_backend>(
+    ASSERT_NO_THROW((void)syevx<test_utils::kGpuBackend>(
         *ctx, A, W.to_span(), m.to_span(), size_t(k), ws.to_span(),
         JobType::NoEigenVectors, no_V, params));
     ctx->wait();
@@ -3005,9 +2999,9 @@ TEST(SyevxRangeRoutingTest, EnvironmentDegradeAppliesToSizingAndSolvingAlike) {
     std::vector<std::vector<double>> want(batch);
     for (int b = 0; b < batch; ++b) {
         EXPECT_EQ(m[b], k);
-        want[b] = ExpectedIndexBlock(W_ref, b, il, il + k - 1, false);
+        want[b] = expected_index_block(W_ref, b, il, il + k - 1, false);
     }
-    ExpectValues(W.data(), k, want, W_ref.norm2, n);
+    expect_values(W.data(), k, want, W_ref.norm2, n);
 }
 
 // syevx_lobpcg and syevx_filtered are public entry points in their own right, not
@@ -3027,10 +3021,10 @@ TEST(SyevxRangeRoutingTest, IterativeSolversRejectRangesDirectly) {
     interior.il = 10;
     interior.iu = 13;
 
-    EXPECT_THROW(syevx_lobpcg_buffer_size<test_utils::gpu_backend>(
+    EXPECT_THROW(syevx_lobpcg_buffer_size<test_utils::kGpuBackend>(
                      *ctx, A, W.to_span(), neig, JobType::NoEigenVectors, no_V, interior),
                  std::invalid_argument);
-    EXPECT_THROW(syevx_filtered_buffer_size<test_utils::gpu_backend>(
+    EXPECT_THROW(syevx_filtered_buffer_size<test_utils::kGpuBackend>(
                      *ctx, A, W.to_span(), neig, JobType::NoEigenVectors, no_V, interior),
                  std::invalid_argument);
 
@@ -3038,19 +3032,19 @@ TEST(SyevxRangeRoutingTest, IterativeSolversRejectRangesDirectly) {
     // calls with the default Extremal range are untouched.
     size_t ws_bytes = 0;
     ASSERT_NO_THROW(ws_bytes = std::max(
-        syevx_lobpcg_buffer_size<test_utils::gpu_backend>(
+        syevx_lobpcg_buffer_size<test_utils::kGpuBackend>(
             *ctx, A, W.to_span(), neig, JobType::NoEigenVectors, no_V, SyevxParams<float>()),
-        syevx_filtered_buffer_size<test_utils::gpu_backend>(
+        syevx_filtered_buffer_size<test_utils::kGpuBackend>(
             *ctx, A, W.to_span(), neig, JobType::NoEigenVectors, no_V, SyevxParams<float>())));
     UnifiedVector<std::byte> ws(std::max<size_t>(ws_bytes, 1));
 
     // A real workspace, so the throw is provably the range check and not an
     // allocation failure.
-    EXPECT_THROW((void)syevx_lobpcg<test_utils::gpu_backend>(
+    EXPECT_THROW((void)syevx_lobpcg<test_utils::kGpuBackend>(
                      *ctx, A, W.to_span(), neig, ws.to_span(), JobType::NoEigenVectors,
                      no_V, interior),
                  std::invalid_argument);
-    EXPECT_THROW((void)syevx_filtered<test_utils::gpu_backend>(
+    EXPECT_THROW((void)syevx_filtered<test_utils::kGpuBackend>(
                      *ctx, A, W.to_span(), neig, ws.to_span(), JobType::NoEigenVectors,
                      no_V, interior),
                  std::invalid_argument);
@@ -3065,7 +3059,7 @@ TEST(SyevxPublicRangeTest, ValueRangeThroughTheMTakingOverload) {
     // this Toeplitz are ~0.097 while the end gaps collapse to ~0.007, so a
     // boundary near either end is the fragile one.
     constexpr int p = 24, q = 31;
-    const auto lam = ToeplitzSpectrumAscending(n, 0.0f, 1.0f);
+    const auto lam = toeplitz_spectrum_ascending(n, 0.0f, 1.0f);
     const float vl = 0.5f * (lam[p - 1] + lam[p]);
     const float vu = 0.5f * (lam[q] + lam[q + 1]);
     ASSERT_GT(0.5f * (lam[p] - lam[p - 1]), 2e-2f) << "lower boundary is not in a clear gap";
@@ -3086,10 +3080,10 @@ TEST(SyevxPublicRangeTest, ValueRangeThroughTheMTakingOverload) {
 
     // Sized through the `m`-taking sizing form, purely to pin that the two calls
     // can be written with the same argument list. `m` is ignored by sizing.
-    UnifiedVector<std::byte> ws(syevx_buffer_size<test_utils::gpu_backend>(
+    UnifiedVector<std::byte> ws(syevx_buffer_size<test_utils::kGpuBackend>(
         *ctx, A, W.to_span(), m.to_span(), size_t(capacity), JobType::EigenVectors,
         V, params));
-    (void)syevx<test_utils::gpu_backend>(*ctx, A, W.to_span(), m.to_span(),
+    (void)syevx<test_utils::kGpuBackend>(*ctx, A, W.to_span(), m.to_span(),
                                    size_t(capacity), ws.to_span(), JobType::EigenVectors,
                                    V, params);
     ctx->wait();
@@ -3104,9 +3098,9 @@ TEST(SyevxPublicRangeTest, ValueRangeThroughTheMTakingOverload) {
                 << "wrote past m[b], batch " << b << " slot " << i;
         }
     }
-    ExpectValues(W_host.data(), capacity, std::vector<std::vector<double>>(batch, ClosedForm(lam, p, q - p + 1)), MaxAbs(lam), n);
+    expect_values(W_host.data(), capacity, std::vector<std::vector<double>>(batch, closed_form(lam, p, q - p + 1)), max_abs(lam), n);
     // Pairs over the valid prefix only: W's stride is the capacity, its count m[b].
-    ExpectPairs(*ctx, A, V, W_host.data(), capacity, count);
+    expect_pairs(*ctx, A, V, W_host.data(), capacity, count);
 }
 
 // An index block through the public entry point, and the `m`-less overload
@@ -3139,14 +3133,14 @@ TEST(SyevxPublicRangeTest, IndexRangeThroughBothOverloadsAgree) {
     UnifiedVector<float> W_m(static_cast<size_t>(k) * batch, kUntouched);
     UnifiedVector<float> W_plain(static_cast<size_t>(k) * batch, kUntouched);
     UnifiedVector<int32_t> m(static_cast<size_t>(batch), -1);
-    UnifiedVector<std::byte> ws(syevx_buffer_size<test_utils::gpu_backend>(
+    UnifiedVector<std::byte> ws(syevx_buffer_size<test_utils::kGpuBackend>(
         *ctx, A, W_m.to_span(), size_t(k), JobType::NoEigenVectors,
         MatrixView<float, MatrixFormat::Dense>(), params));
 
-    (void)syevx<test_utils::gpu_backend>(*ctx, A, W_m.to_span(), m.to_span(), size_t(k),
+    (void)syevx<test_utils::kGpuBackend>(*ctx, A, W_m.to_span(), m.to_span(), size_t(k),
                                    ws.to_span(), JobType::NoEigenVectors,
                                    MatrixView<float, MatrixFormat::Dense>(), params);
-    (void)syevx<test_utils::gpu_backend>(*ctx, A, W_plain.to_span(), size_t(k), ws.to_span(),
+    (void)syevx<test_utils::kGpuBackend>(*ctx, A, W_plain.to_span(), size_t(k), ws.to_span(),
                                    JobType::NoEigenVectors,
                                    MatrixView<float, MatrixFormat::Dense>(), params);
     ctx->wait();
@@ -3161,9 +3155,9 @@ TEST(SyevxPublicRangeTest, IndexRangeThroughBothOverloadsAgree) {
                 << "the m-less form did not forward identically, batch " << b
                 << " slot " << i;
         }
-        want[b] = ExpectedIndexBlock(W_ref, b, il, iu, false);
+        want[b] = expected_index_block(W_ref, b, il, iu, false);
     }
-    ExpectValues(W_m.data(), k, want, W_ref.norm2, n);
+    expect_values(W_m.data(), k, want, W_ref.norm2, n);
 }
 
 // LOBPCG and Filtered never take an `m` argument, so `syevx` fills it for them.
@@ -3180,10 +3174,10 @@ TEST(SyevxPublicRangeTest, IterativePathsStillReportACount) {
 
     UnifiedVector<float> W(static_cast<size_t>(neig) * batch, kUntouched);
     UnifiedVector<int32_t> m(static_cast<size_t>(batch), -1);
-    UnifiedVector<std::byte> ws(syevx_buffer_size<test_utils::gpu_backend>(
+    UnifiedVector<std::byte> ws(syevx_buffer_size<test_utils::kGpuBackend>(
         *ctx, A, W.to_span(), size_t(neig), JobType::NoEigenVectors,
         MatrixView<float, MatrixFormat::Dense>(), params));
-    (void)syevx<test_utils::gpu_backend>(*ctx, A, W.to_span(), m.to_span(), size_t(neig),
+    (void)syevx<test_utils::kGpuBackend>(*ctx, A, W.to_span(), m.to_span(), size_t(neig),
                                    ws.to_span(), JobType::NoEigenVectors,
                                    MatrixView<float, MatrixFormat::Dense>(), params);
     ctx->wait();
@@ -3217,7 +3211,7 @@ namespace {
 // decltype, so `false` means "no viable overload" OR "more than one" -- and both
 // are the failure this guards against.
 template <typename... Args>
-using SyevxCallExpr = decltype(syevx<test_utils::gpu_backend, float, MatrixFormat::Dense>(
+using SyevxCallExpr = decltype(syevx<test_utils::kGpuBackend, float, MatrixFormat::Dense>(
     std::declval<Args>()...));
 
 template <typename Void, typename... Args>
@@ -3265,7 +3259,7 @@ static_assert(syevx_callable<Q, AV, Wv, int32_t&, Ws, JobType, AV, Pv>,
 // that the m-less sizing form must keep accepting a Value range or sizing a
 // value-range solve would be impossible.
 template <typename... Args>
-using SyevxSizeExpr = decltype(syevx_buffer_size<test_utils::gpu_backend, float,
+using SyevxSizeExpr = decltype(syevx_buffer_size<test_utils::kGpuBackend, float,
                                                  MatrixFormat::Dense>(
     std::declval<Args>()...));
 
@@ -3287,7 +3281,7 @@ static_assert(syevx_size_callable<Q, AV, Wv, Mv, size_t, JobType, AV, Pv>,
 static_assert(syevx_size_callable<Q, AV, Wv, Mv, size_t, JobType, AV>,
               "m-taking sizing with a defaulted params must be unambiguous");
 
-} // namespace
+}  // namespace
 
 // House rule: a bare `{}` in the trailing params position must select the SAME
 // overload as an explicit SyevxParams, on both forms. The previous incident in
@@ -3311,21 +3305,21 @@ TEST(SyevxOverloadResolutionTest, BracedParamsPicksTheSameOverloadAsAnExplicitOn
     UnifiedVector<int32_t> m_explicit(static_cast<size_t>(batch), -1);
     UnifiedVector<int32_t> m_braced(static_cast<size_t>(batch), -1);
 
-    UnifiedVector<std::byte> ws(syevx_buffer_size<test_utils::gpu_backend>(
+    UnifiedVector<std::byte> ws(syevx_buffer_size<test_utils::kGpuBackend>(
         *ctx, A, W_explicit.to_span(), size_t(k), JobType::NoEigenVectors, no_V,
         SyevxParams<float>()));
 
     // m-less: explicit params vs `{}`.
-    (void)syevx<test_utils::gpu_backend>(*ctx, A, W_explicit.to_span(), size_t(k),
+    (void)syevx<test_utils::kGpuBackend>(*ctx, A, W_explicit.to_span(), size_t(k),
                                    ws.to_span(), JobType::NoEigenVectors, no_V,
                                    SyevxParams<float>());
-    (void)syevx<test_utils::gpu_backend>(*ctx, A, W_braced.to_span(), size_t(k),
+    (void)syevx<test_utils::kGpuBackend>(*ctx, A, W_braced.to_span(), size_t(k),
                                    ws.to_span(), JobType::NoEigenVectors, no_V, {});
     // m-form: explicit params vs `{}`.
-    (void)syevx<test_utils::gpu_backend>(*ctx, A, W_m_explicit.to_span(),
+    (void)syevx<test_utils::kGpuBackend>(*ctx, A, W_m_explicit.to_span(),
                                    m_explicit.to_span(), size_t(k), ws.to_span(),
                                    JobType::NoEigenVectors, no_V, SyevxParams<float>());
-    (void)syevx<test_utils::gpu_backend>(*ctx, A, W_m_braced.to_span(),
+    (void)syevx<test_utils::kGpuBackend>(*ctx, A, W_m_braced.to_span(),
                                    m_braced.to_span(), size_t(k), ws.to_span(),
                                    JobType::NoEigenVectors, no_V, {});
     ctx->wait();
@@ -3346,13 +3340,12 @@ TEST(SyevxOverloadResolutionTest, BracedParamsPicksTheSameOverloadAsAnExplicitOn
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // Per-item convergence status (`info`).
 //
 // syevx is the one routine in this family whose forcing knob, per-item flag and
 // host read ALL already existed: SyevxParams::iterations is a genuine public
-// parameter that caps both LOBPCG (syevx_lobpcg.cc:559) and the Chebyshev
+// parameter that caps both LOBPCG (syevx_lobpcg.cc:562) and the Chebyshev
 // filtered path (syevx_filtered.cc:439), and both routines already computed a
 // per-item converged flag, read it on the host, collapsed it into one bool and
 // discarded it. Nothing here needs a tier call or an environment variable.
@@ -3365,7 +3358,7 @@ TEST(SyevxOverloadResolutionTest, BracedParamsPicksTheSameOverloadAsAnExplicitOn
 //     item and success on every broken one, and a one-directional test would not
 //     notice. Both directions are asserted below, on the same matrix.
 //   * SyevxInstrumentation::iterations_done LOOKS like per-item convergence
-//     information and is not: syevx_lobpcg.cc:1140 fills every entry with the
+//     information and is not: syevx_lobpcg.cc:1143 fills every entry with the
 //     same batch-global scalar. It is not used here.
 // ---------------------------------------------------------------------------
 
@@ -3389,12 +3382,12 @@ Matrix<float, MatrixFormat::Dense> descending_diagonal(int n, int batch) {
 
 // The items reporting info == 0 hold diag(n..1)'s neigs largest, n, n-1, ...: Check::values with
 // ||A||_2 = n. The kind's bound is 7.8x the old 1e-3 absolute at n = 64; the Slack keeps it.
-void ExpectConvergedRight(const UnifiedVector<float>& W, const UnifiedVector<int32_t>& info, int n, int batch, int neigs) {
+void expect_converged_right(const UnifiedVector<float>& W, const UnifiedVector<int32_t>& info, int n, int batch, int neigs) {
     std::vector<std::vector<double>> want(batch);
     for (int b = 0; b < batch; ++b)
         if (info[b] == 0)
             for (int i = 0; i < neigs; ++i) want[b].push_back(double(n - i));
-    ExpectValues(W.data(), neigs, want, double(n), n, verify::Slack{0.125, "old bound 1e-3 absolute, ||A||_2 = n = 64"});
+    expect_values(W.data(), neigs, want, double(n), n, verify::Slack{0.125, "old bound 1e-3 absolute, ||A||_2 = n = 64"});
 }
 
 TEST(SyevxInfoTest, InfoIsZeroWhenEveryItemConverges) {
@@ -3428,7 +3421,7 @@ TEST(SyevxInfoTest, InfoIsZeroWhenEveryItemConverges) {
 
     // WHY THIS DOES NOT ASSERT info == 0 FOR EVERY ITEM, even though all four
     // matrices are byte-identical: LOBPCG's starting block is random PER ITEM.
-    // syevx_lobpcg.cc:467-480 keys its philox draw on the FLAT
+    // syevx_lobpcg.cc:468-481 keys its philox draw on the FLAT
     // buffer index, reproducing fill_random's walk, so item b starts from a
     // different subspace than item b-1. Convergence within a fixed iteration
     // budget is therefore a property of the item's draw, not only of the matrix;
@@ -3451,7 +3444,7 @@ TEST(SyevxInfoTest, InfoIsZeroWhenEveryItemConverges) {
     EXPECT_GT(converged, 0) << "no item converged on diag(n..1) with a well-separated spectrum "
                                "and 300 iterations; info cannot be reporting 1 unconditionally";
     // A span memset to zero would claim convergence with wrong values.
-    ExpectConvergedRight(W, info, n, batch, neigs);
+    expect_converged_right(W, info, n, batch, neigs);
 }
 
 // THE CASE THAT MATTERS: the same matrix, the same algorithm, one iteration.
@@ -3503,7 +3496,7 @@ TEST(SyevxInfoTest, InfoReportsItemsThatExhaustTheIterationBudget) {
     // Anything still claimed as converged has to be right. This is what a
     // report-failure-everywhere implementation cannot satisfy together with the
     // zero-everywhere assertion in the previous case.
-    ExpectConvergedRight(W, info, n, batch, neigs);
+    expect_converged_right(W, info, n, batch, neigs);
 }
 // The resolver's own normalization table now lives in tests/syevx_range_tests.cc:
 // it needs no device, so it belongs in a binary that is not labelled `slow`.

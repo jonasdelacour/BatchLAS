@@ -55,12 +55,12 @@ namespace tm = batchlas::ops::trmm;
 namespace ub = test_utils::usm_bulk;
 using C = tm::TrmmChoice;
 using Pin = select::ScopedPin<C>;
-template <typename T>
-using MVof = MatrixView<T, MatrixFormat::Dense>;
-template <typename T>
-using RealOf = typename batchlas::base_type<T>::type;
-template <typename T>
-constexpr bool kCx = test_utils::is_complex<T>::value;
+template <typename Scalar>
+using MVof = MatrixView<Scalar, MatrixFormat::Dense>;
+template <typename Scalar>
+using RealOf = typename batchlas::base_type<Scalar>::type;
+template <typename Scalar>
+constexpr bool kCx = test_utils::is_complex<Scalar>::value;
 
 template <typename T>
 bool same_bits(T a, T b) {
@@ -90,17 +90,17 @@ struct Spec {
 // A, B and C in one buffer of a large finite poison, at padded lds and strides that are not
 // ld * cols. A's other triangle, a Unit diagonal, the pads and gaps hold the poison; C starts as
 // poison too, since trmm overwrites it (beta = 0).
-template <typename T>
+template <typename Scalar>
 struct Prob {
     Spec s;
-    T alpha{};
+    Scalar alpha{};
     Region a, b, c;
-    UnifiedVector<T> mem;
-    ub::Pristine<T> pristine;  // mem's initial contents: the reps on the host and the device
+    UnifiedVector<Scalar> mem;
+    ub::Pristine<Scalar> pristine;  // mem's initial contents: the reps on the host and the device
 
-    MVof<T> A() { return {mem.data() + a.off, s.n, s.n, a.ld, a.stride, s.batch}; }
-    MVof<T> B() { return {mem.data() + b.off, b.rows, b.cols, b.ld, b.stride, s.batch}; }
-    MVof<T> Cm() { return {mem.data() + c.off, c.rows, c.cols, c.ld, c.stride, s.batch}; }
+    MVof<Scalar> A() { return {mem.data() + a.off, s.n, s.n, a.ld, a.stride, s.batch}; }
+    MVof<Scalar> B() { return {mem.data() + b.off, b.rows, b.cols, b.ld, b.stride, s.batch}; }
+    MVof<Scalar> Cm() { return {mem.data() + c.off, c.rows, c.cols, c.ld, c.stride, s.batch}; }
     std::size_t ai(int it, int i, int j) const { return a.off + std::size_t(it) * a.stride + std::size_t(j) * a.ld + i; }
     std::size_t bi(int it, int i, int j) const { return b.off + std::size_t(it) * b.stride + std::size_t(j) * b.ld + i; }
     std::size_t ci(int it, int i, int j) const { return c.off + std::size_t(it) * c.stride + std::size_t(j) * c.ld + i; }
@@ -109,7 +109,7 @@ struct Prob {
     // footprint skipped when skip_c. The second: with skip_c, the first C element of an item at
     // or past the representatives that differs from its representative's.
     std::pair<std::optional<std::size_t>, std::optional<std::size_t>> changes(bool skip_c) const {
-        using H = typename ub::Pristine<T>::Hole;
+        using H = typename ub::Pristine<Scalar>::Hole;
         std::optional<H> hole;
         if (skip_c) hole = H{c.off, std::size_t(c.ld), std::size_t(c.rows), std::size_t(c.cols)};
         return pristine.first_change_on_device(mem.data(), hole);
@@ -118,22 +118,22 @@ struct Prob {
     // mem back to its initial contents, so one problem serves every candidate of a shape.
     void restore() { pristine.write(mem.data()); }
     // A view of region g's representatives as first written (batch reps), on the device.
-    MatrixView<T, MatrixFormat::Dense> initial(const Region& g) const {
+    MatrixView<Scalar, MatrixFormat::Dense> initial(const Region& g) const {
         return {pristine.rep(g.off), g.rows, g.cols, g.ld, g.stride, int(pristine.reps)};
     }
 };
 
-template <typename T>
-T poison() {
-    return MatrixView<T, MatrixFormat::Dense>::make(RealOf<T>(-999), RealOf<T>(777));
+template <typename Scalar>
+Scalar poison() {
+    return MatrixView<Scalar, MatrixFormat::Dense>::make(RealOf<Scalar>(-999), RealOf<Scalar>(777));
 }
 
-template <typename T>
-Prob<T> make_prob(const Spec& s) {
-    using R = RealOf<T>;
-    Prob<T> p;
+template <typename Scalar>
+Prob<Scalar> make_prob(const Spec& s) {
+    using R = RealOf<Scalar>;
+    Prob<Scalar> p;
     p.s = s;
-    p.alpha = MatrixView<T, MatrixFormat::Dense>::make(R(1.5), R(-0.5));
+    p.alpha = MatrixView<Scalar, MatrixFormat::Dense>::make(R(1.5), R(-0.5));
     const int br = s.side == Side::Left ? s.n : s.q, bc = s.side == Side::Left ? s.q : s.n;
     p.a = {0, s.n, s.n, s.n + 3, (s.n + 3) * s.n + 5};
     p.b = {std::size_t(p.a.stride) * s.batch + 11, br, bc, br + 2, (br + 2) * bc + 7};
@@ -143,13 +143,13 @@ Prob<T> make_prob(const Spec& s) {
     std::uniform_real_distribution<R> u(R(-1), R(1));
     const int reps = s.period > 0 ? std::min(s.period, s.batch) : s.batch;
     // Only the representatives draw (the order of one pass over the batch); the rest are copies.
-    p.pristine = ub::Pristine<T>(total, std::size_t(s.batch), std::size_t(reps), poison<T>(),
-                                 {{p.a.off, std::size_t(p.a.stride)}, {p.b.off, std::size_t(p.b.stride)},
-                                  {p.c.off, std::size_t(p.c.stride)}});
+    p.pristine = ub::Pristine<Scalar>(total, std::size_t(s.batch), std::size_t(reps), poison<Scalar>(),
+                                      {{p.a.off, std::size_t(p.a.stride)}, {p.b.off, std::size_t(p.b.stride)},
+                                       {p.c.off, std::size_t(p.c.stride)}});
     // Named locals: the two draws of a complex entry in a fixed order on every compiler.
     auto draw = [&] {
         const auto re = u(gen), im = u(gen);
-        return MatrixView<T, MatrixFormat::Dense>::make(re, im);
+        return MatrixView<Scalar, MatrixFormat::Dense>::make(re, im);
     };
     for (int it = 0; it < reps; ++it) {
         for (int j = 0; j < s.n; ++j)
@@ -158,7 +158,7 @@ Prob<T> make_prob(const Spec& s) {
         for (int j = 0; j < bc; ++j)
             for (int i = 0; i < br; ++i) p.pristine.at(p.bi(it, i, j)) = draw();
     }
-    p.mem = UnifiedVector<T>(total);
+    p.mem = UnifiedVector<Scalar>(total);
     p.pristine.write(p.mem.data());
     return p;
 }
@@ -166,13 +166,13 @@ Prob<T> make_prob(const Spec& s) {
 // Worst componentwise backward error of C = alpha op(A) B (Right: B op(A)) over `items` (all below
 // the representatives) through the library; A is read as its triangle (Unit: no diagonal), operands
 // from the pristine representatives.
-template <typename T>
-double residual(Queue& ctx, const Prob<T>& p, std::span<const int> items) {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+double residual(Queue& ctx, const Prob<Scalar>& p, std::span<const int> items) {
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     const Spec& s = p.s;
     const int reps = int(p.pristine.reps);
     // The reps live in device memory and gemm_backward_error reads on the host: stage them.
-    Matrix<T, MatrixFormat::Dense> A0(p.a.rows, p.a.cols, reps), B0(p.b.rows, p.b.cols, reps),
+    Matrix<Scalar, MatrixFormat::Dense> A0(p.a.rows, p.a.cols, reps), B0(p.b.rows, p.b.cols, reps),
         C0(p.c.rows, p.c.cols, reps);
     MV::copy(ctx, B0, p.initial(p.b)).wait();
     MV::copy(ctx, C0, p.initial(p.c)).wait();
@@ -180,8 +180,8 @@ double residual(Queue& ctx, const Prob<T>& p, std::span<const int> items) {
     MV::copy(ctx, A0, p.initial(p.a)).wait();
     A0.triangularize(ctx, s.uplo, s.diag).wait();
     if (s.side == Side::Left)
-        return MV::gemm_backward_error(ctx, A0, s.trans, B0, Transpose::NoTrans, C0, C, MV::up(p.alpha), MV::up(T(0)), items);
-    return MV::gemm_backward_error(ctx, B0, Transpose::NoTrans, A0, s.trans, C0, C, MV::up(p.alpha), MV::up(T(0)), items);
+        return MV::gemm_backward_error(ctx, A0, s.trans, B0, Transpose::NoTrans, C0, C, MV::up(p.alpha), MV::up(Scalar(0)), items);
+    return MV::gemm_backward_error(ctx, B0, Transpose::NoTrans, A0, s.trans, C0, C, MV::up(p.alpha), MV::up(Scalar(0)), items);
 }
 
 // Residuals of the checked items, every element outside C bit for bit (A's poison included),
@@ -249,13 +249,13 @@ struct TableGuard {
 // expansion's gemm throws), and every vendor loop runs each item at the top-level (m, n), so the
 // vendor is refused too. Every pin throws (the vendor class word falls back to Auto), and Auto
 // throws runtime_error, or NoRouteError without a vendor library.
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 void expect_heterogeneous_has_no_route(Queue& ctx) {
-    using R = RealOf<T>;
+    using R = RealOf<Scalar>;
     const int n = 16, q = 3, batch = 4;
-    Matrix<T, MatrixFormat::Dense> A(n, n, batch), Bm(n, q, batch), Cm(n, q, batch);
-    A.fill(MatrixView<T, MatrixFormat::Dense>::make(R(0.5), R(0)));
-    Bm.fill(MatrixView<T, MatrixFormat::Dense>::make(R(1), R(0.5)));
+    Matrix<Scalar, MatrixFormat::Dense> A(n, n, batch), Bm(n, q, batch), Cm(n, q, batch);
+    A.fill(MatrixView<Scalar, MatrixFormat::Dense>::make(R(0.5), R(0)));
+    Bm.fill(MatrixView<Scalar, MatrixFormat::Dense>::make(R(1), R(0.5)));
     UnifiedVector<int> act(batch), cols(batch);
     for (int b = 0; b < batch; ++b) act[b] = n - b, cols[b] = q - (b % 2);
     const auto hetA = A.with_active_dims(act.to_span(), act.to_span());
@@ -263,14 +263,15 @@ void expect_heterogeneous_has_no_route(Queue& ctx) {
     const auto hetC = Cm.with_active_dims(act.to_span(), cols.to_span());
     ASSERT_TRUE(hetA.is_heterogeneous());
     auto call = [&] {
-        (void)trmm<B, T>(ctx, hetA, hetB, hetC, T(1), Side::Left, Uplo::Upper, Transpose::NoTrans, Diag::NonUnit);
+        (void)trmm<B, Scalar>(ctx, hetA, hetB, hetC, Scalar(1), Side::Left, Uplo::Upper, Transpose::NoTrans,
+                              Diag::NonUnit);
         ctx.wait();
     };
     auto expect_no_route = [&](const std::string& what) {
         if constexpr (select::level3_vendor_available<B>) EXPECT_THROW(call(), std::runtime_error) << what;
         else EXPECT_THROW(call(), batchlas::NoRouteError) << what;
     };
-    for (const C& c : tm::candidates<T>()) {
+    for (const C& c : tm::candidates<Scalar>()) {
         const Pin pin("trmm", c);
         if (std::holds_alternative<tm::Vendor>(c)) expect_no_route("vendor pin");
         else EXPECT_THROW(call(), std::invalid_argument) << select::to_string(c);
@@ -279,9 +280,9 @@ void expect_heterogeneous_has_no_route(Queue& ctx) {
     expect_no_route("auto");
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;

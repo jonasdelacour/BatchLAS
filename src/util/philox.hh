@@ -48,84 +48,84 @@ constexpr Words draw(std::uint64_t seed, std::uint64_t stream, std::uint64_t ind
 
 // Integer mantissa of component `slot` (0 or 1): 24 bits from one word for float, 53 bits from
 // two words for double, so a complex<double> consumes the whole block.
-template <typename R>
+template <typename Real>
 constexpr std::uint64_t mantissa_bits(const Words& b, int slot) noexcept {
-    static_assert(std::is_same_v<R, float> || std::is_same_v<R, double>, "float or double");
-    if constexpr (std::is_same_v<R, float>) {
+    static_assert(std::is_same_v<Real, float> || std::is_same_v<Real, double>, "float or double");
+    if constexpr (std::is_same_v<Real, float>) {
         return b.w[slot] >> 8;
     } else {
         return ((static_cast<std::uint64_t>(b.w[2 * slot]) << 32) | b.w[2 * slot + 1]) >> 11;
     }
 }
 
-template <typename R>
-inline constexpr int kMantissaDigits = std::is_same_v<R, float> ? 24 : 53;
+template <typename Real>
+inline constexpr int kMantissaDigits = std::is_same_v<Real, float> ? 24 : 53;
 
-template <typename R>
-constexpr R ulp_scale() noexcept {
-    return R(1) / static_cast<R>(std::uint64_t(1) << kMantissaDigits<R>);
+template <typename Real>
+constexpr Real ulp_scale() noexcept {
+    return Real(1) / static_cast<Real>(std::uint64_t(1) << kMantissaDigits<Real>);
 }
 
 // [0, 1), exact multiples of 2^-24 (float) or 2^-53 (double).
-template <typename R>
-constexpr R unit(const Words& b, int slot) noexcept {
-    return static_cast<R>(mantissa_bits<R>(b, slot)) * ulp_scale<R>();
+template <typename Real>
+constexpr Real unit(const Words& b, int slot) noexcept {
+    return static_cast<Real>(mantissa_bits<Real>(b, slot)) * ulp_scale<Real>();
 }
 
 // [-1, 1), exact: k * 2^(1-digits) - 1 needs no more bits than the mantissa holds.
-template <typename R>
-constexpr R symmetric(const Words& b, int slot) noexcept {
-    return static_cast<R>(mantissa_bits<R>(b, slot)) * (R(2) * ulp_scale<R>()) - R(1);
+template <typename Real>
+constexpr Real symmetric(const Words& b, int slot) noexcept {
+    return static_cast<Real>(mantissa_bits<Real>(b, slot)) * (Real(2) * ulp_scale<Real>()) - Real(1);
 }
 
 template <typename T>
 struct is_complex : std::false_type {};
-template <typename R>
-struct is_complex<std::complex<R>> : std::true_type {};
+template <typename Real>
+struct is_complex<std::complex<Real>> : std::true_type {};
 
-template <typename T>
+template <typename Scalar>
 struct real_of {
-    using type = T;
+    using type = Scalar;
 };
-template <typename R>
-struct real_of<std::complex<R>> {
-    using type = R;
+template <typename Real>
+struct real_of<std::complex<Real>> {
+    using type = Real;
 };
 
 // Each component uniform in [-1, 1); real and imaginary parts come from disjoint bits.
-template <typename T>
-constexpr T uniform_symmetric(std::uint64_t seed, std::uint64_t stream, std::uint64_t index) noexcept {
-    using R = typename real_of<T>::type;
+template <typename Scalar>
+constexpr Scalar uniform_symmetric(std::uint64_t seed, std::uint64_t stream, std::uint64_t index) noexcept {
+    using R = typename real_of<Scalar>::type;
     const Words b = draw(seed, stream, index);
-    if constexpr (is_complex<T>::value) {
-        return T(symmetric<R>(b, 0), symmetric<R>(b, 1));
+    if constexpr (is_complex<Scalar>::value) {
+        return Scalar(symmetric<R>(b, 0), symmetric<R>(b, 1));
     } else {
         return symmetric<R>(b, 0);
     }
 }
 
 // Each component uniform in [0, 1).
-template <typename T>
-constexpr T uniform_unit(std::uint64_t seed, std::uint64_t stream, std::uint64_t index) noexcept {
-    using R = typename real_of<T>::type;
+template <typename Scalar>
+constexpr Scalar uniform_unit(std::uint64_t seed, std::uint64_t stream, std::uint64_t index) noexcept {
+    using R = typename real_of<Scalar>::type;
     const Words b = draw(seed, stream, index);
-    if constexpr (is_complex<T>::value) {
-        return T(unit<R>(b, 0), unit<R>(b, 1));
+    if constexpr (is_complex<Scalar>::value) {
+        return Scalar(unit<R>(b, 0), unit<R>(b, 1));
     } else {
         return unit<R>(b, 0);
     }
 }
 
 // Box-Muller on one block. Each component is N(0, 1) (a complex value has E|z|^2 = 2).
-template <typename T>
-inline T normal(std::uint64_t seed, std::uint64_t stream, std::uint64_t index) {
-    using R = typename real_of<T>::type;
+template <typename Scalar>
+inline Scalar normal(std::uint64_t seed, std::uint64_t stream, std::uint64_t index) {
+    using R = typename real_of<Scalar>::type;
     const Words b = draw(seed, stream, index);
     const R u1 = R(1) - unit<R>(b, 0);  // (0, 1]: log stays finite
     const R angle = R(6.283185307179586476925286766559) * unit<R>(b, 1);
     const R radius = sycl::sqrt(R(-2) * sycl::log(u1));
-    if constexpr (is_complex<T>::value) {
-        return T(radius * sycl::cos(angle), radius * sycl::sin(angle));
+    if constexpr (is_complex<Scalar>::value) {
+        return Scalar(radius * sycl::cos(angle), radius * sycl::sin(angle));
     } else {
         return radius * sycl::cos(angle);
     }

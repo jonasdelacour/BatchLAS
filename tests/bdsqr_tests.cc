@@ -39,9 +39,9 @@ using namespace batchlas;
 
 namespace {
 
-template <typename T, Backend B>
+template <typename Real, Backend B>
 struct BdsqrConfig {
-    using ScalarType = T;
+    using ScalarType = Real;
     static constexpr Backend BackendVal = B;
 };
 
@@ -195,6 +195,5 @@ TYPED_TEST(BdsqrTest, GradedNearOverflow) {
     EXPECT_VERIFY(Scalar, batchlas::verify::Check::orthogonality_rotations, n, MV::orthogonality(ctx, Vh, Vh.all_items()));
 }
 
-
-} // namespace
+}  // namespace
 #endif  // BATCHLAS_HAS_CUDA_BACKEND

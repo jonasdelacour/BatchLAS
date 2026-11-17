@@ -41,16 +41,16 @@ Transpose trans_of(const std::string& w, bool complex) {
     return complex ? Transpose::ConjTrans : Transpose::Trans;
 }
 
-template <typename T>
+template <typename Scalar>
 struct SpmmProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
-    using SV = MatrixView<T, MatrixFormat::CSR>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+    using SV = MatrixView<Scalar, MatrixFormat::CSR>;
     Queue& q;
     Transpose ta, tb;
     int m, nrhs, batch, r, nnz, br, bc, ldb, ldc;
     std::size_t sb, sc;
-    T alpha, beta;
-    UnifiedVector<T> vals, B, C0, C;
+    Scalar alpha, beta;
+    UnifiedVector<Scalar> vals, B, C0, C;
     UnifiedVector<int> offs, cols;
     SV Av;
     MV Bv, C0v, Cv;
@@ -69,7 +69,7 @@ struct SpmmProblem {
         const int step = std::max(1, m / r);
         for (int v = 0; v < kVariants; ++v)
             for (int i = 0; i < m; ++i) {  // a fixed hash of (v, i): the pattern is the cell's structure
-                const int h = int((std::uint64_t(i) * 2654435761ULL + std::uint64_t(v) * 40503ULL) % std::uint64_t(m));
+                const int h = int((std::uint64_t(i) * 2654435761ull + std::uint64_t(v) * 40503ull) % std::uint64_t(m));
                 int* row = vc[v].data() + std::size_t(i) * r;
                 for (int d = 0; d < r; ++d) row[d] = (h + d * step) % m;
                 std::sort(row, row + r);
@@ -91,11 +91,11 @@ struct SpmmProblem {
     // A `vendor` pin that can_run refuses (spmm.cc's CUDA vendor terms) is refused by the tuner's
     // strict pin. evidence: docs/design/known-defects.md#defect-17-cusparse-spmm-shapes-refused-in-can_run-and-the-alignment-waiver
     std::size_t workspace() {
-        return spmm_buffer_size<kBackend, T, MatrixFormat::CSR>(q, Av, Bv, Cv, alpha, beta, ta, tb);
+        return spmm_buffer_size<kBackend, Scalar, MatrixFormat::CSR>(q, Av, Bv, Cv, alpha, beta, ta, tb);
     }
     void clear_info() {}
     void run(Span<std::byte> ws) {
-        (void)spmm<kBackend, T, MatrixFormat::CSR>(q, Av, Bv, Cv, alpha, beta, ta, tb, ws);
+        (void)spmm<kBackend, Scalar, MatrixFormat::CSR>(q, Av, Bv, Cv, alpha, beta, ta, tb, ws);
         q.wait();
     }
     std::pair<double, int> verify() {
@@ -124,8 +124,16 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
-            "src/sycl/kernel_attrs.hh",
-            "src/sycl/sscp_target.hh",
+            "include/batchlas/device/detail/kernel_attrs.hh",
+            "include/batchlas/device/detail/sscp_target.hh",
+            "include/batchlas/util/group-collectives.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn_core.hh",
+            "include/batchlas/device/detail/sg_partition/backend_generic.hh",
+            "include/batchlas/device/detail/sg_partition/backend_nvptx.hh",
+            "include/batchlas/device/detail/sg_partition/backend_spirv.hh",
+            "include/batchlas/device/detail/sg_partition/backend_sscp.hh",
+            "include/batchlas/device/detail/sg_partition/sg_partition.hh",
             // family: direct
             "src/ops/spmm/kernels/spmm_native.cc",
             "src/ops/spmm/spmm_native.hh",
@@ -135,6 +143,16 @@ public:
         // kernel-sources-end
         // kernel-deps-begin
         // common "src/ops/spmm/spmm.cc"
+        // The include/batchlas/device/ headers each family's kernels include.
+        // family: direct "include/batchlas/device.hh" "include/batchlas/device/arith.hh"
+        // family: direct "include/batchlas/device/core.hh" "include/batchlas/device/exec.hh"
+        // family: direct "include/batchlas/device/grid.hh" "include/batchlas/device/interop.hh"
+        // family: direct "include/batchlas/device/lapack_aux.hh" "include/batchlas/device/level1.hh"
+        // family: direct "include/batchlas/device/level2.hh" "include/batchlas/device/level3.hh"
+        // family: direct "include/batchlas/device/operand.hh" "include/batchlas/device/reduce.hh"
+        // family: direct "include/batchlas/device/scalar.hh" "include/batchlas/device/sparse.hh"
+        // family: direct "include/batchlas/device/tier.hh" "include/batchlas/device/view.hh"
+        // family: direct "include/batchlas/device/workspace.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/spmm_spec.cc"; }

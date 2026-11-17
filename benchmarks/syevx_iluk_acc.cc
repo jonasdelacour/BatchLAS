@@ -95,7 +95,7 @@ inline double median_of(std::vector<double> values) {
     const auto mid = values.begin() + static_cast<std::ptrdiff_t>(values.size() / 2);
     std::nth_element(values.begin(), mid, values.end());
     const double upper = *mid;
-    if ((values.size() & 1U) != 0U) {
+    if ((values.size() & 1u) != 0u) {
         return upper;
     }
     const auto lower_mid = values.begin() + static_cast<std::ptrdiff_t>(values.size() / 2 - 1);
@@ -708,22 +708,22 @@ void run_sparse_syevx_iluk(miniacc::State& state, const char* impl_name) {
 }
 
 template <typename Real, Backend B>
-static void ACC_SYEVX_SPARSE_BASELINE(miniacc::State& state) {
+void ACC_SYEVX_SPARSE_BASELINE(miniacc::State& state) {
     run_sparse_syevx_iluk<-1, Real, B>(state, "syevx_sparse_baseline");
 }
 
 template <typename Real, Backend B>
-static void ACC_SYEVX_SPARSE_ILUK_K2(miniacc::State& state) {
+void ACC_SYEVX_SPARSE_ILUK_K2(miniacc::State& state) {
     run_sparse_syevx_iluk<2, Real, B>(state, "syevx_sparse_iluk_k2");
 }
 
 template <typename Real, Backend B>
-static void ACC_SYEVX_SPARSE_ILUK_K3(miniacc::State& state) {
+void ACC_SYEVX_SPARSE_ILUK_K3(miniacc::State& state) {
     run_sparse_syevx_iluk<3, Real, B>(state, "syevx_sparse_iluk_k3");
 }
 
 template <typename Real, Backend B>
-static void ACC_SYEVX_SPARSE_ILUK_K4(miniacc::State& state) {
+void ACC_SYEVX_SPARSE_ILUK_K4(miniacc::State& state) {
     run_sparse_syevx_iluk<4, Real, B>(state, "syevx_sparse_iluk_k4");
 }
 
@@ -738,4 +738,4 @@ BATCHLAS_ACC_ROCM(ACC_SYEVX_SPARSE_ILUK_K3, SparseSyevxIlukSizes)
 BATCHLAS_ACC_CUDA(ACC_SYEVX_SPARSE_ILUK_K4, SparseSyevxIlukSizes)
 BATCHLAS_ACC_ROCM(ACC_SYEVX_SPARSE_ILUK_K4, SparseSyevxIlukSizes)
 
-MINI_ACC_MAIN()
+MINI_ACC_MAIN();
