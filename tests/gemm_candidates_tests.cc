@@ -55,12 +55,12 @@ namespace og = batchlas::ops::gemm;
 namespace ub = test_utils::usm_bulk;
 using C = og::GemmChoice;
 using Pin = select::ScopedPin<C>;
-template <typename T>
-using MVof = MatrixView<T, MatrixFormat::Dense>;
-template <typename T>
-using RealOf = typename batchlas::base_type<T>::type;
-template <typename T>
-constexpr bool kCx = test_utils::is_complex<T>::value;
+template <typename Scalar>
+using MVof = MatrixView<Scalar, MatrixFormat::Dense>;
+template <typename Scalar>
+using RealOf = typename batchlas::base_type<Scalar>::type;
+template <typename Scalar>
+constexpr bool kCx = test_utils::is_complex<Scalar>::value;
 
 template <typename... F>
 struct overloaded : F... { using F::operator()...; };
@@ -70,9 +70,9 @@ overloaded(F...) -> overloaded<F...>;
 constexpr Transpose kN = Transpose::NoTrans, kT = Transpose::Trans, kC = Transpose::ConjTrans;
 const Transpose kForms[] = {kN, kT, kC};
 
-template <typename T>
-bool same_bits(T a, T b) {
-    return std::memcmp(&a, &b, sizeof(T)) == 0;
+template <typename Scalar>
+bool same_bits(Scalar a, Scalar b) {
+    return std::memcmp(&a, &b, sizeof(Scalar)) == 0;
 }
 const char* tw(Transpose t) { return t == kN ? "N" : (t == kT ? "T" : "C"); }
 
@@ -102,19 +102,19 @@ int g_cuda_cc = 0;
 bool wide_copy_leg(int stages) {
     return !BATCHLAS_SYCL_IMPL_ACPP && stages != 2 && g_cuda_cc >= (stages == 3 ? 80 : 120);
 }
-template <typename T>
-constexpr bool kWideAsync = std::is_same_v<T, std::complex<float>>;
+template <typename Scalar>
+constexpr bool kWideAsync = std::is_same_v<Scalar, std::complex<float>>;
 // The BATCHLAS_GEMM_WIDE_STAGES legs of `legs` (the first is unset) that launch a kernel no earlier
 // one does. The variable reaches only the complex<float> cp.async choice (settings.hh), so another
 // scalar keeps the first alone, and a leg with an earlier one's wide_copy_leg is dropped (=2 equals
 // unset on sm_89, =3 equals unset on sm_120).
-template <typename T>
+template <typename Scalar>
 std::vector<const char*> distinct_wide_legs(std::initializer_list<const char*> legs) {
     std::vector<const char*> out;
     std::vector<bool> seen;
     for (const char* l : legs) {
         const bool copy = wide_copy_leg(l ? std::atoi(l) : 0);
-        if (!out.empty() && (!kWideAsync<T> || std::find(seen.begin(), seen.end(), copy) != seen.end())) continue;
+        if (!out.empty() && (!kWideAsync<Scalar> || std::find(seen.begin(), seen.end(), copy) != seen.end())) continue;
         out.push_back(l);
         seen.push_back(copy);
     }
@@ -265,9 +265,9 @@ std::string reg_form(Transpose ta, Transpose tb) {
 }
 // A wide tile's form: the exact (op(A), op(B)) for a complex scalar; a real one folds T to C
 // (conj is the identity, and only the C builds are compiled for it).
-template <typename T>
+template <typename Scalar>
 std::string wide_form(Transpose ta, Transpose tb) {
-    auto w = [](Transpose t) { return t == kN ? "N" : (kCx<T> && t == kT) ? "T" : "C"; };
+    auto w = [](Transpose t) { return t == kN ? "N" : (kCx<Scalar> && t == kT) ? "T" : "C"; };
     return std::string(w(ta)) + w(tb);
 }
 
@@ -288,40 +288,41 @@ const WideRow* wide_row(const og::Wide& w) {
         if (row.m == w.m && row.n == w.n && row.k == w.k) return &row;
     return nullptr;
 }
-template <typename T>
+template <typename Scalar>
 bool wide_compiled(const WideRow& row) {
-    return !row.cf_only || std::is_same_v<T, std::complex<float>>;
+    return !row.cf_only || std::is_same_v<Scalar, std::complex<float>>;
 }
 // Wide v2 (GemmWide64Body, two buffers, the 16-byte leg in every form): 64x64 for every scalar
 // but double, and the complex<float>-only rows for complex<float>.
-template <typename T>
+template <typename Scalar>
 bool wide_v2(const WideRow& row) {
-    return (row.m == 64 && row.n == 64 && !std::is_same_v<T, double>) || (row.cf_only && wide_compiled<T>(row));
+    return (row.m == 64 && row.n == 64 && !std::is_same_v<Scalar,
+            double>) || (row.cf_only && wide_compiled<Scalar>(row));
 }
-// Does the row instantiate wide form f for scalar T?
-template <typename T>
+// Does the row instantiate wide form f for Scalar?
+template <typename Scalar>
 bool wide_row_serves(const WideRow& row, const std::string& f) {
-    return wide_compiled<T>(row) && row.trace.count(f) > 0 && (!kCx<T> || row.real_only.count(f) == 0);
+    return wide_compiled<Scalar>(row) && row.trace.count(f) > 0 && (!kCx<Scalar> || row.real_only.count(f) == 0);
 }
-// The bytes a wide launch gives its two local accessors: one k x (m + n) tile of T, which wide v2
+// The bytes a wide launch gives its two local accessors: one k x (m + n) tile of Scalar, which wide v2
 // (64x64, every scalar but double) double-buffers; complex<float> v2 is 32 KiB, a Metal limit, and
 // complex<double> 64x64x16 is 64 KiB, over acpp's 48 KiB without the opt-in.
 // WP-K: every non-64x64 tile double-buffers too while two stages stay within 40 KiB.
-template <typename T>
+template <typename Scalar>
 std::int64_t wide_slm(const WideRow& row) {
-    const bool v2 = wide_v2<T>(row);
-    const std::int64_t one = std::int64_t(row.k) * (row.m + row.n) * std::int64_t(sizeof(T));
+    const bool v2 = wide_v2<Scalar>(row);
+    const std::int64_t one = std::int64_t(row.k) * (row.m + row.n) * std::int64_t(sizeof(Scalar));
     const bool two = v2 || ((row.m != 64 || row.n != 64) && 2 * one <= 40960);
     // WP-Y: the float and complex<float> element leg pads both operands' rows by 16 B at most.
-    const std::int64_t pad = v2 && sizeof(T) <= 8 ? std::int64_t(row.k) * 2 * 16 : 0;
+    const std::int64_t pad = v2 && sizeof(Scalar) <= 8 ? std::int64_t(row.k) * 2 * 16 : 0;
     return (two ? 2 : 1) * (one + pad);
 }
-template <typename T>
+template <typename Scalar>
 bool wide_fits(const WideRow& row) {
     int wg = g_max_wg;
     for (const og::WideCfg& c : og::wide_configs)
         if (c.m == row.m && c.n == row.n && c.k == row.k) wg = c.threads();
-    return wide_slm<T>(row) <= g_slm_budget + g_slm_per_item * std::max(0, g_max_wg - wg);
+    return wide_slm<Scalar>(row) <= g_slm_budget + g_slm_per_item * std::max(0, g_max_wg - wg);
 }
 
 // split-k's host: a wide row other than 64x64 (launch_wide_transposed in every form), s 2, 4 or 8.
@@ -336,38 +337,38 @@ const WideRow* splitk_row(const og::SplitK& sk) {
 // small, spelled apart from choice.hh: complex<double> stops at 32 (its 64 bucket is 66.5 KB);
 // 128 / (2 NB) slots of NB x (NB + 1) for NB the bucket of max(m, n, k), or the float NN tiled
 // leg's (33..56) 2 NB (NB + 4) on (NB/4)^2 lanes, within the device's local memory budget.
-template <typename T>
+template <typename Scalar>
 bool small_runs(Transpose ta, Transpose tb, int m, int n, int k) {
     const int mx = std::max({m, n, k});
-    if (mx > (sizeof(T) == 16 ? 32 : 64)) return false;
-    const bool tiled = std::is_same_v<T, float> && ta == kN && tb == kN && mx > 32 && mx <= 56;
+    if (mx > (sizeof(Scalar) == 16 ? 32 : 64)) return false;
+    const bool tiled = std::is_same_v<Scalar, float> && ta == kN && tb == kN && mx > 32 && mx <= 56;
     const int nb = tiled ? (mx <= 48 ? 48 : 56) : mx <= 8 ? 8 : mx <= 16 ? 16 : mx <= 32 ? 32 : 64;
     const int wg = tiled ? (nb / 4) * (nb / 4) : 128;
-    const std::int64_t bytes = std::int64_t(tiled ? 2 * nb * (nb + 4) : (128 / (2 * nb)) * nb * (nb + 1)) * sizeof(T);
+    const std::int64_t bytes = std::int64_t(tiled ? 2 * nb * (nb + 4) : (128 / (2 * nb)) * nb * (nb + 1)) * sizeof(Scalar);
     return bytes <= g_slm_budget + g_slm_per_item * std::max(0, g_max_wg - wg);
 }
 
 // Does this native choice have an instantiation for (ta, tb) at this shape, on a GPU?
-template <typename T>
+template <typename Scalar>
 bool oracle_native(const C& c, Transpose ta, Transpose tb, int m, int n, int k) {
     if (m < 1 || n < 1 || k < 1) return false;
     return std::visit(overloaded{
         [](og::Direct) { return true; },
         [](og::Tiled) { return true; },
-        [&](og::Small) { return small_runs<T>(ta, tb, m, n, k); },
+        [&](og::Small) { return small_runs<Scalar>(ta, tb, m, n, k); },
         [&](const og::Reg& r) {
             const RegRow* row = reg_row(r);
             const std::string f = reg_form(ta, tb);
-            return std::is_same_v<T, float> && row && reg_fits(*row) &&
+            return std::is_same_v<Scalar, float> && row && reg_fits(*row) &&
                    std::find(row->forms.begin(), row->forms.end(), f) != row->forms.end();
         },
         [&](const og::Wide& w) {
             const WideRow* row = wide_row(w);
-            return row && wide_fits<T>(*row) && wide_row_serves<T>(*row, wide_form<T>(ta, tb));
+            return row && wide_fits<Scalar>(*row) && wide_row_serves<Scalar>(*row, wide_form<Scalar>(ta, tb));
         },
         [&](const og::SplitK& sk) {
             const WideRow* row = splitk_row(sk);
-            return row && wide_fits<T>(*row) && wide_row_serves<T>(*row, wide_form<T>(ta, tb));
+            return row && wide_fits<Scalar>(*row) && wide_row_serves<Scalar>(*row, wide_form<Scalar>(ta, tb));
         },
         [](og::Vendor) { return false; },
     }, c);
@@ -376,7 +377,7 @@ bool oracle_native(const C& c, Transpose ta, Transpose tb, int m, int n, int k) 
 // The kernel-trace name the pinned choice must launch; "" for the vendor (no SYCL kernel).
 // base8: the operands sit half a scalar past a 16-byte boundary (run_pinned_base8); stages: under
 // BATCHLAS_GEMM_WIDE_STAGES=stages (0: unset).
-template <typename T>
+template <typename Scalar>
 std::string expected_kernel(const C& c, Transpose ta, Transpose tb, bool aligned_layout, bool base8 = false,
                             int stages = 0) {
     return std::visit(overloaded{
@@ -391,22 +392,22 @@ std::string expected_kernel(const C& c, Transpose ta, Transpose tb, bool aligned
         },
         [&](const og::Wide& w) {
             const WideRow* row = wide_row(w);
-            std::string f = wide_form<T>(ta, tb);
+            std::string f = wide_form<Scalar>(ta, tb);
             // A complex<double> is one 16-byte vector, so its strided views take the aligned leg too.
             // Wide v2 (64x64, every scalar but double) has the 16-byte leg in every form; of the
             // others only double's NN 64x64x16 kernel has an aligned leg (64x64x8 NN is transposed's).
-            const bool aligned = !base8 && (aligned_layout || sizeof(T) == 16);
-            const bool v2 = wide_v2<T>(*row);
+            const bool aligned = !base8 && (aligned_layout || sizeof(Scalar) == 16);
+            const bool v2 = wide_v2<Scalar>(*row);
             const bool nn_leg = f == "NN" && (w.m != 64 || w.n != 64 || w.k == 16);
             if ((nn_leg || v2) && aligned && row->trace.count(f + "+aligned")) f += "+aligned";
             const bool copy = wide_copy_leg(stages) && !base8;
             const bool s3 = w.m == 128 && w.n == 128 && copy && g_slm_budget >= 48 * 1024;
-            const bool async = !v2 && kWideAsync<T> && copy;
+            const bool async = !v2 && kWideAsync<Scalar> && copy;
             return row->trace.at(f) + (s3 ? "_s3" : "") + (async ? (aligned ? "_async_vec" : "_async") : "");
         },
         [&](const og::SplitK& sk) {
-            const bool async = kWideAsync<T> && wide_copy_leg(stages) && !base8;
-            return splitk_row(sk)->trace.at(wide_form<T>(ta, tb)) + "_splitk" +
+            const bool async = kWideAsync<Scalar> && wide_copy_leg(stages) && !base8;
+            return splitk_row(sk)->trace.at(wide_form<Scalar>(ta, tb)) + "_splitk" +
                 (async ? (aligned_layout ? "_async_vec" : "_async") : "");
         },
         [](og::Vendor) { return std::string(); },
@@ -443,18 +444,18 @@ struct Spec {
 // starts i (mod 4) elements past a 16-byte boundary. Ld2: Padded with ld = 2 (mod 4), so
 // complex<float> columns alternate 32- and 16-byte aligned and float's ld is not whole granules. The
 // panel form carves A, B and C from one parent at its ld and stride, B aliasing A.
-template <typename T>
+template <typename Scalar>
 struct Problem {
     Spec s;
-    T alpha{}, beta{};
+    Scalar alpha{}, beta{};
     Region a, b, c;
-    UnifiedVector<T> mem;
-    UnifiedVector<T*> pa, pb, pc;
-    ub::Pristine<T> pristine;  // mem's initial contents: the reps on the host and the device
+    UnifiedVector<Scalar> mem;
+    UnifiedVector<Scalar*> pa, pb, pc;
+    ub::Pristine<Scalar> pristine;  // mem's initial contents: the reps on the host and the device
 
-    MVof<T> A() { return {mem.data() + a.off, a.rows, a.cols, a.ld, a.stride, s.batch, pa.data()}; }
-    MVof<T> B() { return {mem.data() + b.off, b.rows, b.cols, b.ld, b.stride, s.batch, pb.data()}; }
-    MVof<T> Cv() { return {mem.data() + c.off, c.rows, c.cols, c.ld, c.stride, s.batch, pc.data()}; }
+    MVof<Scalar> A() { return {mem.data() + a.off, a.rows, a.cols, a.ld, a.stride, s.batch, pa.data()}; }
+    MVof<Scalar> B() { return {mem.data() + b.off, b.rows, b.cols, b.ld, b.stride, s.batch, pb.data()}; }
+    MVof<Scalar> Cv() { return {mem.data() + c.off, c.rows, c.cols, c.ld, c.stride, s.batch, pc.data()}; }
     static std::size_t at(const Region& r, int it, int i, int j) {
         return r.off + std::size_t(it) * r.stride + std::size_t(j) * r.ld + i;
     }
@@ -462,7 +463,7 @@ struct Problem {
     // m x n of every item skipped when skip_c. The second: with skip_c, the first C element of an
     // item at or past the representatives that differs from its representative's.
     std::pair<std::optional<std::size_t>, std::optional<std::size_t>> changes(bool skip_c) const {
-        using H = typename ub::Pristine<T>::Hole;
+        using H = typename ub::Pristine<Scalar>::Hole;
         std::optional<H> hole;
         if (skip_c) hole = H{c.off, std::size_t(c.ld), std::size_t(s.m), std::size_t(s.n)};
         return pristine.first_change_on_device(mem.data(), hole);
@@ -471,42 +472,42 @@ struct Problem {
     // mem back to its initial contents, so one problem serves every candidate of a shape.
     void restore() { pristine.write(mem.data()); }
     // A view of region g's representatives as first written (batch reps), on the device.
-    MatrixView<T, MatrixFormat::Dense> initial(const Region& g) const {
+    MatrixView<Scalar, MatrixFormat::Dense> initial(const Region& g) const {
         return {pristine.rep(g.off), g.rows, g.cols, g.ld, g.stride, int(pristine.reps)};
     }
 };
 
-template <typename T>
-T poison() {
-    return MatrixView<T, MatrixFormat::Dense>::make(RealOf<T>(-999), RealOf<T>(777));
+template <typename Scalar>
+Scalar poison() {
+    return MatrixView<Scalar, MatrixFormat::Dense>::make(RealOf<Scalar>(-999), RealOf<Scalar>(777));
 }
 
 // segs: (offset, batch stride) of each region of whole items, ascending. Only the representatives
 // draw, in the order of one pass over the batch; the rest of the batch is copied from them.
-template <typename T>
-void init(Problem<T>& p, std::size_t total, std::initializer_list<std::pair<std::size_t, std::size_t>> segs) {
-    using R = RealOf<T>;
+template <typename Scalar>
+void init(Problem<Scalar>& p, std::size_t total, std::initializer_list<std::pair<std::size_t, std::size_t>> segs) {
+    using R = RealOf<Scalar>;
     const Spec& s = p.s;
-    p.alpha = MatrixView<T, MatrixFormat::Dense>::make(R(1.25), R(-0.5));
-    p.beta = s.beta_zero ? T(0) : MatrixView<T, MatrixFormat::Dense>::make(R(-0.75), R(0.25));
+    p.alpha = MatrixView<Scalar, MatrixFormat::Dense>::make(R(1.25), R(-0.5));
+    p.beta = s.beta_zero ? Scalar(0) : MatrixView<Scalar, MatrixFormat::Dense>::make(R(-0.75), R(0.25));
     const R nan = std::numeric_limits<R>::quiet_NaN();
-    const T fill = s.nan_poison ? MatrixView<T, MatrixFormat::Dense>::make(nan, nan) : poison<T>();
-    p.pa = UnifiedVector<T*>(s.batch, nullptr);
-    p.pb = UnifiedVector<T*>(s.batch, nullptr);
-    p.pc = UnifiedVector<T*>(s.batch, nullptr);
+    const Scalar fill = s.nan_poison ? MatrixView<Scalar, MatrixFormat::Dense>::make(nan, nan) : poison<Scalar>();
+    p.pa = UnifiedVector<Scalar*>(s.batch, nullptr);
+    p.pb = UnifiedVector<Scalar*>(s.batch, nullptr);
+    p.pc = UnifiedVector<Scalar*>(s.batch, nullptr);
     const int reps = s.period > 0 ? std::min(s.period, s.batch) : s.batch;
-    p.pristine = ub::Pristine<T>(total, std::size_t(s.batch), std::size_t(reps), fill, segs);
+    p.pristine = ub::Pristine<Scalar>(total, std::size_t(s.batch), std::size_t(reps), fill, segs);
     std::mt19937 gen(s.seed);
     std::uniform_real_distribution<R> u(R(-1), R(1));
     for (int it = 0; it < reps; ++it) {
         auto put = [&](const Region& g, bool is_c) {
             for (int j = 0; j < g.cols; ++j)
                 for (int i = 0; i < g.rows; ++i) {
-                    T& v = p.pristine.at(Problem<T>::at(g, it, i, j));
-                    if (is_c && s.nan_c) v = MatrixView<T, MatrixFormat::Dense>::make(nan, nan);
+                    Scalar& v = p.pristine.at(Problem<Scalar>::at(g, it, i, j));
+                    if (is_c && s.nan_c) v = MatrixView<Scalar, MatrixFormat::Dense>::make(nan, nan);
                     else {
                         const auto re = u(gen), im = u(gen);
-                        v = MatrixView<T, MatrixFormat::Dense>::make(re, im);
+                        v = MatrixView<Scalar, MatrixFormat::Dense>::make(re, im);
                     }
                 }
         };
@@ -514,22 +515,22 @@ void init(Problem<T>& p, std::size_t total, std::initializer_list<std::pair<std:
         if (p.b.off != p.a.off) put(p.b, false);
         put(p.c, true);
     }
-    p.mem = UnifiedVector<T>(total);
+    p.mem = UnifiedVector<Scalar>(total);
     p.pristine.write(p.mem.data());
 }
 
 // The first element at which two equally sized UnifiedVectors differ bit for bit.
-template <typename T>
-std::optional<std::size_t> first_diff(const UnifiedVector<T>& x, const UnifiedVector<T>& y) {
+template <typename Scalar>
+std::optional<std::size_t> first_diff(const UnifiedVector<Scalar>& x, const UnifiedVector<Scalar>& y) {
     if (x.size() != y.size()) return std::min(x.size(), y.size());
     return ub::first_diff(ub::download(x.data(), x.size(), 0), ub::download(y.data(), y.size(), 1), x.size());
 }
 
 std::size_t up4(std::size_t v) { return (v + 3) / 4 * 4; }
 
-template <typename T>
-Problem<T> make_problem(const Spec& s) {
-    Problem<T> p;
+template <typename Scalar>
+Problem<Scalar> make_problem(const Spec& s) {
+    Problem<Scalar> p;
     p.s = s;
     const int ar = s.ta == kN ? s.m : s.k, ac = s.ta == kN ? s.k : s.m;
     const int br = s.tb == kN ? s.k : s.n, bc = s.tb == kN ? s.n : s.k;
@@ -553,9 +554,9 @@ Problem<T> make_problem(const Spec& s) {
     return p;
 }
 
-template <typename T>
-inline constexpr bool kWideV2 = std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>> ||
-                                std::is_same_v<T, std::complex<double>>;
+template <typename Scalar>
+inline constexpr bool kWideV2 = std::is_same_v<Scalar, float> || std::is_same_v<Scalar, std::complex<float>> ||
+                                std::is_same_v<Scalar, std::complex<double>>;
 
 // Wide v2's leg against (A layout, B layout): 16-byte loads only when both bases are 16-byte
 // aligned and both ld and batch stride are whole granules, never from the shape (160 x 136 x 48
@@ -563,11 +564,11 @@ inline constexpr bool kWideV2 = std::is_same_v<T, float> || std::is_same_v<T, st
 // whole B conjunct) launches the 16-byte leg on a misaligned operand. Ld2 straddles the ld term:
 // complex<float> (2 per granule) takes it, float (4) does not. complex<double> is one element per
 // granule, so every layout here is whole granules: all twelve take the 16-byte leg.
-template <typename T>
+template <typename Scalar>
 std::vector<std::tuple<Layout, Layout, bool>> wide_v2_leg_layouts() {
     using L = Layout;
-    const bool cd = std::is_same_v<T, std::complex<double>>;
-    const bool cf = cd || std::is_same_v<T, std::complex<float>>;
+    const bool cd = std::is_same_v<Scalar, std::complex<double>>;
+    const bool cf = cd || std::is_same_v<Scalar, std::complex<float>>;
     return {{L::Padded, L::Padded, true}, {L::Ld2, L::Ld2, cf},       {L::OddLd, L::OddLd, cd},
             {L::ItemSkew, L::ItemSkew, cd}, {L::Padded, L::OddLd, cd}, {L::OddLd, L::Padded, cd},
             {L::Padded, L::ItemSkew, cd}, {L::ItemSkew, L::Padded, cd}, {L::Padded, L::Gap1, cd},
@@ -577,10 +578,10 @@ std::vector<std::tuple<Layout, Layout, bool>> wide_v2_leg_layouts() {
 // A panel update in one parent, all three operands at the parent's ld and stride: potrf's
 // A22 -= L21 L21^H (ta = N; B is A's own region, read twice), or a transposed-A shape such as
 // geqrf's V^H A22 (A = U12 above A22; tb = N reads U12 again, a transposed tb reads L21).
-template <typename T>
-Problem<T> make_panel(Spec s, int parent) {
+template <typename Scalar>
+Problem<Scalar> make_panel(Spec s, int parent) {
     s.layout = Layout::Strided;
-    Problem<T> p;
+    Problem<Scalar> p;
     p.s = s;
     const int ld = parent + 5, stride = ld * parent + 9, r0 = 3;
     const Region l21{std::size_t(r0 + s.k), s.m, s.k, ld, stride};            // rows r0+k.., cols 0..k
@@ -596,29 +597,29 @@ Problem<T> make_panel(Spec s, int parent) {
 // The worst of `items` (all below the representatives) against the library's componentwise BLAS
 // backward error (k eps units); the operands and C0 are read from the pristine representatives, so a
 // kernel that wrote into A, B or C0 cannot hide it.
-template <typename T>
-::testing::AssertionResult items_ok(Queue& ctx, const Problem<T>& p, std::span<const int> items) {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+::testing::AssertionResult items_ok(Queue& ctx, const Problem<Scalar>& p, std::span<const int> items) {
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     const Spec& s = p.s;
     const int reps = int(p.pristine.reps);
     const MV C1(p.mem.data() + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, reps);
     // The reps live in device memory and gemm_backward_error reads on the host: stage them.
-    Matrix<T, MatrixFormat::Dense> A0(p.a.rows, p.a.cols, reps), B0(p.b.rows, p.b.cols, reps),
+    Matrix<Scalar, MatrixFormat::Dense> A0(p.a.rows, p.a.cols, reps), B0(p.b.rows, p.b.cols, reps),
         C0(p.c.rows, p.c.cols, reps);
     MV::copy(ctx, A0, p.initial(p.a)).wait();
     MV::copy(ctx, B0, p.initial(p.b)).wait();
     MV::copy(ctx, C0, p.initial(p.c)).wait();
     const double err = MV::gemm_backward_error(ctx, A0, s.ta, B0, s.tb, C0, C1, MV::up(p.alpha), MV::up(p.beta), items);
-    if (!batchlas::verify::pass<T>(batchlas::verify::Check::blas, s.k, err))
+    if (!batchlas::verify::pass<Scalar>(batchlas::verify::Check::blas, s.k, err))
         return ::testing::AssertionFailure() << "worst of " << items.size() << " items: componentwise backward error " << err
-                                             << " exceeds " << batchlas::verify::bound<T>(batchlas::verify::Check::blas, s.k);
+                                             << " exceeds " << batchlas::verify::bound<Scalar>(batchlas::verify::Check::blas, s.k);
     return ::testing::AssertionSuccess();
 }
 
 // The checked items are right, nothing outside C's footprint moved, and a repeating batch is
 // bit-identical to its representatives.
-template <typename T>
-void expect_gemm(Queue& ctx, const Problem<T>& p, const std::string& what) {
+template <typename Scalar>
+void expect_gemm(Queue& ctx, const Problem<Scalar>& p, const std::string& what) {
     const Spec& s = p.s;
     std::vector<int> items;
     if (s.period > 0) {
@@ -705,9 +706,9 @@ std::vector<std::pair<std::string, std::string>> with_gemm_table(const std::stri
     return files;
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;
@@ -816,24 +817,24 @@ protected:
         const Transpose ta = p.s.ta, tb = p.s.tb;
         try {
             const bool launched = std::visit(overloaded{
-                [&](og::Direct) { (void)sycl_gemm::gemm_direct<T>(q, A, Bm, Cm, p.alpha, p.beta, ta, tb); return true; },
-                [&](og::Tiled) { (void)sycl_gemm::gemm_tiled<T>(q, A, Bm, Cm, p.alpha, p.beta, ta, tb); return true; },
-                [&](og::Small) { (void)sycl_gemm::gemm_small<T>(q, A, Bm, Cm, p.alpha, p.beta, ta, tb); return true; },
+                [&](og::Direct) { (void)ops::gemm::gemm_direct<T>(q, A, Bm, Cm, p.alpha, p.beta, ta, tb); return true; },
+                [&](og::Tiled) { (void)ops::gemm::gemm_tiled<T>(q, A, Bm, Cm, p.alpha, p.beta, ta, tb); return true; },
+                [&](og::Small) { (void)ops::gemm::gemm_small<T>(q, A, Bm, Cm, p.alpha, p.beta, ta, tb); return true; },
                 [&](const og::Reg& r) {
                     if constexpr (!std::is_same_v<T, float>) {
                         if (why) *why = "reg is float only";
                         return false;
                     } else {
-                        (void)sycl_gemm::gemm_reg(q, r.m, r.n, r.k, r.u, A, Bm, Cm, p.alpha, p.beta, ta, tb);
+                        (void)ops::gemm::gemm_reg(q, r.m, r.n, r.k, r.u, A, Bm, Cm, p.alpha, p.beta, ta, tb);
                         return true;
                     }
                 },
                 [&](const og::Wide& w) {
-                    (void)sycl_gemm::gemm_wide<T>(q, w.m, w.n, w.k, A, Bm, Cm, p.alpha, p.beta, ta, tb);
+                    (void)ops::gemm::gemm_wide<T>(q, w.m, w.n, w.k, A, Bm, Cm, p.alpha, p.beta, ta, tb);
                     return true;
                 },
                 [&](const og::SplitK& sk) {
-                    (void)sycl_gemm::gemm_splitk<T>(q, sk.m, sk.n, sk.k, sk.s, A, Bm, Cm, p.alpha, p.beta, ta, tb);
+                    (void)ops::gemm::gemm_splitk<T>(q, sk.m, sk.n, sk.k, sk.s, A, Bm, Cm, p.alpha, p.beta, ta, tb);
                     return true;
                 },
                 [&](og::Vendor) {
@@ -968,19 +969,19 @@ TYPED_TEST(GemmCandidates, PinnedCandidatesEveryFormShapeAndLayout) {
 
 // The (reg, wide) counts of (config, form) pairs the oracle rows list no instantiation for,
 // counted from the rows alone (no shape, no device budget), so a loop that skips cases is red.
-template <typename T>
+template <typename Scalar>
 std::pair<int, int> missing_instantiations() {
     int reg = 0, wide = 0;
-    for (const C& c : og::candidates<T>())
+    for (const C& c : og::candidates<Scalar>())
         for (Transpose ta : kForms)
             for (Transpose tb : kForms) {
                 if (const auto* r = std::get_if<og::Reg>(&c)) {
                     const RegRow* row = reg_row(*r);
-                    reg += !std::is_same_v<T, float> || !row ||
+                    reg += !std::is_same_v<Scalar, float> || !row ||
                                std::find(row->forms.begin(), row->forms.end(), reg_form(ta, tb)) == row->forms.end();
                 } else if (const auto* w = std::get_if<og::Wide>(&c)) {
                     const WideRow* row = wide_row(*w);
-                    wide += !row || !wide_row_serves<T>(*row, wide_form<T>(ta, tb));
+                    wide += !row || !wide_row_serves<Scalar>(*row, wide_form<Scalar>(ta, tb));
                 }
             }
     return {reg, wide};
@@ -1110,8 +1111,7 @@ TYPED_TEST(GemmCandidates, PinnedChoiceLaunchesItsOwnKernel) {
                     cases.push_back({c, s, expected_kernel<T>(c, ta, tb, lay == Layout::Packed)});
                 }
                 if (const auto* w = std::get_if<og::Wide>(&c);
-                    w && wide_v2<T>(*wide_row(*w)) && oracle_native<T>(c, ta, tb, 160, 136, 48))
-                {
+                    w && wide_v2<T>(*wide_row(*w)) && oracle_native<T>(c, ta, tb, 160, 136, 48)) {
                     for (const auto& [la, lb, vec] : wide_v2_leg_layouts<T>()) {
                         Spec s{ta, tb, 160, 136, 48, 2, la};
                         if (lb != la) s.layout_b = lb;
@@ -2052,7 +2052,6 @@ TYPED_TEST(GemmCandidates, SplitKGridCeilingIsServedByBatchChunking) {
     }
 }
 
-
 // WP-K, the pipelined transposed-wide staging (two stages, register prefetch, 16-byte granules)
 // on 128x32, 32x128, 64x32, 32x64, 32x32 and 16x16, every form each instantiates. Interior
 // 2TM x 2TN at k = 48 padded (the 16-byte leg, three slabs: the last stage read is 0) and k = 64
@@ -2108,7 +2107,7 @@ TYPED_TEST(GemmCandidates, WideTransposedPipelineEveryTileFormAndLegAtSaturating
                     ++ran;
                 }
                 for (const auto& [la, lb, vec] : wide_v2_leg_layouts<T>()) {
-                    static_cast<void>(vec);
+                    (void)vec;
                     Spec s{ta, tb, 2 * w.m, 2 * w.n, 48, 4, la};
                     if (lb != la) s.layout_b = lb;
                     s.seed = 10300u + 13u * unsigned(la) + unsigned(lb);
@@ -2140,7 +2139,6 @@ TYPED_TEST(GemmCandidates, WideTransposedPipelineEveryTileFormAndLegAtSaturating
     EXPECT_GT(leg_ran, 0);
     EXPECT_EQ(nan_checked, forms);
 }
-
 
 // WP-D, wide v2 (64x64x16: float, complex<float>, since WP-J complex<double>) in all 9 forms at
 // batch 1024, 7 distinct problems, each item bit-identical to its representative. Ragged 100 x 70 x 37 at ld = m + 1
@@ -3148,26 +3146,26 @@ TEST(GemmCanRun, SmallCeilingAndLocalMemoryPerScalar) {
     }
 }
 
-// candidates<T>() holds exactly the oracle's configs: a dropped entry would otherwise just
+// candidates<Scalar>() holds exactly the oracle's configs: a dropped entry would otherwise just
 // shorten every per-candidate loop.
-template <typename T>
+template <typename Scalar>
 void expect_candidate_set() {
     std::set<std::string> got, want{"direct", "tiled", "vendor"};
-    for (const C& c : og::candidates<T>()) EXPECT_TRUE(got.insert(select::to_string(c)).second) << select::to_string(c);
+    for (const C& c : og::candidates<Scalar>()) EXPECT_TRUE(got.insert(select::to_string(c)).second) << select::to_string(c);
     want.insert("small");
-    if constexpr (std::is_same_v<T, float>)
+    if constexpr (std::is_same_v<Scalar, float>)
         for (const auto& r : reg_rows())
             want.insert("reg:m=" + std::to_string(r.m) + ":n=" + std::to_string(r.n) + ":k=" + std::to_string(r.k) +
                         ":u=" + std::to_string(r.u));
     for (const auto& w : wide_rows()) {
-        if (!wide_compiled<T>(w)) continue;
+        if (!wide_compiled<Scalar>(w)) continue;
         want.insert("wide:m=" + std::to_string(w.m) + ":n=" + std::to_string(w.n) + ":k=" + std::to_string(w.k));
         for (int sl : {2, 4, 8})
             if (splitk_row(og::SplitK{w.m, w.n, w.k, sl}))
                 want.insert("splitk:m=" + std::to_string(w.m) + ":n=" + std::to_string(w.n) + ":k=" + std::to_string(w.k) +
                             ":s=" + std::to_string(sl));
     }
-    EXPECT_EQ(got, want) << select::dtype_name<T>();
+    EXPECT_EQ(got, want) << select::dtype_name<Scalar>();
 }
 TEST(GemmCandidateSet, EqualsTheOracleRows) {
     expect_candidate_set<float>();

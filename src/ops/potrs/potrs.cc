@@ -22,29 +22,29 @@ namespace ops::potrs {
 
 using select::overloaded;
 
-template <class T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <class Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
-template <class T>
-select::Key key_of(const MV<T>& A, const MV<T>& B, Uplo uplo) {
+template <class Scalar>
+select::Key key_of(const MV<Scalar>& A, const MV<Scalar>& B, Uplo uplo) {
     return {{"uplo", uplo == Uplo::Lower ? "L" : "U"}, {"n", A.rows()}, {"nrhs", B.cols()}, {"batch", A.batch_size()}};
 }
 
 // Correctness only: false means the launch would throw. The trsm pair is its children's business
 // (trsm refuses what it cannot take); a heterogeneous batch was refused before selection.
-template <class T>
-bool can_run(const PotrsChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& B) {
+template <class Scalar>
+bool can_run(const PotrsChoice& c, const select::Device& d, const MV<Scalar>& A, const MV<Scalar>& B) {
     // Both honour a batch mask: the fused kernel skips an inactive item (I1), trsm does itself.
     return std::visit(overloaded{
-        [&](Fused) { return fused_fits<T>(d, A.rows(), B.cols()); },
+        [&](Fused) { return fused_fits<Scalar>(d, A.rows(), B.cols()); },
         [&](Trsm) { return true; },
     }, c);
 }
 
 // n or nrhs below 1 (batch 0 returned earlier, a no-op) or a heterogeneous batch has no kernel, so
 // both throw before selection: neither Auto nor a pin can take them.
-template <class T>
-void throw_if_unservable(const MV<T>& A, const MV<T>& B) {
+template <class Scalar>
+void throw_if_unservable(const MV<Scalar>& A, const MV<Scalar>& B) {
     // The kernels have no per-item extents: a heterogeneous batch would be solved at the storage order.
     if (A.is_heterogeneous() || B.is_heterogeneous())
         throw batchlas::internal_error("potrs: a heterogeneous batch (per-item active dims on " +
@@ -56,23 +56,24 @@ void throw_if_unservable(const MV<T>& A, const MV<T>& B) {
 
 }  // namespace ops::potrs
 
-template <Backend Back, typename T>
-Event potrs(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
+template <Backend Back, typename Scalar>
+Event potrs(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, const MatrixView<Scalar,
+            MatrixFormat::Dense>& B,
             Uplo uplo) {
-    potrs_validate_params<T>(A, B, uplo);
+    potrs_validate_params<Scalar>(A, B, uplo);
     (void)detail::call_mask("potrs", A, B);
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
-    ops::potrs::throw_if_unservable<T>(A, B);
+    ops::potrs::throw_if_unservable<Scalar>(A, B);
     // The coverage row's key: m = k = order, n = nrhs, and uplo (the field separating rows).
     const coverage::Shape shape{.m = A.rows(), .n = B.cols(), .k = A.rows(), .batch = A.batch_size(), .uplo = uplo};
-    return select::run<Back, T>(
-        ops::potrs::spec, ctx, ops::potrs::key_of<T>(A, B, uplo), ops::potrs::candidates<T>(),
-        [&](const auto& c, const auto& d) { return ops::potrs::can_run<T>(c, d, A, B); }, shape,
+    return select::run<Back, Scalar>(
+        ops::potrs::spec, ctx, ops::potrs::key_of<Scalar>(A, B, uplo), ops::potrs::candidates<Scalar>(),
+        [&](const auto& c, const auto& d) { return ops::potrs::can_run<Scalar>(c, d, A, B); }, shape,
         {{"n", A.rows()}, {"nrhs", B.cols()}, {"batch", A.batch_size()}},
         [&](const auto& c) {
             const bool fused = std::holds_alternative<ops::potrs::Fused>(c);
             // The two solves of `trsm` chain, so they need an in-order queue.
-            return select::on_in_order_queue(ctx, [&](Queue& q) { return ops::potrs::solve<Back, T>(q, A, B, uplo, fused); });
+            return select::on_in_order_queue(ctx, [&](Queue& q) { return ops::potrs::solve<Back, Scalar>(q, A, B, uplo, fused); });
         });
 }
 

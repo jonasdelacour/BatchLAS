@@ -21,15 +21,15 @@ namespace {
 
 namespace S = ops::posv;
 
-template <typename T>
+template <typename Scalar>
 struct PosvProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     int n, nrhs, batch, lda, ldb;
     std::size_t sa, sb;
     Uplo uplo;
-    UnifiedVector<T> A0, A, B0, X;
-    UnifiedVector<T*> pA0, pA, pB0, pX;
+    UnifiedVector<Scalar> A0, A, B0, X;
+    UnifiedVector<Scalar*> pA0, pA, pB0, pX;
     MV A0v, Av, B0v, Xv;
     UnifiedVector<std::int32_t> info;
 
@@ -45,7 +45,7 @@ struct PosvProblem {
         (void)B0v.fill_random(q, false, 777);
         q.wait();
     }
-    std::size_t workspace() { return posv_buffer_size<kBackend, T>(q, Av, Xv, uplo); }
+    std::size_t workspace() { return posv_buffer_size<kBackend, Scalar>(q, Av, Xv, uplo); }
     void reset() {  // the solve overwrites A with the factor and B with X
         (void)MV::copy(q, Av, A0v);
         (void)MV::copy(q, Xv, B0v);
@@ -55,7 +55,7 @@ struct PosvProblem {
         for (int b = 0; b < batch; ++b) info[std::size_t(b)] = 0;
     }
     void run(Span<std::byte> ws) {
-        (void)posv<kBackend, T>(q, Av, Xv, uplo, ws, info.to_span());
+        (void)posv<kBackend, Scalar>(q, Av, Xv, uplo, ws, info.to_span());
         q.wait();
     }
     std::pair<double, int> verify() {
@@ -86,19 +86,19 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
-            "src/sycl/kernel_attrs.hh",
-            "src/sycl/sscp_target.hh",
+            "include/batchlas/device/detail/kernel_attrs.hh",
+            "include/batchlas/device/detail/sscp_target.hh",
             "include/batchlas/util/group-collectives.hh",
-            "src/kernels/common/sg_partition/backend_amdgcn.hh",
-            "src/kernels/common/sg_partition/backend_amdgcn_core.hh",
-            "src/kernels/common/sg_partition/backend_generic.hh",
-            "src/kernels/common/sg_partition/backend_nvptx.hh",
-            "src/kernels/common/sg_partition/backend_spirv.hh",
-            "src/kernels/common/sg_partition/backend_sscp.hh",
-            "src/kernels/common/sg_partition/sg_partition.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn_core.hh",
+            "include/batchlas/device/detail/sg_partition/backend_generic.hh",
+            "include/batchlas/device/detail/sg_partition/backend_nvptx.hh",
+            "include/batchlas/device/detail/sg_partition/backend_spirv.hh",
+            "include/batchlas/device/detail/sg_partition/backend_sscp.hh",
+            "include/batchlas/device/detail/sg_partition/sg_partition.hh",
             // family: tiny
             "src/ops/posv/kernels/posv_tiny.cc",
-            "src/kernels/common/solve_native.hh",
+            "src/ops/posv/posv_native.hh",
             // family: cta
             "src/ops/getrs/kernels/getrs_fused.cc",
             "src/ops/getrs/getrs_native.hh",
@@ -110,10 +110,51 @@ public:
         // common "src/ops/posv/posv.cc"
         // family: tiny "src/kernels/common/tiny_device.hh" "src/ops/potrf/potrf_native.hh"
         // posv cta and blocked call the public potrf and trsm: their native kernels count too.
-        // family: cta "src/ops/potrf/kernels/potrf_tiny.cc" "src/ops/potrf/kernels/potrf_cta.cc" "src/ops/potrf/kernels/potrf_cta_device.hh" "src/ops/potrf/kernels/potrf_lpanel.cc" "src/ops/potrf/kernels/potrf_lpanel_device.hh" "src/ops/potrf/kernels/potrf_blocked.cc" "src/ops/potrf/potrf_native.hh" "src/ops/potrf/potrf_slm_hole.hh" "src/ops/potrf/choice.hh"
+        // family: cta "src/ops/potrf/kernels/potrf_tiny.cc" "src/ops/potrf/kernels/potrf_cta.cc" "include/batchlas/device/lapack/potrf.hh" "src/ops/potrf/kernels/potrf_lpanel.cc" "src/ops/potrf/kernels/potrf_blocked.cc" "src/ops/potrf/potrf_native.hh" "src/util/resident_capacity.hh" "src/ops/potrf/choice.hh"
+        // family: cta "include/batchlas/device/arith.hh"
         // family: cta "src/ops/trsm/kernels/trsm_native.cc" "src/ops/trsm/trsm_native.hh" "src/ops/trsm/kernels/trsm_sg_left.cc" "src/ops/trsm/trsm_canonical.hh" "src/ops/trsm/choice.hh"
-        // family: blocked "src/ops/potrf/kernels/potrf_tiny.cc" "src/ops/potrf/kernels/potrf_cta.cc" "src/ops/potrf/kernels/potrf_cta_device.hh" "src/ops/potrf/kernels/potrf_lpanel.cc" "src/ops/potrf/kernels/potrf_lpanel_device.hh" "src/ops/potrf/kernels/potrf_blocked.cc" "src/ops/potrf/potrf_native.hh" "src/ops/potrf/potrf_slm_hole.hh" "src/ops/potrf/choice.hh"
+        // family: blocked "src/ops/potrf/kernels/potrf_tiny.cc" "src/ops/potrf/kernels/potrf_cta.cc" "include/batchlas/device/lapack/potrf.hh" "src/ops/potrf/kernels/potrf_lpanel.cc" "src/ops/potrf/kernels/potrf_blocked.cc" "src/ops/potrf/potrf_native.hh" "src/util/resident_capacity.hh" "src/ops/potrf/choice.hh"
+        // family: blocked "include/batchlas/device/arith.hh"
         // family: blocked "src/ops/trsm/kernels/trsm_native.cc" "src/ops/trsm/trsm_native.hh" "src/ops/trsm/kernels/trsm_sg_left.cc" "src/ops/trsm/trsm_canonical.hh" "src/ops/trsm/choice.hh"
+        // The include/batchlas/device/ headers each family's kernels include.
+        // family: blocked "include/batchlas/device.hh" "include/batchlas/device/core.hh"
+        // family: blocked "include/batchlas/device/exec.hh" "include/batchlas/device/grid.hh"
+        // family: blocked "include/batchlas/device/interop.hh" "include/batchlas/device/lapack/potrf.hh"
+        // family: blocked "include/batchlas/device/lapack_aux.hh" "include/batchlas/device/level1.hh"
+        // family: blocked "include/batchlas/device/level2.hh" "include/batchlas/device/level3.hh"
+        // family: blocked "include/batchlas/device/level3/cfg.hh" "include/batchlas/device/level3/copy_async.hh"
+        // family: blocked "include/batchlas/device/level3/epilogue.hh" "include/batchlas/device/level3/group.hh"
+        // family: blocked "include/batchlas/device/level3/mma.hh" "include/batchlas/device/level3/packet.hh"
+        // family: blocked "include/batchlas/device/level3/pipeline.hh" "include/batchlas/device/level3/schedule.hh"
+        // family: blocked "include/batchlas/device/level3/stage.hh" "include/batchlas/device/operand.hh"
+        // family: blocked "include/batchlas/device/reduce.hh" "include/batchlas/device/scalar.hh"
+        // family: blocked "include/batchlas/device/sg_partition.hh" "include/batchlas/device/tier.hh"
+        // family: blocked "include/batchlas/device/view.hh" "include/batchlas/device/workspace.hh"
+        // family: cta "include/batchlas/device.hh" "include/batchlas/device/core.hh" "include/batchlas/device/exec.hh"
+        // family: cta "include/batchlas/device/grid.hh" "include/batchlas/device/interop.hh"
+        // family: cta "include/batchlas/device/lapack/getrs.hh" "include/batchlas/device/lapack/potrf.hh"
+        // family: cta "include/batchlas/device/lapack_aux.hh" "include/batchlas/device/level1.hh"
+        // family: cta "include/batchlas/device/level2.hh" "include/batchlas/device/level3.hh"
+        // family: cta "include/batchlas/device/level3/cfg.hh" "include/batchlas/device/level3/copy_async.hh"
+        // family: cta "include/batchlas/device/level3/epilogue.hh" "include/batchlas/device/level3/group.hh"
+        // family: cta "include/batchlas/device/level3/mma.hh" "include/batchlas/device/level3/packet.hh"
+        // family: cta "include/batchlas/device/level3/pipeline.hh" "include/batchlas/device/level3/schedule.hh"
+        // family: cta "include/batchlas/device/level3/stage.hh" "include/batchlas/device/operand.hh"
+        // family: cta "include/batchlas/device/reduce.hh" "include/batchlas/device/scalar.hh"
+        // family: cta "include/batchlas/device/sg_partition.hh" "include/batchlas/device/tier.hh"
+        // family: cta "include/batchlas/device/view.hh" "include/batchlas/device/workspace.hh"
+        // family: tiny "include/batchlas/device/arith.hh" "include/batchlas/device/core.hh"
+        // family: tiny "include/batchlas/device/exec.hh" "include/batchlas/device/interop.hh"
+        // family: tiny "include/batchlas/device/lapack/potrf.hh" "include/batchlas/device/lapack_aux.hh"
+        // family: tiny "include/batchlas/device/level1.hh" "include/batchlas/device/level3/cfg.hh"
+        // family: tiny "include/batchlas/device/level3/copy_async.hh" "include/batchlas/device/level3/epilogue.hh"
+        // family: tiny "include/batchlas/device/level3/group.hh" "include/batchlas/device/level3/mma.hh"
+        // family: tiny "include/batchlas/device/level3/packet.hh" "include/batchlas/device/level3/pipeline.hh"
+        // family: tiny "include/batchlas/device/level3/schedule.hh" "include/batchlas/device/level3/stage.hh"
+        // family: tiny "include/batchlas/device/operand.hh" "include/batchlas/device/reduce.hh"
+        // family: tiny "include/batchlas/device/scalar.hh" "include/batchlas/device/sg_partition.hh"
+        // family: tiny "include/batchlas/device/tier.hh" "include/batchlas/device/view.hh"
+        // family: tiny "include/batchlas/device/workspace.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/posv_spec.cc"; }

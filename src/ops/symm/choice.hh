@@ -21,7 +21,7 @@ struct Vendor : select::NoFields<"vendor"> {};  ///< backend::symm_vendor (cubla
 
 using SymmChoice = std::variant<Mirror, Expand, Vendor>;  ///< fieldless: the tiles and the gemm derived; native: GPU
 
-template <typename T>  /// Every compiled choice, in tie-break order (§6.3): the scratch-free mirror, expand, vendor.
+template <typename Scalar>  /// Every compiled choice, in tie-break order (§6.3): the scratch-free mirror, expand, vendor.
 constexpr auto candidates() { return select::all_of<SymmChoice>(); }
 
 inline constexpr std::array<std::string_view, 3> last_resort{"mirror", "expand", "vendor"};  ///< nothing in the row runs

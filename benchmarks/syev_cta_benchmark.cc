@@ -41,11 +41,9 @@ inline Uplo parse_uplo(int v) {
     return (v == 0) ? Uplo::Lower : Uplo::Upper;
 }
 
-} // namespace
-
 // CTA SYEV-like benchmark (CUDA/ROCm/MKL GPU backends)
-template <typename T, Backend B>
-static void BM_SYEV_CTA(minibench::State& state) {
+template <typename Scalar, Backend B>
+void BM_SYEV_CTA(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const int jobz_i = static_cast<int>(state.range(2));
@@ -56,10 +54,10 @@ static void BM_SYEV_CTA(minibench::State& state) {
     const Uplo uplo = parse_uplo(uplo_i);
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    auto A = Matrix<T>::Random(n, n, /*hermitian=*/true, batch);
-    UnifiedVector<typename base_type<T>::type> W(n * batch);
+    auto A = Matrix<Scalar>::Random(n, n, /*hermitian=*/true, batch);
+    UnifiedVector<typename base_type<Scalar>::type> W(n * batch);
 
-    SteqrParams<T> params;
+    SteqrParams<Scalar> params;
     params.cta_wg_size_multiplier = wg_mult;
 
     const size_t ws_size = syev_cta_buffer_size(*q, A, jobz, params);
@@ -83,8 +81,8 @@ static void BM_SYEV_CTA(minibench::State& state) {
 }
 
 // Reference benchmark using LAPACKE SYEV (NETLIB backend)
-template <typename T, Backend B>
-static void BM_SYEV_NETLIB_REF(minibench::State& state) {
+template <typename Scalar, Backend B>
+void BM_SYEV_NETLIB_REF(minibench::State& state) {
     static_assert(B == Backend::NETLIB, "BM_SYEV_NETLIB_REF is only intended for NETLIB backend.");
 
     const size_t n = state.range(0);
@@ -96,8 +94,8 @@ static void BM_SYEV_NETLIB_REF(minibench::State& state) {
     const Uplo uplo = parse_uplo(uplo_i);
 
     auto q = std::make_shared<Queue>("cpu");
-    auto A = Matrix<T>::Random(n, n, /*hermitian=*/true, batch);
-    UnifiedVector<typename base_type<T>::type> W(n * batch);
+    auto A = Matrix<Scalar>::Random(n, n, /*hermitian=*/true, batch);
+    UnifiedVector<typename base_type<Scalar>::type> W(n * batch);
 
     const size_t ws_size = syev_buffer_size(*q, A, W.to_span(), jobz, uplo);
     UnifiedVector<std::byte> workspace(ws_size);
@@ -116,6 +114,8 @@ static void BM_SYEV_NETLIB_REF(minibench::State& state) {
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * flops), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 BATCHLAS_BENCH_CUDA_ALL_TYPES(BM_SYEV_CTA, SyevCtaBenchSizes);

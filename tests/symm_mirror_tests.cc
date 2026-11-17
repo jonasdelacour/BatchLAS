@@ -38,19 +38,19 @@ using namespace batchlas;
 
 namespace {
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
-template <typename T>
-inline constexpr bool kComplex = !std::is_floating_point_v<T>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+template <typename Scalar>
+inline constexpr bool kComplex = !std::is_floating_point_v<Scalar>;
 
-template <typename T>
-T val(double re, double im) {
-    if constexpr (kComplex<T>) return T(re, im);
-    else return T(re);
+template <typename Scalar>
+Scalar val(double re, double im) {
+    if constexpr (kComplex<Scalar>) return Scalar(re, im);
+    else return Scalar(re);
 }
-template <typename T>
-T conj_of(T x) {
-    if constexpr (kComplex<T>) return std::conj(x);
+template <typename Scalar>
+Scalar conj_of(Scalar x) {
+    if constexpr (kComplex<Scalar>) return std::conj(x);
     else return x;
 }
 template <typename T>
@@ -75,29 +75,30 @@ std::string label(const Spec& s) {
            " batch=" + std::to_string(s.batch) + " pad=" + std::to_string(s.pad);
 }
 
-template <typename T>
+template <typename Scalar>
 struct Operand {
     int rows = 0, cols = 0, batch = 0, ld = 0, stride = 0;
-    UnifiedVector<T> mem;
-    std::vector<T> mem0;
+    UnifiedVector<Scalar> mem;
+    std::vector<Scalar> mem0;
     Operand(int r, int c, int b, int pad, int gap)
         : rows(r), cols(c), batch(b), ld(r + pad), stride((r + pad) * c + gap),
           mem(std::size_t(stride) * std::size_t(b) + 16) {
-        for (std::size_t e = 0; e < mem.size(); ++e) mem[e] = val<T>(3000.0 + double(e % 89), -1500.0 - double(e % 7));
+        for (std::size_t e = 0; e < mem.size(); ++e) mem[e] = val<Scalar>(3000.0 + double(e % 89),
+                                                                          -1500.0 - double(e % 7));
     }
-    T& at(int it, int i, int j) { return mem[std::size_t(it) * stride + std::size_t(j) * ld + i]; }
-    MV<T> view() { return MV<T>(mem.data(), rows, cols, ld, stride, batch); }
+    Scalar& at(int it, int i, int j) { return mem[std::size_t(it) * stride + std::size_t(j) * ld + i]; }
+    MV<Scalar> view() { return MV<Scalar>(mem.data(), rows, cols, ld, stride, batch); }
     void snapshot() { mem0.assign(mem.begin(), mem.end()); }
 };
 
-template <typename T>
+template <typename Scalar>
 struct Prob {
     Spec s;
-    T alpha, beta;
-    Operand<T> A, B, C;
-    Matrix<T, MatrixFormat::Dense> Afull, B0, C0;
+    Scalar alpha, beta;
+    Operand<Scalar> A, B, C;
+    Matrix<Scalar, MatrixFormat::Dense> Afull, B0, C0;
     explicit Prob(const Spec& sp, bool beta_zero = false)
-        : s(sp), alpha(val<T>(1.25, -0.5)), beta(beta_zero ? T(0) : val<T>(-0.75, 0.25)),
+        : s(sp), alpha(val<Scalar>(1.25, -0.5)), beta(beta_zero ? Scalar(0) : val<Scalar>(-0.75, 0.25)),
           A(sp.k(), sp.k(), sp.batch, sp.pad, sp.gap), B(sp.m, sp.n, sp.batch, sp.pad, sp.gap),
           C(sp.m, sp.n, sp.batch, sp.pad + 2, sp.gap), Afull(sp.k(), sp.k(), sp.batch), B0(sp.m, sp.n, sp.batch),
           C0(sp.m, sp.n, sp.batch) {
@@ -110,23 +111,23 @@ struct Prob {
             for (int j = 0; j < k; ++j)
                 for (int i = 0; i < k; ++i) {
                     if (!named(i, j)) continue;  // the poison stays: in range, large, finite
-                    A.at(it, i, j) = it < reps ? val<T>(u(gen), u(gen)) : A.at(r, i, j);
+                    A.at(it, i, j) = it < reps ? val<Scalar>(u(gen), u(gen)) : A.at(r, i, j);
                 }
             for (int j = 0; j < sp.n; ++j)
                 for (int i = 0; i < sp.m; ++i) {
-                    B.at(it, i, j) = it < reps ? val<T>(u(gen), u(gen)) : B.at(r, i, j);
-                    C.at(it, i, j) = beta_zero ? val<T>(std::numeric_limits<double>::quiet_NaN(), 1.0)
-                                               : (it < reps ? val<T>(u(gen), u(gen)) : C.at(r, i, j));
+                    B.at(it, i, j) = it < reps ? val<Scalar>(u(gen), u(gen)) : B.at(r, i, j);
+                    C.at(it, i, j) = beta_zero ? val<Scalar>(std::numeric_limits<double>::quiet_NaN(), 1.0)
+                                               : (it < reps ? val<Scalar>(u(gen), u(gen)) : C.at(r, i, j));
                 }
         }
         // The reference: the named triangle mirrored on the host (conjugated, real diagonal for hemm).
         for (int it = 0; it < sp.batch; ++it) {
             for (int j = 0; j < k; ++j)
                 for (int i = 0; i < k; ++i) {
-                    T a = named(i, j) ? A.at(it, i, j) : A.at(it, j, i);
+                    Scalar a = named(i, j) ? A.at(it, i, j) : A.at(it, j, i);
                     if (sp.herm && !named(i, j)) a = conj_of(a);
-                    if constexpr (kComplex<T>)
-                        if (sp.herm && i == j) a = T(a.real(), 0);
+                    if constexpr (kComplex<Scalar>)
+                        if (sp.herm && i == j) a = Scalar(a.real(), 0);
                     Afull(i, j, it) = a;
                 }
             for (int j = 0; j < sp.n; ++j)
@@ -171,9 +172,9 @@ void expect_product(Queue& q, Prob<T>& p, const std::string& what) {
                         << j << ")";
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types_filtered<Cfg, true>::type;

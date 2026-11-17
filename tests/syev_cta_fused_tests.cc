@@ -24,13 +24,13 @@ using namespace batchlas;
 
 namespace {
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct SyevCtaFusedConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 
-} // namespace
+}  // namespace
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 using SyevCtaFusedTestTypes = ::testing::Types<
@@ -330,7 +330,6 @@ TYPED_TEST(SyevCtaFusedTest, RequiresNoWorkspace) {
     const size_t ws_bytes = syev_cta_fused_buffer_size<B, Scalar>(*this->ctx, A, JobType::EigenVectors);
     EXPECT_EQ(ws_bytes, 0u);
 }
-
 
 // A NaN entry in item 0: the rank sort must still be a bijection (NaN last, ties on index), so no
 // slot of W keeps the 12345 it was poisoned with and A's columns are a permutation; items 1.. are

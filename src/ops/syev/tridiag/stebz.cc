@@ -23,51 +23,22 @@
 #include <batchlas/backend_config.h>
 #include <src/util/template-instantiations.hh>
 #include <src/util/batch_mask.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/lapack/stebz.hh>
 
 namespace batchlas {
 
-template <Backend B, typename T>
+template <Backend B, typename Real>
 struct StebzKernel;
 
-namespace stebz_detail {
-
-// Number of eigenvalues <= x, from the sign changes of the Sturm sequence.
-//
-// Follows LAPACK dlaebz: the recurrence q_i = d_i - x - e_{i-1}^2 / q_{i-1} is
-// guarded by clamping |q| below pivmin, which keeps the count monotone in x even
-// when a pivot underflows. Without the guard a zero pivot produces an infinity and
-// the count becomes non-monotone, which breaks the bisection invariant.
-template <typename T, typename DView, typename EView>
-inline int64_t sturm_count(const DView& d,
-                           const EView& e,
-                           int64_t n,
-                           int64_t b,
-                           T x,
-                           T pivmin) {
-    int64_t count = 0;
-    T q = d(0, b) - x;
-    if (sycl::fabs(q) < pivmin) q = -pivmin;
-    if (q <= T(0)) ++count;
-
-    for (int64_t i = 1; i < n; ++i) {
-        const T ei = e(i - 1, b);
-        q = d(i, b) - x - (ei * ei) / q;
-        if (sycl::fabs(q) < pivmin) q = -pivmin;
-        if (q <= T(0)) ++count;
-    }
-    return count;
-}
-
-} // namespace stebz_detail
-
-template <Backend B, typename T>
+template <Backend B, typename Real>
 Event stebz(Queue& ctx,
-            const VectorView<T>& d,
-            const VectorView<T>& e,
-            const VectorView<T>& w,
+            const VectorView<Real>& d,
+            const VectorView<Real>& e,
+            const VectorView<Real>& w,
             Span<int32_t> m,
             const Span<std::byte>& ws,
-            StebzParams<T> params) {
+            StebzParams<Real> params) {
     const std::uint8_t* mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("stebz", d, e, w));
     const int64_t n = d.size();
     const int64_t batch_size = d.batch_size();
@@ -100,9 +71,9 @@ Event stebz(Queue& ctx,
 
     (void)ws; // Bisection needs no scratch: each work-item's state is in registers.
 
-    const T vl = params.vl;
-    const T vu = params.vu;
-    const T abstol = params.abstol;
+    const Real vl = params.vl;
+    const Real vu = params.vu;
+    const Real abstol = params.abstol;
     const int32_t max_iter = std::max<int32_t>(1, params.max_iterations);
     const bool descending = (params.order == SortOrder::Descending);
 
@@ -111,120 +82,34 @@ Event stebz(Queue& ctx,
         static_cast<size_t>(std::max<int64_t>(max_wanted, 1)));
 
     auto* m_ptr = m.data();
+    using Tier = device::tier::Blocked<1>;
+    const device::WorkspaceSize wsz = device::buffer_size<device::routine::stebz, Tier, Real>(static_cast<int>(n));
 
+    // Thin launcher (design C.8): the body is the public device::stebz.
     ctx->submit([&](sycl::handler& h) {
-        auto bounds = sycl::local_accessor<T, 1>(sycl::range<1>(3), h);   // lo, hi, pivmin
-        auto found = sycl::local_accessor<int32_t, 1>(sycl::range<1>(2), h); // count, first index
+        auto slm = sycl::local_accessor<std::byte, 1>(sycl::range<1>(wsz.local_bytes), h);
 
-        batchlas::impl::parallel_for<StebzKernel<B, T>>(h,
-            sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch_size) * wg}, sycl::range{wg}),
-            [=](sycl::nd_item<1> item) {
-                const int64_t tid = static_cast<int64_t>(item.get_local_linear_id());
-                const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
+        batchlas::impl::parallel_for<StebzKernel<B, Real>>(h,
+            sycl::nd_range<1>(sycl::range<1>{static_cast<size_t>(batch_size) * wg}, sycl::range<1>{wg}),
+            [=](sycl::nd_item<1> it) {
+                const int64_t bid = static_cast<int64_t>(it.get_group_linear_id());
                 if (mask != nullptr && mask[bid] == 0) return;  // I1: before the first collective
-                const int64_t local_size = static_cast<int64_t>(item.get_local_range(0));
-                auto cta = item.get_group();
-
-                // Gershgorin bounds: every eigenvalue lies in
-                // [min_i (d_i - r_i), max_i (d_i + r_i)] with r_i = |e_{i-1}| + |e_i|.
-                T lo_partial = std::numeric_limits<T>::max();
-                T hi_partial = -std::numeric_limits<T>::max();
-                T e2_max_partial = T(0);
-                for (int64_t i = tid; i < n; i += local_size) {
-                    const T left = (i > 0) ? sycl::fabs(e(i - 1, bid)) : T(0);
-                    const T right = (i < n - 1) ? sycl::fabs(e(i, bid)) : T(0);
-                    const T radius = left + right;
-                    lo_partial = sycl::min(lo_partial, d(i, bid) - radius);
-                    hi_partial = sycl::max(hi_partial, d(i, bid) + radius);
-                    e2_max_partial = sycl::max(e2_max_partial, right * right);
-                }
-
-                const T lo_all = batchlas::portable::reduce_over_group(cta, lo_partial, sycl::minimum<T>());
-                const T hi_all = batchlas::portable::reduce_over_group(cta, hi_partial, sycl::maximum<T>());
-                const T e2_max = batchlas::portable::reduce_over_group(cta, e2_max_partial, sycl::maximum<T>());
-
-                if (tid == 0) {
-                    const T eps = std::numeric_limits<T>::epsilon();
-                    const T norm = sycl::max(sycl::fabs(lo_all), sycl::fabs(hi_all));
-                    // Widen slightly so that count(lo) == 0 and count(hi) == n
-                    // strictly, which the bisection invariant relies on.
-                    const T pad = eps * norm * T(2) + std::numeric_limits<T>::min();
-                    bounds[0] = lo_all - pad;
-                    bounds[1] = hi_all + pad;
-                    bounds[2] = std::numeric_limits<T>::min() * sycl::max(T(1), e2_max);
-                    found[0] = 0;
-                    found[1] = 0;
-                }
-                sycl::group_barrier(cta);
-
-                const T glo = bounds[0];
-                const T ghi = bounds[1];
-                const T pivmin = bounds[2];
-                const T eps = std::numeric_limits<T>::epsilon();
-                const T norm = sycl::max(sycl::fabs(glo), sycl::fabs(ghi));
-                const T tol = (abstol > T(0)) ? abstol : (eps * sycl::max(norm, T(1)));
-
-                // For a value range, first convert (vl, vu] into an index range:
-                // the eigenvalues in the interval are exactly those with index in
-                // [count(vl), count(vu)-1].
-                int64_t first = 0;
-                int64_t last = -1;
-                if (value_range) {
-                    if (tid == 0) {
-                        const int64_t c_lo = stebz_detail::sturm_count<T>(d, e, n, bid, vl, pivmin);
-                        const int64_t c_hi = stebz_detail::sturm_count<T>(d, e, n, bid, vu, pivmin);
-                        found[0] = static_cast<int32_t>(c_hi - c_lo);
-                        found[1] = static_cast<int32_t>(c_lo);
-                    }
-                    sycl::group_barrier(cta);
-                    first = static_cast<int64_t>(found[1]);
-                    last = first + static_cast<int64_t>(found[0]) - 1;
-                } else {
-                    first = il;
-                    last = iu;
-                    if (tid == 0) found[0] = static_cast<int32_t>(last - first + 1);
-                }
-
-                const int64_t count_wanted = last - first + 1;
-
-                // One work-item per wanted eigenvalue; no interaction between them.
-                for (int64_t slot = tid; slot < count_wanted; slot += local_size) {
-                    const int64_t j = first + slot;
-
-                    // Invariant: count(left) <= j < count(right), so the j-th
-                    // eigenvalue (0-based, ascending) lies in (left, right].
-                    T left = glo;
-                    T right = ghi;
-                    for (int32_t iter = 0; iter < max_iter; ++iter) {
-                        if ((right - left) <= tol) break;
-                        const T mid = left + (right - left) * T(0.5);
-                        // Guard against the midpoint not advancing at the limit of
-                        // floating-point resolution.
-                        if (mid <= left || mid >= right) break;
-                        if (stebz_detail::sturm_count<T>(d, e, n, bid, mid, pivmin) >= j + 1) {
-                            right = mid;
-                        } else {
-                            left = mid;
-                        }
-                    }
-
-                    const T lambda = left + (right - left) * T(0.5);
-                    const int64_t out = descending ? (count_wanted - 1 - slot) : slot;
-                    w(out, bid) = lambda;
-                }
-
-                sycl::group_barrier(cta);
-                if (tid == 0) {
-                    m_ptr[bid] = found[0];
-                }
+                const device::RtGroup<> ex{it};
+                const auto dv = device::vec(d.data_ptr() + bid * d.stride(), int(n), d.inc());
+                const auto ev = device::vec(e.data_ptr() + bid * e.stride(), int(n) - 1, e.inc());
+                const device::StebzOptions<Real> p{value_range, il, iu, vl, vu, abstol, descending, max_iter};
+                int found = 0;
+                device::stebz<Tier>(ex, dv, ev, device::item(w, static_cast<int>(bid)), found,
+                                device::Workspace{slm.template get_multi_ptr<sycl::access::decorated::yes>(), nullptr}, p);
+                if (ex.leader()) m_ptr[bid] = found;
             });
     });
 
     return ctx.get_event();
 }
 
-template <Backend B, typename T>
-size_t stebz_buffer_size(Queue& ctx, size_t n, size_t batch_size, StebzParams<T> params) {
+template <Backend B, typename Real>
+size_t stebz_buffer_size(Queue& ctx, size_t n, size_t batch_size, StebzParams<Real> params) {
     // Bisection carries its per-eigenvalue state in registers and needs only a
     // handful of work-group locals, so no global scratch is required.
     (void)ctx; (void)n; (void)batch_size; (void)params;
@@ -245,4 +130,4 @@ size_t stebz_buffer_size(Queue& ctx, size_t n, size_t batch_size, StebzParams<T>
 
 #undef STEBZ_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

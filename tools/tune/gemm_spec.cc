@@ -43,16 +43,16 @@ Transpose trans_of(const std::string& w, bool complex) {
     return Transpose::Trans;  // a real scalar's C is its T (the key folds it)
 }
 
-template <typename T>
+template <typename Scalar>
 struct GemmProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     Transpose ta, tb;
     int m, n, k, batch;
     int ar, ac, br, bc, lda, ldb, ldc;
     std::size_t sa, sb, sc;
-    T alpha, beta;
-    UnifiedVector<T> A, B, C0, C;
+    Scalar alpha, beta;
+    UnifiedVector<Scalar> A, B, C0, C;
     MV Av, Bv, C0v, Cv;
 
     GemmProblem(Queue& q_, Transpose ta_, Transpose tb_, int m_, int n_, int k_, int batch_, int pad)
@@ -83,19 +83,19 @@ struct GemmProblem {
     }
     void clear_info() {}
     void run(Span<std::byte>) {
-        (void)gemm<kBackend, T>(q, Av, Bv, Cv, alpha, beta, ta, tb);
+        (void)gemm<kBackend, Scalar>(q, Av, Bv, Cv, alpha, beta, ta, tb);
         q.wait();
     }
     // The sampled columns of op(B), C0 and C are gathered into packed host copies, so A is read
     // once per item. op(B)'s column j is B's row j when B is transposed: gather rows then.
     std::pair<double, int> verify() {
-        using V = MatrixView<T, MatrixFormat::Dense>;
+        using V = MatrixView<Scalar, MatrixFormat::Dense>;
         std::vector<int> cols;
         for (int i = 0; i < std::min(n, kMaxCheckedCols); ++i)
             cols.push_back(n <= kMaxCheckedCols ? i : int(std::int64_t(i) * (n - 1) / (kMaxCheckedCols - 1)));
         const int nc = int(cols.size());
         const bool bt = tb != Transpose::NoTrans;
-        UnifiedVector<T> bs(std::size_t(k) * std::size_t(nc)), c0s(std::size_t(m) * std::size_t(nc)), cs(c0s.size());
+        UnifiedVector<Scalar> bs(std::size_t(k) * std::size_t(nc)), c0s(std::size_t(m) * std::size_t(nc)), cs(c0s.size());
         double worst = 0;
         for (int b : Cv.default_items()) {
             const std::size_t ob = std::size_t(b) * sb, oc = std::size_t(b) * sc;
@@ -215,25 +215,18 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
-            "src/sycl/kernel_attrs.hh",
-            "src/sycl/sscp_target.hh",
+            "include/batchlas/device/detail/kernel_attrs.hh",
+            "include/batchlas/device/detail/sscp_target.hh",
             "src/ops/gemm/kernels/gemm_kernels.cc",
             "src/ops/gemm/kernels/gemm_launch.hh",
             "src/ops/gemm/kernels/gemm_rows.hh",
             "src/ops/gemm/kernels/gemm_shard.cc.in",
             "src/ops/gemm/gemm_kernels.hh",
-            "src/ops/gemm/kernels/accessors.hh",
-            "src/ops/gemm/kernels/epilogue_linear.hh",
             // family: reg
-            "src/ops/gemm/kernels/load_policies.hh",
             "src/ops/gemm/kernels/register_128x128.hh",
             "src/ops/gemm/kernels/register_256x128.hh",
-            "src/ops/gemm/kernels/copy_async.hh",
-            "src/ops/gemm/kernels/vec4.hh",
             // family: wide
             "src/ops/gemm/kernels/register_64x64_k16_wide.hh",
-            "src/ops/gemm/kernels/copy_async.hh",
-            "src/ops/gemm/kernels/vec4.hh",
             // family: reg
             "src/ops/gemm/kernels/register_launchers.hh",
             "src/ops/gemm/kernels/register_tiled_common.hh",
@@ -243,16 +236,46 @@ public:
             // family: splitk
             "src/ops/gemm/kernels/register_wide_transposed.hh",
             "src/ops/gemm/kernels/register_64x64_k16_wide.hh",
-            "src/ops/gemm/kernels/copy_async.hh",
             "src/sycl/device_scalar.hh",
             // family: small
             "src/ops/gemm/kernels/small_batched.hh",
-            "src/ops/gemm/kernels/vec4.hh",
             "src/sycl/device_scalar.hh",
             // family: tiled
             "src/ops/gemm/kernels/tiled_general.hh",
             // common
             "src/ops/gemm/choice.hh",
+            "include/batchlas/device.hh",
+            "include/batchlas/device/arith.hh",
+            "include/batchlas/device/core.hh",
+            "include/batchlas/device/exec.hh",
+            "include/batchlas/device/grid.hh",
+            "include/batchlas/device/interop.hh",
+            "include/batchlas/device/lapack_aux.hh",
+            "include/batchlas/device/level1.hh",
+            "include/batchlas/device/level2.hh",
+            "include/batchlas/device/level3.hh",
+            "include/batchlas/device/level3/cfg.hh",
+            "include/batchlas/device/level3/copy_async.hh",
+            "include/batchlas/device/level3/epilogue.hh",
+            "include/batchlas/device/level3/mma.hh",
+            "include/batchlas/device/level3/packet.hh",
+            "include/batchlas/device/level3/pipeline.hh",
+            "include/batchlas/device/level3/schedule.hh",
+            "include/batchlas/device/level3/stage.hh",
+            "include/batchlas/device/operand.hh",
+            "include/batchlas/device/reduce.hh",
+            "include/batchlas/device/scalar.hh",
+            "include/batchlas/device/tier.hh",
+            "include/batchlas/device/view.hh",
+            "include/batchlas/device/workspace.hh",
+            "include/batchlas/util/group-collectives.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn_core.hh",
+            "include/batchlas/device/detail/sg_partition/backend_generic.hh",
+            "include/batchlas/device/detail/sg_partition/backend_nvptx.hh",
+            "include/batchlas/device/detail/sg_partition/backend_spirv.hh",
+            "include/batchlas/device/detail/sg_partition/backend_sscp.hh",
+            "include/batchlas/device/detail/sg_partition/sg_partition.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin

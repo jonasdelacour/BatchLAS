@@ -14,13 +14,13 @@ namespace batchlas::python {
 
 namespace {
 
-template <typename T>
-const DenseMatrixT<T>& typed(const DenseMatrix& wrapper) {
-    return std::get<DenseMatrixT<T>>(wrapper.storage);
+template <typename Scalar>
+const DenseMatrixT<Scalar>& typed(const DenseMatrix& wrapper) {
+    return std::get<DenseMatrixT<Scalar>>(wrapper.storage);
 }
 
-template <typename R>
-py::object values_to_python(const UnifiedVector<R>& values, int per_item, int batch_size) {
+template <typename Real>
+py::object values_to_python(const UnifiedVector<Real>& values, int per_item, int batch_size) {
     return dense_vector_to_python(wrap_vector_copy(values, per_item, batch_size));
 }
 
@@ -36,15 +36,15 @@ py::object visit_real_only(const DenseMatrix& a, const char* what, F&& fn) {
     });
 }
 
-template <typename T, linalg::BinaryOp Op>
+template <typename Scalar, linalg::BinaryOp Op>
 DenseMatrix elementwise_impl(const DenseMatrix& a_wrapper,
                              const DenseMatrix& b_wrapper,
                              const std::optional<std::string>& device_name) {
-    const auto& a = typed<T>(a_wrapper);
-    const auto& b = typed<T>(b_wrapper);
-    DenseMatrixT<T> c(a.rows(), a.cols(), a.batch_size());
+    const auto& a = typed<Scalar>(a_wrapper);
+    const auto& b = typed<Scalar>(b_wrapper);
+    DenseMatrixT<Scalar> c(a.rows(), a.cols(), a.batch_size());
     Queue& queue = acquire_queue(device_name, Backend::Auto);
-    (void)linalg::elementwise_into<T, Op>(queue, a.view(), b.view(), c.view());
+    (void)linalg::elementwise_into<Scalar, Op>(queue, a.view(), b.view(), c.view());
     queue.wait();
     return wrap_dense(std::move(c));
 }
@@ -60,42 +60,42 @@ DenseMatrix elementwise_dispatch(const DenseMatrix& a,
     });
 }
 
-template <typename T>
+template <typename Scalar>
 DenseMatrix axpby_impl(const DenseMatrix& a_wrapper,
                        const DenseMatrix& b_wrapper,
                        const py::object& alpha_object,
                        const py::object& beta_object,
                        const std::optional<std::string>& device_name) {
-    const auto& a = typed<T>(a_wrapper);
-    const auto& b = typed<T>(b_wrapper);
-    DenseMatrixT<T> c(a.rows(), a.cols(), a.batch_size());
+    const auto& a = typed<Scalar>(a_wrapper);
+    const auto& b = typed<Scalar>(b_wrapper);
+    DenseMatrixT<Scalar> c(a.rows(), a.cols(), a.batch_size());
     Queue& queue = acquire_queue(device_name, Backend::Auto);
-    (void)linalg::axpby_into<T>(queue, scalar_from_object<T>(alpha_object), a.view(),
-                          scalar_from_object<T>(beta_object), b.view(), c.view());
+    (void)linalg::axpby_into<Scalar>(queue, scalar_from_object<Scalar>(alpha_object), a.view(),
+                          scalar_from_object<Scalar>(beta_object), b.view(), c.view());
     queue.wait();
     return wrap_dense(std::move(c));
 }
 
 // linalg::scale is in place, which cannot reach the caller's NumPy array (it was copied
 // on the way in), so this returns alpha * A instead.
-template <typename T>
+template <typename Scalar>
 DenseMatrix scale_impl(const DenseMatrix& a_wrapper,
                        const py::object& alpha_object,
                        const std::optional<std::string>& device_name) {
-    const auto& a = typed<T>(a_wrapper);
+    const auto& a = typed<Scalar>(a_wrapper);
     Queue& queue = acquire_queue(device_name, Backend::Auto);
-    auto c = linalg::scaled<T>(queue, a.view(), scalar_from_object<T>(alpha_object));
+    auto c = linalg::scaled<Scalar>(queue, a.view(), scalar_from_object<Scalar>(alpha_object));
     queue.wait();
     return wrap_dense(std::move(c));
 }
 
-template <typename T>
-py::object svd_impl(const DenseMatrixT<T>& a,
+template <typename Scalar>
+py::object svd_impl(const DenseMatrixT<Scalar>& a,
                     SvdVectors jobu,
                     SvdVectors jobvh,
                     std::optional<Uplo> hermitian_uplo,
                     Queue& queue) {
-    using real_type = typename base_type<T>::type;
+    using real_type = typename base_type<Scalar>::type;
     const int batch = a.batch_size();
     const int k = std::min(a.rows(), a.cols());
     if (jobu != SvdVectors::None || jobvh != SvdVectors::None) {
@@ -110,10 +110,10 @@ py::object svd_impl(const DenseMatrixT<T>& a,
     if (hermitian_uplo && a.rows() != a.cols()) {
         throw py::value_error("svd: hermitian_uplo needs square matrices");
     }
-    DenseMatrixT<T> work = a.clone();
+    DenseMatrixT<Scalar> work = a.clone();
     UnifiedVector<real_type> s(static_cast<std::size_t>(k) * static_cast<std::size_t>(batch));
     UnifiedVector<int32_t> info(static_cast<std::size_t>(batch));
-    const MatrixView<T, MatrixFormat::Dense> none;
+    const MatrixView<Scalar, MatrixFormat::Dense> none;
     if (hermitian_uplo) {
         (void)work.hermitize(queue, *hermitian_uplo);
         auto lease = queue.workspace(batchlas::gesvd_buffer_size(queue, work.view(), s.to_span(), none, none,

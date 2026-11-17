@@ -80,14 +80,14 @@ static_assert(requires(Queue& q, M A, M B, M C) {
 
 // hemm is complex-only: BLAS has no real ?hemm. Both directions are assertable here
 // because inside a concept the call is dependent, so a mismatch is false, not an error.
-template <typename T>
-concept HemmTakesOptions = requires(Queue& q, MatrixView<T, MatrixFormat::Dense> A) {
-    hemm(q, A, A, A, HemmOptions<T>{});
+template <typename Scalar>
+concept HemmTakesOptions = requires(Queue& q, MatrixView<Scalar, MatrixFormat::Dense> A) {
+    hemm(q, A, A, A, HemmOptions<Scalar>{});
 };
 
-template <typename T>
-concept HemmTakesPositional = requires(Queue& q, MatrixView<T, MatrixFormat::Dense> A) {
-    hemm(q, A, A, A, T(1), T(0), Side::Left, Uplo::Lower);
+template <typename Scalar>
+concept HemmTakesPositional = requires(Queue& q, MatrixView<Scalar, MatrixFormat::Dense> A) {
+    hemm(q, A, A, A, Scalar(1), Scalar(0), Side::Left, Uplo::Lower);
 };
 
 static_assert(HemmTakesOptions<std::complex<float>>, "hemm should accept an option struct");
@@ -97,27 +97,27 @@ static_assert(!HemmTakesOptions<float>, "hemm must not accept real operands");
 static_assert(!HemmTakesPositional<float>, "hemm must not accept real operands");
 
 // herk and her2k keep complex operands but take a real alpha (herk) or real beta
-// (both); giving alpha type T compiles and computes something that is not Hermitian.
-template <typename T>
-concept HerkTakesOptions = requires(Queue& q, MatrixView<T, MatrixFormat::Dense> A) {
-    herk(q, A, A, HerkOptions<T>{});
+// (both); giving alpha type Scalar compiles and computes something that is not Hermitian.
+template <typename Scalar>
+concept HerkTakesOptions = requires(Queue& q, MatrixView<Scalar, MatrixFormat::Dense> A) {
+    herk(q, A, A, HerkOptions<Scalar>{});
 };
 
-template <typename T>
-concept HerkTakesRealScalars = requires(Queue& q, MatrixView<T, MatrixFormat::Dense> A,
-                                       typename base_type<T>::type r) {
+template <typename Scalar>
+concept HerkTakesRealScalars = requires(Queue& q, MatrixView<Scalar, MatrixFormat::Dense> A,
+                                       typename base_type<Scalar>::type r) {
     herk(q, A, A, r, r, Uplo::Lower, Transpose::NoTrans);
 };
 
-template <typename T>
-concept Her2kTakesOptions = requires(Queue& q, MatrixView<T, MatrixFormat::Dense> A) {
-    her2k(q, A, A, A, Her2kOptions<T>{});
+template <typename Scalar>
+concept Her2kTakesOptions = requires(Queue& q, MatrixView<Scalar, MatrixFormat::Dense> A) {
+    her2k(q, A, A, A, Her2kOptions<Scalar>{});
 };
 
-template <typename T>
-concept Her2kTakesComplexAlphaRealBeta = requires(Queue& q, MatrixView<T, MatrixFormat::Dense> A,
-                                                  typename base_type<T>::type r) {
-    her2k(q, A, A, A, T(1), r, Uplo::Lower, Transpose::NoTrans);
+template <typename Scalar>
+concept Her2kTakesComplexAlphaRealBeta = requires(Queue& q, MatrixView<Scalar, MatrixFormat::Dense> A,
+                                                  typename base_type<Scalar>::type r) {
+    her2k(q, A, A, A, Scalar(1), r, Uplo::Lower, Transpose::NoTrans);
 };
 
 static_assert(HerkTakesOptions<std::complex<float>>, "herk should accept an option struct");
@@ -341,7 +341,6 @@ TEST(OptionsApi, EmptyWorkspaceIsUsedNotReplacedByALease) {
     EXPECT_GT(fresh.workspace_capacity(), fresh_before)
         << "omitting the workspace should lease one from the queue's arena";
 }
-
 
 // The positional potrf overload validated nothing: a non-square view reached the
 // backend, which factorised A.rows() x A.rows() out of it and read past the columns

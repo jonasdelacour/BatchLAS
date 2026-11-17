@@ -910,7 +910,7 @@ def git_renames(repo, base, head):
 
 
 INCLUDE = re.compile(rb'^([ \t]*#[ \t]*include[ \t]*)(?:"([^"\n]*)"|<([^>\n]*)>)', re.M)
-ANY_INCLUDE = re.compile(rb'^[ \t]*(?:#|%:)[ \t]*include', re.M)
+ANY_INCLUDE = re.compile(rb"^[ \t]*(?:#|%:)[ \t]*include", re.M)
 # A file a move can retarget without the include text changing: refused, never modelled.
 UNMODELLED = re.compile(rb'__has_include|include_next|R"[^(\s"]{0,16}\([^)]*?#[ \t]*include')
 
@@ -935,7 +935,7 @@ def canonical_includes(data, path, tree, rename=None):
         for cand in (os.path.normpath(os.path.join(r, target)) for r in roots):
             if cand in tree.paths:
                 return m.group(1) + b'"@' + (rename or {}).get(cand, cand).encode() + b'"'
-        return m.group(0) + b' ?'
+        return m.group(0) + b" ?"
     return INCLUDE.sub(sub, data)
 
 
@@ -1053,7 +1053,7 @@ def moved_self_test(d, run_line, cell, cands):
         if variant != "other":
             os.makedirs(os.path.join(repo, "src", "common"))
             git(repo, "mv", "src/a/util.hh", "src/common/util.hh")
-            inc = b'#include <src/common/util.hh>\n' if variant == "root" else b'#include "../../common/util.hh"\n'
+            inc = b"#include <src/common/util.hh>\n" if variant == "root" else b'#include "../../common/util.hh"\n'
         else:
             put(repo, "src/ops/k/util.hh", filler + b"int u;\n")
             inc = b'#include "util.hh"\n'

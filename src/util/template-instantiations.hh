@@ -51,9 +51,9 @@
 #include <batchlas/backend_config.h>
 
 #if BATCHLAS_HAS_HOST_BACKEND
-  #define BATCHLAS_IF_HOST(x) x
+#define BATCHLAS_IF_HOST(x) x
 #else
-  #define BATCHLAS_IF_HOST(x)
+#define BATCHLAS_IF_HOST(x)
 #endif
 
 // Backend::SYCL (a GPU with no vendor library, e.g. AdaptiveCpp Metal) gets float and

@@ -9,26 +9,29 @@
 // from here fails the device link with `ptxas fatal`.
 
 #include <src/ops/getrs/getrs_native.hh>
+#include <src/kernels/common/launch.hh>
 
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>
 #include <src/util/batch_mask.hh>
 #include <src/util/resident_capacity.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
+#include <batchlas/device/lapack/getrs.hh>
 #include <batchlas/util/group-collectives.hh>
 
 #include <sycl/sycl.hpp>
 
 #include <algorithm>
 #include <complex>
+#include <type_traits>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
 
 namespace batchlas {
-namespace sycl_getrs {
+namespace ops::getrs {
 
 namespace {
 
@@ -120,23 +123,23 @@ template <> struct GetrsFusedRegs120<std::complex<double>> {
 
 enum class FusedBody { kNoTrans, kTrans, kPotrs };
 
-template <typename T>
+template <typename Scalar>
 constexpr int getrs_fused_regs_for(int nrhs, FusedBody body, int cuda_cc) {
     const int i = getrs_fused_nr_bucket(nrhs);
     const auto pick = [&](const int* nt, const int* tr, const int* po) {
         return body == FusedBody::kTrans ? tr[i] : body == FusedBody::kNoTrans ? nt[i] : po[i];
     };
     if (batchlas::is_sm120_family(cuda_cc)) {
-        using R = GetrsFusedRegs120<T>;
+        using R = GetrsFusedRegs120<Scalar>;
         return pick(R::notrans, R::trans, R::potrs);
     }
-    using R = GetrsFusedRegs<T>;
+    using R = GetrsFusedRegs<Scalar>;
     return pick(R::notrans, R::trans, R::potrs);
 }
 
 // The sm_89 potrs row may only widen the old max(notrans, trans) charge, never narrow it.
-template <typename T> constexpr bool potrs_row_covers_getrs() {
-    using R = GetrsFusedRegs<T>;
+template <typename Scalar> constexpr bool potrs_row_covers_getrs() {
+    using R = GetrsFusedRegs<Scalar>;
     for (int i = 0; i < 4; ++i)
         if (R::potrs[i] < std::max(R::notrans[i], R::trans[i])) return false;
     return true;
@@ -148,7 +151,7 @@ static_assert(potrs_row_covers_getrs<float>() && potrs_row_covers_getrs<double>(
 // The work-group width: ~ n/2 clamped to [64, 1024], then capped by the register gate.
 // `register_gate` is false only on Metal: the rows are NVIDIA ptxas counts, and every Metal
 // pipeline measured reports 1024 threads (the compiler spills rather than lowering the cap).
-template <typename T>
+template <typename Scalar>
 inline int getrs_fused_wg(int n, int nrhs, int max_wg, FusedBody body, int cuda_cc, bool register_gate = true) {
     int wg = 32;
     while (wg < n / 2 && wg < 1024) wg *= 2;
@@ -157,7 +160,7 @@ inline int getrs_fused_wg(int n, int nrhs, int max_wg, FusedBody body, int cuda_
     // Per SUB-PARTITION, never `65536 / regs`: that spelling leaves zero margin at some
     // widths. evidence: docs/perf/lu.md#the-register-cap-that-binds-is-per-sub-partition
     if (register_gate) {
-        const int regs = getrs_fused_regs_for<T>(nrhs, body, cuda_cc) + kGetrsFusedRegMargin;
+        const int regs = getrs_fused_regs_for<Scalar>(nrhs, body, cuda_cc) + kGetrsFusedRegMargin;
         int cap = resident::sm89_max_work_group(regs);   // already a multiple of the sub-group
         if (cap < 32) cap = 32;
         if (wg > cap) wg = cap;
@@ -168,62 +171,43 @@ inline int getrs_fused_wg(int n, int nrhs, int max_wg, FusedBody body, int cuda_
     return wg;
 }
 
-// The 48 KB launch hole, carried verbatim from potrf_cta.cc so the two agree: a dynamic
-// local-memory request in (49152 - static_shared, 49152] fails at enqueue with
-// CUDA_ERROR_INVALID_VALUE, and is STICKY PER CUfunction, so a larger earlier launch
-// hides it from a warm test suite. evidence: docs/perf/lu.md#lu-the-48-kb-launch-hole
-constexpr std::size_t kGetrsHoleLo    = 47104;
-constexpr std::size_t kGetrsHoleHi    = 49664;
-constexpr std::size_t kGetrsHolePadTo = 49920;
-
-constexpr std::size_t getrs_hole_padded(std::size_t bytes) {
-    return (bytes > kGetrsHoleLo && bytes <= kGetrsHoleHi) ? kGetrsHolePadTo : bytes;
-}
-
+// The 48 KB launch hole (resident::hole_padded) is STICKY PER CUfunction, so a larger earlier
+// launch hides it from a warm test suite. evidence: docs/perf/lu.md#lu-the-48-kb-launch-hole
 constexpr std::size_t getrs_fused_slm(std::size_t rhs_elems, int nb,
                                       std::size_t scalar_bytes) {
-    return getrs_hole_padded(
+    return resident::hole_padded(
         (rhs_elems + static_cast<std::size_t>(nb) *
                      static_cast<std::size_t>(getrs_fused_blk_ld(nb))) * scalar_bytes);
 }
 
-// A sub-group sum, hand-rolled with shift_group_left rather than
-// sycl::reduce_over_group, which puts static shared into the kernel and reopens the
-// 48 KB hole. Afterwards only LANE 0 holds the total.
-template <typename SG, typename D>
-inline D sg_sum(const SG& sg, D v) {
-    if constexpr (dev_is_complex_v<D>) {
-        auto re = v.re, im = v.im;
-        for (int off = 16; off > 0; off >>= 1) {
-            re += sycl::shift_group_left(sg, re, off);
-            im += sycl::shift_group_left(sg, im, off);
-        }
-        return D{re, im};
-    } else {
-        for (int off = 16; off > 0; off >>= 1) v += sycl::shift_group_left(sg, v, off);
-        return v;
-    }
+// The getrs bodies are device LA ops (the core plus lapack/getrs.hh): the RHS y is
+// resident in local memory, the block solve is detail::trsm_lane (one sub-group, lane i owns row i,
+// shuffles only), the off-diagonal update detail::gemm_nr (NoTrans: row-parallel axpy form; Trans:
+// one sub-group per column, a shift-down sum with no static local memory, which would reopen the
+// 48 KB hole). NR == 1 keeps the sub-group-0 form: the round-robin over sub-groups cannot help
+// there and cost ~3%. PotrsFused stays hand-written: as gemm_nr its backward axpy loop was
+// runtime-unrolled (NR = 2: LDS 29 -> 47, +13..20%).
+
+// Every staging copy (B <-> y, A's diagonal block -> blk): core lacpy on the hand loops'
+// (e % m, e / m) walk.
+template <class Ex, class MA, class MB> BATCHLAS_DEVICE_INLINE void stage(const Ex& ex, const MA& a, const MB& b) {
+    device::lacpy<device::Part::Full, Transpose::NoTrans, device::alg::DivMod>(ex, a, b);
 }
 
-template <typename D>
-inline D dev_zero_of() {
-    if constexpr (dev_is_complex_v<D>) return D{0, 0};
-    else return D(0);
-}
+template <typename Scalar, int NR> class GetrsFusedNKernel;
+template <typename Scalar, int NR> class GetrsFusedTKernel;
 
-template <typename T, int NR> class GetrsFusedNKernel;
-template <typename T, int NR> class GetrsFusedTKernel;
-
-// NoTrans: apply F to B, solve L y = F b (unit lower), solve U x = y.
-template <typename T, int NR>
+// NoTrans: apply F to B, solve L y = F b (unit lower), solve U x = y. ONE body for every Scalar; against
+// the deleted complex<float> hand body it is 0.96-1.01x at nrhs <= 4, 1.02-1.05x at nrhs 6-8.
+template <typename Scalar, int NR>
 Event fused_launch_notrans(Queue& ctx,
-                           const T* A, int lda, int strideA,
-                           T* B, int ldb, int strideB,
+                           const Scalar* A, int lda, int strideA,
+                           Scalar* B, int ldb, int strideB,
                            const int* piv, int pstride,
                            int n, int nrhs, int batch, int wg, int nb, const std::uint8_t* mask) {
-    using DM = DevMap<T>;
+    using DM = DevMap<Scalar>;
     using D = typename DM::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     const D* const Ap = reinterpret_cast<const D*>(A);
     D* const Bp = reinterpret_cast<D*>(B);
@@ -235,171 +219,64 @@ Event fused_launch_notrans(Queue& ctx,
 
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<D, 1> slm(sycl::range<1>(slm_elems), h);
-        batchlas::impl::parallel_for<GetrsFusedNKernel<T, NR>>(h,
+        batchlas::impl::parallel_for<GetrsFusedNKernel<Scalar, NR>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-                const int tid = static_cast<int>(it.get_local_id(0));
                 const std::size_t b = it.get_group(0);
                 if (mask != nullptr && mask[b] == 0) return;  // I1: before the first barrier
                 const auto sg = it.get_sub_group();
-                const int lane = static_cast<int>(sg.get_local_linear_id());
                 const int sgid = static_cast<int>(sg.get_group_linear_id());
                 const int nsg = static_cast<int>(sg.get_group_linear_range());
-                // NR == 1 keeps the sub-group-0 form: the round-robin cannot help there and cost ~3%.
                 const bool c_active = (NR != 1) || sgid == 0;
                 const int c0 = (NR == 1) ? 0 : sgid;
                 const int cs = (NR == 1) ? 1 : nsg;
+                const device::RtGroup<> ex(it);
+                const device::SubGroup<32> sx{sg};
 
-                const D* const Ab = Ap + b * static_cast<std::size_t>(strideA);
-                D* const Bb = Bp + b * static_cast<std::size_t>(strideB);
-                const int* const pv = piv + b * static_cast<std::size_t>(pstride);
-                D* const y = &slm[0];
-                D* const blk = &slm[rhs_elems];
+                const auto a = device::mat_wide(Ap + b * static_cast<std::size_t>(strideA), n, n, lda);
+                const auto bm = device::mat_wide(Bp + b * static_cast<std::size_t>(strideB), n, nrhs, ldb);
+                const auto y = device::mat<device::Mem::Local>(&slm[0], n, nrhs, n);
+                D* const blk_p = &slm[rhs_elems];
+                const auto ipiv = device::vec(piv + b * static_cast<std::size_t>(pstride), n);
 
-                for (int e = tid; e < n * nrhs; e += wg) {
-                    const int i = e % n, c = e / n;
-                    y[e] = Bb[static_cast<std::size_t>(i) +
-                              static_cast<std::size_t>(c) * static_cast<std::size_t>(ldb)];
-                }
-                it.barrier(sycl::access::fence_space::local_space);
-
-                // F: the interchange list, walked FORWARDS, in LOCAL memory
-                if (tid < nrhs) {
-                    D* const yc = y + static_cast<std::size_t>(tid) * static_cast<std::size_t>(n);
-                    for (int k = 0; k < n; ++k) {
-                        const int p = pv[k] - 1;          // 1-BASED on the wire
-                        if (p != k) { const D t = yc[k]; yc[k] = yc[p]; yc[p] = t; }
-                    }
-                }
-                it.barrier(sycl::access::fence_space::local_space);
+                stage(ex, bm, y);
+                ex.barrier();
+                device::laswp<device::Direct::Forward>(ex, y, ipiv, 0, n);  // F b: item c walks column c
+                ex.barrier();
 
                 // L y = F b, unit lower, forward
                 for (int j = 0; j < n; j += nb) {
                     const int jb = (n - j < nb) ? (n - j) : nb;
-
-                    for (int e = tid; e < jb * jb; e += wg) {
-                        const int i = e % jb, c = e / jb;
-                        blk[static_cast<std::size_t>(i) + static_cast<std::size_t>(c) *
-                                                          static_cast<std::size_t>(bld)] =
-                            Ab[static_cast<std::size_t>(j + i) +
-                               static_cast<std::size_t>(j + c) * static_cast<std::size_t>(lda)];
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    // The block solve runs inside ONE sub-group: lane i owns row j+i in
-                    // a register and the recurrence takes no work-group barrier.
-                    // group_broadcast is a collective and must not be called under
-                    // divergence -- the lane guards are INSIDE it, not around.
-                    if (c_active && jb > 1) {
-                        for (int c = c0; c < nrhs; c += cs) {
-                            D* const yc = y + static_cast<std::size_t>(c) * static_cast<std::size_t>(n);
-                            D v = (lane < jb) ? yc[j + lane] : dev_zero_of<D>();
-                            for (int kk = 0; kk < jb - 1; ++kk) {
-                                const D pv2 = batchlas::portable::group_broadcast(sg, v, kk);
-                                if (lane > kk && lane < jb)
-                                    v = dev_sub(v, dev_mul(blk[static_cast<std::size_t>(lane) +
-                                                               static_cast<std::size_t>(kk) *
-                                                               static_cast<std::size_t>(bld)], pv2));
-                            }
-                            if (lane < jb) yc[j + lane] = v;
-                        }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    // Parallel over rows, so the read of A[i, j+kk] is coalesced.
-                    for (int i = j + jb + tid; i < n; i += wg) {
-                        D acc[NR];
-                        BATCHLAS_UNROLL_FULL
-                        for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
-                        for (int kk = 0; kk < jb; ++kk) {
-                            const D a = Ab[static_cast<std::size_t>(i) +
-                                           static_cast<std::size_t>(j + kk) *
-                                           static_cast<std::size_t>(lda)];
-                            BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c)
-                                if (c < nrhs)
-                                    fma_acc(acc[c], a, y[static_cast<std::size_t>(c) *
-                                                         static_cast<std::size_t>(n) +
-                                                         static_cast<std::size_t>(j + kk)]);
-                        }
-                        BATCHLAS_UNROLL_FULL
-                        for (int c = 0; c < NR; ++c)
-                            if (c < nrhs) {
-                                D* const yc = y + static_cast<std::size_t>(c) *
-                                                  static_cast<std::size_t>(n);
-                                yc[i] = dev_sub(yc[i], acc[c]);
-                            }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
+                    const auto blk = device::mat<device::Mem::Local>(blk_p, jb, jb, bld);
+                    stage(ex, a.sub(j, j, jb, jb), blk);
+                    ex.barrier();
+                    if (c_active && jb > 1)
+                        device::detail::trsm_lane<Uplo::Lower, Diag::Unit>(sx, blk, y.sub(j, 0, jb, nrhs), c0, cs);
+                    ex.barrier();
+                    device::detail::gemm_nr<Transpose::NoTrans, NR>(ex, device::NegOne{}, a.sub(j + jb, j, n - j - jb, jb),
+                                                            y.sub(j, 0, jb, nrhs), device::One{},
+                                                            y.sub(j + jb, 0, n - j - jb, nrhs));
+                    ex.barrier();
                 }
 
                 // U x = y, non-unit upper, backward
                 for (int jend = n; jend > 0; jend -= nb) {
                     const int j0 = (jend - nb > 0) ? (jend - nb) : 0;
                     const int jb = jend - j0;
-
-                    for (int e = tid; e < jb * jb; e += wg) {
-                        const int i = e % jb, c = e / jb;
-                        blk[static_cast<std::size_t>(i) + static_cast<std::size_t>(c) *
-                                                          static_cast<std::size_t>(bld)] =
-                            Ab[static_cast<std::size_t>(j0 + i) +
-                               static_cast<std::size_t>(j0 + c) * static_cast<std::size_t>(lda)];
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    if (c_active) {
-                        for (int c = c0; c < nrhs; c += cs) {
-                            D* const yc = y + static_cast<std::size_t>(c) * static_cast<std::size_t>(n);
-                            D v = (lane < jb) ? yc[j0 + lane] : dev_zero_of<D>();
-                            for (int kk = jb - 1; kk >= 0; --kk) {
-                                if (lane == kk)
-                                    v = dev_div(v, blk[static_cast<std::size_t>(kk) +
-                                                       static_cast<std::size_t>(kk) *
-                                                       static_cast<std::size_t>(bld)]);
-                                const D pv2 = batchlas::portable::group_broadcast(sg, v, kk);
-                                if (lane < kk)
-                                    v = dev_sub(v, dev_mul(blk[static_cast<std::size_t>(lane) +
-                                                               static_cast<std::size_t>(kk) *
-                                                               static_cast<std::size_t>(bld)], pv2));
-                            }
-                            if (lane < jb) yc[j0 + lane] = v;
-                        }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    for (int i = tid; i < j0; i += wg) {
-                        D acc[NR];
-                        BATCHLAS_UNROLL_FULL
-                        for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
-                        for (int kk = 0; kk < jb; ++kk) {
-                            const D a = Ab[static_cast<std::size_t>(i) +
-                                           static_cast<std::size_t>(j0 + kk) *
-                                           static_cast<std::size_t>(lda)];
-                            BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c)
-                                if (c < nrhs)
-                                    fma_acc(acc[c], a, y[static_cast<std::size_t>(c) *
-                                                         static_cast<std::size_t>(n) +
-                                                         static_cast<std::size_t>(j0 + kk)]);
-                        }
-                        BATCHLAS_UNROLL_FULL
-                        for (int c = 0; c < NR; ++c)
-                            if (c < nrhs) {
-                                D* const yc = y + static_cast<std::size_t>(c) *
-                                                  static_cast<std::size_t>(n);
-                                yc[i] = dev_sub(yc[i], acc[c]);
-                            }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
+                    const auto blk = device::mat<device::Mem::Local>(blk_p, jb, jb, bld);
+                    stage(ex, a.sub(j0, j0, jb, jb), blk);
+                    ex.barrier();
+                    if (c_active)
+                        device::detail::trsm_lane<Uplo::Upper, Diag::NonUnit>(sx, blk, y.sub(j0, 0, jb, nrhs), c0, cs);
+                    ex.barrier();
+                    device::detail::gemm_nr<Transpose::NoTrans, NR>(ex, device::NegOne{}, a.sub(0, j0, j0, jb),
+                                                            y.sub(j0, 0, jb, nrhs), device::One{}, y.sub(0, 0, j0, nrhs));
+                    ex.barrier();
                 }
 
-                for (int e = tid; e < n * nrhs; e += wg) {
-                    const int i = e % n, c = e / n;
-                    Bb[static_cast<std::size_t>(i) +
-                       static_cast<std::size_t>(c) * static_cast<std::size_t>(ldb)] = y[e];
-                }
+                stage(ex, y, bm);
             });
     });
     return ctx.get_event();
@@ -410,16 +287,16 @@ Event fused_launch_notrans(Queue& ctx,
 // the OUTPUT and reverses it; getting that wrong is the classic silently-wrong getrs.
 // Both solves are the DOT form, because op(U)[i][j] = op(U[j][i]): the reduction runs
 // down a CONTIGUOUS COLUMN of A.
-template <typename T, int NR>
+template <typename Scalar, int NR>
 Event fused_launch_trans(Queue& ctx,
-                         const T* A, int lda, int strideA,
-                         T* B, int ldb, int strideB,
+                         const Scalar* A, int lda, int strideA,
+                         Scalar* B, int ldb, int strideB,
                          const int* piv, int pstride,
                          int n, int nrhs, int batch, int wg, int nb, bool conj,
                          const std::uint8_t* mask) {
-    using DM = DevMap<T>;
+    using DM = DevMap<Scalar>;
     using D = typename DM::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     const D* const Ap = reinterpret_cast<const D*>(A);
     D* const Bp = reinterpret_cast<D*>(B);
@@ -432,183 +309,75 @@ Event fused_launch_trans(Queue& ctx,
 
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<D, 1> slm(sycl::range<1>(slm_elems), h);
-        batchlas::impl::parallel_for<GetrsFusedTKernel<T, NR>>(h,
+        batchlas::impl::parallel_for<GetrsFusedTKernel<Scalar, NR>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-                const int tid = static_cast<int>(it.get_local_id(0));
                 const std::size_t b = it.get_group(0);
                 if (mask != nullptr && mask[b] == 0) return;  // I1: before the first barrier
                 const auto sg = it.get_sub_group();
-                const int lane = static_cast<int>(sg.get_local_linear_id());
                 const int sgid = static_cast<int>(sg.get_group_linear_id());
-                // NR == 1 keeps the sub-group-0 form: the round-robin cannot help there and cost ~3%.
                 const bool c_active = (NR != 1) || sgid == 0;
                 const int c0 = (NR == 1) ? 0 : sgid;
                 const int cs = (NR == 1) ? 1 : nsg;
+                const device::RtGroup<> ex(it);
+                const device::SubGroup<32> sx{sg};
 
-                const D* const Ab = Ap + b * static_cast<std::size_t>(strideA);
-                D* const Bb = Bp + b * static_cast<std::size_t>(strideB);
-                const int* const pv = piv + b * static_cast<std::size_t>(pstride);
-                D* const y = &slm[0];
-                D* const blk = &slm[rhs_elems];
+                const auto a = device::mat_wide(Ap + b * static_cast<std::size_t>(strideA), n, n, lda);
+                const auto bm = device::mat_wide(Bp + b * static_cast<std::size_t>(strideB), n, nrhs, ldb);
+                const auto y = device::mat<device::Mem::Local>(&slm[0], n, nrhs, n);
+                D* const blk_p = &slm[rhs_elems];
+                const auto ipiv = device::vec(piv + b * static_cast<std::size_t>(pstride), n);
+                // op(A) = conj(A) when conj, read straight from A; blk holds op(A) and the block
+                // solves read it transposed, blk[s + t*bld], stride bld across lanes (the pad).
 
-                auto ld_a = [&](int i, int c) {
-                    const D a = Ab[static_cast<std::size_t>(i) +
-                                   static_cast<std::size_t>(c) * static_cast<std::size_t>(lda)];
-                    return conj ? dev_conj(a) : a;
-                };
+                stage(ex, bm, y);
+                ex.barrier();
 
-                for (int e = tid; e < n * nrhs; e += wg) {
-                    const int i = e % n, c = e / n;
-                    y[e] = Bb[static_cast<std::size_t>(i) +
-                              static_cast<std::size_t>(c) * static_cast<std::size_t>(ldb)];
-                }
-                it.barrier(sycl::access::fence_space::local_space);
-
-                // op(U) z = b : op(U) is LOWER, non-unit, forward
+                // op(U) z = b : op(U) is LOWER, non-unit, forward. The PAST contribution is the dot
+                // form, one sub-group per column, its 32 lanes reading 32 consecutive elements.
                 for (int j = 0; j < n; j += nb) {
                     const int jb = (n - j < nb) ? (n - j) : nb;
-
-                    // Staged contiguously in i; indexed below as blk[s + t*bld].
-                    for (int e = tid; e < jb * jb; e += wg) {
-                        const int i = e % jb, c = e / jb;
-                        blk[static_cast<std::size_t>(i) + static_cast<std::size_t>(c) *
-                                                          static_cast<std::size_t>(bld)] =
-                            ld_a(j + i, j + c);
-                    }
-
-                    // The PAST contribution: y[j+t] -= sum_{i<j} op(A[i, j+t]) y[i]. ONE
-                    // SUB-GROUP PER COLUMN, so its 32 lanes read 32 consecutive elements.
-                    for (int t = sgid; t < jb; t += nsg) {
-                        D acc[NR];
-                        BATCHLAS_UNROLL_FULL
-                        for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
-                        for (int i = lane; i < j; i += 32) {
-                            const D a = ld_a(i, j + t);
-                            BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c)
-                                if (c < nrhs)
-                                    fma_acc(acc[c], a, y[static_cast<std::size_t>(c) *
-                                                         static_cast<std::size_t>(n) +
-                                                         static_cast<std::size_t>(i)]);
-                        }
-                        BATCHLAS_UNROLL_FULL
-                        for (int c = 0; c < NR; ++c)
-                            if (c < nrhs) {
-                                const D s = sg_sum(sg, acc[c]);
-                                if (lane == 0) {
-                                    D* const yc = y + static_cast<std::size_t>(c) *
-                                                      static_cast<std::size_t>(n);
-                                    yc[j + t] = dev_sub(yc[j + t], s);
-                                }
-                            }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    // The diagonal block, by ONE sub-group. Lane t owns row t and
-                    // reads blk[s + t*bld], stride bld across lanes -- the pad.
-                    if (c_active) {
-                        for (int c = c0; c < nrhs; c += cs) {
-                            D* const yc = y + static_cast<std::size_t>(c) * static_cast<std::size_t>(n);
-                            D v = (lane < jb) ? yc[j + lane] : dev_zero_of<D>();
-                            for (int s = 0; s < jb; ++s) {
-                                if (lane == s)
-                                    v = dev_div(v, blk[static_cast<std::size_t>(s) +
-                                                       static_cast<std::size_t>(s) *
-                                                       static_cast<std::size_t>(bld)]);
-                                const D vs = batchlas::portable::group_broadcast(sg, v, s);
-                                if (lane > s && lane < jb)
-                                    v = dev_sub(v, dev_mul(blk[static_cast<std::size_t>(s) +
-                                                               static_cast<std::size_t>(lane) *
-                                                               static_cast<std::size_t>(bld)], vs));
-                            }
-                            if (lane < jb) yc[j + lane] = v;
-                        }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
+                    const auto blk = device::mat<device::Mem::Local>(blk_p, jb, jb, bld);
+                    stage(ex, device::conj_if(a.sub(j, j, jb, jb), conj), blk);
+                    device::detail::gemm_nr<Transpose::Trans, NR>(ex, device::NegOne{}, device::conj_if(a.sub(0, j, j, jb), conj), y.sub(0, 0, j, nrhs),
+                                                          device::One{}, y.sub(j, 0, jb, nrhs));
+                    ex.barrier();
+                    if (c_active)
+                        device::detail::trsm_lane<Uplo::Lower, Diag::NonUnit>(sx, device::op_view<Transpose::Trans>(blk), y.sub(j, 0, jb, nrhs), c0,
+                                                                      cs);
+                    ex.barrier();
                 }
 
                 // op(L) w = z : op(L) is UPPER, UNIT, backward
                 for (int jend = n; jend > 0; jend -= nb) {
                     const int j0 = (jend - nb > 0) ? (jend - nb) : 0;
                     const int jb = jend - j0;
-
-                    for (int e = tid; e < jb * jb; e += wg) {
-                        const int i = e % jb, c = e / jb;
-                        blk[static_cast<std::size_t>(i) + static_cast<std::size_t>(c) *
-                                                          static_cast<std::size_t>(bld)] =
-                            ld_a(j0 + i, j0 + c);
-                    }
-
-                    for (int t = sgid; t < jb; t += nsg) {
-                        D acc[NR];
-                        BATCHLAS_UNROLL_FULL
-                        for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
-                        for (int i = jend + lane; i < n; i += 32) {
-                            const D a = ld_a(i, j0 + t);
-                            BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c)
-                                if (c < nrhs)
-                                    fma_acc(acc[c], a, y[static_cast<std::size_t>(c) *
-                                                         static_cast<std::size_t>(n) +
-                                                         static_cast<std::size_t>(i)]);
-                        }
-                        BATCHLAS_UNROLL_FULL
-                        for (int c = 0; c < NR; ++c)
-                            if (c < nrhs) {
-                                const D s = sg_sum(sg, acc[c]);
-                                if (lane == 0) {
-                                    D* const yc = y + static_cast<std::size_t>(c) *
-                                                      static_cast<std::size_t>(n);
-                                    yc[j0 + t] = dev_sub(yc[j0 + t], s);
-                                }
-                            }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    // UNIT diagonal: no division, and the recurrence runs
-                    // BACKWARDS because op(L) is upper.
-                    if (c_active && jb > 1) {
-                        for (int c = c0; c < nrhs; c += cs) {
-                            D* const yc = y + static_cast<std::size_t>(c) * static_cast<std::size_t>(n);
-                            D v = (lane < jb) ? yc[j0 + lane] : dev_zero_of<D>();
-                            for (int s = jb - 1; s > 0; --s) {
-                                const D vs = batchlas::portable::group_broadcast(sg, v, s);
-                                if (lane < s)
-                                    v = dev_sub(v, dev_mul(blk[static_cast<std::size_t>(s) +
-                                                               static_cast<std::size_t>(lane) *
-                                                               static_cast<std::size_t>(bld)], vs));
-                            }
-                            if (lane < jb) yc[j0 + lane] = v;
-                        }
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
+                    const auto blk = device::mat<device::Mem::Local>(blk_p, jb, jb, bld);
+                    stage(ex, device::conj_if(a.sub(j0, j0, jb, jb), conj), blk);
+                    device::detail::gemm_nr<Transpose::Trans, NR>(ex, device::NegOne{}, device::conj_if(a.sub(jend, j0, n - jend, jb), conj),
+                                                          y.sub(jend, 0, n - jend, nrhs), device::One{},
+                                                          y.sub(j0, 0, jb, nrhs));
+                    ex.barrier();
+                    if (c_active && jb > 1)
+                        device::detail::trsm_lane<Uplo::Upper, Diag::Unit>(sx, device::op_view<Transpose::Trans>(blk), y.sub(j0, 0, jb, nrhs), c0,
+                                                                   cs);
+                    ex.barrier();
                 }
 
-                // F^{-1} on the OUTPUT: the SAME list walked BACKWARDS. Every
-                // transposition is its own inverse, so only the ORDER changes.
-                if (tid < nrhs) {
-                    D* const yc = y + static_cast<std::size_t>(tid) * static_cast<std::size_t>(n);
-                    for (int k = n - 1; k >= 0; --k) {
-                        const int p = pv[k] - 1;
-                        if (p != k) { const D t = yc[k]; yc[k] = yc[p]; yc[p] = t; }
-                    }
-                }
-                it.barrier(sycl::access::fence_space::local_space);
+                // F^{-1} on the OUTPUT: the SAME list walked BACKWARDS. Every transposition is
+                // its own inverse, so only the ORDER changes.
+                device::laswp<device::Direct::Backward>(ex, y, ipiv, 0, n);
+                ex.barrier();
 
-                for (int e = tid; e < n * nrhs; e += wg) {
-                    const int i = e % n, c = e / n;
-                    Bb[static_cast<std::size_t>(i) +
-                       static_cast<std::size_t>(c) * static_cast<std::size_t>(ldb)] = y[e];
-                }
+                stage(ex, y, bm);
             });
     });
     return ctx.get_event();
 }
 
-template <typename T, int NR, bool Lower> class PotrsFusedKernel;
+template <typename Scalar, int NR, bool Lower> class PotrsFusedKernel;
 
 // The lane slot of one right-hand side in the potrs block solve: the power of two >= jb, at least 4.
 inline int potrs_slot_width(int jb) { return jb <= 4 ? 4 : jb <= 8 ? 8 : jb <= 16 ? 16 : 32; }
@@ -624,14 +393,14 @@ inline int potrs_slots(int w, int nrhs, int cs) {
 // the DOT form (column-parallel, one sub-group per column); Upper is the mirror image,
 // U^H in the dot form and U in the axpy form. Each form reads A down a CONTIGUOUS
 // column -- the reason the two triangles are not solved by one spelling.
-template <typename T, int NR, bool Lower>
+template <typename Scalar, int NR, bool Lower>
 Event potrs_fused_launch(Queue& ctx,
-                         const T* A, int lda, int strideA,
-                         T* B, int ldb, int strideB,
+                         const Scalar* A, int lda, int strideA,
+                         Scalar* B, int ldb, int strideB,
                          int n, int nrhs, int batch, int wg, int nb, const std::uint8_t* mask) {
-    using DM = DevMap<T>;
+    using DM = DevMap<Scalar>;
     using D = typename DM::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     const D* const Ap = reinterpret_cast<const D*>(A);
     D* const Bp = reinterpret_cast<D*>(B);
@@ -644,7 +413,7 @@ Event potrs_fused_launch(Queue& ctx,
 
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<D, 1> slm(sycl::range<1>(slm_elems), h);
-        batchlas::impl::parallel_for<PotrsFusedKernel<T, NR, Lower>>(h,
+        batchlas::impl::parallel_for<PotrsFusedKernel<Scalar, NR, Lower>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
@@ -668,11 +437,12 @@ Event potrs_fused_launch(Queue& ctx,
                 const std::size_t nz = static_cast<std::size_t>(n);
                 const std::size_t bz = static_cast<std::size_t>(bld);
 
-                auto ld_a = [&](int i, int c) {
+                auto ld_a = [&](int i, int c) BATCHLAS_DEVICE_BODY {
                     return Ab[static_cast<std::size_t>(i) + static_cast<std::size_t>(c) * ldz];
                 };
                 // The adjoint's element, op(A)[i, c] = conj(A[c, i]), read at A[i, c].
-                auto ld_h = [&](int i, int c) { return dev_conj(ld_a(i, c)); };
+                auto ld_h = [&](int i, int c) BATCHLAS_DEVICE_BODY { return dev_conj(ld_a(i, c)); };
+                const auto add = [](D u, D v) { return device::Arith<D>::add(u, v); };
 
                 for (int e = tid; e < n * nrhs; e += wg) {
                     const int i = e % n, c = e / n;
@@ -696,7 +466,7 @@ Event potrs_fused_launch(Queue& ctx,
                         for (int t = sgid; t < jb; t += nsg) {
                             D acc[NR];
                             BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
+                            for (int c = 0; c < NR; ++c) acc[c] = device::Arith<D>::zero();
                             for (int i = lane; i < j; i += 32) {
                                 const D a = ld_h(i, j + t);
                                 BATCHLAS_UNROLL_FULL
@@ -706,7 +476,7 @@ Event potrs_fused_launch(Queue& ctx,
                             BATCHLAS_UNROLL_FULL
                             for (int c = 0; c < NR; ++c)
                                 if (c < nrhs) {
-                                    const D s = sg_sum(sg, acc[c]);
+                                    const D s = device::shift_reduce<32>(sg, acc[c], add);  // leader-only
                                     if (lane == 0) y[c * nz + j + t] = dev_sub(y[c * nz + j + t], s);
                                 }
                         }
@@ -724,7 +494,7 @@ Event potrs_fused_launch(Queue& ctx,
                             const int c = g * P + h;
                             const bool on = h < P && c < nrhs && l < jb;
                             D* const yc = y + (c < nrhs ? c : 0) * nz;
-                            D v = on ? yc[j + l] : dev_zero_of<D>();
+                            D v = on ? yc[j + l] : device::Arith<D>::zero();
                             for (int s = 0; s < jb; ++s) {
                                 if (on && l == s) v = dev_div(v, blk[s + s * bz]);
                                 const D vs = batchlas::portable::select_from_group(sg, v, h * w + s);
@@ -741,7 +511,7 @@ Event potrs_fused_launch(Queue& ctx,
                         for (int i = j + jb + tid; i < n; i += wg) {
                             D acc[NR];
                             BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
+                            for (int c = 0; c < NR; ++c) acc[c] = device::Arith<D>::zero();
                             for (int kk = 0; kk < jb; ++kk) {
                                 const D a = ld_a(i, j + kk);
                                 BATCHLAS_UNROLL_FULL
@@ -772,7 +542,7 @@ Event potrs_fused_launch(Queue& ctx,
                         for (int t = sgid; t < jb; t += nsg) {
                             D acc[NR];
                             BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
+                            for (int c = 0; c < NR; ++c) acc[c] = device::Arith<D>::zero();
                             for (int i = jend + lane; i < n; i += 32) {
                                 const D a = ld_h(i, j0 + t);
                                 BATCHLAS_UNROLL_FULL
@@ -782,7 +552,7 @@ Event potrs_fused_launch(Queue& ctx,
                             BATCHLAS_UNROLL_FULL
                             for (int c = 0; c < NR; ++c)
                                 if (c < nrhs) {
-                                    const D s = sg_sum(sg, acc[c]);
+                                    const D s = device::shift_reduce<32>(sg, acc[c], add);  // leader-only
                                     if (lane == 0) y[c * nz + j0 + t] = dev_sub(y[c * nz + j0 + t], s);
                                 }
                         }
@@ -796,7 +566,7 @@ Event potrs_fused_launch(Queue& ctx,
                             const int c = g * P + h;
                             const bool on = h < P && c < nrhs && l < jb;
                             D* const yc = y + (c < nrhs ? c : 0) * nz;
-                            D v = on ? yc[j0 + l] : dev_zero_of<D>();
+                            D v = on ? yc[j0 + l] : device::Arith<D>::zero();
                             for (int s = jb - 1; s >= 0; --s) {
                                 if (on && l == s) v = dev_div(v, blk[s + s * bz]);
                                 const D vs = batchlas::portable::select_from_group(sg, v, h * w + s);
@@ -812,7 +582,7 @@ Event potrs_fused_launch(Queue& ctx,
                         for (int i = tid; i < j0; i += wg) {
                             D acc[NR];
                             BATCHLAS_UNROLL_FULL
-                            for (int c = 0; c < NR; ++c) acc[c] = dev_zero_of<D>();
+                            for (int c = 0; c < NR; ++c) acc[c] = device::Arith<D>::zero();
                             for (int kk = 0; kk < jb; ++kk) {
                                 const D a = ld_a(i, j0 + kk);
                                 BATCHLAS_UNROLL_FULL
@@ -844,38 +614,33 @@ Event fused_dispatch_nr(Queue& ctx, bool trans, bool conj,
                         const T* A, int lda, int sA, T* B, int ldb, int sB,
                         const int* piv, int pstride,
                         int n, int nrhs, int batch, int wg, int nb, const std::uint8_t* mask) {
-    #define BATCHLAS_GETRS_FUSED_ARM(NRV)                                            \
-        if (trans) return fused_launch_trans<T, NRV>(ctx, A, lda, sA, B, ldb, sB,    \
-                                                     piv, pstride, n, nrhs, batch,   \
-                                                     wg, nb, conj, mask);            \
-        return fused_launch_notrans<T, NRV>(ctx, A, lda, sA, B, ldb, sB,             \
-                                            piv, pstride, n, nrhs, batch, wg, nb,    \
-                                            mask);
+#define BATCHLAS_GETRS_FUSED_ARM(NRV)                                            \
+    if (trans) return fused_launch_trans<T, NRV>(ctx, A, lda, sA, B, ldb, sB,    \
+                                                 piv, pstride, n, nrhs, batch,   \
+                                                 wg, nb, conj, mask);            \
+    return fused_launch_notrans<T, NRV>(ctx, A, lda, sA, B, ldb, sB,             \
+                                        piv, pstride, n, nrhs, batch, wg, nb,    \
+                                        mask);
     if (nrhs <= 1) { BATCHLAS_GETRS_FUSED_ARM(1) }
     if (nrhs <= 2) { BATCHLAS_GETRS_FUSED_ARM(2) }
     if (nrhs <= 4) { BATCHLAS_GETRS_FUSED_ARM(4) }
     BATCHLAS_GETRS_FUSED_ARM(8)
-    #undef BATCHLAS_GETRS_FUSED_ARM
+#undef BATCHLAS_GETRS_FUSED_ARM
 }
 
 }  // namespace
 
-template <> bool getrs_fused_available<float>()                { return true; }
-template <> bool getrs_fused_available<double>()               { return true; }
-template <> bool getrs_fused_available<std::complex<float>>()  { return true; }
-template <> bool getrs_fused_available<std::complex<double>>() { return true; }
-
 // THE CAPACITY, IN RHS ELEMENTS (n * nrhs). The RHS vector is resident, so this is a
 // HARD launch ceiling -- a can_run question and not a table one. The budget is
 // asked of the DEVICE, and the largest nb the tier ever uses is charged, not this
-// call's. getrs_hole_padded is NOT monotone, so the largest admissible request is the
-// budget when it exceeds kGetrsHoleHi and min(budget, kGetrsHoleLo) otherwise.
-template <typename T>
+// call's. resident::hole_padded is NOT monotone, so the largest admissible request is the
+// budget when it exceeds resident::kLaunchHoleHi and min(budget, resident::kLaunchHoleLo) otherwise.
+template <typename Scalar>
 std::size_t getrs_fused_max_rhs_elems(std::size_t slm_budget_bytes) {
-    using D = typename sycl_device::DevMap<T>::type;
+    using D = typename sycl_device::DevMap<Scalar>::type;
     const std::size_t admissible =
-        (slm_budget_bytes > kGetrsHoleHi) ? slm_budget_bytes
-                                          : std::min(slm_budget_bytes, kGetrsHoleLo);
+        (slm_budget_bytes > resident::kLaunchHoleHi) ? slm_budget_bytes
+                                          : std::min(slm_budget_bytes, resident::kLaunchHoleLo);
     const std::size_t blk_bytes =
         static_cast<std::size_t>(kGetrsFusedNbMax) *
         static_cast<std::size_t>(getrs_fused_blk_ld(kGetrsFusedNbMax)) * sizeof(D);
@@ -884,30 +649,30 @@ std::size_t getrs_fused_max_rhs_elems(std::size_t slm_budget_bytes) {
 
     // The floor division above can round the implied request BACK DOWN INTO the band,
     // where the pad raises it again and the launch is refused; the exact repair is the
-    // request that ends AT kGetrsHoleLo. evidence: docs/perf/lu.md#lu-correctness-findings
+    // request that ends AT resident::kLaunchHoleLo. evidence: docs/perf/lu.md#lu-correctness-findings
     if (getrs_fused_slm(elems, kGetrsFusedNbMax, sizeof(D)) > slm_budget_bytes) {
-        if (kGetrsHoleLo <= blk_bytes) return 0;
-        return (kGetrsHoleLo - blk_bytes) / sizeof(D);
+        if (resident::kLaunchHoleLo <= blk_bytes) return 0;
+        return (resident::kLaunchHoleLo - blk_bytes) / sizeof(D);
     }
     return elems;
 }
 
 // WORKSPACE: ZERO -- the RHS is permuted and solved in local memory and written back in
 // place. Nothing is dereferenced; a measuring pass hands this null data pointers.
-template <typename T>
+template <typename Scalar>
 std::size_t getrs_fused_buffer_size(Queue&,
-                                    const MatrixView<T, MatrixFormat::Dense>&,
-                                    const MatrixView<T, MatrixFormat::Dense>&,
+                                    const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                    const MatrixView<Scalar, MatrixFormat::Dense>&,
                                     Transpose) {
     return 0;
 }
 
 // src/ops/getrs/getrs.cc's can_run(Cta) mirrors these checks (R3); keep the two in step.
 // The entry point is also reachable directly, so every gate is applied here.
-template <typename T>
+template <typename Scalar>
 Event getrs_fused_dispatch(Queue& ctx,
-                           const MatrixView<T, MatrixFormat::Dense>& A,
-                           const MatrixView<T, MatrixFormat::Dense>& B,
+                           const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                           const MatrixView<Scalar, MatrixFormat::Dense>& B,
                            Transpose transA,
                            Span<int64_t> pivots,
                            Span<std::byte> workspace) {
@@ -917,11 +682,8 @@ Event getrs_fused_dispatch(Queue& ctx,
     const int nrhs = static_cast<int>(B.cols());
     const int batch = static_cast<int>(A.batch_size());
 
-    if (n < 1 || nrhs < 1 || batch < 1) {
+    if (nrhs < 1) {
         throw batchlas::invalid_argument("getrs_fused: degenerate extents");
-    }
-    if (A.rows() != A.cols()) {
-        throw batchlas::invalid_argument("getrs_fused: A must be square");
     }
     if (A.rows() != B.rows()) {
         throw batchlas::invalid_argument("getrs_fused: B must have A.rows() rows");
@@ -929,21 +691,7 @@ Event getrs_fused_dispatch(Queue& ctx,
     if (A.batch_size() != B.batch_size()) {
         throw batchlas::invalid_argument("getrs_fused: A and B must agree on batch size");
     }
-    if (A.is_heterogeneous() || B.is_heterogeneous()) {
-        throw batchlas::invalid_argument("getrs_fused: heterogeneous batch is not supported");
-    }
-    const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU) {
-        throw batchlas::invalid_argument("getrs_fused: GPU queues only");
-    }
-    if (!dev.supports_sub_group_size(32)) {
-        // ENUMERATED, never get_property(MAX_SUB_GROUP_SIZE) >= 32: that property
-        // returns sub_group_sizes()[0], so the weak test refuses a {8,16,32} device
-        // and ACCEPTS a {64} one -- where this kernel's reqd_sub_group_size(32)
-        // block solve is a launch abort.
-        throw batchlas::unsupported(
-            "getrs_fused: device does not offer sub-group size 32");
-    }
+    const auto dev = native::require_launchable(ctx, "getrs_fused", A, {.square = true}, B);
     if (pivots.size() < static_cast<std::size_t>(n) * static_cast<std::size_t>(batch)) {
         throw batchlas::invalid_argument("getrs_fused: pivot span is shorter than n * batch");
     }
@@ -951,11 +699,11 @@ Event getrs_fused_dispatch(Queue& ctx,
     const std::size_t local_mem = dev.get_property(DeviceProperty::LOCAL_MEM_SIZE);
     const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
     const std::size_t need = static_cast<std::size_t>(n) * static_cast<std::size_t>(nrhs);
-    if (need > getrs_fused_max_rhs_elems<T>(budget)) {
+    if (need > getrs_fused_max_rhs_elems<Scalar>(budget)) {
         throw batchlas::invalid_argument(
             "getrs_fused: n * nrhs = " + std::to_string(need) +
             " exceeds this device's resident-RHS capacity (" +
-            std::to_string(getrs_fused_max_rhs_elems<T>(budget)) +
+            std::to_string(getrs_fused_max_rhs_elems<Scalar>(budget)) +
             " elements). This is a CAPACITY ceiling, not a speed one: route the "
             "call to the `blocked` choice instead (BATCHLAS_GETRS_ROUTE=blocked).");
     }
@@ -974,11 +722,11 @@ Event getrs_fused_dispatch(Queue& ctx,
 
     const int nb = getrs_fused_nb(n);
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
-    const int wg = getrs_fused_wg<T>(n, nrhs, max_wg,
-                                     trans ? FusedBody::kTrans : FusedBody::kNoTrans,
-                                     dev.cuda_compute_capability(), !impl::is_metal(impl::backend_of(*ctx)));
+    const int wg = getrs_fused_wg<Scalar>(n, nrhs, max_wg,
+                                          trans ? FusedBody::kTrans : FusedBody::kNoTrans,
+                                          dev.cuda_compute_capability(), !impl::is_metal(impl::backend_of(*ctx)));
 
-    return fused_dispatch_nr<T>(
+    return fused_dispatch_nr<Scalar>(
         ctx,
         trans,
         /*conj=*/transA == Transpose::ConjTrans,
@@ -999,22 +747,13 @@ Event potrs_fused_dispatch(Queue& ctx,
     const int nrhs = static_cast<int>(B.cols());
     const int batch = static_cast<int>(A.batch_size());
 
-    if (n < 1 || nrhs < 1 || batch < 1) {
+    if (nrhs < 1) {
         throw batchlas::invalid_argument("potrs_fused: degenerate extents");
     }
-    if (A.rows() != A.cols() || A.rows() != B.rows() || A.batch_size() != B.batch_size()) {
+    if (A.rows() != B.rows() || A.batch_size() != B.batch_size()) {
         throw batchlas::invalid_argument("potrs_fused: A must be square and match B");
     }
-    if (A.is_heterogeneous() || B.is_heterogeneous()) {
-        throw batchlas::invalid_argument("potrs_fused: heterogeneous batch is not supported");
-    }
-    const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU) {
-        throw batchlas::invalid_argument("potrs_fused: GPU queues only");
-    }
-    if (!dev.supports_sub_group_size(32)) {
-        throw batchlas::unsupported("potrs_fused: device does not offer sub-group size 32");
-    }
+    const auto dev = native::require_launchable(ctx, "potrs_fused", A, {.square = true}, B);
     const std::size_t local_mem = dev.get_property(DeviceProperty::LOCAL_MEM_SIZE);
     const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
     const std::size_t need = static_cast<std::size_t>(n) * static_cast<std::size_t>(nrhs);
@@ -1032,19 +771,19 @@ Event potrs_fused_dispatch(Queue& ctx,
                                      dev.cuda_compute_capability(), !impl::is_metal(impl::backend_of(*ctx)));
 
     const std::uint8_t* const mask = batchlas::detail::mask_ptr(batchlas::detail::call_mask("potrs_fused", A, B));
-    #define BATCHLAS_POTRS_FUSED_ARM(NRV)                                                  \
-        if (uplo == Uplo::Lower)                                                           \
-            return potrs_fused_launch<T, NRV, true>(ctx, A.data_ptr(), A.ld(), A.stride(), \
-                                                    B.data_ptr(), B.ld(), B.stride(),      \
-                                                    n, nrhs, batch, wg, nb, mask);         \
-        return potrs_fused_launch<T, NRV, false>(ctx, A.data_ptr(), A.ld(), A.stride(),    \
-                                                 B.data_ptr(), B.ld(), B.stride(),         \
-                                                 n, nrhs, batch, wg, nb, mask);
+#define BATCHLAS_POTRS_FUSED_ARM(NRV)                                                  \
+    if (uplo == Uplo::Lower)                                                           \
+        return potrs_fused_launch<T, NRV, true>(ctx, A.data_ptr(), A.ld(), A.stride(), \
+                                                B.data_ptr(), B.ld(), B.stride(),      \
+                                                n, nrhs, batch, wg, nb, mask);         \
+    return potrs_fused_launch<T, NRV, false>(ctx, A.data_ptr(), A.ld(), A.stride(),    \
+                                             B.data_ptr(), B.ld(), B.stride(),         \
+                                             n, nrhs, batch, wg, nb, mask);
     if (nrhs <= 1) { BATCHLAS_POTRS_FUSED_ARM(1) }
     if (nrhs <= 2) { BATCHLAS_POTRS_FUSED_ARM(2) }
     if (nrhs <= 4) { BATCHLAS_POTRS_FUSED_ARM(4) }
     BATCHLAS_POTRS_FUSED_ARM(8)
-    #undef BATCHLAS_POTRS_FUSED_ARM
+#undef BATCHLAS_POTRS_FUSED_ARM
 }
 
 #define BATCHLAS_GETRS_FUSED_INSTANTIATE(T)                                                \
@@ -1067,5 +806,5 @@ BATCHLAS_GETRS_FUSED_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_GETRS_FUSED_INSTANTIATE
 
-}  // namespace sycl_getrs
+}  // namespace ops::getrs
 }  // namespace batchlas

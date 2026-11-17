@@ -1,42 +1,26 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-// Device helpers for the register-resident GEQRF ("tiny") tier. geqrf_cta_device.hh's
-// LarfgScalars is reused VERBATIM -- tau is a contract ormqr/orgqr/ormbr/sy2sb consume, and a
-// second LAPACK real-beta convention is a second thing to get wrong. evidence:
+// Device helpers for the register-resident GEQRF ("tiny") tier. The tier shares the CTA
+// leaves' xLARFG (device::larfg_scalars<alg::LarfgLapack>) -- tau is a contract ormqr/orgqr/ormbr/sy2sb
+// consume, and a second LAPACK real-beta convention is a second thing to get wrong. Its
+// PARTITION-wide butterflies are core's always_inline device::detail::xor_butterfly<N, alg::BflyAsc>
+// (reduce.hh's plain-inline butterfly<1, N, Asc>: FP64 N = 8 +3.5% SASS), ALL-reduces on
+// purpose, a WORK-GROUP reduction would re-open the 48 KB hole. evidence:
 // docs/perf/qr.md#the-two-partition-butterflies, #a-residual-test-cannot-guard-a-convention
 
-#include <src/ops/geqrf/geqrf_cta_device.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/lapack/geqrf.hh>
 #include <src/kernels/common/tiny_device.hh>
 
 #include <src/sycl/device_scalar.hh>
 #include <src/util/resident_capacity.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <cstddef>
 #include <cstdint>
 
 namespace batchlas::geqrf_native {
-
-// PARTITION-wide XOR butterflies, ALL-reduces on purpose: a WORK-GROUP reduce_over_group would
-// re-open the 48 KB hole. evidence: docs/perf/qr.md#the-two-partition-butterflies
-template <int N, typename R, typename Part>
-inline R geqrf_tiny_reduce_fmax(const Part& part, R value) {
-BATCHLAS_UNROLL_FULL
-    for (uint32_t mask = 1u; mask < static_cast<uint32_t>(N); mask <<= 1) {
-        value = sycl::fmax(value, permute_group_by_xor(part, value, mask));
-    }
-    return value;
-}
-
-template <int N, typename R, typename Part>
-inline R geqrf_tiny_reduce_sum(const Part& part, R value) {
-BATCHLAS_UNROLL_FULL
-    for (uint32_t mask = 1u; mask < static_cast<uint32_t>(N); mask <<= 1) {
-        value += permute_group_by_xor(part, value, mask);
-    }
-    return value;
-}
 
 // THE ONE source of truth for the register count. Keyed on the DEVICE scalar D, never on T:
 // Cx<float> and double are 8 bytes each with very different bodies.
@@ -138,22 +122,22 @@ constexpr int geqrf_tiny_blocks_by_slm(int n_pad, int c, std::size_t elem_bytes,
 // The shared constant, not a forked geometry. No tiny kernel declares reqd_work_group_size:
 // .maxntid lets ptxas trade registers against a launch bound, which would make the probed
 // table a function of the launch shape. evidence: docs/perf/qr.md#the-launch-shape-64-work-items-not-128
-inline constexpr int kGeqrfTinyWg = tiny_native::kTinyWgSize;
+// resident::kTinyWgSize
 
-// Through the shared helper, not `kGeqrfTinyWg / N`, so the power-of-two guarantee and the
+// Through the shared helper, not `resident::kTinyWgSize / N`, so the power-of-two guarantee and the
 // max-work-group clamp stay where they are owned; the byte arguments are nominal.
 template <int N>
 constexpr int geqrf_tiny_matrices_per_wg() {
     return resident::pack_matrices_per_wg(/*bytes_per_matrix=*/1u, N,
                                           /*wg_slm_budget_bytes=*/~std::size_t(0),
-                                          /*max_wg_size=*/kGeqrfTinyWg, kGeqrfTinyWg,
-                                          /*max_pack=*/kGeqrfTinyWg / N);
+                                          /*max_wg_size=*/resident::kTinyWgSize, resident::kTinyWgSize,
+                                          /*max_pack=*/resident::kTinyWgSize / N);
 }
 
-static_assert(geqrf_tiny_matrices_per_wg<8>() * 8 == kGeqrfTinyWg, "N=8: 2 sub-groups x 4");
-static_assert(geqrf_tiny_matrices_per_wg<16>() * 16 == kGeqrfTinyWg, "N=16: 2 sub-groups x 2");
-static_assert(geqrf_tiny_matrices_per_wg<32>() * 32 == kGeqrfTinyWg, "N=32: 2 sub-groups x 1");
-static_assert(kGeqrfTinyWg / tiny_native::kTinySubGroupSize >= 2,
+static_assert(geqrf_tiny_matrices_per_wg<8>() * 8 == resident::kTinyWgSize, "N=8: 2 sub-groups x 4");
+static_assert(geqrf_tiny_matrices_per_wg<16>() * 16 == resident::kTinyWgSize, "N=16: 2 sub-groups x 2");
+static_assert(geqrf_tiny_matrices_per_wg<32>() * 32 == resident::kTinyWgSize, "N=32: 2 sub-groups x 1");
+static_assert(resident::kTinyWgSize / tiny_native::kTinySubGroupSize >= 2,
               "R3 wants at least two sub-groups per work-group");
 
 // C is DERIVED, not fixed: the largest of {N, N/2, N/4} at which local-memory residency is at

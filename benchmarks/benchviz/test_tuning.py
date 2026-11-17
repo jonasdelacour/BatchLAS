@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 """python3 -m unittest discover -s benchmarks/benchviz -p 'test_tuning.py'"""
 import json

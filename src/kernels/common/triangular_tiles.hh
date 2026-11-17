@@ -10,62 +10,62 @@
 #include <type_traits>
 #include <sycl/sycl.hpp>
 #include <batchlas/backend_config.h>
-#include <batchlas/blas/device/detail/group_blas_common.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/core.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 namespace batchlas::backend::detail {
 
 // Replaces sycl::detail::is_complex, which is a DPC++ implementation detail and
 // absent from other SYCL implementations.
 template <typename T> struct is_std_complex : std::false_type {};
-template <typename R> struct is_std_complex<std::complex<R>> : std::true_type {};
+template <typename Real> struct is_std_complex<std::complex<Real>> : std::true_type {};
 template <typename T>
 inline constexpr bool is_std_complex_v = is_std_complex<std::remove_cv_t<T>>::value;
 
-// A vector of four T with the alignment the 128-bit load/store forms need.
-template <typename T>
-struct alignas(4 * sizeof(T)) TileVec4 {
-    T v[4];
+// A vector of four Scalar with the alignment the 128-bit load/store forms need.
+template <typename Scalar>
+struct alignas(4 * sizeof(Scalar)) TileVec4 {
+    Scalar v[4];
 };
 
-template <typename T>
-inline const TileVec4<T>& tile_vec4(const T* p) {
-    return *reinterpret_cast<const TileVec4<T>*>(p);
+template <typename Scalar>
+inline const TileVec4<Scalar>& tile_vec4(const Scalar* p) {
+    return *reinterpret_cast<const TileVec4<Scalar>*>(p);
 }
 
-template <typename T>
-inline TileVec4<T>& tile_vec4(T* p) {
-    return *reinterpret_cast<TileVec4<T>*>(p);
+template <typename Scalar>
+inline TileVec4<Scalar>& tile_vec4(Scalar* p) {
+    return *reinterpret_cast<TileVec4<Scalar>*>(p);
 }
 
 // accum + a * b, written out: std::complex operator* is the __mulsc3 libcall.
-// Returns by value on purpose: a `T&` into the accumulator array spills it.
+// Returns by value on purpose: a `Scalar&` into the accumulator array spills it.
 // evidence: docs/perf/level3.md#level-3-the-complex-mac-and-return-by-value-rules
-template <typename T>
-inline T accumulate(const T& accum, const T& a, const T& b) {
-    if constexpr (is_std_complex_v<T>) {
-        using Real = typename T::value_type;
+template <typename Scalar>
+inline Scalar accumulate(const Scalar& accum, const Scalar& a, const Scalar& b) {
+    if constexpr (is_std_complex_v<Scalar>) {
+        using Real = typename Scalar::value_type;
         const Real ar = a.real();
         const Real ai = a.imag();
         const Real br = b.real();
         const Real bi = b.imag();
-        return T(accum.real() + ar * br - ai * bi,
-                 accum.imag() + ar * bi + ai * br);
+        return Scalar(accum.real() + ar * br - ai * bi,
+                      accum.imag() + ar * bi + ai * br);
     } else {
         return accum + a * b;
     }
 }
 
-// v, or its conjugate when C (a complex T only).
-template <bool C, typename T>
-inline T conj_if(const T& v) {
-    if constexpr (C && is_std_complex_v<T>) return T(v.real(), -v.imag());
+// v, or its conjugate when C (a complex Scalar only).
+template <bool C, typename Scalar>
+inline Scalar conj_if(const Scalar& v) {
+    if constexpr (C && is_std_complex_v<Scalar>) return Scalar(v.real(), -v.imag());
     else return v;
 }
 
-template <typename T>
-inline void tile_store4(T* p, const TileVec4<T>& in) {
-    if constexpr (sizeof(T) == sizeof(float)) {
+template <typename Scalar>
+inline void tile_store4(Scalar* p, const TileVec4<Scalar>& in) {
+    if constexpr (sizeof(Scalar) == sizeof(float)) {
         tile_vec4(p) = in;
     } else {
 BATCHLAS_UNROLL_FULL
@@ -78,12 +78,12 @@ BATCHLAS_UNROLL_FULL
 // Four contiguous elements into registers, by value. Trap: 128-bit only for
 // float; a wider reinterpret assumes an alignment local_accessor never promised.
 // evidence: docs/perf/level3.md#level-3-the-complex-mac-and-return-by-value-rules
-template <typename T>
-inline TileVec4<T> tile_load4(const T* p) {
-    if constexpr (sizeof(T) == sizeof(float)) {
+template <typename Scalar>
+inline TileVec4<Scalar> tile_load4(const Scalar* p) {
+    if constexpr (sizeof(Scalar) == sizeof(float)) {
         return tile_vec4(p);
     } else {
-        TileVec4<T> out;
+        TileVec4<Scalar> out;
 BATCHLAS_UNROLL_FULL
         for (int i = 0; i < 4; ++i) {
             out.v[i] = p[i];
@@ -123,4 +123,4 @@ inline void triangular_tile_decode(int tile, int& bi, int& bj) {
     bj = tile - bi * (bi + 1) / 2;
 }
 
-} // namespace batchlas::backend::detail
+}  // namespace batchlas::backend::detail

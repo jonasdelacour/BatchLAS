@@ -16,7 +16,7 @@
 
 using namespace batchlas;
 
-// Runs on test_utils::gpu_backend, which exists only with a GPU backend.
+// Runs on test_utils::kGpuBackend, which exists only with a GPU backend.
 #if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
 
 namespace {
@@ -67,7 +67,7 @@ protected:
 using RealTypes = ::testing::Types<float, double>;
 TYPED_TEST_SUITE(StebzTest, RealTypes);
 
-} // namespace
+}  // namespace
 
 // Full spectrum must match the closed form exactly, for every batch item.
 TYPED_TEST(StebzTest, AllRangeMatchesClosedForm) {
@@ -84,7 +84,7 @@ TYPED_TEST(StebzTest, AllRangeMatchesClosedForm) {
     params.range = EigenRangeType::All;
 
     auto ws = UnifiedVector<std::byte>(
-        stebz_buffer_size<test_utils::gpu_backend, Real>(*this->ctx, n, batch, params));
+        stebz_buffer_size<test_utils::kGpuBackend, Real>(*this->ctx, n, batch, params));
     (void)stebz(*this->ctx, tb.d_view(), tb.e_view(),
                                    VectorView<Real>(w.data(), n, batch, 1, n),
                                    m.to_span(), ws, params);
@@ -130,7 +130,7 @@ TYPED_TEST(StebzTest, IndexRangeMatchesFullSpectrum) {
         params.iu = c.iu;
 
         auto ws = UnifiedVector<std::byte>(
-            stebz_buffer_size<test_utils::gpu_backend, Real>(*this->ctx, n, batch, params));
+            stebz_buffer_size<test_utils::kGpuBackend, Real>(*this->ctx, n, batch, params));
         (void)stebz(*this->ctx, tb.d_view(), tb.e_view(),
                                        VectorView<Real>(w.data(), k, batch, 1, k),
                                        m.to_span(), ws, params);
@@ -166,7 +166,7 @@ TYPED_TEST(StebzTest, DescendingOrderReversesTheBlock) {
     params.iu = n - 1;
 
     auto ws = UnifiedVector<std::byte>(
-        stebz_buffer_size<test_utils::gpu_backend, Real>(*this->ctx, n, batch, params));
+        stebz_buffer_size<test_utils::kGpuBackend, Real>(*this->ctx, n, batch, params));
 
     (void)stebz(*this->ctx, tb.d_view(), tb.e_view(),
                                    VectorView<Real>(w_asc.data(), k, batch, 1, k),
@@ -210,7 +210,7 @@ TYPED_TEST(StebzTest, ValueRangeSelectsInterval) {
     params.vu = vu;
 
     auto ws = UnifiedVector<std::byte>(
-        stebz_buffer_size<test_utils::gpu_backend, Real>(*this->ctx, n, batch, params));
+        stebz_buffer_size<test_utils::kGpuBackend, Real>(*this->ctx, n, batch, params));
     (void)stebz(*this->ctx, tb.d_view(), tb.e_view(),
                                    VectorView<Real>(w.data(), n, batch, 1, n),
                                    m.to_span(), ws, params);
@@ -242,7 +242,7 @@ TYPED_TEST(StebzTest, HandlesRepeatedAndZeroOffDiagonals) {
     params.range = EigenRangeType::All;
 
     auto ws = UnifiedVector<std::byte>(
-        stebz_buffer_size<test_utils::gpu_backend, Real>(*this->ctx, n, batch, params));
+        stebz_buffer_size<test_utils::kGpuBackend, Real>(*this->ctx, n, batch, params));
     (void)stebz(*this->ctx,
                                    VectorView<Real>(d.data(), n, batch, 1, n),
                                    VectorView<Real>(e.data(), n - 1, batch, 1, n - 1),

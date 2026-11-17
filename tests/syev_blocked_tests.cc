@@ -27,13 +27,13 @@ using namespace batchlas;
 
 namespace {
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct SyevBlockedConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 
-} // namespace
+}  // namespace
 
 using SyevBlockedTestTypes = typename test_utils::backend_types<SyevBlockedConfig>::type;
 
@@ -336,7 +336,8 @@ Matrix<Scalar, MatrixFormat::Dense> upper_mirrored(const Matrix<Scalar, MatrixFo
 
 // max over items of max_i |eig_i(A) - eig_i(B)|, both read from the lower triangle by LAPACKE.
 template <typename Scalar>
-double lapacke_spectrum_gap(const MatrixView<Scalar, MatrixFormat::Dense>& A, const MatrixView<Scalar, MatrixFormat::Dense>& B) {
+double lapacke_spectrum_gap(const MatrixView<Scalar, MatrixFormat::Dense>& A, const MatrixView<Scalar,
+                            MatrixFormat::Dense>& B) {
     double gap = 0;
     for (int b = 0; b < A.batch_size(); ++b) {
         std::vector<double> wa, wc;

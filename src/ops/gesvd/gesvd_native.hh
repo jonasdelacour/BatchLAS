@@ -13,28 +13,28 @@
 #include <string>
 #include <type_traits>
 
-namespace batchlas::sycl_gesvd {
+namespace batchlas::ops::gesvd {
 
 // gesvdj_cta's smallest work-group at tile capacity C: 32 / P problems (P = min(C, 32)) plus
 // the pivot-pair table, as gesvdj_cta.cc allocates. evidence: docs/design/gesvd.md#gesvdj_cta-local-memory-budget-formula
-template <typename T>
+template <typename Scalar>
 constexpr std::size_t gesvdj_slm_bytes(std::size_t C, bool want_vectors) {
-    using Real = std::conditional_t<std::is_same_v<T, std::complex<float>>, float,
-                                    std::conditional_t<std::is_same_v<T, std::complex<double>>, double, T>>;
-    constexpr bool kComplex = !std::is_same_v<T, Real>;
+    using Real = std::conditional_t<std::is_same_v<Scalar, std::complex<float>>, float,
+                                    std::conditional_t<std::is_same_v<Scalar, std::complex<double>>, double, Scalar>>;
+    constexpr bool kComplex = !std::is_same_v<Scalar, Real>;
     const std::size_t P = C < 32 ? C : 32;
     const std::size_t rot = C / 2 > 0 ? C / 2 : 1;
     const std::size_t tile = (C + 1) * C;
-    const std::size_t per_prob = (want_vectors ? 2 : 1) * tile * sizeof(T) + C * sizeof(Real) +
-                                 2 * rot * sizeof(Real) + (kComplex ? rot * sizeof(T) : 0) + C * sizeof(std::int16_t);
+    const std::size_t per_prob = (want_vectors ? 2 : 1) * tile * sizeof(Scalar) + C * sizeof(Real) +
+                                 2 * rot * sizeof(Real) + (kComplex ? rot * sizeof(Scalar) : 0) + C * sizeof(std::int16_t);
     return (32 / P) * per_prob + (C - 1) * rot * sizeof(std::int16_t);
 }
 
 // Largest max(m, n) gesvdj_cta accepts: the widest C whose smallest work-group fits the budget.
-template <typename T>
+template <typename Scalar>
 constexpr std::int64_t gesvd_jacobi_max_dim(bool want_vectors, std::size_t slm_budget_bytes) {
     for (std::size_t C = 64; C >= 4; C /= 2)
-        if (gesvdj_slm_bytes<T>(C, want_vectors) <= slm_budget_bytes) return static_cast<std::int64_t>(C);
+        if (gesvdj_slm_bytes<Scalar>(C, want_vectors) <= slm_budget_bytes) return static_cast<std::int64_t>(C);
     return 0;
 }
 
@@ -57,9 +57,9 @@ inline GesvdBidiagSolver gesvd_bidiag_solver() {
 
 // gesvd_blocked's general path honours a mask wherever every child it reaches does: each bidiagonal
 // solver does, NETLIB's host gemm does not. Canonical jobs.
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 bool gesvd_blocked_honours_mask(std::int64_t, std::int64_t, bool, bool) {
     return select::native_gpu_backend<B>;
 }
 
-}  // namespace batchlas::sycl_gesvd
+}  // namespace batchlas::ops::gesvd

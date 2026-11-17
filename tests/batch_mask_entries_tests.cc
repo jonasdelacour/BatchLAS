@@ -34,10 +34,10 @@ using namespace batchlas;
 
 namespace {
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
-template <typename T>
-using Real = typename base_type<T>::type;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+template <typename Scalar>
+using Real = typename base_type<Scalar>::type;
 
 constexpr int kN = 8, kLd = 10, kStride = kLd * kN + 3, kBatch = 4, kKd = 2;
 constexpr int kVecStride = kN + 2;
@@ -46,16 +46,16 @@ const std::vector<std::uint8_t> kAlternating{0, 1, 0, 1};
 // Every operand of every entry, primed with well-posed data: Hermitian, diagonally dominant items,
 // a diagonal CSR pattern, a positive tridiagonal (d, e). With `only` < 0 every view carries `mask`;
 // otherwise only view number `only` does (see masks()).
-template <typename T>
+template <typename Scalar>
 struct Pool {
     Queue& q;
     Span<const std::uint8_t> mask;
     Span<std::byte> ws;
     int only = -1, views = 0;
     std::vector<std::pair<int, std::string>>* used = nullptr;
-    UnifiedVector<T> a, b, c, z, v, tq, tp, tau, vals;
-    UnifiedVector<Real<T>> d, e, w, s;
-    UnifiedVector<T*> pa, pb, pc;
+    UnifiedVector<Scalar> a, b, c, z, v, tq, tp, tau, vals;
+    UnifiedVector<Real<Scalar>> d, e, w, s;
+    UnifiedVector<Scalar*> pa, pb, pc;
     UnifiedVector<std::int64_t> piv;
     UnifiedVector<std::int32_t> piv32, info, m, counts;
     UnifiedVector<int> ro, ci, full, first_empty, second_k0;
@@ -71,17 +71,17 @@ struct Pool {
         for (auto* buf : {&a, &b, &c, &z, &v})
             for (std::size_t k = 0; k < buf->size(); ++k) {
                 const std::size_t it = k / kStride, j = (k % kStride) / kLd, i = (k % kStride) % kLd;
-                const Real<T> re = i == j ? Real<T>(2 * kN + it) : Real<T>(0.25) * Real<T>(i + j + 1);
-                (*buf)[k] = T(re);
+                const Real<Scalar> re = i == j ? Real<Scalar>(2 * kN + it) : Real<Scalar>(0.25) * Real<Scalar>(i + j + 1);
+                (*buf)[k] = Scalar(re);
             }
         for (std::size_t k = 0; k < vec_len(); ++k) {
-            const auto i = Real<T>(k % kVecStride);
-            d[k] = Real<T>(4) + i;
-            e[k] = Real<T>(0.5);
+            const auto i = Real<Scalar>(k % kVecStride);
+            d[k] = Real<Scalar>(4) + i;
+            e[k] = Real<Scalar>(0.5);
             w[k] = i;
-            s[k] = Real<T>(kN) - i;
-            tq[k] = tp[k] = tau[k] = T(0.5);
-            vals[k] = T(Real<T>(3));
+            s[k] = Real<Scalar>(kN) - i;
+            tq[k] = tp[k] = tau[k] = Scalar(0.5);
+            vals[k] = Scalar(Real<Scalar>(3));
             piv[k] = std::int64_t(k % kVecStride % kN) + 1;
             piv32[k] = std::int32_t(k % kVecStride % kN) + 1;
         }
@@ -115,9 +115,9 @@ struct Pool {
         }
         return masked() && (only < 0 || only == ordinal);
     }
-    MV<T> mat(UnifiedVector<T>& buf, int rows = kN, int cols = kN) {
-        T** ptrs = &buf == &a ? pa.data() : &buf == &b ? pb.data() : &buf == &c ? pc.data() : nullptr;
-        const MV<T> view(buf.data(), rows, cols, kLd, kStride, kBatch, ptrs);
+    MV<Scalar> mat(UnifiedVector<Scalar>& buf, int rows = kN, int cols = kN) {
+        Scalar** ptrs = &buf == &a ? pa.data() : &buf == &b ? pb.data() : &buf == &c ? pc.data() : nullptr;
+        const MV<Scalar> view(buf.data(), rows, cols, kLd, kStride, kBatch, ptrs);
         return masks(buf.data()) ? view.with_batch_mask(mask) : view;
     }
     template <typename U>
@@ -125,16 +125,16 @@ struct Pool {
         const VectorView<U> view(buf.data(), size, kBatch, 1, kVecStride);
         return masks(buf.data()) ? view.with_batch_mask(mask) : view;
     }
-    MatrixView<T, MatrixFormat::CSR> csr() {
-        const MatrixView<T, MatrixFormat::CSR> view(vals.data(), ro.data(), ci.data(), kN, kN, NonZeros{kN}, kVecStride,
-                                                    kN + 1, kBatch);
+    MatrixView<Scalar, MatrixFormat::CSR> csr() {
+        const MatrixView<Scalar, MatrixFormat::CSR> view(vals.data(), ro.data(), ci.data(), kN, kN, NonZeros{kN},
+                                                         kVecStride, kN + 1, kBatch);
         return masks(vals.data()) ? view.with_batch_mask(mask) : view;
     }
     template <typename U>
     static Span<U> flat(UnifiedVector<U>& buf) { return {buf.data(), buf.size()}; }
     static Span<int> ints(UnifiedVector<int>& buf) { return {buf.data(), buf.size()}; }
-    Span<Real<T>> wspan() { return flat(w); }
-    Span<T> tspan() { return flat(tau); }
+    Span<Real<Scalar>> wspan() { return flat(w); }
+    Span<Scalar> tspan() { return flat(tau); }
     Span<std::int64_t> pspan() { return flat(piv); }
     Span<std::int32_t> ispan() { return flat(info); }
 
@@ -145,19 +145,19 @@ struct Pool {
     }
 };
 
-template <typename T>
+template <typename Scalar>
 struct Entry {
     std::string name;
     bool routed = false;  ///< refuses through can_run (NoRouteError text varies): an unmasked twin must run
-    std::function<void(Pool<T>&)> call;
+    std::function<void(Pool<Scalar>&)> call;
     bool pinned = false;  ///< runs under a strict pin, so "cannot run this shape" is can_run's refusal
 };
 
 // One masked run (`only` as for Pool): a refusal, and every operand byte unchanged.
-template <typename T>
-void expect_refused(Queue& q, const Entry<T>& entry, Span<const std::uint8_t> mask, Span<std::byte> ws, int only,
+template <typename Scalar>
+void expect_refused(Queue& q, const Entry<Scalar>& entry, Span<const std::uint8_t> mask, Span<std::byte> ws, int only,
                     const std::string& view, std::vector<std::pair<int, std::string>>* used) {
-    Pool<T> p(q, mask, ws, only);
+    Pool<Scalar> p(q, mask, ws, only);
     p.used = used;
     SCOPED_TRACE(only < 0 ? std::string("every operand masked") : "only " + view + " masked");
     const auto before = p.snapshot();
@@ -186,12 +186,12 @@ void expect_refused(Queue& q, const Entry<T>& entry, Span<const std::uint8_t> ma
 // Every operand masked, then each operand view alone: an entry that refuses on some operands
 // only ignores the mask on the others. False when a routed op has no route in this build at all
 // (`unroutable` allows only that): nothing a mask could be ignored by, nothing to check.
-template <typename T>
-bool check_refuses(Queue& q, const Entry<T>& entry, Span<const std::uint8_t> mask, Span<std::byte> ws,
+template <typename Scalar>
+bool check_refuses(Queue& q, const Entry<Scalar>& entry, Span<const std::uint8_t> mask, Span<std::byte> ws,
                    bool unroutable = false) {
     SCOPED_TRACE(entry.name);
     if (entry.routed) {
-        Pool<T> plain(q, {}, ws);
+        Pool<Scalar> plain(q, {}, ws);
         try {
             entry.call(plain);
             q.wait();
@@ -212,50 +212,55 @@ bool check_refuses(Queue& q, const Entry<T>& entry, Span<const std::uint8_t> mas
 }
 
 // gemm, whose native families honour the mask (W1a): plain, and heterogeneous with a k == 0 item.
-template <typename T, Backend B>
-std::vector<Entry<T>> gemm_entries() {
-    using P = Pool<T>;
-    const T one(1), half(0.5);
+template <typename Scalar, Backend B>
+std::vector<Entry<Scalar>> gemm_entries() {
+    using P = Pool<Scalar>;
+    const Scalar one(1), half(0.5);
     const auto N = Transpose::NoTrans;
     return {
-        {"gemm", true, [=](P& p) { gemm<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, N, N); }},
+        {"gemm", true, [=](P& p) { gemm<B, Scalar>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, N, N); }},
         {"gemm(heterogeneous, a k == 0 item)", true,
          [=](P& p) {
              // Item 0 (inactive) is empty and item 1 (active) has k == 0: the loop writes C there itself.
              const auto A = p.mat(p.a).with_active_dims(p.first_empty.to_span(), p.second_k0.to_span());
              const auto Bm = p.mat(p.b).with_active_dims(p.second_k0.to_span(), p.full.to_span());
              const auto Cm = p.mat(p.c).with_active_dims(p.first_empty.to_span(), p.full.to_span());
-             gemm<B, T>(p.q, A, Bm, Cm, one, half, N, N);
+             gemm<B, Scalar>(p.q, A, Bm, Cm, one, half, N, N);
          }},
     };
 }
 
 // The level-3 ops and spmm, whose native families honour the mask (W1b). trsm writes B, the rest C.
-template <typename T, Backend B>
-std::vector<Entry<T>> level3_entries() {
-    using P = Pool<T>;
-    const T one(1), half(0.5);
+template <typename Scalar, Backend B>
+std::vector<Entry<Scalar>> level3_entries() {
+    using P = Pool<Scalar>;
+    const Scalar one(1), half(0.5);
     const auto L = Uplo::Lower;
     const auto N = Transpose::NoTrans;
-    std::vector<Entry<T>> out = {
-        {"trsm", true, [=](P& p) { trsm<B, T>(p.q, p.mat(p.a), p.mat(p.b), one, Side::Left, L, N, Diag::NonUnit); }},
+    std::vector<Entry<Scalar>> out = {
+        {"trsm", true, [=](P& p) { trsm<B, Scalar>(p.q, p.mat(p.a), p.mat(p.b), one, Side::Left, L, N,
+                                                   Diag::NonUnit); }},
         {"trmm", true,
-         [=](P& p) { trmm<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, Side::Left, L, N, Diag::NonUnit); }},
+         [=](P& p) { trmm<B, Scalar>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, Side::Left, L, N, Diag::NonUnit); }},
         {"spmm", true,
-         [=](P& p) { spmm<B, T, MatrixFormat::CSR>(p.q, p.csr(), p.mat(p.b), p.mat(p.c), one, half, N, N, p.ws); }},
+         [=](P& p) { spmm<B, Scalar, MatrixFormat::CSR>(p.q, p.csr(), p.mat(p.b), p.mat(p.c), one, half, N, N,
+                                                        p.ws); }},
     };
-    if constexpr (is_std_complex_v<T>) {
+    if constexpr (is_std_complex_v<Scalar>) {
         out.push_back({"hemm", true,
-                       [=](P& p) { hemm<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, Side::Left, L); }});
-        out.push_back({"herk", true, [=](P& p) { herk<B, T>(p.q, p.mat(p.a), p.mat(p.c), Real<T>(1), Real<T>(0.5), L, N); }});
+                       [=](P& p) { hemm<B, Scalar>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, Side::Left,
+                                                   L); }});
+        out.push_back({"herk", true, [=](P& p) { herk<B, Scalar>(p.q, p.mat(p.a), p.mat(p.c), Real<Scalar>(1), Real<Scalar>(0.5), L, N); }});
         out.push_back({"her2k", true,
-                       [=](P& p) { her2k<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, Real<T>(0.5), L, N); }});
+                       [=](P& p) { her2k<B, Scalar>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, Real<Scalar>(0.5), L,
+                                                    N); }});
     } else {
         out.push_back({"symm", true,
-                       [=](P& p) { symm<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, Side::Left, L); }});
-        out.push_back({"syrk", true, [=](P& p) { syrk<B, T>(p.q, p.mat(p.a), p.mat(p.c), one, half, L, N); }});
+                       [=](P& p) { symm<B, Scalar>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, Side::Left,
+                                                   L); }});
+        out.push_back({"syrk", true, [=](P& p) { syrk<B, Scalar>(p.q, p.mat(p.a), p.mat(p.c), one, half, L, N); }});
         out.push_back({"syr2k", true,
-                       [=](P& p) { syr2k<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, L, N); }});
+                       [=](P& p) { syr2k<B, Scalar>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, L, N); }});
     }
     return out;
 }
@@ -263,45 +268,48 @@ std::vector<Entry<T>> level3_entries() {
 // The tridiagonal stages that honour the mask (W3a), each with the outputs it writes: name, item
 // stride and item length in bytes. tests/steqr_mask_tests.cc and tridiag_mask_tests.cc hold their
 // contracts; here every operand alone carries the mask as well.
-template <typename T>
+template <typename Scalar>
 struct NativeEntry {
-    Entry<T> entry;
+    Entry<Scalar> entry;
     std::vector<std::tuple<std::string, std::size_t, std::size_t>> outputs;
 };
 
-template <typename T, Backend B>
-std::vector<NativeEntry<T>> tridiag_entries() {
-    std::vector<NativeEntry<T>> out;
-    if constexpr (!is_std_complex_v<T>) {
-        using P = Pool<T>;
+template <typename Scalar, Backend B>
+std::vector<NativeEntry<Scalar>> tridiag_entries() {
+    std::vector<NativeEntry<Scalar>> out;
+    if constexpr (!is_std_complex_v<Scalar>) {
+        using P = Pool<Scalar>;
         const auto ev = JobType::EigenVectors;
-        const std::size_t mat = kStride * sizeof(T), vec = kVecStride * sizeof(T), one = sizeof(std::int32_t);
-        const std::tuple<std::string, std::size_t, std::size_t> Z{"Z", mat, mat}, w{"w", vec, kN * sizeof(T)},
+        const std::size_t mat = kStride * sizeof(Scalar), vec = kVecStride * sizeof(Scalar), one = sizeof(std::int32_t);
+        const std::tuple<std::string, std::size_t, std::size_t> Z{"Z", mat, mat}, w{"w", vec, kN * sizeof(Scalar)},
             info{"info", one, one}, m{"m", one, one};
         const auto add = [&](const char* name, std::function<void(P&)> f, std::vector<std::tuple<std::string, std::size_t, std::size_t>> o) {
             out.push_back({{name, false, std::move(f)}, std::move(o)});
         };
         add("steqr", [=](P& p) {
-            steqr<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), p.ws, ev, SteqrParams<T>(), p.mat(p.z), p.ispan());
+            steqr<B, Scalar>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), p.ws, ev, SteqrParams<Scalar>(), p.mat(p.z), p.ispan());
         }, {Z, w, info});
         add("steqr_cta", [=](P& p) {
-            steqr_cta<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), p.ws, ev, SteqrParams<T>(), p.mat(p.z),
-                            p.ispan());
+            steqr_cta<B, Scalar>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), p.ws, ev, SteqrParams<Scalar>(),
+                                 p.mat(p.z), p.ispan());
         }, {Z, w, info});
         add("stedc", [=](P& p) {
-            stedc<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), p.ws, ev, StedcParams<T>(), p.mat(p.z), p.ispan());
+            stedc<B, Scalar>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), p.ws, ev, StedcParams<Scalar>(), p.mat(p.z), p.ispan());
         }, {Z, w, info});
-        add("stebz", [=](P& p) { stebz<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), P::flat(p.m), p.ws); },
+        add("stebz",
+            [=](P& p) { stebz<B, Scalar>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), P::flat(p.m), p.ws); },
             {w, m});
-        add("stein", [=](P& p) { stein<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), kN, p.mat(p.z), p.ws); },
+        add("stein",
+            [=](P& p) { stein<B, Scalar>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), kN, p.mat(p.z), p.ws); },
             {Z});
         add("stein(counts)", [=](P& p) {
-            stein<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), kN, Span<const std::int32_t>(p.counts.data(), kBatch),
-                        p.mat(p.z), p.ws);
+            stein<B, Scalar>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), kN, Span<const std::int32_t>(p.counts.data(), kBatch),
+                             p.mat(p.z), p.ws);
         }, {Z});
         add("tridiagonal_solver", [=](P& p) {
-            tridiagonal_solver<B, T>(p.q, P::flat(p.tq), P::flat(p.tp), p.wspan(), p.ws, ev, p.mat(p.z), kN, kBatch);
-        }, {Z, {"w", kN * sizeof(T), kN * sizeof(T)}});
+            tridiagonal_solver<B, Scalar>(p.q, P::flat(p.tq), P::flat(p.tp), p.wspan(), p.ws, ev, p.mat(p.z), kN,
+                                          kBatch);
+        }, {Z, {"w", kN * sizeof(Scalar), kN * sizeof(Scalar)}});
     }
     return out;
 }
@@ -309,24 +317,24 @@ std::vector<NativeEntry<T>> tridiag_entries() {
 // The routed ops: the public op entries, each refused by every family's can_run term.
 // gemv honours the mask (W1a): gemv_candidates_tests' Masked* cases hold its contract.
 // sytrf, sytrs and sysv honour it (W4b): sytrf_mask_tests holds their contract.
-template <typename T, Backend B>
-std::vector<Entry<T>> routed_entries() {
-    using P = Pool<T>;
-    const T one(1), half(0.5);
+template <typename Scalar, Backend B>
+std::vector<Entry<Scalar>> routed_entries() {
+    using P = Pool<Scalar>;
+    const Scalar one(1), half(0.5);
     const auto L = Uplo::Lower;
     const auto N = Transpose::NoTrans;
-    std::vector<Entry<T>> out;
+    std::vector<Entry<Scalar>> out;
     // The host backend's natives yield to its BLAS, which cannot skip an item: gemm refuses there,
     // and so do the level-3 ops, whose natives are GPU families (spmm's direct runs there).
     // potrf's natives are GPU kernels (W2a), so the host's LAPACK potrf refuses, and with it posv and
     // potrs, whose children (potrf, trsm) refuse there. On a device all three honour the mask, and
     // potri's cta runs on either backend (potrf_mask_tests holds the contracts).
     if constexpr (B == Backend::NETLIB) {
-        for (auto& e : gemm_entries<T, B>()) out.push_back(std::move(e));
-        out.push_back({"potrf", true, [=](P& p) { potrf<B, T>(p.q, p.mat(p.a), L, p.ws, p.ispan()); }});
-        out.push_back({"posv", true, [=](P& p) { posv<B, T>(p.q, p.mat(p.a), p.mat(p.b), L, p.ws, p.ispan()); }});
-        out.push_back({"potrs", true, [=](P& p) { potrs<B, T>(p.q, p.mat(p.a), p.mat(p.b), L); }});
-        for (auto& e : level3_entries<T, B>())
+        for (auto& e : gemm_entries<Scalar, B>()) out.push_back(std::move(e));
+        out.push_back({"potrf", true, [=](P& p) { potrf<B, Scalar>(p.q, p.mat(p.a), L, p.ws, p.ispan()); }});
+        out.push_back({"posv", true, [=](P& p) { posv<B, Scalar>(p.q, p.mat(p.a), p.mat(p.b), L, p.ws, p.ispan()); }});
+        out.push_back({"potrs", true, [=](P& p) { potrs<B, Scalar>(p.q, p.mat(p.a), p.mat(p.b), L); }});
+        for (auto& e : level3_entries<Scalar, B>())
             if (e.name != "spmm") out.push_back(std::move(e));
     }
     // getrf, getrs, gesv, getri and inv honour the mask (W2b, lift 1): tests/getrf_mask_tests.cc and
@@ -338,146 +346,150 @@ std::vector<Entry<T>> routed_entries() {
     // (trsm, trmm) is its BLAS, which refuses.
     if constexpr (B == Backend::NETLIB)
         out.push_back({"sygvd_factored", true, [=](P& p) {
-                           if (!p.masked()) potrf<B, T>(p.q, p.mat(p.b), L, p.ws, p.ispan());
-                           sygvd_factored<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.wspan(), 1, JobType::EigenVectors, L,
-                                                p.ws, p.ispan());
+                           if (!p.masked()) potrf<B, Scalar>(p.q, p.mat(p.b), L, p.ws, p.ispan());
+                           sygvd_factored<B, Scalar>(p.q, p.mat(p.a), p.mat(p.b), p.wspan(), 1, JobType::EigenVectors,
+                                                     L, p.ws, p.ispan());
                        }});
     return out;
 }
 
 // The vendor entries this build links (backend::*_vendor), each the library call of one routed op.
-template <typename T, Backend B>
-std::vector<Entry<T>> vendor_entries() {
-    using P = Pool<T>;
+template <typename Scalar, Backend B>
+std::vector<Entry<Scalar>> vendor_entries() {
+    using P = Pool<Scalar>;
     namespace sv = batchlas::select;
-    const T one(1), half(0.5);
+    const Scalar one(1), half(0.5);
     const auto L = Uplo::Lower;
     const auto N = Transpose::NoTrans;
-    std::vector<Entry<T>> out;
+    std::vector<Entry<Scalar>> out;
     const auto add = [&](const char* name, std::function<void(P&)> f) { out.push_back({name, false, std::move(f)}); };
     if constexpr (sv::level3_vendor_available<B>) {
         add("gemm_vendor", [=](P& p) {
-            backend::gemm_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, N, N, ComputePrecision::Default);
+            backend::gemm_vendor<B, Scalar>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, N, N, ComputePrecision::Default);
         });
-        add("gemv_vendor", [=](P& p) { backend::gemv_vendor<B, T>(p.q, p.mat(p.a), p.vec(p.tq), p.vec(p.tp), one, half, N); });
+        add("gemv_vendor", [=](P& p) { backend::gemv_vendor<B, Scalar>(p.q, p.mat(p.a), p.vec(p.tq), p.vec(p.tp), one, half, N); });
         add("trsm_vendor", [=](P& p) {
-            backend::trsm_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.b), Side::Left, L, N, Diag::NonUnit, one);
+            backend::trsm_vendor<B, Scalar>(p.q, p.mat(p.a), p.mat(p.b), Side::Left, L, N, Diag::NonUnit, one);
         });
         add("trmm_vendor", [=](P& p) {
-            backend::trmm_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, Side::Left, L, N, Diag::NonUnit);
+            backend::trmm_vendor<B, Scalar>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, Side::Left, L, N,
+                                            Diag::NonUnit);
         });
-        if constexpr (is_std_complex_v<T>) {
+        if constexpr (is_std_complex_v<Scalar>) {
             add("hemm_vendor", [=](P& p) {
-                backend::hemm_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, Side::Left, L);
+                backend::hemm_vendor<B, Scalar>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, Side::Left, L);
             });
             add("herk_vendor", [=](P& p) {
-                backend::herk_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.c), Real<T>(1), Real<T>(0.5), L, N);
+                backend::herk_vendor<B, Scalar>(p.q, p.mat(p.a), p.mat(p.c), Real<Scalar>(1), Real<Scalar>(0.5), L, N);
             });
             add("her2k_vendor", [=](P& p) {
-                backend::her2k_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, Real<T>(0.5), L, N);
+                backend::her2k_vendor<B, Scalar>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, Real<Scalar>(0.5), L, N);
             });
         } else {
             add("symm_vendor", [=](P& p) {
-                backend::symm_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, Side::Left, L);
+                backend::symm_vendor<B, Scalar>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, Side::Left, L);
             });
-            add("syrk_vendor", [=](P& p) { backend::syrk_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.c), one, half, L, N); });
+            add("syrk_vendor",
+                [=](P& p) { backend::syrk_vendor<B, Scalar>(p.q, p.mat(p.a), p.mat(p.c), one, half, L, N); });
             add("syr2k_vendor", [=](P& p) {
-                backend::syr2k_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, L, N);
+                backend::syr2k_vendor<B, Scalar>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, L, N);
             });
         }
     }
     if constexpr (sv::factorization_vendor_available<B>) {
         // NETLIB's LU and QR host loops honour the mask (W2b, W2c, idiom I4); a strided vendor call cannot.
         if constexpr (B != Backend::NETLIB) {
-            add("geqrf_vendor", [=](P& p) { backend::geqrf_vendor<B, T>(p.q, p.mat(p.a), p.tspan(), p.ws); });
-            add("orgqr_vendor", [=](P& p) { backend::orgqr_vendor<B, T>(p.q, p.mat(p.a), p.tspan(), p.ws); });
+            add("geqrf_vendor", [=](P& p) { backend::geqrf_vendor<B, Scalar>(p.q, p.mat(p.a), p.tspan(), p.ws); });
+            add("orgqr_vendor", [=](P& p) { backend::orgqr_vendor<B, Scalar>(p.q, p.mat(p.a), p.tspan(), p.ws); });
             add("ormqr_vendor", [=](P& p) {
-                backend::ormqr_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.c), Side::Left, N, p.tspan(), p.ws);
+                backend::ormqr_vendor<B, Scalar>(p.q, p.mat(p.a), p.mat(p.c), Side::Left, N, p.tspan(), p.ws);
             });
-            add("getrf_vendor", [=](P& p) { backend::getrf_vendor<B, T>(p.q, p.mat(p.a), p.pspan(), p.ws, p.ispan()); });
+            add("getrf_vendor", [=](P& p) { backend::getrf_vendor<B, Scalar>(p.q, p.mat(p.a), p.pspan(), p.ws, p.ispan()); });
             add("getrs_vendor",
-                [=](P& p) { backend::getrs_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.b), N, p.pspan(), p.ws); });
+                [=](P& p) { backend::getrs_vendor<B, Scalar>(p.q, p.mat(p.a), p.mat(p.b), N, p.pspan(), p.ws); });
             add("getri_vendor", [=](P& p) {
-                backend::getri_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.c), p.pspan(), p.ws, p.ispan());
+                backend::getri_vendor<B, Scalar>(p.q, p.mat(p.a), p.mat(p.c), p.pspan(), p.ws, p.ispan());
             });
         }
     }
     if constexpr (sv::solver_vendor_available<B>) {
-        add("potrf_vendor", [=](P& p) { backend::potrf_vendor<B, T>(p.q, p.mat(p.a), L, p.ws, p.ispan()); });
+        add("potrf_vendor", [=](P& p) { backend::potrf_vendor<B, Scalar>(p.q, p.mat(p.a), L, p.ws, p.ispan()); });
         if constexpr (B != Backend::NETLIB)  // LAPACKE's loop honours the mask (syev_mask_tests)
             add("syev_vendor", [=](P& p) {
-                backend::syev_vendor<B, T>(p.q, p.mat(p.a), p.wspan(), JobType::EigenVectors, L, p.ws, p.ispan());
+                backend::syev_vendor<B, Scalar>(p.q, p.mat(p.a), p.wspan(), JobType::EigenVectors, L, p.ws, p.ispan());
             });
         if constexpr (B != Backend::NETLIB)  // LAPACKE's loop honours the mask (gesvd_mask_tests)
             add("gesvd_vendor", [=](P& p) {
-                backend::gesvd_vendor<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), SvdVectors::All,
-                                            SvdVectors::All, p.ws, p.ispan());
+                backend::gesvd_vendor<B, Scalar>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), SvdVectors::All,
+                                                 SvdVectors::All, p.ws, p.ispan());
             });
     }
     if constexpr (sv::sparse_vendor_available<B>) {
         add("spmm_vendor", [=](P& p) {
-            backend::spmm_vendor<B, T, MatrixFormat::CSR>(p.q, p.csr(), p.mat(p.b), p.mat(p.c), one, half, N, N, p.ws);
+            backend::spmm_vendor<B, Scalar, MatrixFormat::CSR>(p.q, p.csr(), p.mat(p.b), p.mat(p.c), one, half, N, N,
+                                                               p.ws);
         });
     }
     if constexpr ((B == Backend::CUDA && sv::kHasCudaVendor) || (B == Backend::NETLIB && sv::kHasNetlib)) {
         if constexpr (B != Backend::NETLIB)  // LAPACKE's loop honours the mask (sygvd_mask_tests)
             add("sygvd_vendor", [=](P& p) {
-                backend::sygvd_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.wspan(), 1, JobType::EigenVectors, L, p.ws,
-                                            p.ispan());
+                backend::sygvd_vendor<B, Scalar>(p.q, p.mat(p.a), p.mat(p.b), p.wspan(), 1, JobType::EigenVectors, L,
+                                                 p.ws, p.ispan());
             });
         // LAPACKE's sytrf and sytrs read the mask in their host loop (W4b); cuSOLVER's cannot skip.
         if constexpr (B == Backend::CUDA)
-            add("sytrf_vendor", [=](P& p) { backend::sytrf_vendor<B, T>(p.q, p.mat(p.a), L, p.pspan(), p.ws, p.ispan()); });
+            add("sytrf_vendor", [=](P& p) { backend::sytrf_vendor<B, Scalar>(p.q, p.mat(p.a), L, p.pspan(), p.ws, p.ispan()); });
     }
     return out;
 }
 
-// The per-family, sub-op and util entries of blas/extensions.hh, extra.hh and internal/ (real T).
-template <typename T, Backend B>
-std::vector<Entry<T>> direct_entries() {
-    using P = Pool<T>;
-    using R = Real<T>;
+// The per-family, sub-op and util entries of blas/extensions.hh, extra.hh and internal/ (real Scalar).
+template <typename Scalar, Backend B>
+std::vector<Entry<Scalar>> direct_entries() {
+    using P = Pool<Scalar>;
+    using R = Real<Scalar>;
     const auto L = Uplo::Lower;
     const auto N = Transpose::NoTrans;
     const auto all = SvdVectors::All;
     const auto ev = JobType::EigenVectors;
-    std::vector<Entry<T>> out;
+    std::vector<Entry<Scalar>> out;
     const auto add = [&](const char* name, std::function<void(P&)> f) { out.push_back({name, false, std::move(f)}); };
     // Every syev and gesvd family honours the mask on a device (lift 2: syev_mask_tests and
     // gesvd_mask_tests); on the host backend their CTA leaves are not built, and gesvd_blocked's
     // general path refuses (its gemm is the host BLAS).
     if constexpr (B == Backend::NETLIB)
         add("gesvd_blocked", [=](P& p) {
-            gesvd_blocked<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, p.ws, p.ispan());
+            gesvd_blocked<B, Scalar>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, p.ws, p.ispan());
         });
     // ormqx_cta, ormqr_blocked, sytrd_blocked, sytrd_sy2sb and the band reduction honour the mask
     // on a device (W2c, W3b, lift 1): tests/ormqr_mask_tests.cc and tests/syev_mask_tests.cc. On
     // NETLIB ormqr_blocked's gemm children are the host BLAS, which refuses.
     if constexpr (B == Backend::NETLIB)
         add("ormqr_blocked",
-            [=](P& p) { ormqr_blocked<B, T>(p.q, p.mat(p.a), p.mat(p.c), Side::Left, N, p.tspan(), p.ws); });
+            [=](P& p) { ormqr_blocked<B, Scalar>(p.q, p.mat(p.a), p.mat(p.c), Side::Left, N, p.tspan(), p.ws); });
     // gebrd_blocked and ormbr honour the mask on a device (W4a); NETLIB's gemm children cannot.
     if constexpr (B == Backend::NETLIB) {
         add("gebrd_blocked", [=](P& p) {
-            gebrd_blocked<B, T>(p.q, p.mat(p.a), p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.tq), p.vec(p.tp), p.ws);
+            gebrd_blocked<B, Scalar>(p.q, p.mat(p.a), p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.tq), p.vec(p.tp), p.ws);
         });
-        add("ormbr", [=](P& p) { ormbr<B, T>(p.q, p.mat(p.a), p.vec(p.tau), p.mat(p.c), 'Q', Side::Left, N, p.ws); });
+        add("ormbr",
+            [=](P& p) { ormbr<B, Scalar>(p.q, p.mat(p.a), p.vec(p.tau), p.mat(p.c), 'Q', Side::Left, N, p.ws); });
     }
     // syevx and syevx_direct honour the mask (W4c): syevx_mask_tests holds their contract. LOBPCG and
     // Filtered refuse it on the host backend (its gemm is the host BLAS); on a GPU they honour it with
     // every ortho, Chol2 included (syevx_mask_tests).
     // DirectSubset (real only) honours it on a device (lift 2); on the host backend sy2sb's gemm refuses.
-    if constexpr (B == Backend::NETLIB && !is_std_complex_v<T>)
+    if constexpr (B == Backend::NETLIB && !is_std_complex_v<Scalar>)
         add("syevx_direct_subset", [=](P& p) {
-            syevx_direct_subset<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), P::flat(p.m), 2, p.ws, ev,
-                                                           p.mat(p.z), SyevxParams<T>());
+            syevx_direct_subset<B, Scalar, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), P::flat(p.m), 2, p.ws, ev,
+                                                                p.mat(p.z), SyevxParams<Scalar>());
         });
     if constexpr (B == Backend::NETLIB) {
         add("syevx_lobpcg", [=](P& p) {
-            syevx_lobpcg<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z), SyevxParams<T>());
+            syevx_lobpcg<B, Scalar, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z), SyevxParams<Scalar>());
         });
         add("syevx_filtered", [=](P& p) {
-            syevx_filtered<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z), SyevxParams<T>());
+            syevx_filtered<B, Scalar, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z), SyevxParams<Scalar>());
         });
     }
     // ortho, ritz_values, norm and cond honour the mask (W4c): norm_mask_tests and ortho_mask_tests
@@ -485,46 +497,48 @@ std::vector<Entry<T>> direct_entries() {
     // ortho(M) reach its BLAS gemm, which refuses.
     if constexpr (B == Backend::NETLIB)
         out.push_back({"ortho(M)", true,
-                       [=](P& p) { ortho<B, T>(p.q, p.mat(p.a, kN, 2), p.mat(p.z, kN, 2), N, N, p.ws); }});
+                       [=](P& p) { ortho<B, Scalar>(p.q, p.mat(p.a, kN, 2), p.mat(p.z, kN, 2), N, N, p.ws); }});
     if constexpr (B == Backend::NETLIB)
         out.push_back({"ritz_values", true, [=](P& p) {
-                           ritz_values<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.mat(p.z), p.vec(p.w), p.ws);
+                           ritz_values<B, Scalar, MatrixFormat::Dense>(p.q, p.mat(p.a), p.mat(p.z), p.vec(p.w), p.ws);
                        }});
     // syfn honours the mask on a device (lift 2, syev_mask_tests); the host backend's syrk is its BLAS.
     if constexpr (B == Backend::NETLIB) {
-        add("syfn", [=](P& p) { syfn<B, T>(p.q, p.mat(p.a), p.mat(p.c), SyfnFunction<R>::exp(), L, p.ws, p.ispan()); });
+        add("syfn",
+            [=](P& p) { syfn<B, Scalar>(p.q, p.mat(p.a), p.mat(p.c), SyfnFunction<R>::exp(), L, p.ws, p.ispan()); });
         add("syfn_from_eigen", [=](P& p) {
-            syfn_from_eigen<B, T>(p.q, p.mat(p.z), p.wspan(), p.mat(p.c), SyfnFunction<R>::exp(), p.ws, p.ispan());
+            syfn_from_eigen<B, Scalar>(p.q, p.mat(p.z), p.wspan(), p.mat(p.c), SyfnFunction<R>::exp(), p.ws, p.ispan());
         });
     }
     // syev_align honours the mask (W3b) where its gemm does; the host backend's gemm is its BLAS.
     if constexpr (B == Backend::NETLIB)
-        add("syev_align", [=](P& p) { syev_align<B, T>(p.q, p.mat(p.z), p.wspan(), p.mat(p.v), R(1e-3), p.ws); });
+        add("syev_align", [=](P& p) { syev_align<B, Scalar>(p.q, p.mat(p.z), p.wspan(), p.mat(p.v), R(1e-3), p.ws); });
     // iluk_apply and iluk's device path honour the mask (W4c, tests/iluk_mask_tests.cc). This batch
     // takes the host path, which only the host backend's CPU queue can read a device-only mask on.
     if constexpr (B != Backend::NETLIB) {
-        add("iluk_factorize", [=](P& p) { (void)iluk_factorize<B, T>(p.q, p.csr()); });
+        add("iluk_factorize", [=](P& p) { (void)iluk_factorize<B, Scalar>(p.q, p.csr()); });
         add("iluk_factorize(workspace)",
-            [=](P& p) { (void)iluk_factorize<B, T>(p.q, p.csr(), p.ws, ILUKParams<T>(), nullptr); });
+            [=](P& p) { (void)iluk_factorize<B, Scalar>(p.q, p.csr(), p.ws, ILUKParams<Scalar>(), nullptr); });
     }
-    if constexpr (!is_std_complex_v<T>) {  // real-only: tridiagonal and bidiagonal stages, lanczos, lascl, cond
+    if constexpr (!is_std_complex_v<Scalar>) {  // real-only: tridiagonal and bidiagonal stages, lanczos, lascl, cond
         // bdsdc honours the mask on either backend, lanczos on a device (lift 2: gesvd_mask_tests,
         // syevx_mask_tests); on the host backend lanczos's gemm is its BLAS.
         if constexpr (B == Backend::NETLIB)
             add("lanczos",
-                [=](P& p) { lanczos<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), p.ws, ev, p.mat(p.z)); });
+                [=](P& p) { lanczos<B, Scalar, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), p.ws, ev,
+                                                                    p.mat(p.z)); });
     }
     return out;
 }
 
 // The verification statics of MatrixView, and the Matrix and view conversions that copy data.
-template <typename T>
-std::vector<Entry<T>> check_entries() {
-    using P = Pool<T>;
-    using V = MV<T>;
+template <typename Scalar>
+std::vector<Entry<Scalar>> check_entries() {
+    using P = Pool<Scalar>;
+    using V = MV<Scalar>;
     const auto N = Transpose::NoTrans;
     const auto L = Uplo::Lower;
-    std::vector<Entry<T>> out;
+    std::vector<Entry<Scalar>> out;
     const auto add = [&](const char* name, std::function<void(P&)> f) { out.push_back({name, false, std::move(f)}); };
     add("MatrixView::product", [=](P& p) { V::product(p.q, p.mat(p.a), N, p.mat(p.b), N, p.mat(p.c)); });
     add("potrf_residual", [=](P& p) { (void)V::potrf_residual(p.q, p.mat(p.a), p.mat(p.b), L); });
@@ -569,15 +583,15 @@ std::vector<Entry<T>> check_entries() {
     add("pivot_ratio", [=](P& p) { (void)V::pivot_ratio(p.mat(p.a)); });
     add("pivots_valid", [=](P& p) { (void)V::pivots_valid(p.vec(p.piv32), kN); });
     add("Matrix::copy_from", [=](P& p) {
-        Matrix<T> dst(kN, kN, kBatch);
+        Matrix<Scalar> dst(kN, kN, kBatch);
         dst.copy_from(p.mat(p.a));
     });
-    add("MatrixView::astype(device-only mask)", [=](P& p) { (void)p.mat(p.a).template astype<T>(); });
-    add("MatrixView::astype(items)", [=](P& p) { (void)p.mat(p.a).template astype<T>(std::span<const int>{}); });
-    add("VectorView::astype", [=](P& p) { (void)p.vec(p.tq).template astype<T>(); });
+    add("MatrixView::astype(device-only mask)", [=](P& p) { (void)p.mat(p.a).template astype<Scalar>(); });
+    add("MatrixView::astype(items)", [=](P& p) { (void)p.mat(p.a).template astype<Scalar>(std::span<const int>{}); });
+    add("VectorView::astype", [=](P& p) { (void)p.vec(p.tq).template astype<Scalar>(); });
     // A Matrix carries its own (shared) store, so these copy the device-only bytes into it.
     const auto owned = [](P& p) {
-        Matrix<T> M(p.a.data(), kN, kN, kLd, kStride, kBatch);
+        Matrix<Scalar> M(p.a.data(), kN, kN, kLd, kStride, kBatch);
         if (p.masks(p.a.data())) {
             auto store = M.enable_batch_mask();
             p.q->memcpy(store.data(), p.mask.data(), store.size());
@@ -594,46 +608,46 @@ std::vector<Entry<T>> check_entries() {
 }
 
 // The header-only value-returning wrappers of blas/linalg-ops.hh: their work copies are unmasked.
-template <typename T>
-std::vector<Entry<T>> linalg_entries() {
-    using P = Pool<T>;
-    std::vector<Entry<T>> out;
+template <typename Scalar>
+std::vector<Entry<Scalar>> linalg_entries() {
+    using P = Pool<Scalar>;
+    std::vector<Entry<Scalar>> out;
     const auto add = [&](const char* name, std::function<void(P&)> f) { out.push_back({name, false, std::move(f)}); };
-    SyevxParams<T> subset;
+    SyevxParams<Scalar> subset;
     subset.select = SyevxSelect::Index;
     subset.il = 0;
     subset.iu = 1;
-    add("linalg::add", [=](P& p) { (void)linalg::add<T>(p.q, p.mat(p.a), p.mat(p.b)); });
-    add("linalg::subtract", [=](P& p) { (void)linalg::subtract<T>(p.q, p.mat(p.a), p.mat(p.b)); });
-    add("linalg::multiply", [=](P& p) { (void)linalg::multiply<T>(p.q, p.mat(p.a), p.mat(p.b)); });
-    add("linalg::divide", [=](P& p) { (void)linalg::divide<T>(p.q, p.mat(p.a), p.mat(p.b)); });
-    add("linalg::scaled", [=](P& p) { (void)linalg::scaled<T>(p.q, p.mat(p.a), T(2)); });
-    add("linalg::matmul", [=](P& p) { (void)linalg::matmul<T>(p.q, p.mat(p.a), p.mat(p.b)); });
-    add("linalg::matvec", [=](P& p) { (void)linalg::matvec<T>(p.q, p.mat(p.a), p.vec(p.tq)); });
-    add("linalg::gram", [=](P& p) { (void)linalg::gram<T>(p.q, p.mat(p.a)); });
-    add("linalg::solve_triangular", [=](P& p) { (void)linalg::solve_triangular<T>(p.q, p.mat(p.a), p.mat(p.b)); });
-    add("linalg::cholesky", [=](P& p) { (void)linalg::cholesky<T>(p.q, p.mat(p.a)); });
-    add("linalg::eigvalsh", [=](P& p) { (void)linalg::eigvalsh<T>(p.q, p.mat(p.a)); });
-    add("linalg::eigh", [=](P& p) { (void)linalg::eigh<T>(p.q, p.mat(p.a)); });
-    add("linalg::eigh(subset)", [=](P& p) { (void)linalg::eigh<T>(p.q, p.mat(p.a), subset); });
-    add("linalg::eigvalsh(subset)", [=](P& p) { (void)linalg::eigvalsh<T>(p.q, p.mat(p.a), subset); });
-    add("linalg::solve", [=](P& p) { (void)linalg::solve<T>(p.q, p.mat(p.a), p.mat(p.b)); });
-    add("linalg::solve_spd", [=](P& p) { (void)linalg::solve_spd<T>(p.q, p.mat(p.a), p.mat(p.b)); });
-    add("linalg::triu", [=](P& p) { (void)linalg::triu<T>(p.q, p.mat(p.a)); });
-    add("linalg::tril", [=](P& p) { (void)linalg::tril<T>(p.q, p.mat(p.a)); });
-    add("linalg::inv", [=](P& p) { (void)linalg::inv<T>(p.q, p.mat(p.a)); });
-    add("linalg::svd", [=](P& p) { (void)linalg::svd<T>(p.q, p.mat(p.a)); });
+    add("linalg::add", [=](P& p) { (void)linalg::add<Scalar>(p.q, p.mat(p.a), p.mat(p.b)); });
+    add("linalg::subtract", [=](P& p) { (void)linalg::subtract<Scalar>(p.q, p.mat(p.a), p.mat(p.b)); });
+    add("linalg::multiply", [=](P& p) { (void)linalg::multiply<Scalar>(p.q, p.mat(p.a), p.mat(p.b)); });
+    add("linalg::divide", [=](P& p) { (void)linalg::divide<Scalar>(p.q, p.mat(p.a), p.mat(p.b)); });
+    add("linalg::scaled", [=](P& p) { (void)linalg::scaled<Scalar>(p.q, p.mat(p.a), Scalar(2)); });
+    add("linalg::matmul", [=](P& p) { (void)linalg::matmul<Scalar>(p.q, p.mat(p.a), p.mat(p.b)); });
+    add("linalg::matvec", [=](P& p) { (void)linalg::matvec<Scalar>(p.q, p.mat(p.a), p.vec(p.tq)); });
+    add("linalg::gram", [=](P& p) { (void)linalg::gram<Scalar>(p.q, p.mat(p.a)); });
+    add("linalg::solve_triangular", [=](P& p) { (void)linalg::solve_triangular<Scalar>(p.q, p.mat(p.a), p.mat(p.b)); });
+    add("linalg::cholesky", [=](P& p) { (void)linalg::cholesky<Scalar>(p.q, p.mat(p.a)); });
+    add("linalg::eigvalsh", [=](P& p) { (void)linalg::eigvalsh<Scalar>(p.q, p.mat(p.a)); });
+    add("linalg::eigh", [=](P& p) { (void)linalg::eigh<Scalar>(p.q, p.mat(p.a)); });
+    add("linalg::eigh(subset)", [=](P& p) { (void)linalg::eigh<Scalar>(p.q, p.mat(p.a), subset); });
+    add("linalg::eigvalsh(subset)", [=](P& p) { (void)linalg::eigvalsh<Scalar>(p.q, p.mat(p.a), subset); });
+    add("linalg::solve", [=](P& p) { (void)linalg::solve<Scalar>(p.q, p.mat(p.a), p.mat(p.b)); });
+    add("linalg::solve_spd", [=](P& p) { (void)linalg::solve_spd<Scalar>(p.q, p.mat(p.a), p.mat(p.b)); });
+    add("linalg::triu", [=](P& p) { (void)linalg::triu<Scalar>(p.q, p.mat(p.a)); });
+    add("linalg::tril", [=](P& p) { (void)linalg::tril<Scalar>(p.q, p.mat(p.a)); });
+    add("linalg::inv", [=](P& p) { (void)linalg::inv<Scalar>(p.q, p.mat(p.a)); });
+    add("linalg::svd", [=](P& p) { (void)linalg::svd<Scalar>(p.q, p.mat(p.a)); });
     add("linalg::svd(options)", [=](P& p) {
-        (void)linalg::svd<T>(p.q, p.mat(p.a), GesvdOptions{.jobu = SvdVectors::All, .jobvh = SvdVectors::None});
+        (void)linalg::svd<Scalar>(p.q, p.mat(p.a), GesvdOptions{.jobu = SvdVectors::All, .jobvh = SvdVectors::None});
     });
-    add("linalg::lu", [=](P& p) { (void)linalg::lu<T>(p.q, p.mat(p.a)); });
+    add("linalg::lu", [=](P& p) { (void)linalg::lu<Scalar>(p.q, p.mat(p.a)); });
     // linalg::norm and linalg::cond forward to norm and cond, which honour the mask (W4c).
     return out;
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct EntryConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using C = std::complex<float>;
