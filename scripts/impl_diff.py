@@ -8,7 +8,7 @@
 
 Harnesses: steqr_accuracy, eigensolver_accuracy, orthogonality_accuracy (benchmarks/). Each writes
 one row per (impl, sample) with an `input_hash` of the generated matrix. Samples pair on
-(impl, n, neigs, dtype, scheme, cta_shift, sample); a cell is that key minus the sample, plus the
+(impl, n, neigs, dtype, cta_shift, sample); a cell is that key minus the sample, plus the
 decade of target_log10_cond. Per cell and metric: median and max for A and B, their B/A ratios, the
 geometric mean of the paired per-sample ratio, the largest paired relative difference, and how
 many inputs and results are bit-identical.
@@ -32,7 +32,7 @@ import sys
 from collections import defaultdict
 
 METRICS = ("R", "O", "max_relerr", "relerr", "orthogonality")
-KEY_COLS = ("impl", "n", "neigs", "backend", "dtype", "scheme", "cta_shift")
+KEY_COLS = ("impl", "n", "neigs", "backend", "dtype", "cta_shift")
 EPS = {"float": 2.0 ** -23, "double": 2.0 ** -52}
 
 

@@ -55,8 +55,8 @@ template <typename A> struct container_elem { using type = void; };
 // A one-parameter class template over the scalar (StedcParams<T>, GemmOptions<T>) names the
 // op's type as well: stedc_buffer_size(ctx, n, batch, job, StedcParams<double>) has no container.
 template <template <typename> class P, typename T> struct container_elem<P<T>> { using type = T; };
-template <typename T> struct container_elem<std::complex<T>> { using type = void; };
-template <typename T, MatrixFormat F> struct container_elem<Matrix<T, F>> { using type = T; };
+template <typename Real> struct container_elem<std::complex<Real>> { using type = void; };
+template <typename Scalar, MatrixFormat F> struct container_elem<Matrix<Scalar, F>> { using type = Scalar; };
 template <typename T, MatrixFormat F> struct container_elem<MatrixView<T, F>> { using type = T; };
 template <typename T> struct container_elem<Vector<T>> { using type = T; };
 template <typename T> struct container_elem<VectorView<T>> { using type = T; };
@@ -95,16 +95,16 @@ inline constexpr bool needs_fp64_v =
         "NETLIB, or convert the data to float or complex<float>.");
 }
 
-/// Throws throw_no_device_fp64 for a double or complex<double> @p T on a GPU without fp64. For
+/// Throws throw_no_device_fp64 for a double or complex<double> @p Scalar on a GPU without fp64. For
 /// kernels that are not Backend-templated (or NETLIB ones that launch on the queue's device),
 /// whose double instantiations exist and would otherwise fail in the device JIT.
-/// @tparam T      element type of the call's data
+/// @tparam Scalar      element type of the call's data
 /// @param[in] ctx queue whose device is checked
 /// @param[in] op  name of the op, used in the error message (may be null)
 /// @throws batchlas::unsupported if the check fails
-template <typename T>
+template <typename Scalar>
 inline void require_device_fp64(const Queue& ctx, const char* op) {
-    if constexpr (is_fp64_scalar_v<T> && !BATCHLAS_HAS_DEVICE_FP64) {
+    if constexpr (is_fp64_scalar_v<Scalar> && !BATCHLAS_HAS_DEVICE_FP64) {
         if (ctx.device().type == DeviceType::GPU && !ctx.device().supports_fp64())
             throw_no_device_fp64(ctx, op);
     }
@@ -181,19 +181,19 @@ inline auto with_backend(Queue& ctx, F&& f) {
     return detail::with_backend_gated<false>(ctx, nullptr, std::forward<F>(f));
 }
 
-/// @brief with_backend() for a call on element type @p T: throws batchlas::unsupported
-/// before dispatch when @p T is double or complex<double> and the queue's backend is
+/// @brief with_backend() for a call on element type @p Scalar: throws batchlas::unsupported
+/// before dispatch when @p Scalar is double or complex<double> and the queue's backend is
 /// Backend::SYCL in a build without device fp64.
-/// @tparam T       element type of the call's data
+/// @tparam Scalar       element type of the call's data
 /// @tparam F       callable taking `std::integral_constant<Backend, B>`
 /// @param[in] ctx  queue whose backend is dispatched on
 /// @param[in] op   name of the op, used in the error message
 /// @param[in] f    callable; every branch must return the same type
 /// @return         whatever @p f returns
 /// @throws batchlas::unsupported as with_backend(), or for the fp64 case above
-template <typename T, typename F>
+template <typename Scalar, typename F>
 inline auto with_backend_for(Queue& ctx, const char* op, F&& f) {
-    return detail::with_backend_gated<detail::is_fp64_scalar_v<T>>(ctx, op, std::forward<F>(f));
+    return detail::with_backend_gated<detail::is_fp64_scalar_v<Scalar>>(ctx, op, std::forward<F>(f));
 }
 
 /// @}

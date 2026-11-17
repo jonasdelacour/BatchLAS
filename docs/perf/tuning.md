@@ -29,6 +29,7 @@ Each tunable quantity has five constants, one per size bucket of \f$n\f$, and a 
 | `SY2SB_ORMQR_NB_*` | WY width of the sy2sb panel back-transform | keep the shape gate in `sytrd_sy2sb.cc` |
 | `SYTRD_BLOCK_SIZE_*` | `sytrd` panel width | n/a |
 | `LATRD_LOWER_PANEL_WG_HINT_*` | latrd lower-panel work-group size | no hint |
+| `LATRD_LOWER_PANEL_SLM_FLOOR_*` (+ `_MIN_ROWS_*`, `_MIN_BATCH`) | local-memory floor in bytes per work-item: an occupancy cap for the latrd lower panel, applied to panels of at least `MIN_ROWS` rows at batch >= `MIN_BATCH` | no floor |
 | `SYTRD_FUSE_PANEL_UPDATE_*` | fused panel update on/off | off |
 | `STEDC_RECURSION_THRESHOLD_*` | stedc leaf size | n/a; 32 is the CTA invariant, not a tuning result |
 | `STEDC_MERGE_VARIANT_*` | `StedcMergeVariant` (1 Fused, 2 FusedCta) | `Auto`, never returned (see below) |
@@ -40,9 +41,9 @@ Because of the last two, `tools/tune/getrf_spec.cc` and `potrf_spec.cc` list the
 potrf op hash pinned in `TuneHash.OpLevelHashUnchangedByFamilyPrefixes`.
 
 Production code calls the runtime accessors `<knob>_for_n(n)`. Each consults its `BATCHLAS_TUNE_*`
-override first and falls back to the table. `latrd_lower_panel_wg_hint()` pins \f$n\f$ to 256 for the
-legacy path. `sytrd_fuse_panel_update_for_n` has no override; its control is
-`BATCHLAS_SYTRD_FUSE_PANEL_UPDATE`, which is tri-state (@ref design_environment).
+override first and falls back to the table. `latrd_lower_panel_wg_hint()` pins \f$n\f$ to 256 (the only
+latrd kernel). `sytrd_fuse_panel_update_for_n` has no caller since the device sytrd path was deleted; the fuse
+control is `BATCHLAS_SYTRD_FUSE_PANEL_UPDATE`, which is tri-state (@ref design_environment).
 
 ## tuning: how the constants were measured
 
@@ -74,8 +75,8 @@ the consumer, where a retune cannot overwrite them:
 
 Each runtime accessor passes its captured `settings().geometry.tune.<field>` and the table value to
 `detail::tuning_env_override`. One process can therefore A/B a retune without a rebuild. The
-thirteen variables are `BATCHLAS_TUNE_{ORMQR_BLOCK_SIZE, GEBRD_BLOCK_SIZE, SB2ST_BACK_TILE,
-SB2ST_BACK_SUBS, SY2SB_ORMQR_NB, SYTRD_BLOCK_SIZE, LATRD_WG_HINT, STEDC_RECURSION_THRESHOLD,
+fourteen variables are `BATCHLAS_TUNE_{ORMQR_BLOCK_SIZE, GEBRD_BLOCK_SIZE, SB2ST_BACK_TILE,
+SB2ST_BACK_SUBS, SY2SB_ORMQR_NB, SYTRD_BLOCK_SIZE, LATRD_WG_HINT, LATRD_SLM_FLOOR, STEDC_RECURSION_THRESHOLD,
 STEDC_MERGE_VARIANT, STEDC_THREADS_PER_ROOT, STEDC_WG_MULTIPLIER, L2_CHUNK_PERCENT, L2_CHUNK_ITEMS}`.
 `L2_CHUNK_ITEMS` overrides no constant: it forces the blocked drivers' chunk size as given.
 
@@ -95,7 +96,7 @@ in `src/util/settings.cc`, which accepts `"16x"`.
   geometry but cannot force auto. Likewise `STEDC_MERGE_VARIANT` 0 (`Auto`) is unreachable from the
   environment.
 
-Five of these sit under an older, outer variable for the same quantity, which wins. See
+Four of these sit under an older, outer variable for the same quantity, which wins. See
 [two variables for one quantity](../design/environment.md#environment-two-variables-for-one-quantity).
 
 ## tuning: regenerating the header

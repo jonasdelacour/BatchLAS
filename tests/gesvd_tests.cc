@@ -43,9 +43,9 @@
 using namespace batchlas;
 namespace ts = test_support;
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct GesvdConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 
@@ -120,12 +120,12 @@ protected:
     using Real = typename base_type<Scalar>::type;
     static constexpr Backend B = Config::BackendVal;
 
-    // sycl_gesvd::gesvd_jacobi_max_dim at this device's budget: at the 99 KiB opt-in only
+    // ops::gesvd::gesvd_jacobi_max_dim at this device's budget: at the 99 KiB opt-in only
     // complex<double> with vectors misses the C=64 rung (gesvdj_cta_tests pins both budgets).
     int max_dim_with_vectors() const {
         const std::size_t budget =
             resident::device_slm_budget(this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
-        const int cap = static_cast<int>(sycl_gesvd::gesvd_jacobi_max_dim<Scalar>(true, budget));
+        const int cap = static_cast<int>(ops::gesvd::gesvd_jacobi_max_dim<Scalar>(true, budget));
         if (!test_utils::kSlmCappedAt48KiB) {
             EXPECT_EQ(cap, (std::is_same_v<Scalar, std::complex<double>> ? 32 : 64)) << "budget " << budget;
         }
@@ -137,14 +137,13 @@ TYPED_TEST_SUITE(GesvdTest, GesvdTestTypes);
 TYPED_TEST_SUITE(GesvdHermitianComplexTest, GesvdHermitianComplexTestTypes);
 TYPED_TEST_SUITE(GesvdGeneralComplexTest, GesvdHermitianComplexTestTypes);
 
-
 TYPED_TEST(GesvdTest, ValuesOnlyMatchesLapacke) {
     using Scalar = typename TestFixture::Scalar;
     using Real = typename TestFixture::Real;
     constexpr Backend B = TestFixture::B;
 
 #if !BATCHLAS_VERIFY_HAVE_LAPACKE
-    GTEST_SKIP() << "Reference LAPACKE backend unavailable.";
+    GTEST_SKIP() << "reference LAPACKE backend unavailable.";
 #else
     const int n = 8;
     const int batch = 3;
@@ -349,7 +348,7 @@ TYPED_TEST(GesvdHermitianComplexTest, ValuesOnlyMatchesLapacke) {
     constexpr Backend B = TestFixture::B;
 
 #if !BATCHLAS_VERIFY_HAVE_LAPACKE
-    GTEST_SKIP() << "Reference LAPACKE backend unavailable.";
+    GTEST_SKIP() << "reference LAPACKE backend unavailable.";
 #else
     const int n = 12;
     const int batch = 2;
@@ -392,7 +391,7 @@ TYPED_TEST(GesvdHermitianComplexTest, BlockedProviderFullVectorsMatchHermitianSv
     constexpr Backend B = TestFixture::B;
 
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Blocked native provider is only dispatched on GPU backends.";
+        GTEST_SKIP() << "blocked native provider is only dispatched on GPU backends.";
     } else {
         const int n = 48;
         const int batch = 2;
@@ -498,14 +497,14 @@ constexpr std::array<GesvdJobCase, 4> kGesvdJobCases{{
     {SvdVectors::All, SvdVectors::All, "AA"},
 }};
 
-} // namespace
+}  // namespace
 
 TYPED_TEST(GesvdTest, BlockedProviderCoversAllJobCombinations) {
     using Scalar = typename TestFixture::Scalar;
     constexpr Backend B = TestFixture::B;
 
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Blocked native provider is only dispatched on GPU backends.";
+        GTEST_SKIP() << "blocked native provider is only dispatched on GPU backends.";
     } else {
         const int n = 64;
         const int batch = 2;
@@ -598,7 +597,7 @@ TYPED_TEST(GesvdTest, BlockedProviderHandlesRepeatedAndTinySingularValues) {
     constexpr Backend B = TestFixture::B;
 
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Blocked native provider is only dispatched on GPU backends.";
+        GTEST_SKIP() << "blocked native provider is only dispatched on GPU backends.";
     } else {
         const int n = 64;
         const int batch = 2;
@@ -689,7 +688,7 @@ TYPED_TEST(GesvdTest, BlockedProviderTallRectangularFullVectors) {
     constexpr Backend B = TestFixture::B;
 
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Blocked native provider is only dispatched on GPU backends.";
+        GTEST_SKIP() << "blocked native provider is only dispatched on GPU backends.";
     } else {
         const int m = 24;
         const int n = 16;
@@ -730,7 +729,7 @@ TYPED_TEST(GesvdTest, BlockedUniformlyTinyInput) {
     constexpr Backend B = TestFixture::B;
 
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Blocked native provider is only dispatched on GPU backends.";
+        GTEST_SKIP() << "blocked native provider is only dispatched on GPU backends.";
     } else {
         const int m = 24, n = 16, batch = 2;
         const Real tiny = std::ldexp(Real(1), std::is_same_v<Real, float> ? -30 : -60);
@@ -800,7 +799,7 @@ TYPED_TEST(GesvdTest, BlockedProviderLargeTallRectangularFullVectors) {
     constexpr Backend B = TestFixture::B;
 
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Blocked native provider is only dispatched on GPU backends.";
+        GTEST_SKIP() << "blocked native provider is only dispatched on GPU backends.";
     } else {
         const int m = 192;
         const int n = 128;
@@ -859,8 +858,8 @@ namespace {
 // spectrum is.
 template <typename Scalar>
 Matrix<Scalar, MatrixFormat::Dense> make_graded_dense_matrix(int n,
-                                                            int batch,
-                                                            double log10cond) {
+                                                             int batch,
+                                                             double log10cond) {
     using Real = typename base_type<Scalar>::type;
 
     std::vector<double> sigma(static_cast<size_t>(n));
@@ -876,7 +875,7 @@ Matrix<Scalar, MatrixFormat::Dense> make_graded_dense_matrix(int n,
         // reproducible without pulling in a generator that is itself suspect.
         std::vector<double> u(static_cast<size_t>(n)), v(static_cast<size_t>(n));
         uint64_t state = 0x9E3779B97F4A7C15ull + static_cast<uint64_t>(b) * 0x1000193ull;
-        auto next = [&state]() {
+        auto next = [&state] {
             state = state * 6364136223846793005ull + 1442695040888963407ull;
             return static_cast<double>((state >> 11) & ((1ull << 53) - 1)) / static_cast<double>(1ull << 53) - 0.5;
         };
@@ -919,7 +918,7 @@ TYPED_TEST(GesvdTest, DefaultProviderKeepsSingularValuesAtHighCondition) {
     constexpr Backend B = TestFixture::B;
 
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Native gesvd providers are only dispatched on GPU backends.";
+        GTEST_SKIP() << "native gesvd providers are only dispatched on GPU backends.";
     } else {
         const int n = 32;
         const int batch = 4;
@@ -1046,7 +1045,7 @@ TYPED_TEST(GesvdTest, ThinWorkspaceIsSmallerThanFull) {
     constexpr Backend B = TestFixture::B;
 
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Native blocked provider is only dispatched on GPU backends.";
+        GTEST_SKIP() << "native blocked provider is only dispatched on GPU backends.";
     } else {
         const int m = 512;
         const int n = 32;
@@ -1131,7 +1130,7 @@ TYPED_TEST(GesvdTest, CtaRejectsGenuinelyThinAndItsPinThrows) {
     constexpr Backend B = TestFixture::B;
 
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Native CTA provider is only dispatched on GPU backends.";
+        GTEST_SKIP() << "native CTA provider is only dispatched on GPU backends.";
     } else {
         const int m = 32, n = 8, k = 8, batch = 2;
         auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(m, n, false, batch, 8104);
@@ -1168,7 +1167,7 @@ TYPED_TEST(GesvdTest, ThinTallUnderNormalEquationsBidiag) {
     constexpr Backend B = TestFixture::B;
 
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Native blocked provider is only dispatched on GPU backends.";
+        GTEST_SKIP() << "native blocked provider is only dispatched on GPU backends.";
     } else {
         ScopedEnvVar bidiag("BATCHLAS_GESVD_BIDIAG", "normal");
 
@@ -1210,7 +1209,7 @@ TYPED_TEST(GesvdTest, TallNarrowBelowCtaCap) {
     constexpr Backend B = TestFixture::B;
 
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Native blocked provider is only dispatched on GPU backends.";
+        GTEST_SKIP() << "native blocked provider is only dispatched on GPU backends.";
     } else {
         struct Shape { int m; int n; };
         const Shape shapes[] = {{256, 8}, {256, 16}, {512, 32}};
@@ -1250,7 +1249,7 @@ TYPED_TEST(GesvdTest, BlockedGebrdMatchesUnblockedAtSmallN) {
     constexpr Backend B = TestFixture::B;
 
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Native blocked provider is only dispatched on GPU backends.";
+        GTEST_SKIP() << "native blocked provider is only dispatched on GPU backends.";
     } else {
         const int m = 192, n = 16, k = 16, batch = 3;
 
@@ -1300,7 +1299,7 @@ TYPED_TEST(GesvdGeneralComplexTest, GeneralComplexAboveThirtyTwo) {
     constexpr Backend B = TestFixture::B;
 
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Native gesvd providers are only dispatched on GPU backends.";
+        GTEST_SKIP() << "native gesvd providers are only dispatched on GPU backends.";
     } else {
         if (this->max_dim_with_vectors() < 64) {
             GTEST_SKIP() << "gesvdj_cta with vectors is capped below 64 here (local memory)";
@@ -1545,7 +1544,7 @@ TYPED_TEST(GesvdGeneralComplexTest, BlockedGradedPaddedShapesAndJobs) {
     using Scalar = typename TestFixture::Scalar;
     constexpr Backend B = TestFixture::B;
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Native gesvd providers are only dispatched on GPU backends.";
+        GTEST_SKIP() << "native gesvd providers are only dispatched on GPU backends.";
     } else {
         const std::pair<int, int> shapes[] = {{48, 48}, {96, 96}, {130, 70}, {70, 130}};
         const SvdVectors jobs[][2] = {{SvdVectors::All, SvdVectors::All},
@@ -1569,7 +1568,7 @@ TYPED_TEST(GesvdGeneralComplexTest, AutoServesComplexGeneralAboveTheJacobiCap) {
     using Scalar = typename TestFixture::Scalar;
     constexpr Backend B = TestFixture::B;
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Native gesvd providers are only dispatched on GPU backends.";
+        GTEST_SKIP() << "native gesvd providers are only dispatched on GPU backends.";
     } else {
         for (auto [m, n] : {std::pair{96, 96}, std::pair{160, 100}, std::pair{100, 160}}) {
             SCOPED_TRACE("m=" + std::to_string(m) + " n=" + std::to_string(n));
@@ -1585,7 +1584,7 @@ TYPED_TEST(GesvdGeneralComplexTest, BlockedSaturatingBatchIsBitIdentical) {
     using Real = typename TestFixture::Real;
     constexpr Backend B = TestFixture::B;
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Native gesvd providers are only dispatched on GPU backends.";
+        GTEST_SKIP() << "native gesvd providers are only dispatched on GPU backends.";
     } else {
         const int n = 72, batch = 1024;
         PaddedBatch<Scalar> A(n, n, batch), U(n, n, batch), Vh(n, n, batch);
@@ -1607,7 +1606,7 @@ TYPED_TEST(GesvdGeneralComplexTest, BlockedSaturatingBatchIsBitIdentical) {
 TYPED_TEST(GesvdHermitianComplexTest, BlockedUpperIgnoresTheLowerTriangle) {
     constexpr Backend B = TestFixture::B;
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Native gesvd providers are only dispatched on GPU backends.";
+        GTEST_SKIP() << "native gesvd providers are only dispatched on GPU backends.";
     } else {
         for (int n : {48, 96}) check_hermitian_upper<typename TestFixture::Scalar, B>(*this->ctx, n, "blocked");
         check_hermitian_upper<typename TestFixture::Scalar, B>(*this->ctx, 96, nullptr);  // Auto
@@ -1617,13 +1616,12 @@ TYPED_TEST(GesvdHermitianComplexTest, BlockedUpperIgnoresTheLowerTriangle) {
 TYPED_TEST(GesvdTest, BlockedUpperIgnoresTheLowerTriangle) {
     constexpr Backend B = TestFixture::B;
     if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Native gesvd providers are only dispatched on GPU backends.";
+        GTEST_SKIP() << "native gesvd providers are only dispatched on GPU backends.";
     } else {
         for (int n : {48, 96}) check_hermitian_upper<typename TestFixture::Scalar, B>(*this->ctx, n, "blocked");
         check_hermitian_upper<typename TestFixture::Scalar, B>(*this->ctx, 96, nullptr);  // Auto
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // Per-item convergence status (`info`).
@@ -1647,7 +1645,7 @@ namespace {
 // than against another run of the same code.
 //
 // Both fills take the view BY VALUE: MatrixView::operator() has a const overload
-// returning `const T&`, so a const-reference parameter would make every
+// returning `const Scalar&`, so a const-reference parameter would make every
 // assignment below a compile error. The view is a non-owning descriptor.
 template <typename Scalar>
 void fill_diagonal_svd_matrix(MatrixView<Scalar, MatrixFormat::Dense> A) {
@@ -1670,7 +1668,7 @@ void fill_mixed_svd_matrices(MatrixView<Scalar, MatrixFormat::Dense> A, unsigned
     const int n = A.rows();
     const int batch = A.batch_size();
     unsigned state = seed;
-    auto next = [&state]() {
+    auto next = [&state] {
         state = state * 1664525u + 1013904223u;
         return double(state >> 8) / double(1u << 24);
     };
@@ -1806,7 +1804,7 @@ TYPED_TEST(GesvdTest, EmptyInfoSpanChangesNeitherAnswerNorWorkspace) {
 //
 // max_sweeps = 2, not 1, and the reason is the termination rule: gesvdj_cta
 // requires TWO CONSECUTIVE zero-rotation sweeps before it will call an item
-// converged (gesvdj_cta.cc:734-738, whose comment explains that one is a silent
+// converged (gesvdj_cta.cc:736-740, whose comment explains that one is a silent
 // wrong answer). At a cap of 1 NOTHING can converge, so "the items reporting
 // info == 0 are still correct" would be vacuously true. At 2 the diagonal items
 // converge and the dense ones do not, which is the mixed outcome this case needs

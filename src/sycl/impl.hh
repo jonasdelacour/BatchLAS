@@ -213,6 +213,16 @@ template <int D, typename... Rest>
 void parallel_for(sycl::handler& h, const sycl::nd_range<D>& r, Rest&&... rest) {
     if (!skip_empty_launch(h, r.get_global_range().size())) h.parallel_for(r, std::forward<Rest>(rest)...);
 }
+// A plain range has no local size, so an empty one is already a no-op on both runtimes
+// (docs/design/sycl-implementations.md): forwarded unchanged, one launch spelling for every kernel.
+template <typename Name, int D, typename... Rest>
+void parallel_for(sycl::handler& h, const sycl::range<D>& r, Rest&&... rest) {
+    h.parallel_for<Name>(r, std::forward<Rest>(rest)...);
+}
+template <int D, typename... Rest>
+void parallel_for(sycl::handler& h, const sycl::range<D>& r, Rest&&... rest) {
+    h.parallel_for(r, std::forward<Rest>(rest)...);
+}
 
 #if BATCHLAS_SYCL_IMPL_ACPP
 // acpp keeps asynchronous errors in ONE process-wide list (launch failures included), and every

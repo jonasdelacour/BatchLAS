@@ -28,18 +28,18 @@ namespace ops::syrk {
 
 using select::overloaded;
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
 // op(A)'s inner extent: the reduction length of C = op(A) op(A)^T.
-template <typename T>
-std::int64_t inner(const MV<T>& A, Transpose transA) {
+template <typename Scalar>
+std::int64_t inner(const MV<Scalar>& A, Transpose transA) {
     return transA == Transpose::NoTrans ? A.cols() : A.rows();
 }
 
-template <typename T>
-select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
-    const std::int64_t n = C.rows(), k = inner<T>(A, transA);
+template <typename Scalar>
+select::Key key_of(const MV<Scalar>& A, const MV<Scalar>& C, Transpose transA) {
+    const std::int64_t n = C.rows(), k = inner<Scalar>(A, transA);
     const char* trans = transA == Transpose::NoTrans ? "N" : (transA == Transpose::Trans ? "T" : "C");
     return {{"form", form_of(n, k)}, {"trans", trans}, {"n", n}, {"k", k}, {"batch", C.batch_size()}};
 }
@@ -51,57 +51,58 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
 // can_run, keeps it on the vendor). Every vendor loop (cuBLAS, rocBLAS, netlib) runs each item
 // at the top-level (n, k), a wrong answer for a heterogeneous batch, so no family takes one.
 // Shapes are validated before this runs.
-template <Backend B, typename T>
-bool can_run(const SyrkChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& C, Transpose transA) {
+template <Backend B, typename Scalar>
+bool can_run(const SyrkChoice& c, const select::Device& d, const MV<Scalar>& A, const MV<Scalar>& C, Transpose transA) {
     // Gram and Triangular honour a batch mask; the vendor's per-item loop cannot skip an item.
     const bool masked = batchlas::detail::any_batch_mask(A, C);
-    const std::int64_t n = C.rows(), k = inner<T>(A, transA), batch = C.batch_size();
+    const std::int64_t n = C.rows(), k = inner<Scalar>(A, transA), batch = C.batch_size();
     const Transpose real_trans = transA == Transpose::NoTrans ? Transpose::NoTrans : Transpose::Trans;
     const bool homogeneous = !A.is_heterogeneous() && !C.is_heterogeneous();
     const bool native = select::native_gpu_backend<B> && d.is_gpu && homogeneous && n >= 1 && k >= 1 && batch >= 1;
     return std::visit(overloaded{
         [&](Gram) {
-            return native && backend::detail::syrk_gram_supported<T>(A, C, real_trans, false) &&
-                   d.max_wg >= gram_threads(n) && d.slm_budget >= gram_slm_bytes<T>(n);
+            return native && backend::detail::syrk_gram_supported<Scalar>(A, C, real_trans, false) &&
+                   d.max_wg >= gram_threads(n) && d.slm_budget >= gram_slm_bytes<Scalar>(n);
         },
         [&](Triangular) {
-            return native && d.max_wg >= kTriangularWg && d.slm_budget >= triangular_slm_bytes<T>() &&
+            return native && d.max_wg >= kTriangularWg && d.slm_budget >= triangular_slm_bytes<Scalar>() &&
                    triangular_groups(n, backend::detail::kTriangularTile) <= d.max_groups_yz;
         },
-        [&](Vendor) { return vendor_wired<B, T> && d.has_vendor && homogeneous && !masked; },
+        [&](Vendor) { return vendor_wired<B, Scalar> && d.has_vendor && homogeneous && !masked; },
     }, c);
 }
 
 // The native arms compile only for CUDA and SYCL (native_gpu_backend); can_run never admits the
 // other instantiations.
-template <Backend B, typename T>
-Event launch(Queue& q, const SyrkChoice& c, const MV<T>& A, const MV<T>& C, T alpha, T beta, Uplo uplo,
+template <Backend B, typename Scalar>
+Event launch(Queue& q, const SyrkChoice& c, const MV<Scalar>& A, const MV<Scalar>& C, Scalar alpha, Scalar beta,
+             Uplo uplo,
              Transpose transA) {
     return std::visit(overloaded{
         [&](Gram) -> Event {
             if constexpr (select::native_gpu_backend<B>)
                 return level3::for_each_chunk(q, C.batch_size(), level3::grid_chunk<B>(q), [&](int f, int n) {
-                    return backend::detail::syrk_gram_tiles<T, false>(q, level3::batch_range(A, f, n),
-                                                                      level3::batch_range(C, f, n), alpha, beta,
-                                                                      uplo, transA);
+                    return backend::detail::syrk_gram_tiles<Scalar, false>(q, level3::batch_range(A, f, n),
+                                                                           level3::batch_range(C, f, n), alpha, beta,
+                                                                           uplo, transA);
                 });
             else
                 throw batchlas::internal_error("syrk: gram is wired for native GPU backends only");
         },
         [&](Triangular) -> Event {
-            if constexpr (select::native_gpu_backend<B> && !std::is_same_v<T, std::complex<double>>)
+            if constexpr (select::native_gpu_backend<B> && !std::is_same_v<Scalar, std::complex<double>>)
                 return level3::for_each_chunk(q, C.batch_size(), level3::grid_chunk<B>(q), [&](int f, int n) {
-                    return backend::detail::syrk_triangular_tiles<T>(q, level3::batch_range(A, f, n),
-                                                                         level3::batch_range(C, f, n), alpha,
-                                                                         beta, uplo, transA);
+                    return backend::detail::syrk_triangular_tiles<Scalar>(q, level3::batch_range(A, f, n),
+                                                                              level3::batch_range(C, f, n), alpha,
+                                                                              beta, uplo, transA);
                 });
             else
                 throw batchlas::internal_error("syrk: triangular is wired for native GPU backends only");
         },
         [&](Vendor) -> Event {
-            if constexpr (vendor_wired<B, T>)
-                return backend::syrk_vendor<B, T>(q, A, C, alpha, beta, uplo, transA);
-            else select::no_vendor<B, T>(spec);
+            if constexpr (vendor_wired<B, Scalar>)
+                return backend::syrk_vendor<B, Scalar>(q, A, C, alpha, beta, uplo, transA);
+            else select::no_vendor<B, Scalar>(spec);
         },
     }, c);
 }

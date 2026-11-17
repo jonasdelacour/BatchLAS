@@ -6,26 +6,28 @@
 
 using namespace batchlas;
 
+namespace {
+
 // Batched tridiagonal_solver benchmark (eigenvalues and eigenvectors)
-template <typename T, Backend B>
-static void BM_STEHR(minibench::State& state) {
+template <typename Real, Backend B>
+void BM_STEHR(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
 
     JobType jobz = JobType::EigenVectors;
     const double avg_deflations_per_eigenvalue = 2.5; // Empirical average
     const double flops_eigvals = avg_deflations_per_eigenvalue * double(n) * double(n) * 35.0/2.0; // Approximate number of flops to compute all eigenvalues.
-    const double flops_eigvects = 3 * avg_deflations_per_eigenvalue * double(n) * double(n) * double(n) - 3 * avg_deflations_per_eigenvalue * double(n) * double(n);  //Extra flops if eigvects are required.
+    const double flops_eigvects = 3 * avg_deflations_per_eigenvalue * double(n) * double(n) * double(n) - 3 * avg_deflations_per_eigenvalue * double(n) * double(n);  // Extra flops if eigvects are required.
 
     const double total_flops = (flops_eigvals + (jobz == JobType::EigenVectors ? flops_eigvects : 0)) * double(batch);
 
-    Vector<T> diags = Vector<T>::random(n, batch);
-    Vector<T> off_diags = Vector<T>::random(n, batch);
+    Vector<Real> diags = Vector<Real>::random(n, batch);
+    Vector<Real> off_diags = Vector<Real>::random(n, batch);
 
-    auto eigvals = Vector<T>::zeros(n, batch);
-    auto eigvects = Matrix<T>::Identity(n, batch);
+    auto eigvals = Vector<Real>::zeros(n, batch);
+    auto eigvects = Matrix<Real>::Identity(n, batch);
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    UnifiedVector<std::byte> ws(tridiagonal_solver_buffer_size<B, T>(*q, n, batch, jobz));
+    UnifiedVector<std::byte> ws(tridiagonal_solver_buffer_size<B, Real>(*q, n, batch, jobz));
 
     state.SetKernel(q,
                     bench::pristine(std::move(diags)),
@@ -59,7 +61,7 @@ static void BM_STEHR(minibench::State& state) {
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 
-
+}  // namespace
 
 // Register size/batch combinations at static‑init time using macro
 

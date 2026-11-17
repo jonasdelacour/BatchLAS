@@ -26,15 +26,15 @@ namespace {
 
 namespace S = ops::potrs;
 
-template <class T>
+template <typename Scalar>
 struct PotrsProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     int n, nrhs, batch, lda, ldb;
     std::size_t sa, sb;
     Uplo uplo;
-    UnifiedVector<T> A0, L, B0, X;
-    UnifiedVector<T*> pA0, pL, pB0, pX;
+    UnifiedVector<Scalar> A0, L, B0, X;
+    UnifiedVector<Scalar*> pA0, pL, pB0, pX;
     MV A0v, Lv, B0v, Xv;
 
     PotrsProblem(Queue& q_, int n_, int nrhs_, int batch_, int ld_pad, Uplo u)
@@ -48,9 +48,9 @@ struct PotrsProblem {
         (void)A0v.fill_random_spd(q, 12345);
         (void)B0v.fill_random(q, false, 777);
         (void)MV::copy(q, Lv, A0v);
-        UnifiedVector<std::byte> fws(std::max<std::size_t>(1, potrf_buffer_size<kBackend, T>(q, Lv, uplo)));
+        UnifiedVector<std::byte> fws(std::max<std::size_t>(1, potrf_buffer_size<kBackend, Scalar>(q, Lv, uplo)));
         UnifiedVector<std::int32_t> info(std::size_t(batch_), 0);
-        (void)potrf<kBackend, T>(q, Lv, uplo, fws.to_span(), info.to_span());
+        (void)potrf<kBackend, Scalar>(q, Lv, uplo, fws.to_span(), info.to_span());
         q.wait();
         for (int b = 0; b < batch; ++b)
             if (info[std::size_t(b)] != 0) throw batchlas::convergence_error("potrs input: potrf reported a non-SPD item");
@@ -66,7 +66,7 @@ struct PotrsProblem {
     }
     void clear_info() {}
     void run(Span<std::byte>) {
-        (void)potrs<kBackend, T>(q, Lv, Xv, uplo);
+        (void)potrs<kBackend, Scalar>(q, Lv, Xv, uplo);
         q.wait();
     }
     std::pair<double, int> verify() { return {MV::solve_residual(q, A0v, Xv, B0v), 0}; }
@@ -93,9 +93,16 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
-            "src/sycl/kernel_attrs.hh",
-            "src/sycl/sscp_target.hh",
+            "include/batchlas/device/detail/kernel_attrs.hh",
+            "include/batchlas/device/detail/sscp_target.hh",
             "include/batchlas/util/group-collectives.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn_core.hh",
+            "include/batchlas/device/detail/sg_partition/backend_generic.hh",
+            "include/batchlas/device/detail/sg_partition/backend_nvptx.hh",
+            "include/batchlas/device/detail/sg_partition/backend_spirv.hh",
+            "include/batchlas/device/detail/sg_partition/backend_sscp.hh",
+            "include/batchlas/device/detail/sg_partition/sg_partition.hh",
             // family: fused
             "src/ops/getrs/kernels/getrs_fused.cc",
             "src/ops/getrs/getrs_native.hh",
@@ -109,6 +116,24 @@ public:
         // common "src/ops/potrs/potrs.cc"
         // trsm calls the public trsm: its native kernels count too.
         // family: trsm "src/ops/trsm/kernels/trsm_native.cc" "src/ops/trsm/trsm_native.hh" "src/ops/trsm/kernels/trsm_sg_left.cc" "src/ops/trsm/trsm_canonical.hh" "src/ops/trsm/choice.hh"
+        // The include/batchlas/device/ headers each family's kernels include.
+        // family: fused "include/batchlas/device.hh" "include/batchlas/device/arith.hh"
+        // family: fused "include/batchlas/device/core.hh" "include/batchlas/device/exec.hh"
+        // family: fused "include/batchlas/device/grid.hh" "include/batchlas/device/interop.hh"
+        // family: fused "include/batchlas/device/lapack/getrs.hh" "include/batchlas/device/lapack_aux.hh"
+        // family: fused "include/batchlas/device/level1.hh" "include/batchlas/device/level2.hh"
+        // family: fused "include/batchlas/device/level3.hh" "include/batchlas/device/operand.hh"
+        // family: fused "include/batchlas/device/reduce.hh" "include/batchlas/device/scalar.hh"
+        // family: fused "include/batchlas/device/tier.hh" "include/batchlas/device/view.hh"
+        // family: fused "include/batchlas/device/workspace.hh"
+        // family: trsm "include/batchlas/device.hh" "include/batchlas/device/arith.hh"
+        // family: trsm "include/batchlas/device/core.hh" "include/batchlas/device/exec.hh"
+        // family: trsm "include/batchlas/device/grid.hh" "include/batchlas/device/interop.hh"
+        // family: trsm "include/batchlas/device/lapack_aux.hh" "include/batchlas/device/level1.hh"
+        // family: trsm "include/batchlas/device/level2.hh" "include/batchlas/device/level3.hh"
+        // family: trsm "include/batchlas/device/operand.hh" "include/batchlas/device/reduce.hh"
+        // family: trsm "include/batchlas/device/scalar.hh" "include/batchlas/device/tier.hh"
+        // family: trsm "include/batchlas/device/view.hh" "include/batchlas/device/workspace.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/potrs_spec.cc"; }

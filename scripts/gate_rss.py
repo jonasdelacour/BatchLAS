@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Per-ctest-entry peak memory for scripts/gate.sh (Linux /proc only).
 
   gate_rss.py --pid PID --log CTEST_LOG --out TSV [--interval S]

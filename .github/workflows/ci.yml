@@ -3,7 +3,7 @@
 # WHAT THIS NOW COVERS - and it is more than it was:
 #   * A real configure, a real compile, a real link, on the only toolchain this
 #     project has ever been built with: a self-built intel/llvm DPC++ with
-#     --cuda, against CUDA 13.2, targeting sm_89. Compile errors, link errors
+#     --cuda, against CUDA 13.3, targeting sm_89. Compile errors, link errors
 #     and ABI breakage are caught here and nowhere else.
 #   * A real ctest run against two RTX 4090s, compared against a checked-in
 #     known-failures list, because `main` is not green and a plain exit-code
@@ -17,7 +17,7 @@
 #     is off, wedged, or busy with the human's own build, every PR queues behind
 #     it or reports nothing. There is no second runner and no cloud fallback.
 #   * One compiler, one CUDA, one architecture. No icpx, no upstream clang, no
-#     CUDA other than 13.2, no sm_ other than 89. A change that only breaks on
+#     CUDA other than 13.3, no sm_ other than 89. A change that only breaks on
 #     another sm_ or another DPC++ passes.
 #   * No AMD and no Intel GPU. The ROCm code paths are compiled by
 #     nobody, here or on the workstation - they are text until somebody with the
@@ -645,9 +645,9 @@ jobs:
       # different reason: ctest sets it per test as an ENVIRONMENT property, and
       # nothing else this job runs touches BLAS. A future step that launches a
       # test or benchmark binary directly must source <build>/batchlas-env.sh.
-      PATH: /opt/dpcpp-cuda/bin:/usr/local/cuda-13.2/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-      LD_LIBRARY_PATH: /opt/dpcpp-cuda/lib:/usr/local/cuda-13.2/lib64:/opt/intel/oneapi-tbb-2022.3.0/lib/intel64/gcc4.8:/usr/lib/x86_64-linux-gnu
-      CUDA_PATH: /usr/local/cuda-13.2
+      PATH: /opt/dpcpp-cuda/bin:/usr/local/cuda-13.3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      LD_LIBRARY_PATH: /opt/dpcpp-cuda/lib:/usr/local/cuda-13.3/lib64:/opt/intel/oneapi-tbb-2022.3.0/lib/intel64/gcc4.8:/usr/lib/x86_64-linux-gnu
+      CUDA_PATH: /usr/local/cuda-13.3
 
     steps:
       - uses: actions/checkout@v4
@@ -814,9 +814,9 @@ jobs:
 
     env:
       # Same reasoning as gpu-build-test's env block; see there.
-      PATH: /opt/dpcpp-cuda/bin:/usr/local/cuda-13.2/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-      LD_LIBRARY_PATH: /opt/dpcpp-cuda/lib:/usr/local/cuda-13.2/lib64:/opt/intel/oneapi-tbb-2022.3.0/lib/intel64/gcc4.8:/usr/lib/x86_64-linux-gnu
-      CUDA_PATH: /usr/local/cuda-13.2
+      PATH: /opt/dpcpp-cuda/bin:/usr/local/cuda-13.3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      LD_LIBRARY_PATH: /opt/dpcpp-cuda/lib:/usr/local/cuda-13.3/lib64:/opt/intel/oneapi-tbb-2022.3.0/lib/intel64/gcc4.8:/usr/lib/x86_64-linux-gnu
+      CUDA_PATH: /usr/local/cuda-13.3
 
     steps:
       - uses: actions/checkout@v4

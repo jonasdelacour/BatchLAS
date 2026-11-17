@@ -104,13 +104,13 @@ before selection, and each item chooses. Every library gemm (the blocked drivers
 
 ### Pins and environment
 
-* `BATCHLAS_GEMM_ROUTE`: `auto`, `native`, `vendor`, or a spelling (`reg:m=128:n=128:k=8:u=1`, `wide:m=64:n=64:k=16`,
+- `BATCHLAS_GEMM_ROUTE`: `auto`, `native`, `vendor`, or a spelling (`reg:m=128:n=128:k=8:u=1`, `wide:m=64:n=64:k=16`,
   `small`). A bad pin throws; old kernel names (`128x128x8`, `tiled16`) and router words (`register_tiled`, `sycl`)
   throw (`GemmCandidates.UnknownAndDeletedPinsThrow`).
-* `BATCHLAS_GEMM_WIDE_STAGES`: `2` forces the register-prefetch leg of the wide kernels, `3` admits their copy-async
+- `BATCHLAS_GEMM_WIDE_STAGES`: `2` forces the register-prefetch leg of the wide kernels, `3` admits their copy-async
   legs from sm_80 (default: sm_120 only). A test and A/B switch.
-* `BATCHLAS_GEMM_VARIANT` and `BATCHLAS_GEMM_SYCL_KERNEL` are read by nothing.
-* `BATCHLAS_SELECT_TRACE=1` prints key, choice and runner-up; the coverage `reached` row's `chosen_algo` is the
+- `BATCHLAS_GEMM_VARIANT` and `BATCHLAS_GEMM_SYCL_KERNEL` are read by nothing.
+- `BATCHLAS_SELECT_TRACE=1` prints key, choice and runner-up; the coverage `reached` row's `chosen_algo` is the
   spelling; `BATCHLAS_KERNEL_TRACE=1` is the only place the derived leg shows (`_aligned`, `_s3`, `_async[_vec]`).
 
 ## GEMM: what the transcribed sm_89 rows rank first
@@ -265,14 +265,14 @@ test that admits an edge group only over-reads, so no numeric test sees it.
 4-byte `cp.async` (`copy_async.hh`), 3 in flight; any `ld`, any base, the k tail needs no branch. Measured 2026-10-19,
 sm_120, 8 reps × 2 passes.
 
-* **The 23-33× defect** (WP-N: NN \f$1024^3\f$ b128 377 ms against u1's 16.6): the body ran out of line on a stack copy of
+- **The 23-33× defect** (WP-N: NN \f$1024^3\f$ b128 377 ms against u1's 16.6): the body ran out of line on a stack copy of
   the functor, and each `asm volatile(... : "memory")` reloaded every member through `this`. The always-inline
   wrapper removed it; `Stages > 2` always inlines.
-* **The aligned cp.async leg is deleted**: it never beat the register prefetch (NN \f$1024^3\f$ 1.145× vs u1's 1.043×).
-* **The cap needs `.reqntid`**: the launch bound alone left staged NN/TN/TT at 155-159 registers (2.2-2.4× vendor);
+- **The aligned cp.async leg is deleted**: it never beat the register prefetch (NN \f$1024^3\f$ 1.145× vs u1's 1.043×).
+- **The cap needs `.reqntid`**: the launch bound alone left staged NN/TN/TT at 155-159 registers (2.2-2.4× vendor);
   `reqd_work_group_size(1, 1, 256)` holds 128 (it lives in `register_128x128.hh`, not `kernel_attrs.hh`, whose hash
   is in every op's table).
-* **Pointer bump per slab**, not `ptr + k0·ld` per copy (that spilled 52-72 B); staged NN still spilled 12 B, so u4
+- **Pointer bump per slab**, not `ptr + k0·ld` per copy (that spilled 52-72 B); staged NN still spilled 12 B, so u4
   NN takes the direct epilogue.
 
 Predicated cells (`ld = m + 1`): u4 wins 8% on NN \f$256 \times 512 \times 128\f$ b2048 (1.316× vs u1 1.425×) and 4% on NT \f$1218 \times 128 \times 96\f$,
@@ -285,12 +285,12 @@ not its computed address (+0.0-0.7%, [WP-W](#gemm-wp-w-a-256x128-float-tile-with
 Target: ~600 float cells at \f$m, n \ge 128\f$ losing 1.08-1.38×, mostly strided at \f$k = 64\text{-}128\f$ (2026-10-20, 188 SMs). ncu:
 the cells are DRAM-bound and both sides move the same bytes; two defects of ours, neither the tile size:
 
-* the predicated leg's direct epilogue stored scalars four rows apart, 3.7× the store sectors of a whole-column store
+- the predicated leg's direct epilogue stored scalars four rows apart, 3.7× the store sectors of a whole-column store
   (151M vs 41M). Shipped: the predicated leg (u1 and u4) stages C at every k; the 16 priors of a pass load after the
   stage write (its accumulators are dead) and before the barrier, all in flight. Staging with inline priors fixed
   the sectors but not the time (2.614 ms, DRAM 59%); batched priors 1.923 ms, DRAM 91.8% (vendor 1.819). The aligned
   leg keeps `kStagedEpilogueMaxK = 64`.
-* u4's k-contiguous operand read 16 rows' sectors per 128 useful bytes (343M vs 112M). Shipped: k fastest, 8 lanes
+- u4's k-contiguous operand read 16 rows' sectors per 128 useful bytes (343M vs 112M). Shipped: k fastest, 8 lanes
   per 32-byte row segment, shared stride padded by 4 (132) so the transposed writes are conflict-free;
   `RegCfg::slm_bytes` 33,792 B.
 
@@ -321,14 +321,14 @@ packed \f$512 \times 512\f$ b128: \f$k = 512\f$ 0.963-0.996, \f$k = 768\f$ 1.006
 `reg:m=256:n=128:k=8:u=4` and `reg:m=128:n=256:k=8:u=4` (`register_256x128.hh`, NN NT TN TT), 2026-10-20. Target: 95
 cells on u4 at 1.05-1.17× vendor, where cuBLAS runs `cutlass_80_simt_sgemm_256x128_8x4` / `128x256_8x4_tt`.
 
-* 256 lanes, one group per SM, 16×8 (8×16) accumulators. 4 slabs of \f$k = 8\f$, 3 in flight, one zero-filled 4-byte
+- 256 lanes, one group per SM, 16×8 (8×16) accumulators. 4 slabs of \f$k = 8\f$, 3 in flight, one zero-filled 4-byte
   `cp.async` per element with u4's lane maps, strides padded by 4: 50,176 B (`can_run` refuses a smaller budget).
   A slab past k is issued anyway (`src-size` 0), so no branch guards the refill.
-* A 16-byte leg, derived in `launch_register_k8_s4_large`, when every packet operand has a 16-byte base and
+- A 16-byte leg, derived in `launch_register_k8_s4_large`, when every packet operand has a 16-byte base and
   `ld`, stride ≡ 0 mod 4.
-* Epilogue staged at every k, 4 passes; pass \f$p + 1\f$'s priors load while pass \f$p\f$ stores; none at \f$\beta = 0\f$. Stage stride
+- Epilogue staged at every k, 4 passes; pass \f$p + 1\f$'s priors load while pass \f$p\f$ stores; none at \f$\beta = 0\f$. Stage stride
   TileM + 16: at + 4 the two column slots of an `STS.128` phase overlapped in 12 banks (conflicts 4.19M → 0, time flat).
-* ncu (TT strided \f$1024^2 \times 362\f$): the tile moves exactly cuBLAS's global sectors, shared wavefronts and instructions;
+- ncu (TT strided \f$1024^2 \times 362\f$): the tile moves exactly cuBLAS's global sectors, shared wavefronts and instructions;
   the remaining gap is issue (`wait`, `lg_throttle` on the 12 back-to-back `LDGSTS`).
 
 | cell (b128 unless noted) | best before / vendor | best new / vendor |
@@ -425,15 +425,15 @@ the next chunk. No local memory is added. complex<double> skips staging (its ele
 `GemmWide64Body` (`register_64x64_k16_wide.hh`) runs `wide:m=64:n=64` for float, complex<float> and (since
 [WP-J](#gemm-wp-j-complex-double-on-wide-v2)) complex<double> in all nine forms; double keeps the old kernels.
 
-* **Staging is a pure copy.** Conjugation is folded into compile-time FMA signs (`wide_v2::fma_signed`).
-* **One shared layout**, `s[kk][i]` in 16-byte granules, for both operands; the granule index is XORed with
+- **Staging is a pure copy.** Conjugation is folded into compile-time FMA signs (`wide_v2::fma_signed`).
+- **One shared layout**, `s[kk][i]` in 16-byte granules, for both operands; the granule index is XORed with
   `swz(kk) = ((kk / VecN) & 3) << 1` on store and read, so the transposing store is conflict-free (the old one was
   16-way). Four values, not eight: eight left complex<float> TN and CN 24 B of spill at the cap.
-* **Two buffers, one barrier per slab, the next slab prefetched into `ext_vector` registers**; an odd slab count
+- **Two buffers, one barrier per slab, the next slab prefetched into `ext_vector` registers**; an odd slab count
   ends on buffer 0 with no barrier, so the staged epilogue adds one.
-* **The leg** (16-byte vs element loads) is per launch (`wide64_v2_vec_loads`: bases, ld, batch stride); predication
+- **The leg** (16-byte vs element loads) is per launch (`wide64_v2_vec_loads`: bases, ld, batch stride); predication
   is per work-group and slab, so one ragged edge no longer sends interior groups down the predicated path.
-* **Launch bound** on `operator()`: 3 groups per CU float, 2 complex<float>, 1 complex<double> and 128×128. The
+- **Launch bound** on `operator()`: 3 groups per CU float, 2 complex<float>, 1 complex<double> and 128×128. The
   bound is ignored on a lambda, and needs `.reqntid` ([WP-Q](#gemm-wp-q-the-launch-bound-was-ignored)).
   `operator()` is `always_inline`: out of line, complex<float> spilled 64-104 B behind the call while the entry
   reported zero.
@@ -468,14 +468,14 @@ Target: few tiles with a large k (\f$\mathrm{tiles} \times \mathrm{batch} \lesss
 sm_120: float NT \f$32 \times 64 \times 1024\f$ b128 3.36× vendor, cfloat NC 3.51×). The deep table ranks `splitk` first in 649 rows; the
 WP-X A/B: float NT strided \f$32 \times 64 \times 1024\f$ b128 `splitk 32x64 s4` 0.710× vs `wide:m=32:n=64` 1.115×.
 
-* Hosts: `splitk_host` rows (the six non-64×64, non-v2 rows), \f$s \in \{2, 4, 8\}\f$. Group \f$z\f$ computes item \f$z / s\f$ over its k
+- Hosts: `splitk_host` rows (the six non-64×64, non-v2 rows), \f$s \in \{2, 4, 8\}\f$. Group \f$z\f$ computes item \f$z / s\f$ over its k
   slice (\f$k_c = \lceil k / s \rceil\f$ rounded up to TileK) into partials at \f$\alpha = 1\f$, \f$\beta = 0\f$; a slice past k stores zeros.
-* Partials `[batch][s][ldw × n]`, ldw = m rounded to 4 (`splitk_ld`), leased from the Queue's arena (sized with
+- Partials `[batch][s][ldw × n]`, ldw = m rounded to 4 (`splitk_ld`), leased from the Queue's arena (sized with
   `BumpAllocator::measuring()`). The arena keeps its peak until `trim_workspace()`
   ([workspace](../design/workspace.md#workspace-the-arena-keeps-its-peak)).
-* Reduction (`gemm_splitk_reduce`) sums slices \f$0, \ldots, s-1\f$ in order (deterministic, no atomics), then \f$C = \alpha \sum_{i=0}^{s-1} P_i + \beta C\f$; \f$\beta = 0\f$
+- Reduction (`gemm_splitk_reduce`) sums slices \f$0, \ldots, s-1\f$ in order (deterministic, no atomics), then \f$C = \alpha \sum_{i=0}^{s-1} P_i + \beta C\f$; \f$\beta = 0\f$
   never reads C. An out-of-order Queue waits for the slices first.
-* `can_run` holds the partials to `scratch_budget` \f$= \min(\mathrm{MAX\_MEM\_ALLOC\_SIZE}, \mathrm{GLOBAL\_MEM\_SIZE}/4) / \mathrm{batch}\f$ (past it the
+- `can_run` holds the partials to `scratch_budget` \f$= \min(\mathrm{MAX\_MEM\_ALLOC\_SIZE}, \mathrm{GLOBAL\_MEM\_SIZE}/4) / \mathrm{batch}\f$ (past it the
   lease throws `std::bad_alloc`); no k or tile-count term, the table draws the window. The tuner's large-k grid
   (`grid_gram_*`, `grid_large_skinny_k`) is not in the sm_89 transcription.
 
@@ -559,12 +559,12 @@ cuBLAS (`cutlass_100_simt_cgemm_64x32_16x4`, element `cp.async`, 4-5 stages) at 
 the staged C epilogue (8 serial round trips for a 64×32 cfloat tile) and element loads touching twice the sectors
 they use (2.1-3.2× cuBLAS's count).
 
-* Epilogue (float, complex<float>): `staged_c_store` in one pass and one round trip, as wide v2's. Double precision
+- Epilogue (float, complex<float>): `staged_c_store` in one pass and one round trip, as wide v2's. Double precision
   keeps two per trip.
-* Copy leg (complex<float> only): 2 stages, one barrier per slab; one 16-byte copy per granule along i on the 16-byte
+- Copy leg (complex<float> only): 2 stages, one barrier per slab; one 16-byte copy per granule along i on the 16-byte
   leg, else one 8-byte element per copy on consecutive addresses; conjugation at the fragment read. Gate as WP-V's,
   plus \f$\mathrm{ld} \le \mathrm{INT\_MAX} / 128\f$ (int offsets). Traces `_async`, `_async_vec`, `_splitk_async[_vec]`.
-* 3 and 4 stages cut groups per SM and lost 3-10%; float's 4-byte copies cost 16-45 registers and ran slower, so
+- 3 and 4 stages cut groups per SM and lost 3-10%; float's 4-byte copies cost 16-45 registers and ran slower, so
   float takes only the epilogue.
 
 | cell (strided) | parent / vendor | new / vendor | `=2` |
@@ -672,16 +672,6 @@ members are skipped, a `k == 0` member is `C := beta·C`, and an all-skipped bat
 (`create_event_after_external_work()`, right for cuBLAS and rocBLAS; an MKL backend would need the queue's own event).
 The public `gemm` splits a heterogeneous batch before choosing; the backends' loops serve direct `gemm_vendor` callers.
 
-### The subgroup workspace budget
-
-`kSubgroupWorkspaceBudgetBytes` (`group_blas_subgroup_common.hh`) is `device_limits::subgroup_workspace_budget_bytes()`,
-generated from `cmake/device_limits.h.in` (`batchlas_subgroup_workspace_budget_bytes`, `cmake/BatchLASDetectSYCL.cmake`):
-the architecture's table local memory less a 4 KiB reserve, 16 KiB floor. NVIDIA 45,056; AMD and Intel 61,440;
-unrecognised GPU 28,672. It is deliberately not the device's real local memory (101,376 B on sm_89): five `if
-constexpr` workspace predicates read it, and `group_blas_rankk.hh` is shared by symm, herk, syrk and syr2k, so raising
-it retunes five ops. Run-time capacities query `DeviceProperty::LOCAL_MEM_SIZE` (`src/util/resident_capacity.hh`).
-No budget but the shipped one was ever timed; there is no override.
-
 ## GEMM: negative results
 
 | Alternative | Result | Verdict |
@@ -711,38 +701,38 @@ No budget but the shipped one was ever timed; there is no override.
 
 ## GEMM: correctness findings
 
-* **Hard-wired forms.** Nine transposed launchers dropped the conjugation on `ConjTrans` (fixed `f236575`), and 18
+- **Hard-wired forms.** Nine transposed launchers dropped the conjugation on `ConjTrans` (fixed `f236575`), and 18
   NN-only register variants computed NN on a transposed call (fixed in P3.4). `can_run` lists the instantiated forms
   per config (`reg_form`, `wide_serves`), so such a pin throws; guard
   `ForcedTransposedLauncherRejectsMismatchedTransposeForm` (`tests/gemm_tests.cc`).
-* **The \f$\beta = 0\f$ microbenchmark is blind to epilogue defects**: an epilogue with m slow-varying ran 26.0 TFLOP/s at
+- **The \f$\beta = 0\f$ microbenchmark is blind to epilogue defects**: an epilogue with m slow-varying ran 26.0 TFLOP/s at
   \f$\beta = 0\f$ vs 41 standalone. Measure both betas, and \f$\beta = 0\f$ with \f$A = 0\f$, \f$\alpha = -1\f$ for the −0 rule.
-* **Event-profiling sums over queued submissions do not measure kernel time** (30 submissions summed to 19.8 ms for
+- **Event-profiling sums over queued submissions do not measure kernel time** (30 submissions summed to 19.8 ms for
   a 3.15 ms kernel).
-* **An unbounded over-read is invisible to value tests**: rows past m or n feed only discarded accumulators, so a
+- **An unbounded over-read is invisible to value tests**: rows past m or n feed only discarded accumulators, so a
   dropped i bound, interior test or edge clip is correct until it leaves the allocation. The tests use one
   poison-padded buffer; `src-size` 0 copies are assumed never to translate their address.
-* **Register counts at a cap are chaotic**: a logically equivalent rewrite moves spill between instances; re-run
+- **Register counts at a cap are chaotic**: a logically equivalent rewrite moves spill between instances; re-run
   `scripts/register_probe.sh` (zero spill library-wide is the invariant) after any kernel edit.
 
 ## GEMM: open debts
 
-* **sm_89 is untimed.** Every sm_89 row is transcribed; wide v2, the copy-async legs, WP-U and the large tiles were
+- **sm_89 is untimed.** Every sm_89 row is transcribed; wide v2, the copy-async legs, WP-U and the large tiles were
   probed there, not timed. FP64 rows on both devices are transcribed, so complex<double> wide v2 (WP-J) runs in
   windows drawn for the pre-v2 kernels (`wide` is the first native entry of 1014 sm_89 NN rows and of 1264 sm_120
   cdouble rows), reached by vendor-free builds and `native`.
-* **The complex batch edge of the CTA gate is not in the sm_89 table**: a complex NN call below batch 128 takes a
+- **The complex batch edge of the CTA gate is not in the sm_89 table**: a complex NN call below batch 128 takes a
   batch-128 row whose native walk ranks `wide` where the ladder measured losses (0.17-0.96× of `tiled`). Only a
   vendor-free build pays it; the fix is a grid edge row.
-* **The sm_120 table misses \f$k \gt 512\f$ at \f$512 \times 512\f$ b128**: \f$k = 768\f$ and 1024 borrow the \f$k = 512\f$ row and run u1 at 1.01-1.06×
+- **The sm_120 table misses \f$k \gt 512\f$ at \f$512 \times 512\f$ b128**: \f$k = 768\f$ and 1024 borrow the \f$k = 512\f$ row and run u1 at 1.01-1.06×
   vendor (WP-U).
-* **Vendor-free heterogeneous GEMM is ~7 GFLOP/s**, one launch per member; a single-launch variant is deferred.
-* **The `ld` slope has no mechanism below L2**; ncu exposes no row-activate counter.
-* **The demand tables are `ctest` coverage captures**, not user workloads.
-* **TF32 is reachable but unmeasured**: the natives answer a TF32 request only vendor-free, at full precision
+- **Vendor-free heterogeneous GEMM is ~7 GFLOP/s**, one launch per member; a single-launch variant is deferred.
+- **The `ld` slope has no mechanism below L2**; ncu exposes no row-activate counter.
+- **The demand tables are `ctest` coverage captures**, not user workloads.
+- **TF32 is reachable but unmeasured**: the natives answer a TF32 request only vendor-free, at full precision
   ([precision contract](#gemm-batch-chunking)).
-* **`gemm_direct`'s batch offsets are `int`**: overflow at large batch × stride; not a `can_run` term.
-* **AdaptiveCpp drops `reqd_work_group_size`**, so an acpp CUDA build presumably runs the u4 leg at one group per SM
+- **`gemm_direct`'s batch offsets are `int`**: overflow at large batch × stride; not a `can_run` term.
+- **AdaptiveCpp drops `reqd_work_group_size`**, so an acpp CUDA build presumably runs the u4 leg at one group per SM
   (not probed).
 
 ## GEMM: raw evidence

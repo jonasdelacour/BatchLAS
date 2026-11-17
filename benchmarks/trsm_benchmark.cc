@@ -10,21 +10,23 @@
 #include <vector>
 using namespace batchlas;
 
-template <typename T, Backend B>
-static void BM_TRSM(minibench::State& state) {
+namespace {
+
+template <typename Scalar, Backend B>
+void BM_TRSM(minibench::State& state) {
     // Args (n, nrhs, batch): A is n x n, B is n x nrhs. SquareBatchSizes emits nrhs = n.
     const size_t n = state.range(0);
     const size_t nrhs = state.range(1);
     const size_t batch = state.range(2);
 
-    auto A = Matrix<T>::Triangular(n, Uplo::Lower, T(1), T(0.5), batch);
-    auto Bm = Matrix<T>::Random(n, nrhs, false, batch);
+    auto A = Matrix<Scalar>::Triangular(n, Uplo::Lower, Scalar(1), Scalar(0.5), batch);
+    auto Bm = Matrix<Scalar>::Random(n, nrhs, false, batch);
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     state.SetKernel(q,
                     std::move(A),
                     bench::pristine(Bm),
-                    T(1),
+                    Scalar(1),
                     Side::Left,
                     Uplo::Lower,
                     Transpose::NoTrans,
@@ -37,21 +39,27 @@ static void BM_TRSM(minibench::State& state) {
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 
+}  // namespace
+
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_TRSM, SquareBatchSizes);
 
 // The ortho-shaped grid: the only shape the library issues -- ortho.cc passes a k x k
 // Cholesky factor as A and an m x k basis as B, so n is small and q large.
 // evidence: docs/perf/trsm.md#the-measured-grid
 
+namespace {
+
 // The cap is computed for complex<double> and applied to every type, so all four run
 // an identical grid. Dropped cells are printed.
-static constexpr double kTrsmGridCapBytes = 6.0e9;   // of 24 GB
+constexpr double kTrsmGridCapBytes = 6.0e9;   // of 24 GB
 
-static inline double trsm_grid_bytes(double n, double q, double batch) {
+inline double trsm_grid_bytes(double n, double q, double batch) {
     // 16 = sizeof(std::complex<double>), the worst type; 2*q*n counts B and the
     // pristine copy the harness keeps so an in-place solve can be re-run.
     return 16.0 * batch * (2.0 * q * n + n * n);
 }
+
+}  // namespace
 
 template <typename Benchmark>
 inline void TrsmOrthoSizes(Benchmark* b) {
@@ -92,9 +100,11 @@ inline void TrsmOrthoStarvedSizes(Benchmark* b) {
     }
 }
 
+namespace {
+
 // Announce the pin once per process. A spelling trsm does not know, or one the shape
 // cannot run, throws std::invalid_argument at the first call (flat selection, R6).
-static void trsm_announce_route_env() {
+void trsm_announce_route_env() {
     static bool done = false;
     if (done) return;
     done = true;
@@ -108,8 +118,8 @@ static void trsm_announce_route_env() {
 }
 
 // The two ortho cells, as one body. SD picks which extent of B carries q.
-template <typename T, Backend Bk, Side SD>
-static void BM_TRSM_OrthoBody(minibench::State& state) {
+template <typename Scalar, Backend B, Side SD>
+void BM_TRSM_OrthoBody(minibench::State& state) {
     trsm_announce_route_env();
 
     const size_t n     = state.range(0);
@@ -119,18 +129,18 @@ static void BM_TRSM_OrthoBody(minibench::State& state) {
     // ConjTrans for complex, Trans for real -- what ortho.cc issues; the resolver keys
     // on the enum, so the two spellings are not interchangeable here.
     constexpr Transpose kTrans =
-        batchlas::is_std_complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
+        batchlas::is_std_complex_v<Scalar> ? Transpose::ConjTrans : Transpose::Trans;
     constexpr Transpose trans = (SD == Side::Right) ? kTrans : Transpose::NoTrans;
 
-    auto A = Matrix<T>::Triangular(n, Uplo::Lower, T(1), T(0.5), batch);
-    auto Bm = (SD == Side::Right) ? Matrix<T>::Random(q, n, false, batch)
-                                  : Matrix<T>::Random(n, q, false, batch);
+    auto A = Matrix<Scalar>::Triangular(n, Uplo::Lower, Scalar(1), Scalar(0.5), batch);
+    auto Bm = (SD == Side::Right) ? Matrix<Scalar>::Random(q, n, false, batch)
+                                  : Matrix<Scalar>::Random(n, q, false, batch);
 
-    auto qh = std::make_shared<Queue>(Device(Bk == Backend::NETLIB ? "cpu" : "gpu"), Bk);
+    auto qh = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     state.SetKernel(qh,
                     std::move(A),
                     bench::pristine(Bm),
-                    T(1),
+                    Scalar(1),
                     SD,
                     Uplo::Lower,
                     trans,
@@ -146,16 +156,18 @@ static void BM_TRSM_OrthoBody(minibench::State& state) {
     state.SetMetric("Time (us) / matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
 }
 
-template <typename T, Backend Bk>
-static void BM_TRSM_OrthoRight(minibench::State& s) { BM_TRSM_OrthoBody<T, Bk, Side::Right>(s); }
-template <typename T, Backend Bk>
-static void BM_TRSM_OrthoLeft(minibench::State& s)  { BM_TRSM_OrthoBody<T, Bk, Side::Left>(s); }
+template <typename Scalar, Backend B>
+void BM_TRSM_OrthoRight(minibench::State& s) { BM_TRSM_OrthoBody<Scalar, B, Side::Right>(s); }
+template <typename Scalar, Backend B>
+void BM_TRSM_OrthoLeft(minibench::State& s)  { BM_TRSM_OrthoBody<Scalar, B, Side::Left>(s); }
 // NOT named *OrthoRightStarved: --name matches by SUBSTRING, so that spelling would
 // fold these profile-only rows into every ranking run.
-template <typename T, Backend Bk>
-static void BM_TRSM_StarvedRight(minibench::State& s) { BM_TRSM_OrthoBody<T, Bk, Side::Right>(s); }
-template <typename T, Backend Bk>
-static void BM_TRSM_StarvedLeft(minibench::State& s)  { BM_TRSM_OrthoBody<T, Bk, Side::Left>(s); }
+template <typename Scalar, Backend B>
+void BM_TRSM_StarvedRight(minibench::State& s) { BM_TRSM_OrthoBody<Scalar, B, Side::Right>(s); }
+template <typename Scalar, Backend B>
+void BM_TRSM_StarvedLeft(minibench::State& s)  { BM_TRSM_OrthoBody<Scalar, B, Side::Left>(s); }
+
+}  // namespace
 
 BATCHLAS_BENCH_CUDA_ALL_TYPES(BM_TRSM_OrthoRight, TrsmOrthoSizes);
 BATCHLAS_BENCH_CUDA_ALL_TYPES(BM_TRSM_OrthoLeft,  TrsmOrthoSizes);

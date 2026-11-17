@@ -15,7 +15,7 @@ TEST(InverseTest, InverseIdentityCheck) {
     Matrix<float, MatrixFormat::Dense> A = Matrix<float, MatrixFormat::Dense>::Random(40, 40, false, 2);
     const Matrix<float, MatrixFormat::Dense> A0 = A;
 
-    Matrix<float, MatrixFormat::Dense> Ainverse(40,40,2);
+    Matrix<float, MatrixFormat::Dense> Ainverse(40, 40, 2);
     UnifiedVector<std::byte> ws(inv_buffer_size(ctx, A));
     (void)inv(ctx, A, Ainverse, ws);
     ctx.wait();

@@ -13,16 +13,16 @@ namespace batchlas {
 // Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
 // src/util/template-instantiations.hh. Keep in sync with the declaration below.
 namespace sig {
-template <typename T>
+template <typename Scalar>
 using gemm = Event(Queue&,
-                   const MatrixView<T, MatrixFormat::Dense>&,
-                   const MatrixView<T, MatrixFormat::Dense>&,
-                   const MatrixView<T, MatrixFormat::Dense>&,
-                   T, T, Transpose, Transpose, ComputePrecision);
+                   const MatrixView<Scalar, MatrixFormat::Dense>&,
+                   const MatrixView<Scalar, MatrixFormat::Dense>&,
+                   const MatrixView<Scalar, MatrixFormat::Dense>&,
+                   Scalar, Scalar, Transpose, Transpose, ComputePrecision);
 
 // backend::gemm_vendor shares gemm's signature.
-template <typename T>
-using gemm_vendor = gemm<T>;
+template <typename Scalar>
+using gemm_vendor = gemm<Scalar>;
 }  // namespace sig
 
 /// @brief Batched general matrix-matrix multiply.
@@ -40,11 +40,11 @@ using gemm_vendor = gemm<T>;
 /// valid Event. There is no separate `gemm_heterogeneous` in C++ (the Python
 /// binding's one exists to coerce a list of differently-shaped arrays).
 ///
-/// Also callable as `gemm(ctx, A, B, C, GemmOptions<T>{...})`, with owning
+/// Also callable as `gemm(ctx, A, B, C, GemmOptions<Scalar>{...})`, with owning
 /// `Matrix` arguments, and without `Back` (taken from `ctx.backend()`).
 ///
 /// @tparam Back  backend the call is compiled for; must match `ctx`'s device
-/// @tparam T     scalar type: `float`, `double`, `std::complex<float>` or `std::complex<double>`
+/// @tparam Scalar     scalar type: `float`, `double`, `std::complex<float>` or `std::complex<double>`
 /// @param[in]     ctx        queue the work is enqueued on
 /// @param[in]     A          batch of \f$m \times k\f$ (NoTrans) or \f$k \times m\f$ (Trans/ConjTrans) matrices
 /// @param[in]     B          batch of \f$k \times n\f$ (NoTrans) or \f$n \times k\f$ (Trans/ConjTrans) matrices
@@ -53,7 +53,7 @@ using gemm_vendor = gemm<T>;
 /// @param[in]     beta       \f$\beta\f$, scale of the input `C`
 /// @param[in]     transA     \f$\mathrm{op}(\cdot)\f$ applied to `A`
 /// @param[in]     transB     \f$\mathrm{op}(\cdot)\f$ applied to `B`
-/// @param[in]     precision  compute precision; `ComputePrecision::Default` computes in `T`. The scalar's
+/// @param[in]     precision  compute precision; `ComputePrecision::Default` computes in `Scalar`. The scalar's
 ///                           own precision (F32 for float, F64 for double) is always served; F16/BF16/TF32
 ///                           on float are permissions, taken by the vendor library and answered at full
 ///                           precision without one (see ComputePrecision); other pairs are refused.
@@ -65,13 +65,13 @@ using gemm_vendor = gemm<T>;
 ///         neither reaches selection, so `precision` is not checked there.
 /// @see GemmOptions, @ref md_docs_2cpp-api
 /// @ingroup api_blas3
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 BATCHLAS_API Event gemm(Queue& ctx,
-                        const MatrixView<T, MatrixFormat::Dense>& A,
-                        const MatrixView<T, MatrixFormat::Dense>& B,
-                        const MatrixView<T, MatrixFormat::Dense>& C,
-                        T alpha,
-                        T beta,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                        Scalar alpha,
+                        Scalar beta,
                         Transpose transA,
                         Transpose transB,
                         ComputePrecision precision = ComputePrecision::Default);
@@ -88,7 +88,7 @@ namespace batchlas::backend {
 /// Not an entry point: batchlas::gemm calls it when it selects the `vendor`
 /// kernel family. Same arguments and semantics as batchlas::gemm.
 /// @tparam Back  vendor backend whose library serves the call
-/// @tparam T     scalar type: `float`, `double`, `std::complex<float>` or `std::complex<double>`
+/// @tparam Scalar     scalar type: `float`, `double`, `std::complex<float>` or `std::complex<double>`
 /// @param[in]     ctx        queue the work is enqueued on
 /// @param[in]     A          batch of \f$m \times k\f$ (NoTrans) or \f$k \times m\f$ (Trans/ConjTrans) matrices
 /// @param[in]     B          batch of \f$k \times n\f$ (NoTrans) or \f$n \times k\f$ (Trans/ConjTrans) matrices
@@ -100,13 +100,13 @@ namespace batchlas::backend {
 /// @param[in]     precision  compute precision, as for batchlas::gemm
 /// @return event of the last enqueued kernel; `C` is valid once it completes
 /// @ingroup api_dispatch
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 BATCHLAS_API Event gemm_vendor(Queue& ctx,
-                               const MatrixView<T, MatrixFormat::Dense>& A,
-                               const MatrixView<T, MatrixFormat::Dense>& B,
-                               const MatrixView<T, MatrixFormat::Dense>& C,
-                               T alpha,
-                               T beta,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                               Scalar alpha,
+                               Scalar beta,
                                Transpose transA,
                                Transpose transB,
                                ComputePrecision precision);
@@ -117,7 +117,6 @@ namespace batchlas {
 
 // Owning-argument (`f(ctx, Matrix, ...)`) and backend-deducing (`f(ctx, ...)`)
 // overloads; see blas/queue-dispatch.hh.
-
 
 BATCHLAS_DISPATCH_ON_QUEUE(gemm)
 

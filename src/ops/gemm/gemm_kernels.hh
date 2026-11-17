@@ -9,14 +9,14 @@
 
 #include <cstdint>
 
-namespace batchlas::sycl_gemm {
+namespace batchlas::ops::gemm {
 
 // The call's batch mask as a kernel argument (null: unmasked). A, B and C share one span, so a
 // chunk's views (batch_range) hand its slice to the chunk's launch.
-template <typename T>
-inline const std::uint8_t* item_mask(const MatrixView<T, MatrixFormat::Dense>& A,
-                                     const MatrixView<T, MatrixFormat::Dense>& B,
-                                     const MatrixView<T, MatrixFormat::Dense>& C) {
+template <typename Scalar>
+inline const std::uint8_t* item_mask(const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                     const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                                     const MatrixView<Scalar, MatrixFormat::Dense>& C) {
     return batchlas::detail::mask_ptr(batchlas::detail::call_mask("gemm", A, B, C));
 }
 
@@ -91,23 +91,23 @@ enum class KernelVariant {
 // One launcher per gemm family (src/ops/gemm/choice.hh). Each serves exactly what its family's
 // can_run admits and throws batchlas::unsupported otherwise -- never a silent fallback to another
 // kernel. The transpose instantiation and the aligned/predicated leg are derived here.
-template <typename T>
-BATCHLAS_INTERNAL_API Event gemm_direct(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                                        const MatrixView<T, MatrixFormat::Dense>& B,
-                                        const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta,
+template <typename Scalar>
+BATCHLAS_INTERNAL_API Event gemm_direct(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                        const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                                        const MatrixView<Scalar, MatrixFormat::Dense>& C, Scalar alpha, Scalar beta,
                                         Transpose transA, Transpose transB);
 
-template <typename T>
-BATCHLAS_INTERNAL_API Event gemm_tiled(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                                       const MatrixView<T, MatrixFormat::Dense>& B,
-                                       const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta,
+template <typename Scalar>
+BATCHLAS_INTERNAL_API Event gemm_tiled(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                       const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                                       const MatrixView<Scalar, MatrixFormat::Dense>& C, Scalar alpha, Scalar beta,
                                        Transpose transA, Transpose transB);
 
 // Every scalar; \f$\max(m, n, k) \le 64\f$, or 32 for complex<double> (ops::gemm::small_max_dim).
-template <typename T>
-BATCHLAS_INTERNAL_API Event gemm_small(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                                       const MatrixView<T, MatrixFormat::Dense>& B,
-                                       const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta,
+template <typename Scalar>
+BATCHLAS_INTERNAL_API Event gemm_small(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                       const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                                       const MatrixView<Scalar, MatrixFormat::Dense>& C, Scalar alpha, Scalar beta,
                                        Transpose transA, Transpose transB);
 
 // float only; (tm, tn, tk, u) must be a row of ops::gemm::reg_configs instantiated for the form.
@@ -118,19 +118,19 @@ BATCHLAS_INTERNAL_API Event gemm_reg(Queue& ctx, int tm, int tn, int tk, int u,
                                      Transpose transA, Transpose transB);
 
 // (tm, tn, tk) must be a row of ops::gemm::wide_configs instantiated for the form.
-template <typename T>
-BATCHLAS_INTERNAL_API Event gemm_wide(Queue& ctx, int tm, int tn, int tk, const MatrixView<T, MatrixFormat::Dense>& A,
-                                      const MatrixView<T, MatrixFormat::Dense>& B,
-                                      const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta,
+template <typename Scalar>
+BATCHLAS_INTERNAL_API Event gemm_wide(Queue& ctx, int tm, int tn, int tk, const MatrixView<Scalar,
+                                      MatrixFormat::Dense>& A, const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                                      const MatrixView<Scalar, MatrixFormat::Dense>& C, Scalar alpha, Scalar beta,
                                       Transpose transA, Transpose transB);
 
 // (tm, tn, tk) must be a split-k host row (ops::gemm::splitk_host) instantiated for the form and
 // splits one of ops::gemm::kSplitKSlices; the partials are leased from ctx's workspace arena.
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API Event gemm_splitk(Queue& ctx, int tm, int tn, int tk, int splits,
-                                        const MatrixView<T, MatrixFormat::Dense>& A,
-                                        const MatrixView<T, MatrixFormat::Dense>& B,
-                                        const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta,
+                                        const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                        const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                                        const MatrixView<Scalar, MatrixFormat::Dense>& C, Scalar alpha, Scalar beta,
                                         Transpose transA, Transpose transB);
 
-} // namespace batchlas::sycl_gemm
+}  // namespace batchlas::ops::gemm

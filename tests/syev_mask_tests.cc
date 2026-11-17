@@ -38,39 +38,39 @@ namespace {
 namespace mc = masked_contract;
 namespace ts = test_support;
 
-template <typename T>
-using Real = typename base_type<T>::type;
+template <typename Scalar>
+using Real = typename base_type<Scalar>::type;
 
-/// Item-dependent small values over 8 (identical items when `same`), complex where T is.
-template <typename T>
-void fill_items(T* p, std::size_t per, int batch, int salt, bool same) {
+/// Item-dependent small values over 8 (identical items when `same`), complex where Scalar is.
+template <typename Scalar>
+void fill_items(Scalar* p, std::size_t per, int batch, int salt, bool same) {
     for (std::size_t e = 0; e < per * std::size_t(batch); ++e) {
         const std::size_t item = same ? 0 : e / per, off = e % per;
         const double re = double(int((off * 7 + item * 3 + salt) % 23) - 11) / 8;
         const double im = double(int((off * 5 + item + salt) % 13) - 6) / 8;
-        p[e] = MatrixView<T>::make(re, im);
+        p[e] = MatrixView<Scalar>::make(re, im);
     }
 }
 
 /// A batched vector at inc 2 with a gap after each item, poisoned; `item_bytes` covers the gap.
-template <typename U>
+template <typename Scalar>
 struct PaddedVec {
     int n, batch, inc = 2, stride;
-    UnifiedVector<U> buf;
+    UnifiedVector<Scalar> buf;
     PaddedVec(int n_, int batch_) : n(std::max(1, n_)), batch(batch_), stride(2 * n + 3), buf(std::size_t(stride) * batch_) {}
-    void poison() { std::fill_n(buf.data(), buf.size(), ts::poison<U>()); }
-    VectorView<U> view(Span<const std::uint8_t> mask) {
-        return VectorView<U>(buf.data(), n, batch, inc, stride).with_batch_mask(mask);
+    void poison() { std::fill_n(buf.data(), buf.size(), ts::poison<Scalar>()); }
+    VectorView<Scalar> view(Span<const std::uint8_t> mask) {
+        return VectorView<Scalar>(buf.data(), n, batch, inc, stride).with_batch_mask(mask);
     }
     mc::Output output(std::string name) const {
-        const std::size_t s = std::size_t(stride) * sizeof(U);
+        const std::size_t s = std::size_t(stride) * sizeof(Scalar);
         return {std::move(name), reinterpret_cast<const std::byte*>(buf.data()), s, s};
     }
 };
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;
@@ -312,7 +312,7 @@ TYPED_TEST(SyevMask, LatrdPanelLeavesInactiveItemsUntouched) {
     const int ib = 4, j0 = 3, batch = 10;
     // grid at n = 100: four work-groups per item share its software grid barrier (40 resident).
     const bool cuda = B == Backend::CUDA;
-    for (const char* impl : {"legacy", "device", "grid"}) {
+    for (const char* impl : {"legacy", "grid"}) {
         if (impl[0] == 'g' && !cuda) continue;  // never on Metal or a host device: a CUDA-only check
         const int n = impl[0] == 'g' ? 100 : 21;
         SCOPED_TRACE(impl);

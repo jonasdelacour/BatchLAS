@@ -1,7 +1,9 @@
+// SPDX-License-Identifier: MIT
 // sygvd's element-wise launches (sygvd_native.hh). No shared or sub-group state.
 
 #include <src/ops/sygvd/sygvd_native.hh>
 
+#include <batchlas/device/arith.hh>
 #include <src/sycl/device_scalar.hh>
 #include <src/queue.hh>
 
@@ -11,21 +13,21 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace batchlas::sycl_sygvd {
+namespace batchlas::ops::sygvd {
 
 namespace {
 
-template <typename T> class SygvdIdentityFailedKernel;
+template <typename Scalar> class SygvdIdentityFailedKernel;
 class SygvdMergeInfoKernel;
 
 }  // namespace
 
-template <typename T>
-Event sygvd_identity_failed(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& B, Uplo uplo,
+template <typename Scalar>
+Event sygvd_identity_failed(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& B, Uplo uplo,
                             Span<const int32_t> potrf_info, const std::uint8_t* mask) {
-    using D = typename sycl_device::DevMap<T>::type;
-    using R = typename base_type<T>::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    using D = typename sycl_device::DevMap<Scalar>::type;
+    using R = typename base_type<Scalar>::type;
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
     D* const bp = reinterpret_cast<D*>(B.data_ptr());
     const int n = B.rows();
     const std::ptrdiff_t ldb = B.ld(), stride = B.stride();
@@ -35,7 +37,7 @@ Event sygvd_identity_failed(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>
     const std::size_t elems = static_cast<std::size_t>(n) * static_cast<std::size_t>(n);
 
     ctx->submit([&](sycl::handler& h) {
-        h.parallel_for<SygvdIdentityFailedKernel<T>>(sycl::range<2>(batch, elems), [=](sycl::item<2> it) {
+        batchlas::impl::parallel_for<SygvdIdentityFailedKernel<Scalar>>(h, sycl::range<2>(batch, elems), [=](sycl::item<2> it) {
             const std::size_t b = it.get_id(0);
             if (mask && !mask[b]) return;  // I3
             if (fail[b] == 0) return;
@@ -44,7 +46,7 @@ Event sygvd_identity_failed(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>
             const int c = static_cast<int>(e / static_cast<std::size_t>(n));
             if (lower ? r < c : r > c) return;
             bp[static_cast<std::ptrdiff_t>(b) * stride + static_cast<std::ptrdiff_t>(c) * ldb + r] =
-                sycl_device::dev_from_real<D>(R(r == c ? 1 : 0));
+                batchlas::device::lift<D>(R(r == c ? 1 : 0));
         });
     });
     return ctx.get_event();
@@ -55,7 +57,7 @@ Event sygvd_merge_info(Queue& ctx, int n, Span<const int32_t> potrf_info, Span<i
     const int32_t* const fail = potrf_info.data();
     int32_t* const out = info.data();
     ctx->submit([&](sycl::handler& h) {
-        h.parallel_for<SygvdMergeInfoKernel>(sycl::range<1>(info.size()), [=](sycl::item<1> it) {
+        batchlas::impl::parallel_for<SygvdMergeInfoKernel>(h, sycl::range<1>(info.size()), [=](sycl::item<1> it) {
             if (mask && !mask[it.get_id(0)]) return;  // I3
             const int32_t f = fail[it.get_id(0)];
             if (f != 0) out[it.get_id(0)] = n + f;
@@ -75,4 +77,4 @@ BATCHLAS_SYGVD_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_SYGVD_INSTANTIATE
 
-}  // namespace batchlas::sycl_sygvd
+}  // namespace batchlas::ops::sygvd

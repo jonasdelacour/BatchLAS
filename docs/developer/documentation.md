@@ -162,7 +162,7 @@ page edits.
 ````md
 # <op or topic>: <what the page is about> {#perf_<op>}
 
-> **Status:** current · RTX 4090 (sm_89), CUDA 13.2 · measured <dates>
+> **Status:** current · RTX 4090 (sm_89), CUDA 13.3 · measured <dates>
 
 <One to three sentences: the conclusion needed first.>
 

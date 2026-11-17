@@ -33,16 +33,14 @@ namespace batchlas {
 
 /// @brief Synchronous or asynchronous execution policy.
 /// @ingroup api_core
-enum class Policy
-{
+enum class Policy {
     SYNC,   ///< Wait for completion.
     ASYNC   ///< Return after enqueueing.
 };
 
 /// @brief The kind of SYCL device.
 /// @ingroup api_core
-enum class DeviceType
-{
+enum class DeviceType {
     CPU,            ///< A CPU device.
     GPU,            ///< A GPU device.
     ACCELERATOR,    ///< An accelerator device.
@@ -52,8 +50,7 @@ enum class DeviceType
 
 /// @brief Device vendor, parsed from the SYCL vendor string by str_to_vendor().
 /// @ingroup api_core
-enum class Vendor
-{
+enum class Vendor {
     AMD,     ///< AMD.
     ARM,     ///< Arm.
     INTEL,   ///< Intel.
@@ -162,8 +159,7 @@ inline Vendor str_to_vendor(std::string&& v) {
 /// @brief A device property queryable with Device::get_property(); each maps to the SYCL
 /// `sycl::info::device` descriptor of the same name.
 /// @ingroup api_core
-enum class DeviceProperty
-{
+enum class DeviceProperty {
     MAX_WORK_GROUP_SIZE,         ///< Maximum work-group size.
     MAX_CLOCK_FREQUENCY,         ///< Maximum clock frequency (MHz).
     MAX_COMPUTE_UNITS,           ///< Number of compute units.
@@ -214,17 +210,17 @@ struct BATCHLAS_API Device{
     Device(std::string type) {
         std::transform(type.begin(), type.end(), type.begin(), ::tolower);
         auto pick = [](std::vector<Device> devs, const std::string& name) -> Device {
-            if (devs.empty()) throw batchlas::device_error("No " + name + " device available");
+            if (devs.empty()) throw batchlas::device_error("Device::Device: No " + name + " device available");
             return devs.at(0);
         };
-        if(type == "cpu") {
+        if (type == "cpu") {
             *this = pick(get_devices(DeviceType::CPU), "cpu");
-        } else if(type == "gpu") {
+        } else if (type == "gpu") {
             *this = pick(get_devices(DeviceType::GPU), "gpu");
-        } else if(type == "accelerator") {
+        } else if (type == "accelerator") {
             *this = pick(get_devices(DeviceType::ACCELERATOR), "accelerator");
         } else {
-            throw batchlas::invalid_argument("Invalid device type: " + type);
+            throw batchlas::invalid_argument("Device::Device: Invalid device type: " + type);
         }
     }
 
@@ -235,23 +231,23 @@ struct BATCHLAS_API Device{
     /// @brief The first GPU, else the first CPU, else the host device.
     /// @return the chosen device
     inline static Device default_device() {
-        if(!get_devices(DeviceType::GPU).empty()) {
+        if (!get_devices(DeviceType::GPU).empty()) {
             return get_devices(DeviceType::GPU).at(0);
-        } else if(!get_devices(DeviceType::CPU).empty()) {
+        } else if (!get_devices(DeviceType::CPU).empty()) {
             return get_devices(DeviceType::CPU).at(0);
         } else {
             return get_devices(DeviceType::HOST).at(0);
         }
     }
 
-    /// @brief default_device(), except the first CPU device for a double or complex<double> @p T
-    /// when that default is a GPU without fp64 (an Apple GPU), which cannot run @p T kernels.
-    /// @tparam T  the scalar type the caller will run
+    /// @brief default_device(), except the first CPU device for a double or complex<double> @p Scalar
+    /// when that default is a GPU without fp64 (an Apple GPU), which cannot run @p Scalar kernels.
+    /// @tparam Scalar  the scalar type the caller will run
     /// @return the chosen device
-    template <typename T>
+    template <typename Scalar>
     static Device default_device_for() {
         Device dev = default_device();
-        if constexpr (std::is_same_v<T, double> || std::is_same_v<T, std::complex<double>>) {
+        if constexpr (std::is_same_v<Scalar, double> || std::is_same_v<Scalar, std::complex<double>>) {
             if (dev.type == DeviceType::GPU && !dev.supports_fp64() && !get_devices(DeviceType::CPU).empty())
                 dev = get_devices(DeviceType::CPU).front();
         }
@@ -292,8 +288,6 @@ struct BATCHLAS_API Device{
     /// `BATCHLAS_HAS_DEVICE_FP64` has no double or complex<double> kernels.
     /// @return whether the device has `sycl::aspect::fp64`
     bool supports_fp64() const;
-
-
 
     size_t     idx  = 0;                 ///< Index among devices of `type`.
     DeviceType type = DeviceType::HOST;  ///< The device's type.
@@ -394,7 +388,7 @@ struct BATCHLAS_API Queue{
     Queue(const Queue& base, bool in_order);
     /// @brief Take over @p other's device, SYCL queue and arena.
     /// @param[in,out] other  the Queue moved from; left moved-from
-    Queue(Queue&& other); //= default;
+    Queue(Queue&& other); // = default;
     /// @brief Take over @p other's device, SYCL queue and arena, releasing this Queue's.
     /// @param[in,out] other  the Queue moved from; left moved-from
     /// @return `*this`
@@ -406,7 +400,6 @@ struct BATCHLAS_API Queue{
     /// @param[in] other  the Queue that cannot be copied
     /// @return nothing: the function is deleted
     Queue& operator=(const Queue& other) = delete;
-
 
     /// @brief Access the implementation.
     /// @return `impl_.get()`
@@ -434,8 +427,8 @@ struct BATCHLAS_API Queue{
     /// @tparam EventContainer  a range of Event, iterated by non-const reference
     /// @param[in] events  the Events later work waits for; not modified
     template <typename EventContainer>
-    void enqueue(EventContainer& events){
-        for(auto& event : events){
+    void enqueue(EventContainer& events) {
+        for (auto& event : events) {
             enqueue(event);
         }
     }
@@ -520,7 +513,7 @@ struct BATCHLAS_API Queue{
     /// @return the native stream, or `nullptr`
     BATCHLAS_API void* native_handle() const;
 
-    private:
+private:
         friend struct detail::SyclInteropAccess;
         /// @brief Root Queue over a caller's SYCL context and device (queue_from_sycl). SyclQueueSource
         /// is complete only in queue-impl.cc, so no SYCL type reaches this header.

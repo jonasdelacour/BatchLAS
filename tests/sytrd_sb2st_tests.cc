@@ -28,22 +28,22 @@ using namespace batchlas;
 
 namespace {
 
-template <typename T>
-static void dense_from_lower_band_work(const std::vector<T>& ABw,
-                                       std::vector<T>& A,
-                                       int n,
-                                       int kd_work,
-                                       int batch,
-                                       int ldab,
-                                       int lda) {
+template <typename Scalar>
+void dense_from_lower_band_work(const std::vector<Scalar>& ABw,
+                                std::vector<Scalar>& A,
+                                int n,
+                                int kd_work,
+                                int batch,
+                                int ldab,
+                                int lda) {
     // ABw layout matches the device band layout: rows = kd_work+1, cols = n, batch stride = ldab*n
     for (int b = 0; b < batch; ++b) {
-        T* A_b = A.data() + static_cast<size_t>(b) * static_cast<size_t>(lda) * static_cast<size_t>(n);
-        const T* AB_b = ABw.data() + static_cast<size_t>(b) * static_cast<size_t>(ldab) * static_cast<size_t>(n);
+        Scalar* A_b = A.data() + static_cast<size_t>(b) * static_cast<size_t>(lda) * static_cast<size_t>(n);
+        const Scalar* AB_b = ABw.data() + static_cast<size_t>(b) * static_cast<size_t>(ldab) * static_cast<size_t>(n);
 
         for (int j = 0; j < n; ++j) {
             for (int i = 0; i < n; ++i) {
-                A_b[i + static_cast<size_t>(j) * static_cast<size_t>(lda)] = T(0);
+                A_b[i + static_cast<size_t>(j) * static_cast<size_t>(lda)] = Scalar(0);
             }
         }
 
@@ -51,19 +51,19 @@ static void dense_from_lower_band_work(const std::vector<T>& ABw,
             for (int r = 0; r <= kd_work; ++r) {
                 const int i = j + r;
                 if (i >= n) break;
-                const T aij = AB_b[r + static_cast<size_t>(j) * static_cast<size_t>(ldab)];
+                const Scalar aij = AB_b[r + static_cast<size_t>(j) * static_cast<size_t>(ldab)];
                 A_b[i + static_cast<size_t>(j) * static_cast<size_t>(lda)] = aij;
                 if (i != j) {
-                    A_b[j + static_cast<size_t>(i) * static_cast<size_t>(lda)] = MatrixView<T, MatrixFormat::Dense>::conj(aij);
+                    A_b[j + static_cast<size_t>(i) * static_cast<size_t>(lda)] = MatrixView<Scalar, MatrixFormat::Dense>::conj(aij);
                 }
             }
         }
     }
 }
 
-template <typename T>
-void fill_lower_band_from_dense(const MatrixView<T, MatrixFormat::Dense>& A,
-                                MatrixView<T, MatrixFormat::Dense> AB,
+template <typename Scalar>
+void fill_lower_band_from_dense(const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                MatrixView<Scalar, MatrixFormat::Dense> AB,
                                 int n,
                                 int kd) {
     // AB is (kd+1) x n, lower band: AB(r,j) = A(j+r, j)
@@ -75,15 +75,15 @@ void fill_lower_band_from_dense(const MatrixView<T, MatrixFormat::Dense>& A,
                 AB(r, j, b) = A(j + r, j, b);
             }
             for (int r = rmax + 1; r <= kd; ++r) {
-                AB(r, j, b) = T(0);
+                AB(r, j, b) = Scalar(0);
             }
         }
     }
 }
 
-template <typename T>
-::testing::AssertionResult expect_lower_band_unchanged(const MatrixView<T, MatrixFormat::Dense>& AB_before,
-                                                       const MatrixView<T, MatrixFormat::Dense>& AB_after,
+template <typename Scalar>
+::testing::AssertionResult expect_lower_band_unchanged(const MatrixView<Scalar, MatrixFormat::Dense>& AB_before,
+                                                       const MatrixView<Scalar, MatrixFormat::Dense>& AB_after,
                                                        int n,
                                                        int kd) {
     if (AB_before.rows() != AB_after.rows()) {
@@ -111,7 +111,7 @@ template <typename T>
                     }
                 } else {
                     // Rows beyond the stored band should stay exactly zero (by construction).
-                    if (!(after == T(0))) {
+                    if (!(after == Scalar(0))) {
                         return ::testing::AssertionFailure()
                                << "AB had unexpected fill at (r=" << r << ", j=" << j << ") batch=" << b
                                << " after=" << after;
@@ -124,9 +124,9 @@ template <typename T>
     return ::testing::AssertionSuccess();
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct SytrdSb2stConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 
@@ -181,21 +181,22 @@ inline double spectra_error(const Spectra& got, const Spectra& ref, int* worst_i
 // bound. Double's old 1e-9 absolute is looser than the kind's bound, which it meets (need 0.017). @p steps
 // scales float's bound for that many accumulated chase steps, as the old tol0 * k, never above the kind's
 // bound; double stays at the kind's bound (multistep need <= 0.019 at every step, 2026-10-10).
-template <typename T>
+template <typename Scalar>
 batchlas::verify::Slack spectra_slack(int steps = 1) {
-    if constexpr (std::is_same_v<typename base_type<T>::type, float>)
+    if constexpr (std::is_same_v<typename base_type<Scalar>::type, float>)
         return {std::min(1.0, 0.0625 * std::max(1, steps)),
                 "the old 1e-4 absolute spectrum tolerance (about 3e-5 of the spectral radius); measured need 0.009"};
     else
         return {1.0, "the library bound, tighter than the old 1e-9 absolute; measured need 0.019"};
 }
 
-template <typename T>
+template <typename Scalar>
 ::testing::AssertionResult spectra_match(const Spectra& got, const Spectra& ref, int n) {
-    return test_utils::verify_pass<T>(batchlas::verify::Check::values, n, spectra_error(got, ref), spectra_slack<T>());
+    return test_utils::verify_pass<Scalar>(batchlas::verify::Check::values, n, spectra_error(got, ref),
+                                           spectra_slack<Scalar>());
 }
 
-} // namespace
+}  // namespace
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 using SytrdSb2stTestTypes = ::testing::Types<
@@ -236,13 +237,13 @@ TYPED_TEST(SytrdSb2stTest, MatchesDenseSyevSpectrum) {
     // sub_group_size=32, SB2ST will throw when forced on; in that case, skip.
     ScopedEnvVar force_subgroup("BATCHLAS_SB2ST_SUBGROUP", "1");
 
-    #if defined(BATCHLAS_SB2ST_DEBUG_PRINTF)
+#if defined(BATCHLAS_SB2ST_DEBUG_PRINTF)
     const int n = 12;
     const int kd = 3;
-    #else
+#else
     const int n = 256;
     const int kd = 6;
-    #endif
+#endif
     const int batch = 5;
     const int block_size = 16;
 
@@ -337,12 +338,12 @@ void band_reduction_matches_dense(Queue& ctx, int n) {
     using Real = typename base_type<T>::type;
     if (!BATCHLAS_VERIFY_HAVE_LAPACKE) GTEST_SKIP() << "no host LAPACKE reference in this build";
 
-    #if defined(BATCHLAS_SB2ST_DEBUG_PRINTF)
+#if defined(BATCHLAS_SB2ST_DEBUG_PRINTF)
     n = 12;
     const int kd = 3;
-    #else
+#else
     const int kd = 6;
-    #endif
+#endif
     const int batch = 5;
     const int block_size = 16;
 
@@ -769,7 +770,7 @@ inline int bandr1_count_steps_one_sweep(int n, int kd, int block_size, int d_per
     return steps;
 }
 
-} // namespace
+}  // namespace
 
 TYPED_TEST(SytrdSb2stTest, BandReductionOneSweepSpectrumPreservation) {
     using T = typename TestFixture::ScalarType;

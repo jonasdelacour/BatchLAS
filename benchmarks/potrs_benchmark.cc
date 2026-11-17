@@ -27,7 +27,9 @@ inline void PotrsSizesNetlib(Benchmark* b) {
             for (int bs : {16, 128}) b->Args({n, nrhs, bs});
 }
 
-static void potrs_announce_route_env() {
+namespace {
+
+void potrs_announce_route_env() {
     static bool done = false;
     if (done) return;
     done = true;
@@ -36,21 +38,21 @@ static void potrs_announce_route_env() {
                                      : "potrs route: unset (the tuned table's choice)%s\n", raw ? raw : "");
 }
 
-template <typename T, Backend B, Uplo U>
-static void BM_POTRS_Body(minibench::State& state) {
+template <typename Scalar, Backend B, Uplo U>
+void BM_POTRS_Body(minibench::State& state) {
     potrs_announce_route_env();
     const int n = static_cast<int>(state.range(0));
     const int nrhs = static_cast<int>(state.range(1));
     const int batch = static_cast<int>(state.range(2));
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    Matrix<T> A(n, n, batch);
+    Matrix<Scalar> A(n, n, batch);
     (void)A.view().fill_random_spd(*q, 12345);
-    UnifiedVector<std::byte> ws(std::max<std::size_t>(1, potrf_buffer_size<B, T>(*q, A.view(), U)));
+    UnifiedVector<std::byte> ws(std::max<std::size_t>(1, potrf_buffer_size<B, Scalar>(*q, A.view(), U)));
     UnifiedVector<std::int32_t> info(static_cast<std::size_t>(batch), 0);
-    (void)potrf<B, T>(*q, A.view(), U, ws.to_span(), info.to_span());
+    (void)potrf<B, Scalar>(*q, A.view(), U, ws.to_span(), info.to_span());
     q->wait();
-    auto Bm = Matrix<T>::Random(n, nrhs, false, batch);
+    auto Bm = Matrix<Scalar>::Random(n, nrhs, false, batch);
 
     state.SetKernel(q, std::move(A), bench::pristine(Bm), U, [](Queue& qq, auto&&... xs) {
         (void)potrs(qq, std::forward<decltype(xs)>(xs)...);
@@ -60,10 +62,12 @@ static void BM_POTRS_Body(minibench::State& state) {
     state.SetMetric("Time (us) / matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
 }
 
-template <typename T, Backend B>
-static void BM_POTRS(minibench::State& s) { BM_POTRS_Body<T, B, Uplo::Lower>(s); }
-template <typename T, Backend B>
-static void BM_POTRS_Upper(minibench::State& s) { BM_POTRS_Body<T, B, Uplo::Upper>(s); }
+template <typename Scalar, Backend B>
+void BM_POTRS(minibench::State& s) { BM_POTRS_Body<Scalar, B, Uplo::Lower>(s); }
+template <typename Scalar, Backend B>
+void BM_POTRS_Upper(minibench::State& s) { BM_POTRS_Body<Scalar, B, Uplo::Upper>(s); }
+
+}  // namespace
 
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_POTRS, PotrsSizes);
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_POTRS_Upper, PotrsSizes);

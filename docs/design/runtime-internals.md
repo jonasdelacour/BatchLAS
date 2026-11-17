@@ -108,7 +108,7 @@ leases. `Queue::attach_to_current_thread()` moves ownership and throws while a l
   `std::optional<sycl::event>` abort with `UR_RESULT_ERROR_INVALID_EVENT`.
 - **Profiling** is opt-in: `settings().diagnostics.profiling` is the OR of `BATCHLAS_QUEUE_PROFILING`
   and `BATCHLAS_BENCH_PROFILING`.
-- **`BATCHLAS_LAUNCH_BOUNDS`** (`src/sycl/kernel_attrs.hh`) is empty except on DPC++ NVPTX: on SPIR-V
+- **`BATCHLAS_LAUNCH_BOUNDS`** (`include/batchlas/device/detail/kernel_attrs.hh`) is empty except on DPC++ NVPTX: on SPIR-V
   it emits `KernelAttributesINTEL`, which icpx 2026.0's CPU AOT rejects ("unsupported capability
   5892").
 

@@ -16,9 +16,9 @@ correctness only. A masked batch is refused by every family. Every native family
 
 | spelling | implementation | `can_run` beyond the common term |
 |---|---|---|
-| `cta` | `sycl_trsm::trsm_native_v1_dispatch` (V1) | `max_wg >= 32`, order <= `trsm_cta_max_n<T>()` (32) |
-| `sg_left` | `sycl_trsm::trsm_native_sg_left_dispatch` ([sub-group Left kernel](blackwell.md#trsm-sub-group-left-kernel)) | `Side::Left`, `has_sg32`, order <= `kTrsmSgLeftMaxN` (32), `max_wg >= kTrsmSgLeftWgSize` (128) |
-| `blocked` | `sycl_trsm::trsm_native_blocked` (V2) with the public `gemm` injected | `max_wg >= 32`, `trsm_blocked_available<T>()`, `trsm_cta_max_n<T>() >= 1`; no order term |
+| `cta` | `ops::trsm::trsm_native_v1_dispatch` (V1) | `max_wg >= 32`, order <= `trsm_cta_max_n<T>()` (32) |
+| `sg_left` | `ops::trsm::trsm_native_sg_left_dispatch` ([sub-group Left kernel](blackwell.md#trsm-sub-group-left-kernel)) | `Side::Left`, `has_sg32`, order <= `kTrsmSgLeftMaxN` (32), `max_wg >= kTrsmSgLeftWgSize` (128) |
+| `blocked` | `ops::trsm::trsm_native_blocked` (V2) with the public `gemm` injected | `max_wg >= 32`, `trsm_cta_max_n<T>() >= 1`; no order term |
 | `vendor` | `backend::trsm_vendor` | `d.has_vendor`, homogeneous A and B |
 
 The key is `side:exact trans:exact order:log:2 q:log batch:log`. `q` is `B.cols()` for `Side::Left`
@@ -42,15 +42,15 @@ heterogeneous batch, a CPU queue). The sm_120 result is on the
 
 ### Tuning knobs and environment {#tuning-knobs-and-environment}
 
-* `BATCHLAS_TRSM_ROUTE` takes `auto`, `native`, `vendor`, or a spelling. `native` takes the first
+- `BATCHLAS_TRSM_ROUTE` takes `auto`, `native`, `vendor`, or a spelling. `native` takes the first
   non-vendor runnable entry. A spelling the shape cannot run (`cta`/`sg_left` above order 32,
   `sg_left` on `Side::Right`) or an unknown word throws `invalid_argument`. `native` and `vendor` fall
   back to Auto with a warning when nothing of their class can run.
-* `BATCHLAS_TRSM_OUTER_NB` is V2's outer block width (`trsm_outer_block`, `trsm_native.cc`), a tuning
+- `BATCHLAS_TRSM_OUTER_NB` is V2's outer block width (`trsm_outer_block`, `trsm_native.cc`), a tuning
   knob. Default 128 for `Side::Left` and `cta_max_n` (32) for `Side::Right`, rounded down to whole CTA
   blocks; 0 means unset. It is read per call from `settings().geometry.trsm_outer_nb` and never
   latched, so an A/B harness or a `ScopedEnvVar` test measures both arms.
-* `BATCHLAS_TRSM_VARIANT` is read by nothing.
+- `BATCHLAS_TRSM_VARIANT` is read by nothing.
 
 ---
 
@@ -150,7 +150,7 @@ only. Worst clean cell (relative sd \f$\le 10\%\f$) per order:
 | complex\<float\> Right | 1.01 | 1.03 | 1.35 | 1.90 | 8.49 | 15.31 | 19.64 |
 
 223 of 224 clean pairs win; the loser (float/Right, order 512, \f$q=256\f$, batch=128, 0.978-0.983x) is the
-smallest-work cell at that order and got no clause. Before step 16 V2 called `sycl_gemm::gemm_custom`,
+smallest-work cell at that order and got no clause. Before step 16 V2 called `ops::gemm::gemm_custom`,
 bypassing gemm's routing, and float/Left lost 8 cells at orders 256-512 (worst 0.760x).
 `trsm_native_blocked` now takes a mandatory `TrsmTrailingGemm<T>` and the `blocked` arm passes the
 public `gemm`: \f$n=512\f$, \f$q=1024\f$, batch=512 float went 18.8 -> 11.19 ms against the vendor's 14.28 ms.
@@ -207,14 +207,14 @@ throws (`TrsmNativeCta.OverCapacityThrowsRatherThanTruncating`). The facade caps
 
 ### Testing traps
 
-* Blocked tests must exceed `OUTER_NB = 128` or the outer level never runs (`TwoLevelPanelStructure`
+- Blocked tests must exceed `OUTER_NB = 128` or the outer level never runs (`TwoLevelPanelStructure`
   uses 129, 256, 300, 384).
-* Alpha is applied once: for blocks `i > 0` it arrives through the trailing GEMM's beta. The natural
+- Alpha is applied once: for blocks `i > 0` it arrives through the trailing GEMM's beta. The natural
   `beta = 1` is invisible to any `alpha == 1` test.
-* Complex data with nonzero imaginary parts (`tri_fill`) is needed to see ConjTrans; the complex
+- Complex data with nonzero imaginary parts (`tri_fill`) is needed to see ConjTrans; the complex
   reciprocal uses Smith's form.
-* The oracle is an independent multiply-back: netlib and cuBLAS fold the 24 cases the same way.
-* `ctest -L blas -L ortho` is an AND and runs zero tests; use `ctest -L 'blas|ortho'`.
+- The oracle is an independent multiply-back: netlib and cuBLAS fold the 24 cases the same way.
+- `ctest -L blas -L ortho` is an AND and runs zero tests; use `ctest -L 'blas|ortho'`.
 
 ---
 

@@ -50,7 +50,7 @@ inline void merge_call_mask(const char* op, const View& v, int64_t call_batch, S
 
 // True when any operand view carries a batch mask: the correctness term a family adds to can_run
 // until its kernels honour the mask.
-template <class... V>
+template <typename... V>
 bool any_batch_mask(const V&... v) { return (v.has_batch_mask() || ...); }
 
 // The one span shared by the masked operands whose batch is the call batch (the largest operand
@@ -76,10 +76,11 @@ void refuse_batch_mask(const char* who, const Views&... v) {
     if (any_batch_mask(v...)) throw batchlas::unsupported(batch_mask_refusal(who));
 }
 
-template <class T, class... V>
+template <typename Scalar, typename... V>
 void refuse_batch_mask(Op op, const char* who, Backend backend, const V&... v) {
     (void)call_mask(who, v...);
-    if (any_batch_mask(v...)) throw NoRouteError(op, backend, scalar_kind_of<T>, batch_mask_refusal(who));
+    if (any_batch_mask(v...)) throw batchlas::NoRouteError(op, backend, scalar_kind_of<Scalar>,
+                                                           batch_mask_refusal(who));
 }
 
 }  // namespace batchlas::detail

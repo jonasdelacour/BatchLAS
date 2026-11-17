@@ -27,14 +27,14 @@ namespace {
 
 namespace S = ops::getrs;
 
-template <typename T>
+template <typename Scalar>
 struct GetrsProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     int n, nrhs, batch, lda, ldb;
     std::size_t sa, sb;
-    UnifiedVector<T> A0, A, B0, X;
-    UnifiedVector<T*> pA0, pA, pB0, pX;
+    UnifiedVector<Scalar> A0, A, B0, X;
+    UnifiedVector<Scalar*> pA0, pA, pB0, pX;
     MV A0v, Av, B0v, Xv;
     UnifiedVector<std::int64_t> piv;
 
@@ -49,21 +49,21 @@ struct GetrsProblem {
         (void)A0v.fill_random_pivoted(q, 12345);
         (void)B0v.fill_random(q, false, 777);
         (void)MV::copy(q, Av, A0v);
-        UnifiedVector<std::byte> fws(std::max<std::size_t>(1, getrf_buffer_size<kBackend, T>(q, Av)));
+        UnifiedVector<std::byte> fws(std::max<std::size_t>(1, getrf_buffer_size<kBackend, Scalar>(q, Av)));
         UnifiedVector<std::int32_t> info(std::size_t(batch_), 0);
-        (void)getrf<kBackend, T>(q, Av, piv.to_span(), fws.to_span(), info.to_span());
+        (void)getrf<kBackend, Scalar>(q, Av, piv.to_span(), fws.to_span(), info.to_span());
         q.wait();
         for (int b = 0; b < batch; ++b)
             if (info[std::size_t(b)] != 0) throw batchlas::convergence_error("getrs input: getrf reported a singular item");
     }
-    std::size_t workspace() { return getrs_buffer_size<kBackend, T>(q, Av, Xv, Transpose::NoTrans); }
+    std::size_t workspace() { return getrs_buffer_size<kBackend, Scalar>(q, Av, Xv, Transpose::NoTrans); }
     void reset() {  // the solve overwrites B with X; A and the pivots are read only
         (void)MV::copy(q, Xv, B0v);
         q.wait();
     }
     void clear_info() {}
     void run(Span<std::byte> ws) {
-        (void)getrs<kBackend, T>(q, Av, Xv, Transpose::NoTrans, piv.to_span(), ws);
+        (void)getrs<kBackend, Scalar>(q, Av, Xv, Transpose::NoTrans, piv.to_span(), ws);
         q.wait();
     }
     std::pair<double, int> verify() {
@@ -93,9 +93,16 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
-            "src/sycl/kernel_attrs.hh",
-            "src/sycl/sscp_target.hh",
+            "include/batchlas/device/detail/kernel_attrs.hh",
+            "include/batchlas/device/detail/sscp_target.hh",
             "include/batchlas/util/group-collectives.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn_core.hh",
+            "include/batchlas/device/detail/sg_partition/backend_generic.hh",
+            "include/batchlas/device/detail/sg_partition/backend_nvptx.hh",
+            "include/batchlas/device/detail/sg_partition/backend_spirv.hh",
+            "include/batchlas/device/detail/sg_partition/backend_sscp.hh",
+            "include/batchlas/device/detail/sg_partition/sg_partition.hh",
             // family: cta
             "src/ops/getrs/kernels/getrs_fused.cc",
             // family: blocked
@@ -110,6 +117,24 @@ public:
         // blocked calls the public trsm: its native kernels count too.
         // family: blocked "src/kernels/common/lu_laswp.hh"
         // family: blocked "src/ops/trsm/kernels/trsm_native.cc" "src/ops/trsm/trsm_native.hh" "src/ops/trsm/kernels/trsm_sg_left.cc" "src/ops/trsm/trsm_canonical.hh" "src/ops/trsm/choice.hh"
+        // The include/batchlas/device/ headers each family's kernels include.
+        // family: blocked "include/batchlas/device.hh" "include/batchlas/device/arith.hh"
+        // family: blocked "include/batchlas/device/core.hh" "include/batchlas/device/exec.hh"
+        // family: blocked "include/batchlas/device/grid.hh" "include/batchlas/device/interop.hh"
+        // family: blocked "include/batchlas/device/lapack/getrs.hh" "include/batchlas/device/lapack_aux.hh"
+        // family: blocked "include/batchlas/device/level1.hh" "include/batchlas/device/level2.hh"
+        // family: blocked "include/batchlas/device/level3.hh" "include/batchlas/device/operand.hh"
+        // family: blocked "include/batchlas/device/reduce.hh" "include/batchlas/device/scalar.hh"
+        // family: blocked "include/batchlas/device/tier.hh" "include/batchlas/device/view.hh"
+        // family: blocked "include/batchlas/device/workspace.hh"
+        // family: cta "include/batchlas/device.hh" "include/batchlas/device/arith.hh" "include/batchlas/device/core.hh"
+        // family: cta "include/batchlas/device/exec.hh" "include/batchlas/device/grid.hh"
+        // family: cta "include/batchlas/device/interop.hh" "include/batchlas/device/lapack/getrs.hh"
+        // family: cta "include/batchlas/device/lapack_aux.hh" "include/batchlas/device/level1.hh"
+        // family: cta "include/batchlas/device/level2.hh" "include/batchlas/device/level3.hh"
+        // family: cta "include/batchlas/device/operand.hh" "include/batchlas/device/reduce.hh"
+        // family: cta "include/batchlas/device/scalar.hh" "include/batchlas/device/tier.hh"
+        // family: cta "include/batchlas/device/view.hh" "include/batchlas/device/workspace.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/getrs_spec.cc"; }

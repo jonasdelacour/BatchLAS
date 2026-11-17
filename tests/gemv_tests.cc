@@ -24,9 +24,9 @@
 
 using namespace batchlas;
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct TestConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 
@@ -35,11 +35,11 @@ using MyTypes = typename test_utils::backend_types<TestConfig>::type;
 // These tests used a relative tolerance of the old test_utils::tolerance vendor-comparison bound (1e-5 float,
 // 2e-5 cfloat, 1e-10 double, 2e-10 cdouble), which the relative bound exceeds at long reductions in float.
 // The Slack keeps it.
-template <typename T>
+template <typename Scalar>
 batchlas::verify::Slack vendor_comparison_slack(int k) {
-    constexpr double rel_tol = batchlas::is_std_complex_v<T> ? (std::is_same_v<batchlas::float_t<T>, float> ? 2e-5 : 2e-10)
-                                                                      : (std::is_same_v<T, float> ? 1e-5 : 1e-10);
-    return {std::min(1.0, rel_tol / batchlas::verify::bound<T>(batchlas::verify::Check::blas, k)),
+    constexpr double rel_tol = batchlas::is_std_complex_v<Scalar> ? (std::is_same_v<batchlas::float_t<Scalar>, float> ? 2e-5 : 2e-10)
+                                                                      : (std::is_same_v<Scalar, float> ? 1e-5 : 1e-10);
+    return {std::min(1.0, rel_tol / batchlas::verify::bound<Scalar>(batchlas::verify::Check::blas, k)),
             "the old relative tolerance, kept"};
 }
 
@@ -145,7 +145,6 @@ TYPED_TEST(GemvMatrixViewTest, SingleGemvWithTranspose) {
     EXPECT_EQ(this->gemv_error(A_view, x_vec, y_vec, y_vec, alpha, beta, Transpose::Trans), 0.0);
 }
 
-
 TYPED_TEST(GemvMatrixViewTest, BatchedGemvNoTranspose) {
     using ScalarType = typename TestFixture::ScalarType;
     constexpr Backend BackendType = TestFixture::BackendType;
@@ -219,8 +218,6 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithAlphaBeta) {
                         vendor_comparison_slack<ScalarType>(this->cols));
 }
 
-
-
 // Coverage fixture: non-square, ld-padded, inc-strided, ConjTrans and genuinely complex
 // data, none of which GemvMatrixViewTest above (fixed 10x10, inc == 1) reaches.
 // evidence: docs/perf/gemv.md#blind-guards-found-and-closed
@@ -228,13 +225,13 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithAlphaBeta) {
 namespace {
 
 // Magnitudes stay in [-1, 1] so a ~100-term reduction does not cancel; complex values here have a non-zero imaginary part.
-template <typename T>
-T gemv_cov_value(int seed) {
-    using R = typename batchlas::base_type<T>::type;
+template <typename Scalar>
+Scalar gemv_cov_value(int seed) {
+    using R = typename batchlas::base_type<Scalar>::type;
     const R re = static_cast<R>(std::sin(0.7 * seed + 0.3));
     const R im = static_cast<R>(std::cos(1.3 * seed + 1.1));
-    if constexpr (test_utils::is_complex<T>::value) {
-        return T(re, im);
+    if constexpr (test_utils::is_complex<Scalar>::value) {
+        return Scalar(re, im);
     } else {
         (void)im;
         return re;
@@ -766,7 +763,6 @@ TYPED_TEST(GemvCoverageTest, PaddedBatchStrideSegmented) {
     this->run_case(c);
 }
 
-
 // Body 5, the segmented TRANSPOSED CTA kernel, GemvSegTKernel<T, W>. Its gate is on
 // red_len (= m under Trans/ConjTrans), not out_len as body 4's is, and it is per scalar
 // type: float <= 32, cfloat <= 16, double <= 48, cdouble <= 64. Bodies 3 and 5 both
@@ -784,21 +780,21 @@ TYPED_TEST(GemvCoverageTest, SegTransWidthDecisionSurface) {
     const int64_t kItems = 1 << 20;
     std::vector<std::pair<int, int>> want;
     if constexpr (std::is_same_v<S, float>) {
-        want = {{1,8},{16,8},{24,8},{25,4},{32,4},{33,1},{48,1},{64,1},{128,1}};
+        want = {{1, 8}, {16, 8}, {24, 8}, {25, 4}, {32, 4}, {33, 1}, {48, 1}, {64, 1}, {128, 1}};
     } else if constexpr (std::is_same_v<S, std::complex<float>>) {
-        want = {{1,8},{8,8},{16,8},{17,1},{24,1},{32,1},{48,1},{64,1},{128,1}};
+        want = {{1, 8}, {8, 8}, {16, 8}, {17, 1}, {24, 1}, {32, 1}, {48, 1}, {64, 1}, {128, 1}};
     } else if constexpr (std::is_same_v<S, double>) {
-        want = {{1,8},{16,8},{32,8},{33,4},{48,4},{49,1},{64,1},{128,1}};
+        want = {{1, 8}, {16, 8}, {32, 8}, {33, 4}, {48, 4}, {49, 1}, {64, 1}, {128, 1}};
     } else {
-        want = {{1,8},{16,8},{32,8},{33,4},{48,4},{64,4},{65,1},{96,1},{128,1}};
+        want = {{1, 8}, {16, 8}, {32, 8}, {33, 4}, {48, 4}, {64, 4}, {65, 1}, {96, 1}, {128, 1}};
     }
     for (const auto& [rl, w] : want) {
-        const int got = batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, rl, kItems);
+        const int got = batchlas::ops::gemv::gemv_seg_trans_width_debug<S>(*this->ctx, rl, kItems);
         EXPECT_EQ(got, sg32 ? w : 1) << "red_len " << rl << " sg32 " << sg32;
     }
     // Degenerate reduction lengths take body 3.
-    EXPECT_EQ(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, 0, kItems), 1);
-    EXPECT_EQ(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, -1, kItems), 1);
+    EXPECT_EQ(batchlas::ops::gemv::gemv_seg_trans_width_debug<S>(*this->ctx, 0, kItems), 1);
+    EXPECT_EQ(batchlas::ops::gemv::gemv_seg_trans_width_debug<S>(*this->ctx, -1, kItems), 1);
 }
 
 // And the shapes below really do reach body 5 -- asserted, so a gate edit that sends them
@@ -826,15 +822,15 @@ TYPED_TEST(GemvCoverageTest, SegTransCasesAreReachable) {
 
     // Every m used by a body-5 case below; 40 and 44 are inside the double gates only.
     for (int m : {1, 3, 5, 16}) {
-        EXPECT_GT(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, m, kItems), 1)
+        EXPECT_GT(batchlas::ops::gemv::gemv_seg_trans_width_debug<S>(*this->ctx, m, kItems), 1)
             << "body 5 must serve red_len " << m << " for every scalar type";
     }
     const bool wide = std::is_same_v<S, double> || std::is_same_v<S, std::complex<double>>;
     for (int m : {40, 44}) {
-        EXPECT_EQ(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, m, kItems4) > 1, wide)
+        EXPECT_EQ(batchlas::ops::gemv::gemv_seg_trans_width_debug<S>(*this->ctx, m, kItems4) > 1, wide)
             << "red_len " << m << " is inside the double gates only";
         if (wide) {
-            EXPECT_EQ(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, m, kItems4), 4)
+            EXPECT_EQ(batchlas::ops::gemv::gemv_seg_trans_width_debug<S>(*this->ctx, m, kItems4), 4)
                 << "red_len " << m << " is in the W = 4 band";
         }
     }
@@ -948,7 +944,6 @@ TYPED_TEST(GemvCoverageTest, SegTransPaddedBatchStrideWideBand) {
     this->run_case(c);
 }
 
-
 // Gate 3, the parallelism condition, on both sides.
 // evidence: docs/perf/gemv.md#the-body-5-gates
 TYPED_TEST(GemvCoverageTest, SegTransParallelismGate) {
@@ -958,7 +953,7 @@ TYPED_TEST(GemvCoverageTest, SegTransParallelismGate) {
     const int cu = static_cast<int>(
         this->ctx->device().get_property(DeviceProperty::MAX_COMPUTE_UNITS));
     auto w = [&](int red_len, int64_t items) {
-        return batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, red_len, items);
+        return batchlas::ops::gemv::gemv_seg_trans_width_debug<S>(*this->ctx, red_len, items);
     };
     // The W = 8 row, floor 16*CU, at a red_len every type puts in that band.
     const int64_t f8 = static_cast<int64_t>(16) * cu;
@@ -988,7 +983,7 @@ TYPED_TEST(GemvCoverageTest, SegTransSpellingKnobIsNotLatched) {
     const int64_t kBig = 1 << 20;
     const int kFar = 100000;     // far above every per-type red_len gate
     auto width = [&](int red_len, int64_t items) {
-        return batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, red_len, items);
+        return batchlas::ops::gemv::gemv_seg_trans_width_debug<S>(*this->ctx, red_len, items);
     };
     // Every arm below is a ScopedEnvVar, never a bare ::setenv. What the route
     // reads is settings().selection.gemv_segt, and only this guard's constructor

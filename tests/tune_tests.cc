@@ -336,7 +336,7 @@ TEST(TuneHash, EditingOneFamilyFileChangesOnlyThatFamily) {
 TEST(TuneHash, OpLevelHashUnchangedByFamilyPrefixes) {
     const std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
     const std::map<std::string, std::string> pinned{
-        {"gemm", "7a97ed5b"}, {"potrf", "9010dde6"}, {"posv", "bac56224"}, {"trsm", "5aa39727"}};
+        {"gemm", "f453cbfe"}, {"potrf", "0983e16e"}, {"posv", "d0444185"}, {"trsm", "601f8c2e"}};
     for (const auto& [op, want] : pinned) {
         const KernelBlock b = parse_kernel_block(read_file(fs::path(repo) / "tools/tune" / (op + "_spec.cc")));
         EXPECT_EQ(kernel_hash(repo, b.all), want) << op;
@@ -355,8 +355,8 @@ TEST(TuneHash, OpLevelHashUnchangedByFamilyPrefixes) {
 TEST(TuneHash, SharedKernelHeadersAreCommonInEverySpec) {
     const fs::path repo = BATCHLAS_TUNE_SOURCE_DIR;
     const auto shared = [](const std::string& p) {
-        return p == "src/sycl/kernel_attrs.hh" || p == "src/sycl/sscp_target.hh" ||
-               p.rfind("src/kernels/common/sg_partition/", 0) == 0 || p == "include/batchlas/util/group-collectives.hh";
+        return p == "include/batchlas/device/detail/kernel_attrs.hh" || p == "include/batchlas/device/detail/sscp_target.hh" ||
+               p.rfind("include/batchlas/device/detail/sg_partition/", 0) == 0 || p == "include/batchlas/util/group-collectives.hh";
     };
     const std::regex inc(R"re(#\s*include\s*[<"]([^>"]+)[>"])re");
     int specs = 0;
@@ -365,7 +365,7 @@ TEST(TuneHash, SharedKernelHeadersAreCommonInEverySpec) {
         if (name.size() < 8 || name.substr(name.size() - 8) != "_spec.cc") continue;
         ++specs;
         const KernelBlock b = parse_kernel_block(read_file(entry.path()));
-        std::set<std::string> reached{"src/sycl/kernel_attrs.hh"}, seen;
+        std::set<std::string> reached{"include/batchlas/device/detail/kernel_attrs.hh"}, seen;
         std::vector<fs::path> todo;
         for (const auto& f : b.all) todo.push_back(repo / f);
         while (!todo.empty()) {
@@ -2972,14 +2972,14 @@ TEST(TuneRemeasure, OnlyNamedOnAStaleLedgerMeasuresExactlyTheNamedCellsAtTheRuns
     std::ofstream(repo.path / "k.cc") << "k changed";
     o.remeasure = {{"fakeop.float", {{{"n", "4"}}, {{"n", "9"}}}}};
     o.plan = true;
-    testing::internal::CaptureStdout();
+    ::testing::internal::CaptureStdout();
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0);
-    const std::string stale = testing::internal::GetCapturedStdout();
+    const std::string stale = ::testing::internal::GetCapturedStdout();
     EXPECT_EQ(stale.find("tier=deep: 2 cells"), std::string::npos) << "control: the stale lattice is planned\n" << stale;
     o.only_named = true;
-    testing::internal::CaptureStdout();
+    ::testing::internal::CaptureStdout();
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0);
-    const std::string named = testing::internal::GetCapturedStdout();
+    const std::string named = ::testing::internal::GetCapturedStdout();
     EXPECT_NE(named.find("== plan fakeop float sm_fake tier=deep: 2 cells (2 remeasure)"), std::string::npos) << named;
     EXPECT_NE(named.find("(~0 refinement cells"), std::string::npos) << "no refinement is estimated\n" << named;
     o.plan = false;
@@ -3763,9 +3763,9 @@ TEST(TuneTieredDriver, RefinementCapStopsAndReportsIt) {
     const int fd = ::open(events.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     o.progress_fd = fd;
     FakeMeasurer m;
-    testing::internal::CaptureStdout();
+    ::testing::internal::CaptureStdout();
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
-    const std::string out = testing::internal::GetCapturedStdout();
+    const std::string out = ::testing::internal::GetCapturedStdout();
     ::close(fd);
     EXPECT_EQ(m.keys, (std::vector<std::string>{"n=1", "n=2", "n=4", "n=8", "n=16", "n=32", "n=64", "n=11", "n=9"}));
     const std::string ev = read_file(events);
@@ -3781,9 +3781,9 @@ TEST(TuneTieredDriver, PlanEstimateIncludesRefinement) {
     const fs::path events = ledger.path / "events.jsonl";
     const int fd = ::open(events.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     o.progress_fd = fd;
-    testing::internal::CaptureStdout();
+    ::testing::internal::CaptureStdout();
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0);
-    const std::string out = testing::internal::GetCapturedStdout();
+    const std::string out = ::testing::internal::GetCapturedStdout();
     ::close(fd);
     const std::string ev = read_file(events);
     // No history: refine_cap_factor 1.0 x 0.5 x 7 lattice cells, rounded.
@@ -3833,9 +3833,9 @@ TEST(TuneTieredDriver, AThrottledCellIsRacedOnceMore) {
         TieredOpts o = fake_opts(repo, ledger, Tier::preview);
         o.audit_fraction = 0;
         ThrottledMeasurer m(capped);
-        testing::internal::CaptureStdout();
+        ::testing::internal::CaptureStdout();
         ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
-        (void)testing::internal::GetCapturedStdout();
+        (void)::testing::internal::GetCapturedStdout();
         const Ledger l = read_ledger(ledger_file(ledger.str(), "fakeop", "sm_fake"), "float");
         std::size_t raced = 0;
         for (const CellRecord& c : l.cells) {
@@ -3853,17 +3853,17 @@ TEST(TuneTieredDriver, PlanSaysWhichCellsCameFromPhaseHistory) {
     TempDir repo, ledger;
     TieredOpts o = fake_opts(repo, ledger, Tier::coarse);
     o.plan = true;
-    testing::internal::CaptureStdout();
+    ::testing::internal::CaptureStdout();
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0);
-    std::string out = testing::internal::GetCapturedStdout();
+    std::string out = ::testing::internal::GetCapturedStdout();
     EXPECT_NE(out.find("(0 cells from lean-cold phase history, 7 from the model)"), std::string::npos) << out;
     EXPECT_EQ(out.find("worker starts and audits"), std::string::npos) << out;
     o.plan = false;
     o.tier = Tier::preview;
     PhasedMeasurer m;
-    testing::internal::CaptureStdout();
+    ::testing::internal::CaptureStdout();
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
-    (void)testing::internal::GetCapturedStdout();
+    (void)::testing::internal::GetCapturedStdout();
     const Ledger l = read_ledger(ledger_file(ledger.str(), "fakeop", "sm_fake"), "float");
     ASSERT_FALSE(l.cells.empty());
     EXPECT_EQ(l.runs.back().protocol, kProtocol);
@@ -3871,9 +3871,9 @@ TEST(TuneTieredDriver, PlanSaysWhichCellsCameFromPhaseHistory) {
     for (const CellRecord& c : l.cells) EXPECT_EQ(c.phases.arms, 2) << key_text(c.key);
     o.plan = true;
     o.tier = Tier::coarse;  // preview records are lower: every coarse lattice cell is measured again
-    testing::internal::CaptureStdout();
+    ::testing::internal::CaptureStdout();
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0);
-    out = testing::internal::GetCapturedStdout();
+    out = ::testing::internal::GetCapturedStdout();
     EXPECT_NE(out.find("(0 cells from lean-cold phase history, 7 from the model)"), std::string::npos) << "preview prices no coarse cell\n" << out;
     EXPECT_EQ(out.find("worker starts and audits"), std::string::npos) << out;
 
@@ -3884,9 +3884,9 @@ TEST(TuneTieredDriver, PlanSaysWhichCellsCameFromPhaseHistory) {
     const fs::path events = ledger.path / "events.jsonl";
     const int fd = ::open(events.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     o.progress_fd = fd;
-    testing::internal::CaptureStdout();
+    ::testing::internal::CaptureStdout();
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0);
-    out = testing::internal::GetCapturedStdout();
+    out = ::testing::internal::GetCapturedStdout();
     ::close(fd);
     EXPECT_NE(out.find("(2 measure, 2 partial)"), std::string::npos) << out;
     EXPECT_NE(out.find("(4 cells from lean-cold phase history, 0 from the model)"), std::string::npos) << out;
@@ -3993,9 +3993,9 @@ TEST(TuneTieredDriver, PreviewMeasuresTheLatticeOnlyNeverABracket) {
         const fs::path events = ledger.path / "events.jsonl";
         const int fd = ::open(events.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         o.progress_fd = fd;
-        testing::internal::CaptureStdout();
+        ::testing::internal::CaptureStdout();
         ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0);
-        const std::string plan = testing::internal::GetCapturedStdout();
+        const std::string plan = ::testing::internal::GetCapturedStdout();
         ::close(fd);
         o.progress_fd = -1;
         EXPECT_NE(plan.find("   round 0 only: no frontier or refinement rounds"), std::string::npos) << plan;
@@ -4004,9 +4004,9 @@ TEST(TuneTieredDriver, PreviewMeasuresTheLatticeOnlyNeverABracket) {
         EXPECT_EQ(count_of(ev, "\"refine_cells\": 0,"), 2u) << "plan_job and plan" << ev;
         o.plan = false;
         FakeMeasurer flip;
-        testing::internal::CaptureStdout();
+        ::testing::internal::CaptureStdout();
         ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &flip), 0);
-        const std::string out = testing::internal::GetCapturedStdout();
+        const std::string out = ::testing::internal::GetCapturedStdout();
         EXPECT_EQ(flip.keys, lattice) << "coarse bisects the 4|16 flip";
         EXPECT_NE(out.find("measured 4 lattice + 0 refinement cells, per round 4;"), std::string::npos) << out;
     }
@@ -5194,17 +5194,17 @@ TEST(TuneTieredDriver, FrontierMeasuresTheCrossoverRegionAndSkipsTheFlatParts) {
     TieredOpts o = frontier_opts(repo, ledger, g_frontier1d);
     o.refine_cap_factor = 0.01;  // no cap in frontier mode: only the budget stops it
     o.plan = true;
-    testing::internal::CaptureStdout();
+    ::testing::internal::CaptureStdout();
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0);
-    const std::string plan = testing::internal::GetCapturedStdout();
+    const std::string plan = ::testing::internal::GetCapturedStdout();
     EXPECT_NE(plan.find("tier=deep: 11 cells (11 measure)"), std::string::npos) << plan;
     EXPECT_NE(plan.find("frontier (stride 2, k 6, 5%): ~9 cells, data-dependent (0.86 x the 10 grid cells round 0 "
                         "leaves"), std::string::npos) << plan;
     o.plan = false;
     MapMeasurer m(crossover_at_10);
-    testing::internal::CaptureStdout();
+    ::testing::internal::CaptureStdout();
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
-    const std::string out = testing::internal::GetCapturedStdout();
+    const std::string out = ::testing::internal::GetCapturedStdout();
     ASSERT_EQ(m.keys.size(), 18u) << out;
     std::set<std::string> round0(m.keys.begin(), m.keys.begin() + 11);
     std::set<std::string> lattice2;
@@ -5317,9 +5317,9 @@ TEST(TuneTieredDriver, FrontierReRacesEveryPartlyStaleCellInRoundZero) {
     std::ofstream(repo.path / "b.cc") << "b changed";  // b's hash moves, a still wins: every record partly stale
     g_frontier1d.plan = {};
     MapMeasurer m(a_wins);
-    testing::internal::CaptureStdout();
+    ::testing::internal::CaptureStdout();
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
-    const std::string out = testing::internal::GetCapturedStdout();
+    const std::string out = ::testing::internal::GetCapturedStdout();
     EXPECT_EQ(m.keys.size(), 21u) << out;
     EXPECT_NE(out.find("(21 partial)"), std::string::npos) << out;
 }
@@ -5335,17 +5335,17 @@ TEST(TuneTieredDriver, PreviewStopsAfterRoundZeroForFrontierAndLatticeSpecs) {
         TieredOpts o = frontier_opts(repo, ledger, g_frontier1d);
         o.tier = Tier::preview;
         o.plan = true;
-        testing::internal::CaptureStdout();
+        ::testing::internal::CaptureStdout();
         ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0);
-        const std::string plan = testing::internal::GetCapturedStdout();
+        const std::string plan = ::testing::internal::GetCapturedStdout();
         EXPECT_NE(plan.find("   round 0 only: no frontier or refinement rounds"), std::string::npos) << plan;
         EXPECT_EQ(plan.find("   frontier (stride"), std::string::npos) << plan;
         EXPECT_NE(plan.find("(~0 refinement cells;"), std::string::npos) << plan;
         o.plan = false;
         MapMeasurer m(crossover_at_10);  // deep measures 18 (stride 2) or 24 (stride 1) cells here
-        testing::internal::CaptureStdout();
+        ::testing::internal::CaptureStdout();
         ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
-        const std::string out = testing::internal::GetCapturedStdout();
+        const std::string out = ::testing::internal::GetCapturedStdout();
         EXPECT_EQ(m.keys.size(), 11u) << stride << out;
         EXPECT_EQ(std::set<std::string>(m.keys.begin(), m.keys.end()), lattice2) << stride;
         EXPECT_NE(out.find(stride == 2 ? "measured 11 round-0 (stride 2) + 0 frontier and bisection cells, per round 11;"
@@ -5394,9 +5394,9 @@ TEST(TuneTieredDriver, PreviewSamplesADemandDrivenGridAtHashTwelveInsideCoarse) 
         o.ops = {kTriangle.op()};
         o.max_dim = 0;
         MapMeasurer m([](const CellKey& k) { return std::pair{1.0, key_int(k, "n") <= 64 ? 0.5 : 2.0}; });
-        testing::internal::CaptureStdout();
+        ::testing::internal::CaptureStdout();
         EXPECT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
-        (void)testing::internal::GetCapturedStdout();
+        (void)::testing::internal::GetCapturedStdout();
         return m.keys;
     };
     const std::vector<std::string> c = run(coarse_ledger, Tier::coarse);
@@ -6122,9 +6122,9 @@ TEST(TuneTieredDriver, AutoLadderLeavesAnOldLedgerAloneAndAForcedOneReRacesItsSt
     o.ladder_auto = true;
     o.run_id = "20261021T000002-box-1";
     FakeMeasurer autom;
-    testing::internal::CaptureStdout();
+    ::testing::internal::CaptureStdout();
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake", 8}, &autom), 0);
-    const std::string out = testing::internal::GetCapturedStdout();
+    const std::string out = ::testing::internal::GetCapturedStdout();
     EXPECT_TRUE(autom.keys.empty()) << "auto: the old axis, every cell current\n" << out;
     EXPECT_NE(out.find("batch ladder off"), std::string::npos) << out;
     EXPECT_EQ(read_ledger(file, "float").runs.back().grid, "n=1,16 batch=1,3,128");

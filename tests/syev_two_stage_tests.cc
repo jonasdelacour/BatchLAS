@@ -32,10 +32,10 @@ using namespace batchlas;
 
 namespace {
 
-template <typename U>
-inline U conj_if(const U& x) {
-    if constexpr (std::is_same_v<U, std::complex<float>> ||
-                  std::is_same_v<U, std::complex<double>>) {
+template <typename Scalar>
+inline Scalar conj_if(const Scalar& x) {
+    if constexpr (std::is_same_v<Scalar, std::complex<float>> ||
+                  std::is_same_v<Scalar, std::complex<double>>) {
         return std::conj(x);
     } else {
         return x;
@@ -53,9 +53,9 @@ void expect_residual(Queue& ctx, const Matrix<T, MatrixFormat::Dense>& A0, const
         << what << " n=" << n;
 }
 
-template <typename T, Backend Back>
+template <typename Scalar, Backend Back>
 struct TwoStageConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = Back;
 };
 
@@ -353,4 +353,4 @@ TYPED_TEST(SyevTwoStageTest, Sy2sbBandPreservesSpectrum) {
     }
 }
 
-} // namespace
+}  // namespace

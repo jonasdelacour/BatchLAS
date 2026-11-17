@@ -11,7 +11,7 @@ namespace batchlas {
 
 namespace {
 
-template <Backend B, typename T>
+template <Backend B, typename Real>
 inline bool should_use_cta(const Queue& ctx, int64_t n) {
     // steqr_cta uses chunked sub-group operations that produce incorrect
     // eigenvalues on AMD gfx1200. Disable the CTA path only for ROCm; syev's Cta and CtaFused
@@ -24,34 +24,34 @@ inline bool should_use_cta(const Queue& ctx, int64_t n) {
     return n > 0 && n <= 32 && ctx.device().type == DeviceType::GPU && ctx.device().supports_sub_group_size(32);
 }
 
-} // namespace
+}  // namespace
 
-template <Backend B, typename T>
+template <Backend B, typename Real>
 Event steqr_dispatch(Queue& ctx,
-                     const VectorView<T>& d_in,
-                     const VectorView<T>& e_in,
-                     const VectorView<T>& eigenvalues,
+                     const VectorView<Real>& d_in,
+                     const VectorView<Real>& e_in,
+                     const VectorView<Real>& eigenvalues,
                      const Span<std::byte>& ws,
                      JobType jobz,
-                     SteqrParams<T> params,
-                     const MatrixView<T, MatrixFormat::Dense>& eigvects,
+                     SteqrParams<Real> params,
+                     const MatrixView<Real, MatrixFormat::Dense>& eigvects,
                      Span<int32_t> info) {
     const int64_t n = d_in.size();
-    if (should_use_cta<B, T>(ctx, n)) {
-        return steqr_cta<B, T>(ctx, d_in, e_in, eigenvalues, ws, jobz, params, eigvects, info);
+    if (should_use_cta<B, Real>(ctx, n)) {
+        return steqr_cta<B, Real>(ctx, d_in, e_in, eigenvalues, ws, jobz, params, eigvects, info);
     }
-    return steqr_wg<B, T>(ctx, d_in, e_in, eigenvalues, ws, jobz, params, eigvects, info);
+    return steqr_wg<B, Real>(ctx, d_in, e_in, eigenvalues, ws, jobz, params, eigvects, info);
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Real>
 Event steqr(Queue& ctx,
-            const VectorView<T>& d_in,
-            const VectorView<T>& e_in,
-            const VectorView<T>& eigenvalues,
+            const VectorView<Real>& d_in,
+            const VectorView<Real>& e_in,
+            const VectorView<Real>& eigenvalues,
             const Span<std::byte>& ws,
             JobType jobz,
-            SteqrParams<T> params,
-            const MatrixView<T, MatrixFormat::Dense>& eigvects,
+            SteqrParams<Real> params,
+            const MatrixView<Real, MatrixFormat::Dense>& eigvects,
             Span<int32_t> info) {
     const auto mask = batchlas::detail::call_mask("steqr", d_in, e_in, eigenvalues, eigvects);
     // The one clear, here rather than in the tiers: neither steqr_cta nor steqr_wg
@@ -59,21 +59,21 @@ Event steqr(Queue& ctx,
     // whatever was in its span for the healthy items. Everything below only ever
     // raises a status -- see the accumulator rule in src/kernels/common/info_span.hh.
     detail::info_clear(ctx, info, d_in.batch_size(), mask);
-    return steqr_dispatch<B, T>(ctx, d_in, e_in, eigenvalues, ws, jobz, params, eigvects, info);
+    return steqr_dispatch<B, Real>(ctx, d_in, e_in, eigenvalues, ws, jobz, params, eigvects, info);
 }
 
-template <typename T>
+template <typename Real>
 size_t steqr_buffer_size(Queue& ctx,
-                         const VectorView<T>& d,
-                         const VectorView<T>& e,
-                         const VectorView<T>& eigenvalues,
+                         const VectorView<Real>& d,
+                         const VectorView<Real>& e,
+                         const VectorView<Real>& eigenvalues,
                          JobType jobz,
-                         SteqrParams<T> params) {
+                         SteqrParams<Real> params) {
     const int64_t n = d.size();
     // Return the maximum of both paths so the buffer is sufficient regardless
     // of which backend's dispatch is used at runtime.
-    const size_t cta_sz = n > 0 ? steqr_cta_buffer_size<T>(ctx, d, e, eigenvalues, jobz, params) : 0;
-    const size_t wg_sz  = steqr_wg_buffer_size<T>(ctx, d, e, eigenvalues, jobz, params);
+    const size_t cta_sz = n > 0 ? steqr_cta_buffer_size<Real>(ctx, d, e, eigenvalues, jobz, params) : 0;
+    const size_t wg_sz  = steqr_wg_buffer_size<Real>(ctx, d, e, eigenvalues, jobz, params);
     return std::max(cta_sz, wg_sz);
 }
 
@@ -91,4 +91,4 @@ BATCHLAS_FOR_EACH_REAL_TYPE(STEQR_BUFFER_SIZE_INSTANTIATE)
 #undef STEQR_BUFFER_SIZE_INSTANTIATE
 #undef STEQR_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

@@ -19,7 +19,7 @@
 
 #include <batchlas/verify/tolerance.hh>
 
-#include <src/kernels/common/solve_native.hh>
+#include <src/ops/gesv/gesv_native.hh>
 #include <src/ops/getrf/getrf_native.hh>
 #include <src/ops/gesv/choice.hh>
 
@@ -35,37 +35,37 @@ using namespace batchlas;
 
 namespace {
 
-template <typename T>
-using RealOf = typename batchlas::base_type<T>::type;
+template <typename Scalar>
+using RealOf = typename batchlas::base_type<Scalar>::type;
 
 using verify::Check;
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct GesvConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 
 // A batch of DISTINCT systems with a PADDED ld and a stride that is NOT ld*cols, the
 // pad POISONED. A launcher that lets MatrixView default the stride, or that writes
 // `c < N` instead of `c < n`, is falsifiable by construction.
-template <typename T>
+template <typename Scalar>
 struct Sys {
     int n = 0, nrhs = 0, batch = 0;
     int lda = 0, stra = 0, ldb = 0, strb = 0;
-    UnifiedVector<T> a;          // overwritten by the factor
-    UnifiedVector<T> b;          // overwritten by X
-    std::vector<T> a0, b0;       // pristine inputs, same ld/stride
-    UnifiedVector<T*> aptr, bptr;
+    UnifiedVector<Scalar> a;          // overwritten by the factor
+    UnifiedVector<Scalar> b;          // overwritten by X
+    std::vector<Scalar> a0, b0;       // pristine inputs, same ld/stride
+    UnifiedVector<Scalar*> aptr, bptr;
     UnifiedVector<int64_t> piv;
     UnifiedVector<int32_t> info;
 };
 
-template <typename T>
-void reset(Sys<T>& p) {
+template <typename Scalar>
+void reset(Sys<Scalar>& p) {
     std::copy(p.a0.begin(), p.a0.end(), p.a.begin());
     std::copy(p.b0.begin(), p.b0.end(), p.b.begin());
     std::fill(p.piv.begin(), p.piv.end(), int64_t(0x0BADBEEF0BADBEEFLL));
@@ -76,33 +76,33 @@ void reset(Sys<T>& p) {
 // is the right one. The diagonal magnitude is 4n against off-diagonals bounded by 1.
 // Rows are shifted cyclically, so every column pivots off the diagonal: an identity
 // interchange list would hide a dropped or reversed row swap from every check here.
-template <typename T>
-Sys<T> make_system(int n, int nrhs, int batch, unsigned seed,
-                   int ld_pad = 5, int stride_pad = 11, bool singular_col = false) {
-    Sys<T> p;
+template <typename Scalar>
+Sys<Scalar> make_system(int n, int nrhs, int batch, unsigned seed,
+                        int ld_pad = 5, int stride_pad = 11, bool singular_col = false) {
+    Sys<Scalar> p;
     p.n = n; p.nrhs = nrhs; p.batch = batch;
     p.lda = n + ld_pad;  p.stra = p.lda * n + stride_pad;
     p.ldb = n + ld_pad;  p.strb = p.ldb * nrhs + stride_pad;
 
-    const T poison = MV<T>::make(-9.75e3, 4.5e3);
-    p.a = UnifiedVector<T>(static_cast<size_t>(p.stra) * batch, poison);
-    p.b = UnifiedVector<T>(static_cast<size_t>(p.strb) * batch, poison);
-    p.aptr = UnifiedVector<T*>(static_cast<size_t>(batch), nullptr);
-    p.bptr = UnifiedVector<T*>(static_cast<size_t>(batch), nullptr);
+    const Scalar poison = MV<Scalar>::make(-9.75e3, 4.5e3);
+    p.a = UnifiedVector<Scalar>(static_cast<size_t>(p.stra) * batch, poison);
+    p.b = UnifiedVector<Scalar>(static_cast<size_t>(p.strb) * batch, poison);
+    p.aptr = UnifiedVector<Scalar*>(static_cast<size_t>(batch), nullptr);
+    p.bptr = UnifiedVector<Scalar*>(static_cast<size_t>(batch), nullptr);
     p.piv = UnifiedVector<int64_t>(static_cast<size_t>(n) * batch, int64_t(0));
     p.info = UnifiedVector<int32_t>(static_cast<size_t>(batch), int32_t(0));
 
-    const Matrix<T> rnd = Matrix<T>::Random(n, n + nrhs, false, batch, seed);  // A, then B; the pad keeps its poison
+    const Matrix<Scalar> rnd = Matrix<Scalar>::Random(n, n + nrhs, false, batch, seed);  // A, then B; the pad keeps its poison
     for (int bi = 0; bi < batch; ++bi) {
         for (int j = 0; j < n; ++j) {
             for (int i = 0; i < n; ++i) {
                 const double re = double(std::real(rnd(i, j, bi)));
-                T v = rnd(i, j, bi);
-                if (i == j) v = MV<T>::make(4.0 * double(n) * (re >= 0 ? 1.0 : -1.0), 0.0);
+                Scalar v = rnd(i, j, bi);
+                if (i == j) v = MV<Scalar>::make(4.0 * double(n) * (re >= 0 ? 1.0 : -1.0), 0.0);
                 // A whole zero COLUMN, not a zero diagonal entry: partial pivoting
                 // finds a nonzero pivot for a merely small diagonal, so only a zero
                 // column makes U exactly singular at a predictable step.
-                if (singular_col && j == (n / 2)) v = T{};
+                if (singular_col && j == (n / 2)) v = Scalar{};
                 p.a[size_t(bi) * p.stra + size_t(j) * p.lda + (i + 1) % n] = v;
             }
         }
@@ -116,30 +116,32 @@ Sys<T> make_system(int n, int nrhs, int batch, unsigned seed,
     return p;
 }
 
-template <typename T>
-MatrixView<T, MatrixFormat::Dense> a_view(Sys<T>& p) {
-    return MatrixView<T, MatrixFormat::Dense>(p.a.data(), p.n, p.n, p.lda, p.stra, p.batch,
-                                              p.aptr.data());
+template <typename Scalar>
+MatrixView<Scalar, MatrixFormat::Dense> a_view(Sys<Scalar>& p) {
+    return MatrixView<Scalar, MatrixFormat::Dense>(p.a.data(), p.n, p.n, p.lda, p.stra, p.batch,
+                                                   p.aptr.data());
 }
-template <typename T>
-MatrixView<T, MatrixFormat::Dense> b_view(Sys<T>& p) {
-    return MatrixView<T, MatrixFormat::Dense>(p.b.data(), p.n, p.nrhs, p.ldb, p.strb, p.batch,
-                                              p.bptr.data());
+template <typename Scalar>
+MatrixView<Scalar, MatrixFormat::Dense> b_view(Sys<Scalar>& p) {
+    return MatrixView<Scalar, MatrixFormat::Dense>(p.b.data(), p.n, p.nrhs, p.ldb, p.strb, p.batch,
+                                                   p.bptr.data());
 }
 
 // ||A x - b||_F / (||A||_F ||x||_F) for ONE batch item, in double.
-template <typename T>
-double solve_residual(Queue& ctx, const Sys<T>& p, int item) {
+template <typename Scalar>
+double solve_residual(Queue& ctx, const Sys<Scalar>& p, int item) {
     const int items[] = {item};
-    return MV<T>::solve_residual(ctx, MV<T>(const_cast<T*>(p.a0.data()), p.n, p.n, p.lda, p.stra, p.batch),
-                                 MV<T>(const_cast<T*>(p.b.data()), p.n, p.nrhs, p.ldb, p.strb, p.batch),
-                                 MV<T>(const_cast<T*>(p.b0.data()), p.n, p.nrhs, p.ldb, p.strb, p.batch), items);
+    return MV<Scalar>::solve_residual(ctx,
+                                      MV<Scalar>(const_cast<Scalar*>(p.a0.data()), p.n, p.n, p.lda, p.stra, p.batch),
+                                      MV<Scalar>(const_cast<Scalar*>(p.b.data()), p.n, p.nrhs, p.ldb, p.strb, p.batch),
+                                      MV<Scalar>(const_cast<Scalar*>(p.b0.data()), p.n, p.nrhs, p.ldb, p.strb, p.batch),
+                                      items);
 }
 
 // Every element of the working buffer that no correct kernel may touch: the ld pad
 // rows, the stride pad, and (for A) nothing else. Returns the first offender.
-template <typename T>
-bool pad_intact(const UnifiedVector<T>& live, const std::vector<T>& pristine,
+template <typename Scalar>
+bool pad_intact(const UnifiedVector<Scalar>& live, const std::vector<Scalar>& pristine,
                 int n, int cols, int ld, int stride, int batch, size_t* where) {
     for (int bi = 0; bi < batch; ++bi) {
         for (size_t o = 0; o < size_t(stride); ++o) {
@@ -148,7 +150,7 @@ bool pad_intact(const UnifiedVector<T>& live, const std::vector<T>& pristine,
             const bool owned = (col < cols) && (row < n) && (int(o) < ld * cols);
             if (owned) continue;
             const size_t idx = size_t(bi) * stride + o;
-            if (std::memcmp(&live[idx], &pristine[idx], sizeof(T)) != 0) {
+            if (std::memcmp(&live[idx], &pristine[idx], sizeof(Scalar)) != 0) {
                 *where = idx;
                 return false;
             }
@@ -173,15 +175,15 @@ protected:
             GTEST_SKIP() << "device does not offer sub-group size 32";
     }
 
-    int cap() const { return sycl_gesv::gesv_tiny_max_n<T>(); }
+    int cap() const { return ops::gesv::gesv_tiny_max_n<T>(); }
 
     // Run the tiny tier on one prepared system, waiting for it.
     void run_tiny(Sys<T>& p) {
         auto A = a_view(p);
         auto B = b_view(p);
-        const size_t need = sycl_gesv::gesv_tiny_buffer_size<T>(*this->ctx, A, B);
+        const size_t need = ops::gesv::gesv_tiny_buffer_size<T>(*this->ctx, A, B);
         UnifiedVector<std::byte> ws(need > 0 ? need : size_t(1));
-        (void)sycl_gesv::gesv_tiny_dispatch<T>(*this->ctx, A, B, p.piv.to_span(),
+        (void)ops::gesv::gesv_tiny_dispatch<T>(*this->ctx, A, B, p.piv.to_span(),
                                          Span<std::byte>(ws.data(), need),
                                          p.info.to_span());
         this->ctx->wait();
@@ -223,7 +225,7 @@ TYPED_TEST(GesvTest, TinySolveResidualMatchesHostReference) {
     }
 }
 
-// G2. THE CONTRACT solve_native.hh states: gesv leaves behind exactly what getrf
+// G2. THE CONTRACT gesv_native.hh states: gesv leaves behind exactly what getrf
 // would, bit-for-bit, because both run the same recurrence in the same order.
 // ARMED BREAK (R9): in gesv_tiny.cc step 5 drop the `if (act)` guard so the pivot
 // lane updates its own RHS. EXPECTED: G1 RED, THIS test GREEN -- the pair is what
@@ -232,16 +234,16 @@ TYPED_TEST(GesvTest, TinyFactorAndPivotsAreBitIdenticalToGetrf) {
     using T = typename TestFixture::T;
     const int cap = this->cap();
     for (int n : {4, 8, 9, 16, 17, 32}) {
-        if (n > sycl_getrf::getrf_tiny_max_n<T>() || n > cap) continue;
+        if (n > ops::getrf::getrf_tiny_max_n<T>() || n > cap) continue;
         auto p = make_system<T>(n, 2, 5, 777u + unsigned(n));
         auto q = make_system<T>(n, 2, 5, 777u + unsigned(n));   // same seed, same data
 
         this->run_tiny(p);
 
         auto Aq = a_view(q);
-        const size_t need = sycl_getrf::getrf_tiny_buffer_size<T>(*this->ctx, Aq);
+        const size_t need = ops::getrf::getrf_tiny_buffer_size<T>(*this->ctx, Aq);
         UnifiedVector<std::byte> ws(need > 0 ? need : size_t(1));
-        (void)sycl_getrf::getrf_tiny_dispatch<T>(*this->ctx, Aq, q.piv.to_span(),
+        (void)ops::getrf::getrf_tiny_dispatch<T>(*this->ctx, Aq, q.piv.to_span(),
                                            Span<std::byte>(ws.data(), need),
                                            q.info.to_span());
         this->ctx->wait();
@@ -337,14 +339,14 @@ TYPED_TEST(GesvTest, TinyRefusesShapesAboveItsCeilings) {
     auto Aw = a_view(wide);
     auto Bw = b_view(wide);
     UnifiedVector<std::byte> ws(size_t(1024));
-    EXPECT_THROW((void)sycl_gesv::gesv_tiny_dispatch<T>(*this->ctx, Aw, Bw, wide.piv.to_span(),
+    EXPECT_THROW((void)ops::gesv::gesv_tiny_dispatch<T>(*this->ctx, Aw, Bw, wide.piv.to_span(),
                                                   ws.to_span(), wide.info.to_span()),
                  batchlas::unsupported);
 
     auto big = make_system<T>(cap + 1, 1, 2, 4u);
     auto Ab = a_view(big);
     auto Bb = b_view(big);
-    EXPECT_THROW((void)sycl_gesv::gesv_tiny_dispatch<T>(*this->ctx, Ab, Bb, big.piv.to_span(),
+    EXPECT_THROW((void)ops::gesv::gesv_tiny_dispatch<T>(*this->ctx, Ab, Bb, big.piv.to_span(),
                                                   ws.to_span(), big.info.to_span()),
                  batchlas::unsupported);
 }
@@ -413,14 +415,14 @@ TYPED_TEST(GesvTest, PublicGesvRejectsNonConformingViews) {
 
 // A heterogeneous batch and an empty n or nrhs are caller errors: invalid_argument, the message
 // opening with the op name, on every backend. GesvTest skips off-GPU, hence the NETLIB TEST below.
-template <Backend B, typename T>
-void ExpectUnservableShapesAreInvalidArgument(Queue& q) {
+template <Backend B, typename Scalar>
+void expect_unservable_shapes_are_invalid_argument(Queue& q) {
     const int n = 6, nrhs = 2, batch = 3;
-    Matrix<T, MatrixFormat::Dense> A(n, n, batch), Bm(n, nrhs, batch);
+    Matrix<Scalar, MatrixFormat::Dense> A(n, n, batch), Bm(n, nrhs, batch);
     UnifiedVector<int> act(batch), cols(batch);
     for (int b = 0; b < batch; ++b) act[b] = n - b, cols[b] = nrhs - (b % 2);
-    Matrix<T, MatrixFormat::Dense> A0(0, 0, 1), B0(0, 1, 1), A4(4, 4, 1), B4(4, 0, 1);
-    struct Case { const char* what; MatrixView<T, MatrixFormat::Dense> a, b; };
+    Matrix<Scalar, MatrixFormat::Dense> A0(0, 0, 1), B0(0, 1, 1), A4(4, 4, 1), B4(4, 0, 1);
+    struct Case { const char* what; MatrixView<Scalar, MatrixFormat::Dense> a, b; };
     const Case cases[] = {{"A heterogeneous", A.with_active_dims(act.to_span(), act.to_span()), Bm.view()},
                           {"B heterogeneous", A.view(), Bm.with_active_dims(act.to_span(), cols.to_span())},
                           {"n = 0", A0.view(), B0.view()},
@@ -431,8 +433,8 @@ void ExpectUnservableShapesAreInvalidArgument(Queue& q) {
     for (const auto& k : cases) {
         for (bool sizing : {true, false}) {
             try {
-                if (sizing) (void)gesv_buffer_size<B, T>(q, k.a, k.b);
-                else (void)gesv<B, T>(q, k.a, k.b, piv.to_span(), ws.to_span(), info.to_span());
+                if (sizing) (void)gesv_buffer_size<B, Scalar>(q, k.a, k.b);
+                else (void)gesv<B, Scalar>(q, k.a, k.b, piv.to_span(), ws.to_span(), info.to_span());
                 ADD_FAILURE() << k.what << ": no throw";
             } catch (const batchlas::invalid_argument& e) {
                 EXPECT_EQ(std::string(e.what()).rfind("gesv", 0), 0u) << k.what << ": " << e.what();
@@ -446,13 +448,13 @@ void ExpectUnservableShapesAreInvalidArgument(Queue& q) {
 }
 
 TYPED_TEST(GesvTest, UnservableShapesAreInvalidArgument) {
-    ExpectUnservableShapesAreInvalidArgument<TestFixture::BackendType, typename TestFixture::T>(*this->ctx);
+    expect_unservable_shapes_are_invalid_argument<TestFixture::BackendType, typename TestFixture::T>(*this->ctx);
 }
 
 #if BATCHLAS_HAS_HOST_BACKEND
 TEST(GesvNetlib, UnservableShapesAreInvalidArgument) {
     Queue q(Device("cpu"), Backend::NETLIB);
-    ExpectUnservableShapesAreInvalidArgument<Backend::NETLIB, double>(q);
-    ExpectUnservableShapesAreInvalidArgument<Backend::NETLIB, std::complex<double>>(q);
+    expect_unservable_shapes_are_invalid_argument<Backend::NETLIB, double>(q);
+    expect_unservable_shapes_are_invalid_argument<Backend::NETLIB, std::complex<double>>(q);
 }
 #endif
