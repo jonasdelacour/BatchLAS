@@ -43,22 +43,22 @@ inline double max_abs_singular_error(const R* ref_desc,
 template <typename T>
 struct is_complex : std::false_type {};
 
-template <typename T>
-struct is_complex<std::complex<T>> : std::true_type {};
+template <typename Real>
+struct is_complex<std::complex<Real>> : std::true_type {};
 
-template <typename T>
-inline T conj_value(const T& value) {
-    if constexpr (is_complex<T>::value) {
+template <typename Scalar>
+inline Scalar conj_value(const Scalar& value) {
+    if constexpr (is_complex<Scalar>::value) {
         return std::conj(value);
     } else {
         return value;
     }
 }
 
-template <typename T>
-inline typename base_type<T>::type abs_squared_value(const T& value) {
-    using Real = typename base_type<T>::type;
-    if constexpr (is_complex<T>::value) {
+template <typename Scalar>
+inline typename base_type<Scalar>::type abs_squared_value(const Scalar& value) {
+    using Real = typename base_type<Scalar>::type;
+    if constexpr (is_complex<Scalar>::value) {
         return static_cast<Real>(std::norm(value));
     } else {
         return value * value;
@@ -136,7 +136,7 @@ void run_gesvd_cta_acc(miniacc::State& state) {
         UnifiedVector<Real> s(static_cast<size_t>(n) * static_cast<size_t>(cur_batch));
 
         try {
-            const size_t ws_bytes = [&]() {
+            const size_t ws_bytes = [&] {
                 if constexpr (is_complex<Scalar>::value) {
                     return gesvd_cta_buffer_size<B, Scalar>(*q,
                                                             A_work,
@@ -159,23 +159,23 @@ void run_gesvd_cta_acc(miniacc::State& state) {
             UnifiedVector<std::byte> ws(ws_bytes);
             if constexpr (is_complex<Scalar>::value) {
                 (void)gesvd_cta<B, Scalar>(*q,
-                                     A_work,
-                                     s.to_span(),
-                                     U,
-                                     Vh,
-                                     SvdVectors::All,
-                                     SvdVectors::All,
-                                     Uplo::Lower,
-                                     ws.to_span());
+                                           A_work,
+                                           s.to_span(),
+                                           U,
+                                           Vh,
+                                           SvdVectors::All,
+                                           SvdVectors::All,
+                                           Uplo::Lower,
+                                           ws.to_span());
             } else {
                 (void)gesvd_cta<B, Scalar>(*q,
-                                     A_work,
-                                     s.to_span(),
-                                     U,
-                                     Vh,
-                                     SvdVectors::All,
-                                     SvdVectors::All,
-                                     ws.to_span());
+                                           A_work,
+                                           s.to_span(),
+                                           U,
+                                           Vh,
+                                           SvdVectors::All,
+                                           SvdVectors::All,
+                                           ws.to_span());
             }
             q->wait();
         } catch (const std::exception& ex) {
@@ -271,13 +271,13 @@ void run_gesvd_cta_acc(miniacc::State& state) {
     }
 }
 
-} // namespace
-
-template <typename Real, Backend B>
-static void ACC_GESVD_CTA(miniacc::State& state) {
-    run_gesvd_cta_acc<Real, B>(state);
+template <typename Scalar, Backend B>
+void ACC_GESVD_CTA(miniacc::State& state) {
+    run_gesvd_cta_acc<Scalar, B>(state);
 }
+
+}  // namespace
 
 BATCHLAS_ACC_CUDA_ALL_TYPES(ACC_GESVD_CTA, GesvdCtaAccSizes)
 
-MINI_ACC_MAIN()
+MINI_ACC_MAIN();

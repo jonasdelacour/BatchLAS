@@ -18,4 +18,4 @@ inline void for_each_batch_item(F&& f, const View& first, const Views&... rest) 
     }
 }
 
-} // namespace batchlas::backend
+}  // namespace batchlas::backend

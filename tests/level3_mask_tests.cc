@@ -47,8 +47,8 @@ namespace {
 
 namespace mc = masked_contract;
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
 struct Dims {
     int rows, cols;
@@ -56,36 +56,38 @@ struct Dims {
 
 // One masked level-3 problem: A, B (unused by the rank-k ops) and the output C. `op` runs the call
 // on the three views, each carrying the mask; beta0 asks it for beta = 0 (C poisoned, never read).
-template <typename T>
+template <typename Scalar>
 struct Problem {
-    using Op = std::function<void(Queue&, const MV<T>&, const MV<T>&, const MV<T>&, bool beta0)>;
+    using Op = std::function<void(Queue&, const MV<Scalar>&, const MV<Scalar>&, const MV<Scalar>&, bool beta0)>;
     Queue& q;
     int batch;
     bool identical, beta0;
-    Matrix<T> A, Bm, C;
+    Matrix<Scalar> A, Bm, C;
     Op op;
 
     Problem(Queue& queue, Dims a, Dims b, Dims c, int batch_, bool identical_, bool beta0_, Op op_)
         : q(queue), batch(batch_), identical(identical_), beta0(beta0_),
-          A(test_support::padded<T>(a.rows, a.cols, batch_)), Bm(test_support::padded<T>(b.rows, b.cols, batch_)),
-          C(test_support::padded<T>(c.rows, c.cols, batch_)), op(std::move(op_)) {}
+          A(test_support::padded<Scalar>(a.rows, a.cols, batch_)), Bm(test_support::padded<Scalar>(b.rows, b.cols,
+                                                                                                   batch_)),
+          C(test_support::padded<Scalar>(c.rows, c.cols, batch_)), op(std::move(op_)) {}
 
     // Small values over 8 and a heavy diagonal, so every item is distinct and well conditioned.
-    std::vector<T> image(const Matrix<T>& M, int salt) const {
+    std::vector<Scalar> image(const Matrix<Scalar>& M, int salt) const {
         const std::size_t per = std::size_t(M.stride()), ld = std::size_t(M.ld());
-        std::vector<T> img(per * std::size_t(batch));
+        std::vector<Scalar> img(per * std::size_t(batch));
         for (std::size_t e = 0; e < img.size(); ++e) {
             const std::size_t item = identical ? 0 : e / per, off = e % per;
             double re = double(int((off * 7 + item * 3 + salt) % 23) - 11) / 8;
             const double im = double(int((off * 5 + item + salt) % 13) - 6) / 8;
             if (off % ld == off / ld) re += 4;
-            img[e] = MV<T>::make(re, im);
+            img[e] = MV<Scalar>::make(re, im);
         }
         return img;
     }
     // The inputs' host images, built on the first prepare and copied in by q.memcpy on every one.
-    std::vector<T> imgA, imgB, imgC;
-    void load(Matrix<T>& M, const std::vector<T>& img) { q->memcpy(M.data_ptr(), img.data(), img.size() * sizeof(T)); }
+    std::vector<Scalar> imgA, imgB, imgC;
+    void load(Matrix<Scalar>& M,
+              const std::vector<Scalar>& img) { q->memcpy(M.data_ptr(), img.data(), img.size() * sizeof(Scalar)); }
     mc::Case make_case(int chunk_items = 0) {
         mc::Case c;
         c.batch = batch;
@@ -95,7 +97,8 @@ struct Problem {
             if (imgA.empty()) {
                 imgA = image(A, 1);
                 imgB = image(Bm, 5);
-                imgC = beta0 ? std::vector<T>(std::size_t(C.stride()) * batch, test_support::poison<T>()) : image(C, 9);
+                imgC = beta0 ? std::vector<Scalar>(std::size_t(C.stride()) * batch,
+                                                   test_support::poison<Scalar>()) : image(C, 9);
             }
             load(A, imgA);
             load(Bm, imgB);
@@ -118,9 +121,9 @@ struct Spec {
     int chunk_items = 0;
 };
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;

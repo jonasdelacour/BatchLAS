@@ -39,20 +39,18 @@ inline void SytrdSy2sbBenchSizesNetlib(Benchmark* b) {
     }
 }
 
-} // namespace
-
-template <typename T, Backend B>
-static void BM_SYTRD_SY2SB(minibench::State& state) {
+template <typename Scalar, Backend B>
+void BM_SYTRD_SY2SB(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const int kd = static_cast<int>(state.range(2));
     const int uplo_i = static_cast<int>(state.range(3));
     const Uplo uplo = (uplo_i == 0) ? Uplo::Lower : Uplo::Upper;
 
-    auto A0 = Matrix<T>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/2026);
-    auto A = Matrix<T>::Zeros(n, n, batch);
-    auto AB = Matrix<T, MatrixFormat::Dense>::Zeros(kd + 1, n, batch);
-    auto tau = Vector<T>::zeros(std::max<int>(0, static_cast<int>(n) - kd), batch);
+    auto A0 = Matrix<Scalar>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/2026);
+    auto A = Matrix<Scalar>::Zeros(n, n, batch);
+    auto AB = Matrix<Scalar, MatrixFormat::Dense>::Zeros(kd + 1, n, batch);
+    auto tau = Vector<Scalar>::zeros(std::max<int>(0, static_cast<int>(n) - kd), batch);
 
     const std::string device_str = (B == Backend::NETLIB) ? "cpu" : "gpu";
     const bool in_order = true;
@@ -61,7 +59,7 @@ static void BM_SYTRD_SY2SB(minibench::State& state) {
     const size_t ws_bytes = sytrd_sy2sb_buffer_size(*q,
                                                          A,
                                                          AB,
-                                                         VectorView<T>(tau),
+                                                         VectorView<Scalar>(tau),
                                                          uplo,
                                                          kd);
     UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
@@ -84,6 +82,8 @@ static void BM_SYTRD_SY2SB(minibench::State& state) {
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * flops), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / static_cast<double>(batch)) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_SYTRD_SY2SB, SytrdSy2sbBenchSizes);
 

@@ -104,7 +104,8 @@ EXCLUDE                = docs/theme \
                          docs/tools
 EXCLUDE_PATTERNS       = */minibench.hh \
                          */minibench_structured.hh \
-                         */bench_structured.hh
+                         */bench_structured.hh \
+                         */batchlas/device/detail/*
 EXCLUDE_SYMBOLS        = batchlas::sig \
                          batchlas::linalg::sig \
                          BATCHLAS_CHECK_ARGS \

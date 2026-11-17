@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// Pass/fail bounds: c(kind) * f(n) * eps, c calibrated (docs/design/verification.md#verification-calibration).
 #pragma once
+// Pass/fail bounds: c(kind) * f(n) * eps, c calibrated (docs/design/verification.md#verification-calibration).
 
 #include <batchlas/blas/enums.hh>
 #include <batchlas/error.hh>
@@ -16,9 +16,9 @@
 
 namespace batchlas::verify {
 
-/// Unit roundoff \f$u\f$ of T's real type: \f$2^{-24}\f$ for float, \f$2^{-53}\f$ for double.
-/// @return \f$u\f$, half of `std::numeric_limits<float_t<T>>::epsilon()`
-template <typename T> constexpr double eps() { return std::numeric_limits<float_t<T>>::epsilon() * 0.5; }
+/// Unit roundoff \f$u\f$ of Scalar's real type: \f$2^{-24}\f$ for float, \f$2^{-53}\f$ for double.
+/// @return \f$u\f$, half of `std::numeric_limits<float_t<Scalar>>::epsilon()`
+template <typename Scalar> constexpr double eps() { return std::numeric_limits<float_t<Scalar>>::epsilon() * 0.5; }
 
 /// \f$\max(a, b)\f$, NaN if either is NaN (std::max drops a NaN second argument, so a poisoned value would pass).
 /// @param[in] a  first value
@@ -71,9 +71,9 @@ inline const char* kind_name(Check kind) {
     return "unknown";
 }
 
-template <typename T> constexpr const char* dtype_name() {
-    if constexpr (is_std_complex_v<T>) return std::is_same_v<float_t<T>, float> ? "cfloat" : "cdouble";
-    else return std::is_same_v<T, float> ? "float" : "double";
+template <typename Scalar> constexpr const char* dtype_name() {
+    if constexpr (is_std_complex_v<Scalar>) return std::is_same_v<float_t<Scalar>, float> ? "cfloat" : "cdouble";
+    else return std::is_same_v<Scalar, float> ? "float" : "double";
 }
 
 }  // namespace detail
@@ -134,54 +134,54 @@ inline void record(const char* kind, const char* dtype, int n, double value, dou
 
 }  // namespace detail
 
-/// \f$c(\mathrm{kind}) \cdot f(n) \cdot u\f$ with \f$u\f$ = `eps<T>()`: \f$f(n) = \max(n, 1)\f$, except blas,
+/// \f$c(\mathrm{kind}) \cdot f(n) \cdot u\f$ with \f$u\f$ = `eps<Scalar>()`: \f$f(n) = \max(n, 1)\f$, except blas,
 /// \f$f(k) = \max(k, 0) + 2\f$.
 /// @param[in] kind  which check the bound is for; selects the calibrated coefficient \f$c\f$
 /// @param[in] n     size the bound scales with, as defined per kind in Check
 /// @return the pass/fail bound
-template <typename T> double bound(Check kind, int n) {
+template <typename Scalar> double bound(Check kind, int n) {
     const double f = kind == Check::blas ? double(n < 0 ? 0 : n) + 2.0 : double(n < 1 ? 1 : n);
-    return detail::coefficient(kind) * f * eps<T>();
+    return detail::coefficient(kind) * f * eps<Scalar>();
 }
 
-/// `slack.factor` \f$\cdot\f$ `bound<T>(kind, n)`.
+/// `slack.factor` \f$\cdot\f$ `bound<Scalar>(kind, n)`.
 /// @param[in] kind   which check the bound is for
 /// @param[in] n      size the bound scales with, as defined per kind in Check
 /// @param[in] slack  per-site factor on the bound, with its mandatory reason
 /// @return the slacked bound
 /// @throws batchlas::invalid_argument for an empty reason, or a factor that is not both finite and \f$> 0\f$.
-template <typename T> double bound(Check kind, int n, Slack slack) {
+template <typename Scalar> double bound(Check kind, int n, Slack slack) {
     detail::check_slack(slack);
-    return slack.factor * bound<T>(kind, n);
+    return slack.factor * bound<Scalar>(kind, n);
 }
 
 /// pass without recording: for predicates evaluated on results expected to be wrong.
 /// @param[in] kind   which check @p value is judged under
 /// @param[in] n      size the bound scales with, as defined per kind in Check
 /// @param[in] value  measured error
-/// @return true when @p value is not NaN and \f$\le\f$ `bound<T>(kind, n)`
-template <typename T> bool within(Check kind, int n, double value) { return !std::isnan(value) && value <= bound<T>(kind, n); }
+/// @return true when @p value is not NaN and \f$\le\f$ `bound<Scalar>(kind, n)`
+template <typename Scalar> bool within(Check kind, int n, double value) { return !std::isnan(value) && value <= bound<Scalar>(kind, n); }
 
 /// within() against the slacked bound, without recording.
 /// @param[in] kind   which check @p value is judged under
 /// @param[in] n      size the bound scales with, as defined per kind in Check
 /// @param[in] value  measured error
 /// @param[in] slack  per-site factor on the bound, with its mandatory reason
-/// @return true when @p value is not NaN and \f$\le\f$ `bound<T>(kind, n, slack)`
+/// @return true when @p value is not NaN and \f$\le\f$ `bound<Scalar>(kind, n, slack)`
 /// @throws batchlas::invalid_argument when @p value is not NaN and the reason is empty or the factor is not both finite and \f$> 0\f$ (a NaN @p value returns false without checking @p slack).
-template <typename T> bool within(Check kind, int n, double value, Slack slack) {
-    return !std::isnan(value) && value <= bound<T>(kind, n, slack);
+template <typename Scalar> bool within(Check kind, int n, double value, Slack slack) {
+    return !std::isnan(value) && value <= bound<Scalar>(kind, n, slack);
 }
 
-/// True when @p value is not NaN and within `bound<T>(kind, n)`. With `BATCHLAS_VERIFY_RECORD=<path>`
+/// True when @p value is not NaN and within `bound<Scalar>(kind, n)`. With `BATCHLAS_VERIFY_RECORD=<path>`
 /// set, appends "kind dtype n value bound 1 -" to that file (calibration input).
 /// @param[in] kind   which check @p value is judged under
 /// @param[in] n      size the bound scales with, as defined per kind in Check
 /// @param[in] value  measured error
 /// @return true when the check passes
-template <typename T> bool pass(Check kind, int n, double value) {
-    detail::record(detail::kind_name(kind), detail::dtype_name<T>(), n, value, bound<T>(kind, n), 1.0, "-");
-    return within<T>(kind, n, value);
+template <typename Scalar> bool pass(Check kind, int n, double value) {
+    detail::record(detail::kind_name(kind), detail::dtype_name<Scalar>(), n, value, bound<Scalar>(kind, n), 1.0, "-");
+    return within<Scalar>(kind, n, value);
 }
 
 /// pass against the slacked bound; records the raw value, the kind's bound, the factor and the reason.
@@ -189,16 +189,16 @@ template <typename T> bool pass(Check kind, int n, double value) {
 /// @param[in] n      size the bound scales with, as defined per kind in Check
 /// @param[in] value  measured error
 /// @param[in] slack  per-site factor on the bound, with its mandatory reason
-/// @return true when @p value is not NaN and within `bound<T>(kind, n, slack)`
+/// @return true when @p value is not NaN and within `bound<Scalar>(kind, n, slack)`
 /// @throws batchlas::invalid_argument for an empty reason, or a factor that is not both finite and \f$> 0\f$.
-template <typename T> bool pass(Check kind, int n, double value, Slack slack) {
+template <typename Scalar> bool pass(Check kind, int n, double value, Slack slack) {
     detail::check_slack(slack);
-    detail::record(detail::kind_name(kind), detail::dtype_name<T>(), n, value, bound<T>(kind, n), slack.factor, slack.reason);
-    return within<T>(kind, n, value, slack);
+    detail::record(detail::kind_name(kind), detail::dtype_name<Scalar>(), n, value, bound<Scalar>(kind, n), slack.factor, slack.reason);
+    return within<Scalar>(kind, n, value, slack);
 }
 
-/// Bound of pivot_ratio: \f$1 + 64\,u\f$ with \f$u\f$ = `eps<T>()` (32 machine epsilons), the slack of a cabs1 comparison in T.
+/// Bound of pivot_ratio: \f$1 + 64\,u\f$ with \f$u\f$ = `eps<Scalar>()` (32 machine epsilons), the slack of a cabs1 comparison in Scalar.
 /// @return the bound \f$1 + 64\,u\f$
-template <typename T> double pivot_ratio_bound() { return 1.0 + 64.0 * eps<T>(); }
+template <typename Scalar> double pivot_ratio_bound() { return 1.0 + 64.0 * eps<Scalar>(); }
 
 }  // namespace batchlas::verify

@@ -45,7 +45,7 @@ ALIASES = {
 SHARED_PREFIXES = (
     "cmake/", "CMakeLists.txt", "CMakePresets.json", "src/select/", "src/sycl/", "src/util/",
     "src/backends/", "src/kernels/", "src/verify/", "src/CMakeLists.txt", "src/ops/CMakeLists.txt",
-    "include/batchlas/util/", "include/batchlas/verify/", "include/batchlas/blas/device",
+    "include/batchlas/util/", "include/batchlas/verify/", "include/batchlas/device",
     "tests/test_utils.hh", "tests/CMakeLists.txt", "tests/cmake/",
 )
 IGNORED_PREFIXES = ("docs/", "benchmarks/", "python/", "examples/", "evaluation/", ".github/",
@@ -138,6 +138,11 @@ def tests_for(name, targets, seen=None):
 
 def test_target(stem, targets):
     stem = "verify_tests" if stem == "verify_residuals_tests" else stem
+    # An extra translation unit of another binary (tests/CMakeLists.txt BATCHLAS_TEST_SUITE_SOURCES).
+    for pair in cmake_list(open(TESTS_CMAKE, encoding="utf-8").read(), "BATCHLAS_TEST_SUITE_SOURCES"):
+        owner, _, src = pair.partition("=")
+        if src == stem + ".cc":
+            stem = owner
     return stem if stem in targets else None
 
 

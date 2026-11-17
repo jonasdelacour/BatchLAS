@@ -21,7 +21,7 @@ namespace batchlas::detail {
 std::size_t set_fill_local_budget(std::size_t bytes);
 }  // namespace batchlas::detail
 
-TEST (MatrixDenseTest, StridedConstruction) {
+TEST(MatrixDenseTest, StridedConstruction) {
     constexpr int rows = 3;
     constexpr int cols = 2;
     constexpr int batch = 2;
@@ -36,12 +36,12 @@ TEST (MatrixDenseTest, StridedConstruction) {
     EXPECT_EQ(mat.stride(), stride);
     EXPECT_EQ(mat.data().size(), stride * batch);
 
-    //Ensure that the underlying data is zero'd first:
+    // Ensure that the underlying data is zero'd first:
     for (auto v : mat.data()) {
         EXPECT_FLOAT_EQ(v, 0.0f);
     }
 
-    //Now use matrix fill function (shouldn't fill the padding areas)
+    // Now use matrix fill function (shouldn't fill the padding areas)
     mat.fill(1.0f);
     for (int k = 0; k < batch; ++k) {
         for (int j = 0; j < cols; ++j) {
@@ -71,8 +71,7 @@ TEST (MatrixDenseTest, StridedConstruction) {
     }
 }
 
-
-TEST (MatrixDenseTest, StridedIdentity) {
+TEST(MatrixDenseTest, StridedIdentity) {
     constexpr int n = 4;
     constexpr int batch = 2;
     constexpr int ld = 6;
@@ -207,7 +206,6 @@ TEST(MatrixDenseTest, StaticFactoryMethods) {
 }
 
 // Additional tests for Matrix class
-#include <complex>
 
 TEST(MatrixDenseTest, DoubleAndComplexConstruction) {
     Matrix<double, MatrixFormat::Dense> dmat(3, 2, 1);
@@ -1368,9 +1366,9 @@ TEST(MatrixDenseTest, AstypePackedBatched) {
 // Every case runs on a padded layout (ld > n, stride > ld * n) whose padding holds a poison the
 // fills must leave alone, with batch >= 3 so per-item seeding is visible.
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct FillConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 
@@ -1763,7 +1761,7 @@ TEST(FillDiagonalVector, OffsetsAtOrPastTheEdge) {
 // recovered from the permutation; the bug made them a linear function of fill_random_spd's column 0.
 TEST(SeededFills, IndependentStreams) {
     constexpr int n = 256;
-    constexpr unsigned int seed = 21u;
+    constexpr unsigned seed = 21u;
     Queue ctx(Device::default_device());
     Matrix<float, MatrixFormat::Dense> piv(n, n), spd(n, n);
     piv.fill_random_pivoted(ctx, seed).wait();

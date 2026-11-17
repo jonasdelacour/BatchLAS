@@ -109,9 +109,9 @@ SKIP_PARTS = ("third_party", "thirdparty", "extern", "external", "_deps",
 # `R"delim(` with any of the C++ encoding prefixes, not preceded by an
 # identifier character, so that `FOOR"x"` is not read as a raw string.
 RAW_OPEN = re.compile(r'(?:u8|u|U|L)?R"([^()\\ \t]{0,16})\(')
-IDENT = re.compile(r'[A-Za-z0-9_]')
+IDENT = re.compile(r"[A-Za-z0-9_]")
 # A whole-line `// SPDX-License-Identifier: ...` tag is licensing, not prose.
-SPDX_LINE = re.compile(r'^\s*//\s*SPDX-License-Identifier:\s*\S')
+SPDX_LINE = re.compile(r"^\s*//\s*SPDX-License-Identifier:\s*\S")
 
 
 # --------------------------------------------------------------------------
@@ -193,7 +193,7 @@ def classify_detail(text, exempt_doc):
                 continue
 
             if state == "raw":
-                term = ')' + raw_delim + '"'
+                term = ")" + raw_delim + '"'
                 pos = line.find(term, i)
                 if pos < 0:
                     if line[i:].strip():

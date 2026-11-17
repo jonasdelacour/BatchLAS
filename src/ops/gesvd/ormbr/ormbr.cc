@@ -10,6 +10,8 @@
 #include <src/select/vendor.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/kernels/common/larft_wy.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/lapack/gesvd.hh>
 #include <src/util/batch_mask.hh>
 
 #include <algorithm>
@@ -32,12 +34,12 @@ class OrmbrPKernel;
 // Kernel-name tag for this TU's instantiations of the shared wy:: LARFT.
 struct OrmbrPWyTag;
 
-template <typename T>
+template <typename Scalar>
 class PackPPanelKernel;
 
-template <Backend B, typename T>
-bool ormbr_q_use_cta(const MatrixView<T, MatrixFormat::Dense>& a,
-                     const MatrixView<T, MatrixFormat::Dense>& c) {
+template <Backend B, typename Scalar>
+bool ormbr_q_use_cta(const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                     const MatrixView<Scalar, MatrixFormat::Dense>& c) {
     if constexpr (!select::native_gpu_backend<B>) {
         static_cast<void>(a);
         static_cast<void>(c);
@@ -47,9 +49,9 @@ bool ormbr_q_use_cta(const MatrixView<T, MatrixFormat::Dense>& a,
     }
 }
 
-template <Backend B, typename T>
-bool ormbr_p_use_cta(const MatrixView<T, MatrixFormat::Dense>& a,
-                     const MatrixView<T, MatrixFormat::Dense>& c,
+template <Backend B, typename Scalar>
+bool ormbr_p_use_cta(const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                     const MatrixView<Scalar, MatrixFormat::Dense>& c,
                      Side side) {
     if constexpr (!select::native_gpu_backend<B>) {
         static_cast<void>(a);
@@ -65,11 +67,11 @@ bool ormbr_p_use_cta(const MatrixView<T, MatrixFormat::Dense>& a,
     }
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event ormbr_apply_p_cta(Queue& ctx,
-                        const MatrixView<T, MatrixFormat::Dense>& a,
-                        const VectorView<T>& tau,
-                        const MatrixView<T, MatrixFormat::Dense>& c,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                        const VectorView<Scalar>& tau,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& c,
                         Side side,
                         Transpose trans,
                         const Span<std::byte>& ws) {
@@ -79,15 +81,17 @@ Event ormbr_apply_p_cta(Queue& ctx,
     Span<std::byte> ws_mut(const_cast<std::byte*>(ws.data()), ws.size());
     BumpAllocator pool(ws_mut);
 
-    auto aq_buf = pool.allocate<T>(ctx, static_cast<size_t>(n) * static_cast<size_t>(n) * static_cast<size_t>(batch));
-    auto tauq_buf = pool.allocate<T>(ctx, static_cast<size_t>(n) * static_cast<size_t>(batch));
+    auto aq_buf = pool.allocate<Scalar>(ctx,
+                                        static_cast<size_t>(n) * static_cast<size_t>(n) * static_cast<size_t>(batch));
+    auto tauq_buf = pool.allocate<Scalar>(ctx, static_cast<size_t>(n) * static_cast<size_t>(batch));
 
     // Rebuilt from raw pointers: re-attach the call's mask, which ormqx_cta then honours.
     const auto mask_span = ::batchlas::detail::call_mask("ormbr", a, tau, c);
     const std::uint8_t* const mask = ::batchlas::detail::mask_ptr(mask_span);
-    const auto aq_view = MatrixView<T, MatrixFormat::Dense>(aq_buf.data(), n, n, n, static_cast<int64_t>(n) * n, batch)
+    const auto aq_view = MatrixView<Scalar, MatrixFormat::Dense>(aq_buf.data(), n, n, n, static_cast<int64_t>(n) * n,
+                                                                 batch)
                              .with_batch_mask(mask_span);
-    const auto tauq_view = VectorView<T>(tauq_buf, n, batch, 1, n).with_batch_mask(mask_span);
+    const auto tauq_view = VectorView<Scalar>(tauq_buf, n, batch, 1, n).with_batch_mask(mask_span);
 
     ctx->submit([&](sycl::handler& cgh) {
         auto A = a.kernel_view();
@@ -96,7 +100,7 @@ Event ormbr_apply_p_cta(Queue& ctx,
         const int32_t nn = n;
         const int64_t total = static_cast<int64_t>(nb) * static_cast<int64_t>(nn) * static_cast<int64_t>(nn);
 
-        cgh.parallel_for(sycl::range<1>(static_cast<size_t>(total)), [=](sycl::id<1> tid) {
+        batchlas::impl::parallel_for(cgh, sycl::range<1>(static_cast<size_t>(total)), [=](sycl::id<1> tid) {
             const int64_t idx = static_cast<int64_t>(tid[0]);
             const int32_t b = static_cast<int32_t>(idx / (static_cast<int64_t>(nn) * nn));
             const int64_t rem = idx - static_cast<int64_t>(b) * nn * nn;
@@ -104,13 +108,13 @@ Event ormbr_apply_p_cta(Queue& ctx,
             const int32_t col = static_cast<int32_t>(rem / nn);
             if (mask != nullptr && mask[b] == 0) return;  // I3
 
-            AQ(row, col, b) = T(0);
-            if (col >= 1) {
-                const int32_t i = col - 1;
-                if (row >= col + 1 && row < nn) {
-                    AQ(row, col, b) = batchlas::device::detail::conj(A(i, row, b));
-                }
-            }
+            // AQ := 0, then AQ(1:, 1:) strictly lower := A(0:, 1:)^H: P's row reflectors as Q-form columns.
+            const device::ElemAt<true> ex{row, col};
+            const auto aq = device::item(AQ, b, nn, nn);
+            device::laset(ex, device::Zero{}, device::Zero{}, aq);
+            device::lacpy<device::Part::StrictLower, Transpose::ConjTrans>(
+                ex.sub(1, 1), device::window(device::item(A, b, nn, nn), 0, 1, nn - 1, nn - 1),
+                device::window(aq, 1, 1, nn - 1, nn - 1));
         });
     });
 
@@ -121,49 +125,45 @@ Event ormbr_apply_p_cta(Queue& ctx,
         const int32_t nn = n;
         const int64_t total = static_cast<int64_t>(nb) * static_cast<int64_t>(nn);
 
-        cgh.parallel_for(sycl::range<1>(static_cast<size_t>(total)), [=](sycl::id<1> tid) {
+        batchlas::impl::parallel_for(cgh, sycl::range<1>(static_cast<size_t>(total)), [=](sycl::id<1> tid) {
             const int64_t idx = static_cast<int64_t>(tid[0]);
             const int32_t b = static_cast<int32_t>(idx / nn);
             const int32_t j = static_cast<int32_t>(idx - static_cast<int64_t>(b) * nn);
             if (mask != nullptr && mask[b] == 0) return;  // I3
-
-            if (j == 0) {
-                TAUQ(j, b) = T(0);
-            } else {
-                TAUQ(j, b) = (j - 1 < (nn - 1)) ? TAU(j - 1, b) : T(0);
-            }
+            const auto tauq = device::item(TAUQ, b, nn);
+            device::copy(device::Grid1D<true>{j}, device::shifted(device::item(TAU, b, nn - 1), 1, nn), tauq);
         });
     });
 
-    return ormqx_cta<B, T>(ctx,
-                           aq_view,
-                           tauq_view,
-                           c,
-                           Uplo::Upper,
-                           side,
-                           trans,
-                           n,
-                           Span<std::byte>(),
-                           1);
+    return ormqx_cta<B, Scalar>(ctx,
+                                aq_view,
+                                tauq_view,
+                                c,
+                                Uplo::Upper,
+                                side,
+                                trans,
+                                n,
+                                Span<std::byte>(),
+                                1);
 }
 
-template <typename T>
+template <typename Scalar>
 size_t ormbr_p_cta_buffer_size(Queue& ctx,
-                               const MatrixView<T, MatrixFormat::Dense>& a) {
+                               const MatrixView<Scalar, MatrixFormat::Dense>& a) {
     const size_t n = static_cast<size_t>(a.rows());
     const size_t batch = static_cast<size_t>(a.batch_size());
     size_t size = 0;
-    size += BumpAllocator::allocation_size<T>(ctx, n * n * batch);
-    size += BumpAllocator::allocation_size<T>(ctx, n * batch);
+    size += BumpAllocator::allocation_size<Scalar>(ctx, n * n * batch);
+    size += BumpAllocator::allocation_size<Scalar>(ctx, n * batch);
     return size;
 }
 
-template <typename T>
+template <typename Scalar>
 sycl::event pack_p_panel_batched(Queue& q,
-                                 T* v_out,
+                                 Scalar* v_out,
                                  int ld_v_out,
                                  int stride_v_out,
-                                 const MatrixView<T, MatrixFormat::Dense>& a,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& a,
                                  int i0,
                                  int ib,
                                  int nq,
@@ -171,11 +171,11 @@ sycl::event pack_p_panel_batched(Queue& q,
     const int m = std::max(0, nq - i0 - 1);
     const int ld_a = a.ld();
     const int stride_a = a.stride();
-    const T* a_ptr = a.data_ptr();
+    const Scalar* a_ptr = a.data_ptr();
     const int batch = a.batch_size();
 
     return q->submit([&](sycl::handler& h) {
-        h.parallel_for<PackPPanelKernel<T>>(sycl::range<3>(static_cast<size_t>(batch),
+        batchlas::impl::parallel_for<PackPPanelKernel<Scalar>>(h, sycl::range<3>(static_cast<size_t>(batch),
                                                            static_cast<size_t>(m),
                                                            static_cast<size_t>(ib)),
                                             [=](sycl::id<3> idx) {
@@ -183,15 +183,16 @@ sycl::event pack_p_panel_batched(Queue& q,
                                                 const int r = static_cast<int>(idx[1]);
                                                 const int c = static_cast<int>(idx[2]);
                                                 if (mask != nullptr && mask[b] == 0) return;  // I3
-                                                T val = T(0);
-                                                if (r == c) {
-                                                    val = T(1);
-                                                } else if (r > c) {
-                                                    const int row = i0 + c;
-                                                    const int col = i0 + 1 + r;
-                                                    val = batchlas::device::detail::conj(a_ptr[static_cast<std::ptrdiff_t>(b) * stride_a + row + col * ld_a]);
-                                                }
-                                                v_out[static_cast<std::ptrdiff_t>(b) * stride_v_out + r + c * ld_v_out] = val;
+                                                // V := unit lower part of A(i0:, i0+1:)^H (row reflectors as columns).
+                                                const device::ElemAt<true> ex{r, c};
+                                                const auto ap = device::mat(a_ptr + static_cast<std::ptrdiff_t>(b) * stride_a,
+                                                                        i0 + ib, i0 + 1 + m, ld_a);
+                                                const auto v = device::mat(v_out + static_cast<std::ptrdiff_t>(b) * stride_v_out,
+                                                                       m, ib, ld_v_out);
+                                                // One tag per laset call: see set_identity in gesvd_blocked.cc (complex<double> stack).
+                                                if (r > c) device::lacpy<device::Part::StrictLower, Transpose::ConjTrans>(ex, ap.sub(i0, i0 + 1, ib, m), v);
+                                                else if (r == c) device::laset(ex, device::One{}, device::One{}, v);
+                                                else device::laset(ex, device::Zero{}, device::Zero{}, v);
                                             });
     });
 }
@@ -204,10 +205,10 @@ inline int ormbr_resolved_nb(int32_t block_size) {
     return std::max<int>(1, block_size);
 }
 
-template <Backend B, typename T, int NB>
+template <Backend B, typename Scalar, int NB>
 size_t ormbr_p_blocked_buffer_size_impl(Queue& ctx,
-                                        const MatrixView<T, MatrixFormat::Dense>& a,
-                                        const MatrixView<T, MatrixFormat::Dense>& c,
+                                        const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                                        const MatrixView<Scalar, MatrixFormat::Dense>& c,
                                         Side side,
                                         int32_t block_size) {
     const int nq = std::max<int>(0, static_cast<int>(a.cols()) - 1);
@@ -222,22 +223,22 @@ size_t ormbr_p_blocked_buffer_size_impl(Queue& ctx,
     const int nb = std::min(ormbr_resolved_nb<NB>(block_size), k);
 
     size_t size = 0;
-    size += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(nq) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
-    size += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(nb) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
+    size += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(nq) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
+    size += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(nb) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
 
     const size_t w_elems = (side == Side::Left)
                                ? static_cast<size_t>(nb) * static_cast<size_t>(n)
                                : static_cast<size_t>(m) * static_cast<size_t>(nb);
-    size += 2 * BumpAllocator::allocation_size<T>(ctx, w_elems * static_cast<size_t>(batch));
+    size += 2 * BumpAllocator::allocation_size<Scalar>(ctx, w_elems * static_cast<size_t>(batch));
 
     return size;
 }
 
-template <Backend B, typename T, int NB>
+template <Backend B, typename Scalar, int NB>
 Event ormbr_apply_p_blocked_impl(Queue& ctx,
-                                 const MatrixView<T, MatrixFormat::Dense>& a,
-                                 const VectorView<T>& tau,
-                                 const MatrixView<T, MatrixFormat::Dense>& c,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                                 const VectorView<Scalar>& tau,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& c,
                                  Side side,
                                  Transpose trans,
                                  const Span<std::byte>& ws,
@@ -256,21 +257,23 @@ Event ormbr_apply_p_blocked_impl(Queue& ctx,
 
     Span<std::byte> ws_mut(const_cast<std::byte*>(ws.data()), ws.size());
     BumpAllocator pool(ws_mut);
-    auto Vbuf = pool.allocate<T>(ctx, static_cast<size_t>(nq - 1) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
-    auto Tbuf = pool.allocate<T>(ctx, static_cast<size_t>(nb) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
+    auto Vbuf = pool.allocate<Scalar>(ctx, static_cast<size_t>(nq - 1) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
+    auto Tbuf = pool.allocate<Scalar>(ctx,
+                                      static_cast<size_t>(nb) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
 
     const size_t w_elems = (side == Side::Left)
                                ? static_cast<size_t>(nb) * static_cast<size_t>(nC)
                                : static_cast<size_t>(mC) * static_cast<size_t>(nb);
-    auto W1buf = pool.allocate<T>(ctx, w_elems * static_cast<size_t>(batch));
-    auto W2buf = pool.allocate<T>(ctx, w_elems * static_cast<size_t>(batch));
+    auto W1buf = pool.allocate<Scalar>(ctx, w_elems * static_cast<size_t>(batch));
+    auto W2buf = pool.allocate<Scalar>(ctx, w_elems * static_cast<size_t>(batch));
 
     // Workspace views are rebuilt from raw pointers: each re-attaches the call's mask for gemm.
     const auto mask_span = ::batchlas::detail::call_mask("ormbr", a, tau, c);
     const std::uint8_t* const mask = ::batchlas::detail::mask_ptr(mask_span);
-    const auto Vmat = MatrixView<T, MatrixFormat::Dense>(Vbuf.data(), nq - 1, nb, nq - 1,
-                                                         static_cast<int64_t>(nq - 1) * nb, batch).with_batch_mask(mask_span);
-    const auto Tmat = MatrixView<T, MatrixFormat::Dense>(Tbuf.data(), nb, nb, nb, static_cast<int64_t>(nb) * nb, batch)
+    const auto Vmat = MatrixView<Scalar, MatrixFormat::Dense>(Vbuf.data(), nq - 1, nb, nq - 1,
+                                                              static_cast<int64_t>(nq - 1) * nb, batch).with_batch_mask(mask_span);
+    const auto Tmat = MatrixView<Scalar, MatrixFormat::Dense>(Tbuf.data(), nb, nb, nb, static_cast<int64_t>(nb) * nb,
+                                                              batch)
                           .with_batch_mask(mask_span);
 
     auto apply_block = [&](int i0) {
@@ -280,16 +283,16 @@ Event ormbr_apply_p_blocked_impl(Queue& ctx,
             return;
         }
 
-        (void)pack_p_panel_batched<T>(ctx,
-                                      Vmat.data_ptr(), Vmat.ld(), Vmat.stride(),
-                                      a, i0, ib, nq, mask);
+        (void)pack_p_panel_batched<Scalar>(ctx,
+                                           Vmat.data_ptr(), Vmat.ld(), Vmat.stride(),
+                                           a, i0, ib, nq, mask);
 
-        (void)wy::larft_forward_columnwise_batched_t<OrmbrPWyTag, T, false>(ctx,
-                                                                         Tmat.data_ptr(), Tmat.ld(), Tmat.stride(),
-                                                                         Vmat.data_ptr(), Vmat.ld(), Vmat.stride(),
-                                                                         m, ib,
-                                                                         tau.data_ptr(), tau.stride(), i0,
-                                                                         batch, mask);
+        (void)wy::larft_forward_columnwise_batched<OrmbrPWyTag, Scalar>(ctx,
+                                                                              Tmat.data_ptr(), Tmat.ld(), Tmat.stride(),
+                                                                              Vmat.data_ptr(), Vmat.ld(), Vmat.stride(),
+                                                                              m, ib,
+                                                                              tau.data_ptr(), tau.stride(), i0,
+                                                                              batch, mask);
 
         auto Ublk = Vmat({0, m}, {0, ib});
         auto Tblk = Tmat({0, ib}, {0, ib});
@@ -297,9 +300,9 @@ Event ormbr_apply_p_blocked_impl(Queue& ctx,
 
         if (side == Side::Left) {
             auto Csub = c({i0 + 1, SliceEnd()}, Slice());
-            const auto W1full = MatrixView<T, MatrixFormat::Dense>(W1buf.data(), nb, nC, nb, static_cast<int64_t>(nb) * nC, batch)
+            const auto W1full = MatrixView<Scalar, MatrixFormat::Dense>(W1buf.data(), nb, nC, nb, static_cast<int64_t>(nb) * nC, batch)
                                     .with_batch_mask(mask_span);
-            const auto W2full = MatrixView<T, MatrixFormat::Dense>(W2buf.data(), nb, nC, nb, static_cast<int64_t>(nb) * nC, batch)
+            const auto W2full = MatrixView<Scalar, MatrixFormat::Dense>(W2buf.data(), nb, nC, nb, static_cast<int64_t>(nb) * nC, batch)
                                     .with_batch_mask(mask_span);
             auto W1 = W1full({0, ib}, Slice());
             auto W2 = W2full({0, ib}, Slice());
@@ -308,23 +311,23 @@ Event ormbr_apply_p_blocked_impl(Queue& ctx,
             // is already ordered after this one and the Event carries nothing the caller needs.
             (void)gemm<B>(ctx, Ublk, Csub, W1, {.transA = Transpose::ConjTrans});
             (void)gemm<B>(ctx, Tblk, W1, W2, {.transA = t_eff});
-            (void)gemm<B>(ctx, Ublk, W2, Csub, {.alpha = T(-1), .beta = T(1)});
+            (void)gemm<B>(ctx, Ublk, W2, Csub, {.alpha = Scalar(-1), .beta = Scalar(1)});
         } else {
             auto Csub = c(Slice(), {i0 + 1, SliceEnd()});
-            const auto W1full = MatrixView<T, MatrixFormat::Dense>(W1buf.data(), mC, nb, mC, static_cast<int64_t>(mC) * nb, batch)
+            const auto W1full = MatrixView<Scalar, MatrixFormat::Dense>(W1buf.data(), mC, nb, mC, static_cast<int64_t>(mC) * nb, batch)
                                     .with_batch_mask(mask_span);
-            const auto W2full = MatrixView<T, MatrixFormat::Dense>(W2buf.data(), mC, nb, mC, static_cast<int64_t>(mC) * nb, batch)
+            const auto W2full = MatrixView<Scalar, MatrixFormat::Dense>(W2buf.data(), mC, nb, mC, static_cast<int64_t>(mC) * nb, batch)
                                     .with_batch_mask(mask_span);
             auto W1 = W1full(Slice(), {0, ib});
             auto W2 = W2full(Slice(), {0, ib});
 
-            (void)gemm<B>(ctx, Csub, Ublk, W1, GemmOptions<T>{});
+            (void)gemm<B>(ctx, Csub, Ublk, W1, GemmOptions<Scalar>{});
             (void)gemm<B>(ctx, W1, Tblk, W2, {.transB = t_eff});
             (void)gemm<B>(ctx,
                     W2,
                     Ublk,
                     Csub,
-                    {.alpha = T(-1), .beta = T(1), .transB = Transpose::ConjTrans});
+                    {.alpha = Scalar(-1), .beta = Scalar(1), .transB = Transpose::ConjTrans});
         }
     };
 
@@ -341,10 +344,10 @@ Event ormbr_apply_p_blocked_impl(Queue& ctx,
     return ctx.get_event();
 }
 
-template <typename T>
-inline void validate_ormbr_dims(const MatrixView<T, MatrixFormat::Dense>& a,
-                                const VectorView<T>& tau,
-                                const MatrixView<T, MatrixFormat::Dense>& c,
+template <typename Scalar>
+inline void validate_ormbr_dims(const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                                const VectorView<Scalar>& tau,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& c,
                                 char vect,
                                 Side side) {
     if (a.batch_size() != c.batch_size() || tau.batch_size() != a.batch_size()) {
@@ -378,13 +381,13 @@ inline void validate_ormbr_dims(const MatrixView<T, MatrixFormat::Dense>& a,
     }
 }
 
-} // namespace
+}  // namespace
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event ormbr(Queue& ctx,
-            const MatrixView<T, MatrixFormat::Dense>& a_in,
-            const VectorView<T>& tau_in,
-            const MatrixView<T, MatrixFormat::Dense>& c_in,
+            const MatrixView<Scalar, MatrixFormat::Dense>& a_in,
+            const VectorView<Scalar>& tau_in,
+            const MatrixView<Scalar, MatrixFormat::Dense>& c_in,
             char vect,
             Side side,
             Transpose trans,
@@ -404,52 +407,52 @@ Event ormbr(Queue& ctx,
     const char v = upper_ascii(vect);
     if (v == 'Q') {
         const size_t tau_elems = tau.data().size();
-        Span<T> tau_span(const_cast<T*>(tau.data_ptr()), tau_elems);
-        if (ormbr_q_use_cta<B, T>(a, c)) {
-            return ormqx_cta<B, T>(ctx,
-                                   a,
-                                   tau,
-                                   c,
-                                   Uplo::Upper,
-                                   side,
-                                   trans,
-                                   static_cast<int32_t>(a.rows()),
-                                   ws);
+        Span<Scalar> tau_span(const_cast<Scalar*>(tau.data_ptr()), tau_elems);
+        if (ormbr_q_use_cta<B, Scalar>(a, c)) {
+            return ormqx_cta<B, Scalar>(ctx,
+                                        a,
+                                        tau,
+                                        c,
+                                        Uplo::Upper,
+                                        side,
+                                        trans,
+                                        static_cast<int32_t>(a.rows()),
+                                        ws);
         }
         Span<std::byte> ws_mut(const_cast<std::byte*>(ws.data()), ws.size());
-        return ormqr_blocked<B, T>(ctx, a, c, side, trans, tau_span, ws_mut, block_size);
+        return ormqr_blocked<B, Scalar>(ctx, a, c, side, trans, tau_span, ws_mut, block_size);
     }
 
-    if constexpr (detail::is_complex<T>::value) {
+    if constexpr (detail::is_complex<Scalar>::value) {
         if (trans == Transpose::Trans) {
             throw batchlas::unsupported("ormbr: Trans not supported for complex 'P'; use ConjTrans");
         }
     }
 
-    if (ormbr_p_use_cta<B, T>(a, c, side)) {
-        return ormbr_apply_p_cta<B, T>(ctx, a, tau, c, side, trans, ws);
+    if (ormbr_p_use_cta<B, Scalar>(a, c, side)) {
+        return ormbr_apply_p_cta<B, Scalar>(ctx, a, tau, c, side, trans, ws);
     }
 
     const int nb = std::max<int>(1, block_size);
     switch (nb) {
         case 16:
-            return ormbr_apply_p_blocked_impl<B, T, 16>(ctx, a, tau, c, side, trans, ws, block_size);
+            return ormbr_apply_p_blocked_impl<B, Scalar, 16>(ctx, a, tau, c, side, trans, ws, block_size);
         case 32:
-            return ormbr_apply_p_blocked_impl<B, T, 32>(ctx, a, tau, c, side, trans, ws, block_size);
+            return ormbr_apply_p_blocked_impl<B, Scalar, 32>(ctx, a, tau, c, side, trans, ws, block_size);
         case 64:
-            return ormbr_apply_p_blocked_impl<B, T, 64>(ctx, a, tau, c, side, trans, ws, block_size);
+            return ormbr_apply_p_blocked_impl<B, Scalar, 64>(ctx, a, tau, c, side, trans, ws, block_size);
         case 128:
-            return ormbr_apply_p_blocked_impl<B, T, 128>(ctx, a, tau, c, side, trans, ws, block_size);
+            return ormbr_apply_p_blocked_impl<B, Scalar, 128>(ctx, a, tau, c, side, trans, ws, block_size);
         default:
-            return ormbr_apply_p_blocked_impl<B, T, -1>(ctx, a, tau, c, side, trans, ws, block_size);
+            return ormbr_apply_p_blocked_impl<B, Scalar, -1>(ctx, a, tau, c, side, trans, ws, block_size);
     }
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t ormbr_buffer_size(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& a,
-                         const VectorView<T>& tau,
-                         const MatrixView<T, MatrixFormat::Dense>& c,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                         const VectorView<Scalar>& tau,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& c,
                          char vect,
                          Side side,
                          Transpose trans,
@@ -458,36 +461,36 @@ size_t ormbr_buffer_size(Queue& ctx,
 
     const char v = upper_ascii(vect);
     if (v == 'Q') {
-        if (ormbr_q_use_cta<B, T>(a, c)) {
+        if (ormbr_q_use_cta<B, Scalar>(a, c)) {
             return 0;
         }
         const size_t tau_elems = tau.data().size();
-        Span<T> tau_span(const_cast<T*>(tau.data_ptr()), tau_elems);
-        return ormqr_blocked_buffer_size<B, T>(ctx, a, c, side, trans, tau_span, block_size);
+        Span<Scalar> tau_span(const_cast<Scalar*>(tau.data_ptr()), tau_elems);
+        return ormqr_blocked_buffer_size<B, Scalar>(ctx, a, c, side, trans, tau_span, block_size);
     }
 
-    if constexpr (detail::is_complex<T>::value) {
+    if constexpr (detail::is_complex<Scalar>::value) {
         if (trans == Transpose::Trans) {
             throw batchlas::unsupported("ormbr_buffer_size: Trans not supported for complex 'P'; use ConjTrans");
         }
     }
 
-    if (ormbr_p_use_cta<B, T>(a, c, side)) {
-        return ormbr_p_cta_buffer_size<T>(ctx, a);
+    if (ormbr_p_use_cta<B, Scalar>(a, c, side)) {
+        return ormbr_p_cta_buffer_size<Scalar>(ctx, a);
     }
 
     const int nb = std::max<int>(1, block_size);
     switch (nb) {
         case 16:
-            return ormbr_p_blocked_buffer_size_impl<B, T, 16>(ctx, a, c, side, block_size);
+            return ormbr_p_blocked_buffer_size_impl<B, Scalar, 16>(ctx, a, c, side, block_size);
         case 32:
-            return ormbr_p_blocked_buffer_size_impl<B, T, 32>(ctx, a, c, side, block_size);
+            return ormbr_p_blocked_buffer_size_impl<B, Scalar, 32>(ctx, a, c, side, block_size);
         case 64:
-            return ormbr_p_blocked_buffer_size_impl<B, T, 64>(ctx, a, c, side, block_size);
+            return ormbr_p_blocked_buffer_size_impl<B, Scalar, 64>(ctx, a, c, side, block_size);
         case 128:
-            return ormbr_p_blocked_buffer_size_impl<B, T, 128>(ctx, a, c, side, block_size);
+            return ormbr_p_blocked_buffer_size_impl<B, Scalar, 128>(ctx, a, c, side, block_size);
         default:
-            return ormbr_p_blocked_buffer_size_impl<B, T, -1>(ctx, a, c, side, block_size);
+            return ormbr_p_blocked_buffer_size_impl<B, Scalar, -1>(ctx, a, c, side, block_size);
     }
 }
 
@@ -518,4 +521,4 @@ BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(ORMBR_INSTANTIATE)
 
 #undef ORMBR_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

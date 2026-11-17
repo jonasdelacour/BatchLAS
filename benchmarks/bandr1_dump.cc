@@ -63,7 +63,7 @@ inline void set_env(const char* key, const std::string& value) {
     batchlas::detail::reload_settings();
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 int run_one(const std::string& dump_dir,
             int n,
             int kd,
@@ -92,22 +92,22 @@ int run_one(const std::string& dump_dir,
 
     auto q = std::make_shared<Queue>(device.c_str(), /*in_order=*/in_order);
 
-    Matrix<T, MatrixFormat::Dense> A0 =
-        Matrix<T, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, /*batch=*/1, /*seed=*/seed);
+    Matrix<Scalar, MatrixFormat::Dense> A0 =
+        Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, /*batch=*/1, /*seed=*/seed);
 
     // Enforce banded input.
     for (int j = 0; j < n; ++j) {
         for (int i = 0; i < n; ++i) {
             if (std::abs(i - j) > kd) {
-                A0(i, j, 0) = T(0);
+                A0(i, j, 0) = Scalar(0);
             }
         }
     }
 
-    auto AB = Matrix<T, MatrixFormat::Dense>::Zeros(kd + 1, n, batch);
+    auto AB = Matrix<Scalar, MatrixFormat::Dense>::Zeros(kd + 1, n, batch);
     {
-        Matrix<T, MatrixFormat::Dense> AB0(kd + 1, n, /*batch=*/1);
-        fill_lower_band_from_dense<T>(A0, AB0, n, kd);
+        Matrix<Scalar, MatrixFormat::Dense> AB0(kd + 1, n, /*batch=*/1);
+        fill_lower_band_from_dense<Scalar>(A0, AB0, n, kd);
         for (int b = 0; b < batch; ++b) {
             for (int j = 0; j < n; ++j) {
                 for (int r = 0; r <= kd; ++r) {
@@ -117,10 +117,10 @@ int run_one(const std::string& dump_dir,
         }
     }
 
-    using Real = typename base_type<T>::type;
+    using Real = typename base_type<Scalar>::type;
     auto dvec = Vector<Real>::zeros(n, batch);
     auto e = Vector<Real>::zeros(n > 0 ? n - 1 : 0, batch);
-    auto tau = Vector<T>::zeros(n > 0 ? n - 1 : 0, batch);
+    auto tau = Vector<Scalar>::zeros(n > 0 ? n - 1 : 0, batch);
 
     SytrdBandReductionParams params;
     params.block_size_seq = {block_size};
@@ -132,17 +132,17 @@ int run_one(const std::string& dump_dir,
                                                                    AB,
                                                                    VectorView<Real>(dvec),
                                                                    VectorView<Real>(e),
-                                                                   VectorView<T>(tau),
+                                                                   VectorView<Scalar>(tau),
                                                                    Uplo::Lower,
                                                                    kd,
                                                                    params);
     UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
-    sytrd_band_reduction(*q, AB, VectorView<Real>(dvec), VectorView<Real>(e), VectorView<T>(tau), Uplo::Lower, kd, ws.to_span(), params).wait();
+    sytrd_band_reduction(*q, AB, VectorView<Real>(dvec), VectorView<Real>(e), VectorView<Scalar>(tau), Uplo::Lower, kd, ws.to_span(), params).wait();
 
     return 0;
 }
 
-} // namespace
+}  // namespace
 
 int main(int argc, char** argv) {
 #if !BATCHLAS_HAS_CUDA_BACKEND

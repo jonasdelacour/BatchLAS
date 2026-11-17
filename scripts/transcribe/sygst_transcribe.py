@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Append a `transcribed` run to the sygst ledgers from the measured sm_89 float/cfloat rows of a table
 generated from the ledger (no timing): double <- float and cdouble <- cfloat on sm_89; all four dtypes on
 sm_120 from the matching sm_89 measured dtype; and, for sm_89 float/cfloat, the grid cells the deep run

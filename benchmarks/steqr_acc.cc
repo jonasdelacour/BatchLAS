@@ -87,12 +87,12 @@ void run_steqr(miniacc::State& state) {
     }
 }
 
-} // namespace
-
 template <typename Real, Backend B>
-static void ACC_STEQR(miniacc::State& state) {
+void ACC_STEQR(miniacc::State& state) {
     run_steqr<Real, B>(state);
 }
+
+}  // namespace
 
 template <typename Benchmark>
 void EigensolverSizesNetlib(Benchmark* b) {
@@ -101,4 +101,4 @@ void EigensolverSizesNetlib(Benchmark* b) {
 
 BATCHLAS_REGISTER_ACCURACY(ACC_STEQR, EigensolverSizes)
 
-MINI_ACC_MAIN()
+MINI_ACC_MAIN();

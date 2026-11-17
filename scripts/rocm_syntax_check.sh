@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Syntax-check the three ROCm vendor TUs, which this machine never compiles.
 #

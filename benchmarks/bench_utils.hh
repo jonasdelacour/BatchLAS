@@ -60,9 +60,9 @@
 
 // Copies the lower band of batch item 0 of the dense n x n A into AB, which is (kd+1) x n:
 // AB(r,j) = A(j+r, j), and rows past the matrix edge are zeroed.
-template <typename T>
-inline void fill_lower_band_from_dense(const batchlas::MatrixView<T, batchlas::MatrixFormat::Dense>& A,
-                                       batchlas::MatrixView<T, batchlas::MatrixFormat::Dense> AB,
+template <typename Scalar>
+inline void fill_lower_band_from_dense(const batchlas::MatrixView<Scalar, batchlas::MatrixFormat::Dense>& A,
+                                       batchlas::MatrixView<Scalar, batchlas::MatrixFormat::Dense> AB,
                                        int n,
                                        int kd) {
     for (int j = 0; j < n; ++j) {
@@ -71,7 +71,7 @@ inline void fill_lower_band_from_dense(const batchlas::MatrixView<T, batchlas::M
             AB(r, j, 0) = A(j + r, j, 0);
         }
         for (int r = rmax + 1; r <= kd; ++r) {
-            AB(r, j, 0) = T(0);
+            AB(r, j, 0) = Scalar(0);
         }
     }
 }

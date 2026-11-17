@@ -27,10 +27,8 @@ inline void SytrdSb2stBenchSizes(Benchmark* b) {
     }
 }
 
-} // namespace
-
-template <typename T, Backend B>
-static void BM_SYTRD_SB2ST(minibench::State& state) {
+template <typename Scalar, Backend B>
+void BM_SYTRD_SB2ST(minibench::State& state) {
 #if BATCHLAS_HAS_CUDA_BACKEND
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
@@ -42,13 +40,13 @@ static void BM_SYTRD_SB2ST(minibench::State& state) {
     constexpr int ib = 32;
 
     // Build a Hermitian/symmetric band input once.
-    auto A0 = Matrix<T>::Random(n, n, /*hermitian=*/true, /*batch=*/1, /*seed=*/2027);
+    auto A0 = Matrix<Scalar>::Random(n, n, /*hermitian=*/true, /*batch=*/1, /*seed=*/2027);
 
-    auto AB = Matrix<T, MatrixFormat::Dense>::Zeros(kd + 1, n, batch);
+    auto AB = Matrix<Scalar, MatrixFormat::Dense>::Zeros(kd + 1, n, batch);
     {
         // Fill batch 0 from A0, and replicate across batch for deterministic inputs.
-        Matrix<T, MatrixFormat::Dense> AB0(kd + 1, n, /*batch=*/1);
-        fill_lower_band_from_dense<T>(A0, AB0, static_cast<int>(n), kd);
+        Matrix<Scalar, MatrixFormat::Dense> AB0(kd + 1, n, /*batch=*/1);
+        fill_lower_band_from_dense<Scalar>(A0, AB0, static_cast<int>(n), kd);
         for (size_t b = 0; b < batch; ++b) {
             for (int j = 0; j < static_cast<int>(n); ++j) {
                 for (int r = 0; r <= kd; ++r) {
@@ -58,10 +56,10 @@ static void BM_SYTRD_SB2ST(minibench::State& state) {
         }
     }
 
-    using Real = typename base_type<T>::type;
+    using Real = typename base_type<Scalar>::type;
     auto d = Vector<Real>::zeros(n, batch);
     auto e = Vector<Real>::zeros(n > 0 ? n - 1 : 0, batch);
-    auto tau = Vector<T>::zeros(n > 0 ? n - 1 : 0, batch);
+    auto tau = Vector<Scalar>::zeros(n > 0 ? n - 1 : 0, batch);
 
     auto q = std::make_shared<Queue>(Device("gpu"), B, /*in_order=*/true);
 
@@ -69,7 +67,7 @@ static void BM_SYTRD_SB2ST(minibench::State& state) {
                                                          AB,
                                                          VectorView<Real>(d),
                                                          VectorView<Real>(e),
-                                                         VectorView<T>(tau),
+                                                         VectorView<Scalar>(tau),
                                                          uplo,
                                                          kd,
                                                          ib);
@@ -95,8 +93,8 @@ static void BM_SYTRD_SB2ST(minibench::State& state) {
 #endif
 }
 
-template <typename T, Backend B>
-static void BM_SYTRD_BAND_REDUCTION(minibench::State& state) {
+template <typename Scalar, Backend B>
+void BM_SYTRD_BAND_REDUCTION(minibench::State& state) {
 #if BATCHLAS_HAS_CUDA_BACKEND
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
@@ -107,12 +105,12 @@ static void BM_SYTRD_BAND_REDUCTION(minibench::State& state) {
     constexpr int ib = 32;
 
     // Build a Hermitian/symmetric band input once.
-    auto A0 = Matrix<T>::Random(n, n, /*hermitian=*/true, /*batch=*/1, /*seed=*/2028);
+    auto A0 = Matrix<Scalar>::Random(n, n, /*hermitian=*/true, /*batch=*/1, /*seed=*/2028);
 
-    auto AB = Matrix<T, MatrixFormat::Dense>::Zeros(kd + 1, n, batch);
+    auto AB = Matrix<Scalar, MatrixFormat::Dense>::Zeros(kd + 1, n, batch);
     {
-        Matrix<T, MatrixFormat::Dense> AB0(kd + 1, n, /*batch=*/1);
-        fill_lower_band_from_dense<T>(A0, AB0, static_cast<int>(n), kd);
+        Matrix<Scalar, MatrixFormat::Dense> AB0(kd + 1, n, /*batch=*/1);
+        fill_lower_band_from_dense<Scalar>(A0, AB0, static_cast<int>(n), kd);
         for (size_t b = 0; b < batch; ++b) {
             for (int j = 0; j < static_cast<int>(n); ++j) {
                 for (int r = 0; r <= kd; ++r) {
@@ -122,10 +120,10 @@ static void BM_SYTRD_BAND_REDUCTION(minibench::State& state) {
         }
     }
 
-    using Real = typename base_type<T>::type;
+    using Real = typename base_type<Scalar>::type;
     auto d = Vector<Real>::zeros(n, batch);
     auto e = Vector<Real>::zeros(n > 0 ? n - 1 : 0, batch);
-    auto tau = Vector<T>::zeros(n > 0 ? n - 1 : 0, batch);
+    auto tau = Vector<Scalar>::zeros(n > 0 ? n - 1 : 0, batch);
 
     auto q = std::make_shared<Queue>(Device("gpu"), B, /*in_order=*/true);
 
@@ -133,7 +131,7 @@ static void BM_SYTRD_BAND_REDUCTION(minibench::State& state) {
                                                                    AB,
                                                                    VectorView<Real>(d),
                                                                    VectorView<Real>(e),
-                                                                   VectorView<T>(tau),
+                                                                   VectorView<Scalar>(tau),
                                                                    uplo,
                                                                    kd,
                                                                    ib);
@@ -158,6 +156,8 @@ static void BM_SYTRD_BAND_REDUCTION(minibench::State& state) {
     (void)state;
 #endif
 }
+
+}  // namespace
 
 BATCHLAS_BENCH_CUDA_ALL_TYPES(BM_SYTRD_SB2ST, SytrdSb2stBenchSizes);
 BATCHLAS_BENCH_CUDA_ALL_TYPES(BM_SYTRD_BAND_REDUCTION, SytrdSb2stBenchSizes);

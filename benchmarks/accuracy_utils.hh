@@ -132,4 +132,4 @@ inline UnifiedVector<typename base_type<Real>::type> orthogonality_residuals(
     return norm(q, gram_minus_i, NormType::Frobenius);
 }
 
-} // namespace batchlas::accuracy
+}  // namespace batchlas::accuracy

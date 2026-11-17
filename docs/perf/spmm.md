@@ -11,7 +11,7 @@ DRAM roof), in-order SYCL queue.
 
 | spelling | implementation | `can_run` (correctness only) |
 |---|---|---|
-| `direct` | `sycl_spmm::spmm_native_csr` | CSR; the body for this `transA` compiled; `one_spmm()` shape checks; no heterogeneous B or C; batch \f$\ge 1\f$ |
+| `direct` | `ops::spmm::spmm_native_csr` | CSR; the body for this `transA` compiled; `one_spmm()` shape checks; no heterogeneous B or C; batch \f$\ge 1\f$ |
 | `vendor` | `backend::spmm_vendor` (cuSPARSE, rocSPARSE, netlib) | a sparse vendor library, no heterogeneous B or C, not netlib with any transpose, not CUDA complex `transB = ConjTrans` with one row of B ([known-defects #17](../design/known-defects.md#defect-17-cusparse-spmm-shapes-refused-in-can_run-and-the-alignment-waiver)) |
 
 Both refuse a masked batch. Selection takes the first runnable entry of the nearest row of
@@ -44,11 +44,11 @@ The `direct` terms in `src/ops/spmm/spmm.cc` are correctness gates. `one_spmm()`
 positive `ld`s and an offset stride of at least `m + 1`. An empty batch returns before selection. Per-item `nnz`
 variation is handled through the row offsets, so a CSR view is never heterogeneous.
 
-* **No `is_gpu` gate.** No body uses local memory, group or sub-group collectives; the vendor-free build runs
+- **No `is_gpu` gate.** No body uses local memory, group or sub-group collectives; the vendor-free build runs
   `direct` on the host backend.
-* **No transpose refusal.** All nine `(transA, transB)` spellings are served. `transB = Trans` cuts the gather's
+- **No transpose refusal.** All nine `(transA, transB)` spellings are served. `transB = Trans` cuts the gather's
   `op(B)` traffic from `nrhs` 32-byte sectors per nonzero to `ceil(nrhs*sizeof(T)/32)`.
-* **No `nnz` key.** `MatrixView::nnz()` is the batch-maximum capacity; the per-item count is in device memory, and
+- **No `nnz` key.** `MatrixView::nnz()` is the batch-maximum capacity; the per-item count is in device memory, and
   selection must not read device memory.
 
 `direct` needs no workspace; `spmm_buffer_size` runs the same choice, so a `direct` call never asks the vendor sizer.
@@ -59,17 +59,17 @@ variation is handled through the row offsets, so a CSR view is never heterogeneo
 clock. Named cells `(m, nnz/row, nrhs, batch)`: **L** = (1024, 3, 2, 512) lanczos, **M** = (1024, 16, 12, 512) and
 **S** = (2048, 16, 25, 128) LOBPCG.
 
-* **No event timing.** It costs about 0.36 ms per call; cell L's ideal-traffic roof is 22.9 µs.
-* **The vendor's per-call host chain is timed** (`setStream`, the host walk of row offsets, the buffer-size
+- **No event timing.** It costs about 0.36 ms per call; cell L's ideal-traffic roof is 22.9 µs.
+- **The vendor's per-call host chain is timed** (`setStream`, the host walk of row offsets, the buffer-size
   re-query, the `BumpAllocator` carve). Descriptors are created on the first, untimed call. `nsys` shows both arms
   spend \f$> 93\%\f$ of wall time in GPU kernels, so the win is a kernel result.
-* **Warm-up is wall-clock.** The SM clock idles at 210 MHz; a call count cannot price the ramp. Default
+- **Warm-up is wall-clock.** The SM clock idles at 210 MHz; a call count cannot price the ramp. Default
   `BATCHLAS_SPMM_WARM_MS` = 400 ms per row.
-* **Check the route** from `BATCHLAS_COVERAGE_OUT` in every run. `BATCHLAS_SPMM_ROUTE=vendor` is a pin, not a control.
-* **Admission rule.** A row is admitted when either arm's rel_sd is \f$\le 0.02\f$ in both passes, **or** the two passes'
+- **Check the route** from `BATCHLAS_COVERAGE_OUT` in every run. `BATCHLAS_SPMM_ROUTE=vendor` is a pin, not a control.
+- **Admission rule.** A row is admitted when either arm's rel_sd is \f$\le 0.02\f$ in both passes, **or** the two passes'
   ratios agree within 5 %. An rel_sd-only filter deleted a reproducible loss (1.934 / 1.872) and manufactured a
   passing clause.
-* Every sweep ran twice in independent processes, one route per process. Cross-pass median spread is 0.3-0.8 %.
+- Every sweep ran twice in independent processes, one route per process. Cross-pass median spread is 0.3-0.8 %.
 
 > **Warning:** `BATCHLAS_SPMM_ROUTE=vendor` over `spmm_tests` fails 92 `Backend::NETLIB` cases: the netlib
 > transpose refusals, which the suite skips only when the pin is native.
@@ -131,15 +131,15 @@ vendor time at batch 512); the gather launches one, the transposed arm two (scal
 \f$C := \alpha\,\mathrm{op}(A)\,\mathrm{op}(B) + \beta C\f$, with `A` batched CSR (one strided slab per item) and
 `B`, `C` dense column-major.
 
-* **CSR indexing** (`src/matrix.cc`): row offsets are indexed `b*offset_stride()`, values and column indices
+- **CSR indexing** (`src/matrix.cc`): row offsets are indexed `b*offset_stride()`, values and column indices
   `b*matrix_stride()`. `A.nnz()` is a capacity, so the only legal bound on the nonzero loop is
   `row_offsets[ro+i+1]`; slots above an item's nnz are uninitialised.
-* **`beta == 0` must not read `C`.** Callers pass never-zeroed `BumpAllocator` memory. `alpha == 0` leaves `A` and
+- **`beta == 0` must not read `C`.** Callers pass never-zeroed `BumpAllocator` memory. `alpha == 0` leaves `A` and
   `B` unread but still computes `C = beta*C`.
-* **No `__restrict__`, no pointer arrays.** LOBPCG passes element-disjoint slices of one buffer.
-* **The transposed arm scatters through global atomics.** Summation order varies, so no test compares two runs
+- **No `__restrict__`, no pointer arrays.** LOBPCG passes element-disjoint slices of one buffer.
+- **The transposed arm scatters through global atomics.** Summation order varies, so no test compares two runs
   bitwise. Its FP64 instantiations require the `atomic64` aspect.
-* **`B` and `C` carry their own `ld` and batch stride.**
+- **`B` and `C` carry their own `ld` and batch stride.**
 
 ## SpMM: correctness findings
 
@@ -167,9 +167,9 @@ before multiplying. The test now poisons with an in-range column and a large fin
 `C`. `PaddingAboveNnzOutOfRangeIsNotReadTrans` keeps the out-of-range case as the range guard's only regression
 test. Rules:
 
-* A poison must reach the assertion; a defensive predicate in between makes the case vacuous.
-* Coverage rows prove that some shape resolved to a route, not that this shape ran that body. Break the body.
-* A break must be as narrow as the contract it denies.
+- A poison must reach the assertion; a defensive predicate in between makes the case vacuous.
+- Coverage rows prove that some shape resolved to a route, not that this shape ran that body. Break the body.
+- A break must be as narrow as the contract it denies.
 
 The transposed tolerance denominator is a backward-error scale (sum of `|a|*|b|`, floored at 1). A transposed case
 whose backend throws is skipped unless the pin is native. `cusparse.cc` checks no status, so a
@@ -177,18 +177,18 @@ whose backend throws is skipped unless the pin is native. `cusparse.cc` checks n
 
 ## Open debts
 
-* **The transposed scatter has no winning sm_89 row and no in-tree C++ caller.** The deep `tuned/spmm.sm_120.txt`
+- **The transposed scatter has no winning sm_89 row and no in-tree C++ caller.** The deep `tuned/spmm.sm_120.txt`
   ranks `direct` first in 1055 of its 1823 `transA=T` rows; the refusal above is sm_89 only.
-* **The sm_89 and CPU tables are transcribed, not timed.**
-* **The `cfloat` gather margin is about 3 %** (0.910-1.078 across the batch ladder). A 5 % kernel regression on
+- **The sm_89 and CPU tables are transcribed, not timed.**
+- **The `cfloat` gather margin is about 3 %** (0.910-1.078 across the batch ladder). A 5 % kernel regression on
   `complex<float>` turns admitted cells into losses, and no test notices.
-* **The `nrhs >= 16` narrowing and the scatter's `nrhs <= 2 && !cdouble` clause** become re-arguable if the key
+- **The `nrhs >= 16` narrowing and the scatter's `nrhs <= 2 && !cdouble` clause** become re-arguable if the key
   gains an honest pattern or `nnz` signal.
-* **FP64 scatter needs `atomic64`.** Without it the failure is a launch-time kernel-selection error. Untested.
-* **Coverage cannot distinguish scale from scatter**, and rows are keyed on a power-of-two `shape_class`,
+- **FP64 scatter needs `atomic64`.** Without it the failure is a launch-time kernel-selection error. Untested.
+- **Coverage cannot distinguish scale from scatter**, and rows are keyed on a power-of-two `shape_class`,
   first-writer-wins, so a CSR and a Dense `spmm` at the same extents would share a row. Do not add a format bit: it
   invalidates every stored `.routes` baseline.
-* **No `is_gpu` gate is a correctness decision**, not a measured claim about `native_cpu`: there is no CPU-queue
+- **No `is_gpu` gate is a correctness decision**, not a measured claim about `native_cpu`: there is no CPU-queue
   timing. The two 4090s share one UVM driver; a sweep on the other card inflated a cell 5.5x at a stable rel_sd.
 
 ## Raw evidence

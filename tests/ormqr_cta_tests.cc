@@ -22,7 +22,7 @@ inline bool is_missing_subgroup32_message(const std::string& msg) {
     return msg.find("subgroup size 32") != std::string::npos;
 }
 
-} // namespace
+}  // namespace
 
 #include <tests/test_support/storage.hh>
 #include <tests/test_utils.hh>
@@ -32,9 +32,9 @@ namespace ts = test_support;
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct OrmqrCtaConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 
@@ -77,7 +77,7 @@ TYPED_TEST(OrmqrCtaTest, MatchesNetlibOrmqrLeftRightTrans) {
                          A_fact,
                          tau_view,
                          C_cta,
-                         Uplo::Upper, //QR factorization
+                         Uplo::Upper, // QR factorization
                          side,
                          trans,
                          k,
@@ -110,7 +110,7 @@ TYPED_TEST(OrmqrCtaTest, MatchesNetlibOrmqrLeftRightTrans) {
         !run_case(Side::Left, Transpose::Trans) ||
         !run_case(Side::Right, Transpose::NoTrans) ||
         !run_case(Side::Right, Transpose::Trans)) {
-        GTEST_SKIP() << "Skipping ormq_cta due to runtime limitation: " << skip_reason;
+        GTEST_SKIP() << "skipping ormq_cta due to runtime limitation: " << skip_reason;
     }
 }
 
@@ -129,7 +129,7 @@ TYPED_TEST(OrmqrCtaTest, ThrowsOnNTooLarge) {
                     A,
                     VectorView<T>(tau),
                     C,
-                    Uplo::Upper, //QR factorization
+                    Uplo::Upper, // QR factorization
                     Side::Left,
                     Transpose::NoTrans,
                     /*k=*/n,

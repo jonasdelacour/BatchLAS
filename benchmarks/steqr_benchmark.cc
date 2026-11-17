@@ -7,23 +7,25 @@
 
 using namespace batchlas;
 
+namespace {
+
 // Batched STEQR benchmark
 // Args:
 //   [n, batch]
 //   [n, batch, n_sweeps, transpose]
 //   [n, batch, n_sweeps, wg_multiplier, shift_kind]
-template <typename T, Backend B>
-static void BM_STEQR(minibench::State& state) {
+template <typename Real, Backend B>
+void BM_STEQR(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const size_t n_sweeps = state.range(2) > 0 ? state.range(2) : 10;
     const size_t arg3 = state.range(3);
     const size_t arg4 = state.range(4);
-    //const int use_block_rotations = state.range(4);
+    // const int use_block_rotations = state.range(4);
     JobType jobz = JobType::EigenVectors;
     const double avg_deflations_per_eigenvalue = 2.5; // Empirical average
     const double flops_eigvals = avg_deflations_per_eigenvalue * double(n) * double(n) * 35.0/2.0; // Approximate number of flops to compute all eigenvalues.
-    const double flops_eigvects = 3 * avg_deflations_per_eigenvalue * double(n) * double(n) * double(n) - 3 * avg_deflations_per_eigenvalue * double(n) * double(n);  //Extra flops if eigvects are required.
+    const double flops_eigvects = 3 * avg_deflations_per_eigenvalue * double(n) * double(n) * double(n) - 3 * avg_deflations_per_eigenvalue * double(n) * double(n);  // Extra flops if eigvects are required.
 
     const double total_flops = (flops_eigvals + (jobz == JobType::EigenVectors ? flops_eigvects : 0)) * double(batch);
 
@@ -35,25 +37,24 @@ static void BM_STEQR(minibench::State& state) {
     const size_t wg_multiplier = use_tuned_schema ? arg3 : size_t(0);  // 0: library-tuned
     const int shift_kind = use_tuned_schema ? static_cast<int>(arg4) : 1;
 
-    SteqrParams<T> params;
+    SteqrParams<Real> params;
     params.max_sweeps = n_sweeps;
     params.cta_wg_size_multiplier = wg_multiplier;
     params.cta_shift_strategy = (shift_kind == 1) ? SteqrShiftStrategy::Wilkinson : SteqrShiftStrategy::Lapack;
-    params.cta_update_scheme = SteqrUpdateScheme::EXP;
     params.back_transform = false;
     params.block_rotations = false;
     params.transpose_working_vectors = transpose;
 
-    Vector<T> diags = Vector<T>::random(n, batch,
-                                        Stride(static_cast<int>(transpose ? 1 : n)),
-                                        Inc(static_cast<int>(transpose ? batch : 1)));
-    Vector<T> off_diags = Vector<T>::random(n - 1, batch,
-                                            Stride(static_cast<int>(transpose ? 1 : n - 1)),
-                                            Inc(static_cast<int>(transpose ? batch : 1)));
+    Vector<Real> diags = Vector<Real>::random(n, batch,
+                                              Stride(static_cast<int>(transpose ? 1 : n)),
+                                              Inc(static_cast<int>(transpose ? batch : 1)));
+    Vector<Real> off_diags = Vector<Real>::random(n - 1, batch,
+                                                  Stride(static_cast<int>(transpose ? 1 : n - 1)),
+                                                  Inc(static_cast<int>(transpose ? batch : 1)));
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    auto eigvals = Vector<T>::zeros(n, batch);
-    auto eigvects = Matrix<T>::Identity(n, batch);
-    const size_t ws_size = steqr_buffer_size<T>(*q, diags, off_diags, eigvals, jobz, params);
+    auto eigvals = Vector<Real>::zeros(n, batch);
+    auto eigvects = Matrix<Real>::Identity(n, batch);
+    const size_t ws_size = steqr_buffer_size<Real>(*q, diags, off_diags, eigvals, jobz, params);
     UnifiedVector<std::byte> ws(ws_size);
 
     state.SetKernel(q,
@@ -71,7 +72,7 @@ static void BM_STEQR(minibench::State& state) {
     state.SetMetric("T(µs)/matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 
-
+}  // namespace
 
 // Register size/batch combinations at static‑init time using macro
 

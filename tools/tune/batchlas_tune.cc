@@ -374,7 +374,6 @@ void nvml_lost(int gpu, const char* what) {
                      what, gpu);
 }
 
-
 struct Cell {
     CellKey key;
     int round = 0, gpu = 0;

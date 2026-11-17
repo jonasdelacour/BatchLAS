@@ -37,13 +37,13 @@ namespace mc = masked_contract;
 
 // Small values over 8 and |tau| <= 1.5: the reflectors need not be a factorization's for the
 // mask's bit comparison, only finite.
-template <typename T>
-void fill(T* p, std::size_t elems, std::size_t per, int salt, bool identical, double scale = 1.0) {
+template <typename Scalar>
+void fill(Scalar* p, std::size_t elems, std::size_t per, int salt, bool identical, double scale = 1.0) {
     for (std::size_t e = 0; e < elems; ++e) {
         const std::size_t item = identical ? 0 : e / per, off = e % per;
         const double re = double(int((off * 7 + item * 3 + salt) % 23) - 11) / 8 * scale;
         const double im = double(int((off * 5 + item + salt) % 13) - 6) / 8 * scale;
-        p[e] = MatrixView<T>::make(re, im);
+        p[e] = MatrixView<Scalar>::make(re, im);
     }
 }
 
@@ -64,17 +64,17 @@ std::string label(const Shape& s) {
            std::to_string(s.batch);
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct OrmqrProblem {
     Queue& q;
     Shape s;
-    Matrix<T> A, C;
-    UnifiedVector<T> tau;
+    Matrix<Scalar> A, C;
+    UnifiedVector<Scalar> tau;
 
     int nq() const { return s.side == Side::Left ? s.m : s.n; }
     OrmqrProblem(Queue& queue, const Shape& shape)
-        : q(queue), s(shape), A(test_support::padded<T>(shape.side == Side::Left ? shape.m : shape.n, shape.k, shape.batch)),
-          C(test_support::padded<T>(shape.m, shape.n, shape.batch)), tau(std::size_t(shape.k) * shape.batch) {}
+        : q(queue), s(shape), A(test_support::padded<Scalar>(shape.side == Side::Left ? shape.m : shape.n, shape.k, shape.batch)),
+          C(test_support::padded<Scalar>(shape.m, shape.n, shape.batch)), tau(std::size_t(shape.k) * shape.batch) {}
 
     mc::Case make_case() {
         mc::Case c;
@@ -90,27 +90,27 @@ struct OrmqrProblem {
             fill(tau.data(), tau.size(), std::size_t(s.k), 4, s.identical, 1.0 / 8);
         };
         c.call = [this](Span<const std::uint8_t> mask, Span<std::byte> ws) {
-            ormqr<B, T>(q, A.view().with_batch_mask(mask), C.view().with_batch_mask(mask), s.side, s.trans,
-                        tau.to_span(), ws, s.hint);
+            ormqr<B, Scalar>(q, A.view().with_batch_mask(mask), C.view().with_batch_mask(mask), s.side, s.trans,
+                             tau.to_span(), ws, s.hint);
         };
         c.buffer_size = [this](Span<const std::uint8_t> mask) {
-            return ormqr_buffer_size<B, T>(q, A.view().with_batch_mask(mask), C.view().with_batch_mask(mask), s.side,
-                                           s.trans, tau.to_span(), s.hint);
+            return ormqr_buffer_size<B, Scalar>(q, A.view().with_batch_mask(mask), C.view().with_batch_mask(mask),
+                                                s.side, s.trans, tau.to_span(), s.hint);
         };
         c.outputs = [this] { return std::vector<mc::Output>{mc::Output::matrix("C", C.view())}; };
         return c;
     }
 };
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct OrgqrProblem {
     Queue& q;
     Shape s;
-    Matrix<T> A;
-    UnifiedVector<T> tau;
+    Matrix<Scalar> A;
+    UnifiedVector<Scalar> tau;
 
     OrgqrProblem(Queue& queue, const Shape& shape)
-        : q(queue), s(shape), A(test_support::padded<T>(shape.m, shape.n, shape.batch)),
+        : q(queue), s(shape), A(test_support::padded<Scalar>(shape.m, shape.n, shape.batch)),
           tau(std::size_t(shape.n) * shape.batch) {}
 
     mc::Case make_case() {
@@ -124,10 +124,10 @@ struct OrgqrProblem {
             fill(tau.data(), tau.size(), std::size_t(s.n), 6, s.identical, 1.0 / 8);
         };
         c.call = [this](Span<const std::uint8_t> mask, Span<std::byte> ws) {
-            orgqr<B, T>(q, A.view().with_batch_mask(mask), tau.to_span(), ws);
+            orgqr<B, Scalar>(q, A.view().with_batch_mask(mask), tau.to_span(), ws);
         };
         c.buffer_size = [this](Span<const std::uint8_t> mask) {
-            return orgqr_buffer_size<B, T>(q, A.view().with_batch_mask(mask), tau.to_span());
+            return orgqr_buffer_size<B, Scalar>(q, A.view().with_batch_mask(mask), tau.to_span());
         };
         c.outputs = [this] { return std::vector<mc::Output>{mc::Output::matrix("A", A.view())}; };
         return c;
@@ -135,17 +135,17 @@ struct OrgqrProblem {
 };
 
 // ormqx_cta: square n x n A and C, k reflectors, tau at a batch stride of n + 2.
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct CtaProblem {
     Queue& q;
     Shape s;
     Uplo fact;
-    Matrix<T> A, C;
-    UnifiedVector<T> tau;
+    Matrix<Scalar> A, C;
+    UnifiedVector<Scalar> tau;
 
     CtaProblem(Queue& queue, const Shape& shape, Uplo factorization)
-        : q(queue), s(shape), fact(factorization), A(test_support::padded<T>(shape.n, shape.n, shape.batch)),
-          C(test_support::padded<T>(shape.n, shape.n, shape.batch)), tau(std::size_t(shape.n + 2) * shape.batch) {}
+        : q(queue), s(shape), fact(factorization), A(test_support::padded<Scalar>(shape.n, shape.n, shape.batch)),
+          C(test_support::padded<Scalar>(shape.n, shape.n, shape.batch)), tau(std::size_t(shape.n + 2) * shape.batch) {}
 
     mc::Case make_case() {
         mc::Case c;
@@ -158,18 +158,18 @@ struct CtaProblem {
             fill(tau.data(), tau.size(), std::size_t(s.n + 2), 5, s.identical, 1.0 / 8);
         };
         c.call = [this](Span<const std::uint8_t> mask, Span<std::byte> ws) {
-            const VectorView<T> tv(tau.data(), s.n, s.batch, 1, s.n + 2);
-            ormqx_cta<B, T>(q, A.view().with_batch_mask(mask), tv.with_batch_mask(mask), C.view().with_batch_mask(mask),
-                            fact, s.side, s.trans, s.k, ws);
+            const VectorView<Scalar> tv(tau.data(), s.n, s.batch, 1, s.n + 2);
+            ormqx_cta<B, Scalar>(q, A.view().with_batch_mask(mask), tv.with_batch_mask(mask),
+                                 C.view().with_batch_mask(mask), fact, s.side, s.trans, s.k, ws);
         };
         c.outputs = [this] { return std::vector<mc::Output>{mc::Output::matrix("C", C.view())}; };
         return c;
     }
 };
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;

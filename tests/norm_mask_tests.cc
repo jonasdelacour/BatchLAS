@@ -48,28 +48,28 @@ const char* norm_name(NormType t) {
 
 // Hermitian and diagonally dominant (so inv and the spectral solve are well posed), with a distinct
 // value per item; the pads keep the poison.
-template <typename T>
-void fill_hermitian(Matrix<T>& A, int n, int batch, bool identical) {
-    using R = typename base_type<T>::type;
-    std::fill_n(A.data_ptr(), std::size_t(A.stride()) * batch, test_support::poison<T>());
+template <typename Scalar>
+void fill_hermitian(Matrix<Scalar>& A, int n, int batch, bool identical) {
+    using R = typename base_type<Scalar>::type;
+    std::fill_n(A.data_ptr(), std::size_t(A.stride()) * batch, test_support::poison<Scalar>());
     for (int b = 0; b < batch; ++b) {
         const int item = identical ? 0 : b;
-        T* a = A.data_ptr() + std::size_t(A.stride()) * b;
+        Scalar* a = A.data_ptr() + std::size_t(A.stride()) * b;
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i) {
                 const int lo = std::min(i, j), hi = std::max(i, j);
                 const double re = double(int((lo * 7 + hi * 3 + item * 5) % 17) - 8) / 8;
                 double im = double(int((lo * 5 + hi + item * 3) % 11) - 5) / 8;
                 if (i < j) im = -im;
-                T v = i == j ? T(R(2 * n + item % 7)) : MatrixView<T>::make(re, im);
+                Scalar v = i == j ? Scalar(R(2 * n + item % 7)) : MatrixView<Scalar>::make(re, im);
                 a[i + std::size_t(A.ld()) * j] = v;
             }
     }
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;

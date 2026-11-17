@@ -22,14 +22,14 @@ namespace {
 
 namespace S = ops::sysv;
 
-template <typename T>
+template <typename Scalar>
 struct SysvProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     int n, nrhs, batch, ld;
     std::size_t sa, sb;
-    UnifiedVector<T> A0, A, B0, X;
-    UnifiedVector<T*> pA0, pA, pB0, pX;
+    UnifiedVector<Scalar> A0, A, B0, X;
+    UnifiedVector<Scalar*> pA0, pA, pB0, pX;
     MV A0v, Av, B0v, Xv;
     UnifiedVector<std::int64_t> piv;
     UnifiedVector<std::int32_t> info;
@@ -47,7 +47,7 @@ struct SysvProblem {
         (void)B0v.fill_random(q, false, 777);
         q.wait();
     }
-    std::size_t workspace() { return sysv_buffer_size<kBackend, T>(q, Av, Xv, Uplo::Lower); }
+    std::size_t workspace() { return sysv_buffer_size<kBackend, Scalar>(q, Av, Xv, Uplo::Lower); }
     void reset() {  // the solve overwrites A with the factor and B with X
         (void)MV::copy(q, Av, A0v);
         (void)MV::copy(q, Xv, B0v);
@@ -57,7 +57,7 @@ struct SysvProblem {
         for (int b = 0; b < batch; ++b) info[std::size_t(b)] = 0;
     }
     void run(Span<std::byte> ws) {
-        (void)sysv<kBackend, T>(q, Av, Xv, Uplo::Lower, piv.to_span(), ws, info.to_span());
+        (void)sysv<kBackend, Scalar>(q, Av, Xv, Uplo::Lower, piv.to_span(), ws, info.to_span());
         q.wait();
     }
     std::pair<double, int> verify() {
@@ -88,16 +88,49 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
-            "src/sycl/kernel_attrs.hh",
+            "include/batchlas/device/detail/kernel_attrs.hh",
+            "include/batchlas/device/detail/sscp_target.hh",
             "src/sycl/device_scalar.hh",
             "include/batchlas/util/group-collectives.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn_core.hh",
+            "include/batchlas/device/detail/sg_partition/backend_generic.hh",
+            "include/batchlas/device/detail/sg_partition/backend_nvptx.hh",
+            "include/batchlas/device/detail/sg_partition/backend_spirv.hh",
+            "include/batchlas/device/detail/sg_partition/backend_sscp.hh",
+            "include/batchlas/device/detail/sg_partition/sg_partition.hh",
             // cta is sytrf_kernels.cc's fused launch with sytrs cta's solve; compose's sytrf and sytrs live there too
             // common
             "src/ops/sytrf/kernels/sytrf_kernels.cc",
-            "src/ops/sytrf/sytrf_device.hh",
-            "src/ops/sytrs/sytrs_device.hh",
             "src/ops/sytrf/sytrf_native.hh",
             "src/ops/sysv/choice.hh",
+            "include/batchlas/device.hh",
+            "include/batchlas/device/arith.hh",
+            "include/batchlas/device/core.hh",
+            "include/batchlas/device/exec.hh",
+            "include/batchlas/device/grid.hh",
+            "include/batchlas/device/interop.hh",
+            "include/batchlas/device/lapack/sytrf.hh",
+            "include/batchlas/device/lapack/sytrs.hh",
+            "include/batchlas/device/lapack_aux.hh",
+            "include/batchlas/device/level1.hh",
+            "include/batchlas/device/level2.hh",
+            "include/batchlas/device/level3.hh",
+            "include/batchlas/device/level3/cfg.hh",
+            "include/batchlas/device/level3/copy_async.hh",
+            "include/batchlas/device/level3/epilogue.hh",
+            "include/batchlas/device/level3/group.hh",
+            "include/batchlas/device/level3/mma.hh",
+            "include/batchlas/device/level3/packet.hh",
+            "include/batchlas/device/level3/pipeline.hh",
+            "include/batchlas/device/level3/schedule.hh",
+            "include/batchlas/device/level3/stage.hh",
+            "include/batchlas/device/operand.hh",
+            "include/batchlas/device/reduce.hh",
+            "include/batchlas/device/scalar.hh",
+            "include/batchlas/device/tier.hh",
+            "include/batchlas/device/view.hh",
+            "include/batchlas/device/workspace.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin

@@ -344,7 +344,7 @@ struct QueueImpl : public sycl::queue{
         auto it = contexts.find(key);
         if (it != contexts.end()) return it->second;
 
-        const sycl::device sycl_dev = device_arrays.at((int)dev.type).at(dev.idx);
+        const sycl::device sycl_dev = device_arrays.at(static_cast<int>(dev.type)).at(dev.idx);
         auto [new_it, _] = contexts.emplace(key, sycl::context(sycl_dev));
         return new_it->second;
     }
@@ -368,7 +368,7 @@ struct QueueImpl : public sycl::queue{
                 sycl::device::get_devices(sycl::info::device_type::accelerator),
                 sycl::device::get_devices(sycl::info::device_type::host)};
 
-    static_assert(device_arrays.size() == (int)DeviceType::NUM_DEV_TYPES && "DeviceType enum does not match device_arrays size");
+    static_assert(device_arrays.size() == static_cast<int>(DeviceType::NUM_DEV_TYPES) && "DeviceType enum does not match device_arrays size");
 
     // Metal: batch operations into shared command buffers (acpp commits one per operation
     // otherwise). Its events then complete with the whole queue, which over-synchronises but is
@@ -424,9 +424,9 @@ struct QueueImpl : public sycl::queue{
     // impl::on_async_errors: wait_and_throw throws instead of the default std::terminate.
     QueueImpl(Device dev, bool in_order)
         : sycl::queue(shared_context(dev),
-                      device_arrays.at((int)dev.type).at(dev.idx),
+                      device_arrays.at(static_cast<int>(dev.type)).at(dev.idx),
                       impl::on_async_errors,
-                      make_queue_properties(device_arrays.at((int)dev.type).at(dev.idx), in_order)),
+                      make_queue_properties(device_arrays.at(static_cast<int>(dev.type)).at(dev.idx), in_order)),
           device_(dev),
           trace_tid_(allocate_trace_tid()) {}
 
@@ -440,9 +440,9 @@ struct QueueImpl : public sycl::queue{
 
     QueueImpl()
         : sycl::queue(shared_context(Device{0, DeviceType::CPU}),
-                      device_arrays.at((int)DeviceType::CPU).at(0),
+                      device_arrays.at(static_cast<int>(DeviceType::CPU)).at(0),
                       impl::on_async_errors,
-                      make_queue_properties(device_arrays.at((int)DeviceType::CPU).at(0), false)),
+                      make_queue_properties(device_arrays.at(static_cast<int>(DeviceType::CPU)).at(0), false)),
           device_(Device{0, DeviceType::CPU}),
           trace_tid_(allocate_trace_tid()) {}
 

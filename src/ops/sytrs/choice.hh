@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /// @file
@@ -18,7 +19,7 @@ struct Vendor : select::NoFields<"vendor"> {};    ///< backend::sytrs_vendor: LA
 
 using SytrsChoice = std::variant<Cta, Blocked, Wg, Vendor>;  ///< natives: GPU, sub-group 32, homogeneous, not NETLIB
 
-template <class T>  /// Every compiled choice, once, in tie-break order (§6.3).
+template <class Scalar>  /// Every compiled choice, once, in tie-break order (§6.3).
 constexpr auto candidates() { return select::all_of<SytrsChoice>(); }
 
 inline constexpr std::array<std::string_view, 2> kLastResort{"blocked", "vendor"};

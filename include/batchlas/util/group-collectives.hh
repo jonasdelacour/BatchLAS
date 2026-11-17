@@ -37,8 +37,8 @@ inline constexpr bool kSplitWords = sizeof(T) > 8 || (sizeof(T) & (sizeof(T) - 1
 
 template <typename T>
 struct is_std_complex : std::false_type {};
-template <typename R>
-struct is_std_complex<std::complex<R>> : std::true_type {};
+template <typename Real>
+struct is_std_complex<std::complex<Real>> : std::true_type {};
 
 template <typename T, typename Op>
 inline constexpr bool kSplitComplexSum =
@@ -89,7 +89,7 @@ struct rebind_op<OpT<V>, R> {
 template <typename T>
 using local_ptr = __attribute__((address_space(3))) T*;
 
-// sycl_impl::on_metal() (src/sycl/sscp_target.hh), which an installed header cannot include.
+// sycl_impl::on_metal() (include/batchlas/device/detail/sscp_target.hh), which an installed header cannot include.
 // 4 is compiler_backend::metal; acpp 25.10 has no such enumerator.
 __attribute__((always_inline)) inline bool on_metal() {
     bool r = false;
@@ -184,7 +184,7 @@ inline W broadcast_fenced(Group g, W w, Id... id) {
     return r;
 }
 
-} // namespace detail
+}  // namespace detail
 
 /// @addtogroup api_internal_helpers
 /// @{
@@ -390,4 +390,4 @@ using sycl::shift_group_right;
 
 #endif
 
-} // namespace batchlas::portable
+}  // namespace batchlas::portable

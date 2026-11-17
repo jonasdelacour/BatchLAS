@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // potri for the tuner (docs/design/flat-kernel-selection.md §6.1): MatrixView::fill_random_spd A factored once,
 // untimed, by the public potrf under Auto; the timed call turns the Lower factor into the Lower triangle of the
 // inverse, which is mirrored onto a copy and checked on the default items by MatrixView::solve_residual with an
@@ -27,14 +28,14 @@ namespace {
 
 namespace I = ops::potri;
 
-template <class T>
+template <typename Scalar>
 struct PotriProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     int n, batch, ld;
     std::size_t stride;
-    UnifiedVector<T> A0, L, A, X;
-    UnifiedVector<T*> pA0, pL, pA, pX;
+    UnifiedVector<Scalar> A0, L, A, X;
+    UnifiedVector<Scalar*> pA0, pL, pA, pX;
     MV A0v, Lv, Av, Xv;
     UnifiedVector<std::int32_t> info;
 
@@ -47,13 +48,13 @@ struct PotriProblem {
           Xv(X.data(), n, n, ld, int(stride), batch, pX.data()), info(std::size_t(batch_), 0) {
         (void)A0v.fill_random_spd(q, 12345);
         (void)MV::copy(q, Lv, A0v);
-        UnifiedVector<std::byte> fws(std::max<std::size_t>(1, potrf_buffer_size<kBackend, T>(q, Lv, Uplo::Lower)));
-        (void)potrf<kBackend, T>(q, Lv, Uplo::Lower, fws.to_span(), info.to_span());
+        UnifiedVector<std::byte> fws(std::max<std::size_t>(1, potrf_buffer_size<kBackend, Scalar>(q, Lv, Uplo::Lower)));
+        (void)potrf<kBackend, Scalar>(q, Lv, Uplo::Lower, fws.to_span(), info.to_span());
         q.wait();
         for (int b = 0; b < batch; ++b)
             if (info[std::size_t(b)] != 0) throw batchlas::convergence_error("potri input: potrf reported a non-SPD item");
     }
-    std::size_t workspace() { return potri_buffer_size<kBackend, T>(q, Av, Uplo::Lower); }
+    std::size_t workspace() { return potri_buffer_size<kBackend, Scalar>(q, Av, Uplo::Lower); }
     void reset() {  // the call overwrites A with the inverse
         (void)MV::copy(q, Av, Lv);
         q.wait();
@@ -62,14 +63,14 @@ struct PotriProblem {
         for (int b = 0; b < batch; ++b) info[std::size_t(b)] = 0;
     }
     void run(Span<std::byte> ws) {
-        (void)potri<kBackend, T>(q, Av, Uplo::Lower, false, ws, info.to_span());
+        (void)potri<kBackend, Scalar>(q, Av, Uplo::Lower, false, ws, info.to_span());
         q.wait();
     }
     std::pair<double, int> verify() {
         int bad = 0;
         for (int b = 0; b < batch; ++b) bad += info[std::size_t(b)] != 0;
         (void)MV::copy(q, Xv, Av);
-        if constexpr (is_std_complex_v<T>) (void)Xv.hermitize(q, Uplo::Lower);
+        if constexpr (is_std_complex_v<Scalar>) (void)Xv.hermitize(q, Uplo::Lower);
         else (void)Xv.symmetrize(q, Uplo::Lower);
         q.wait();
         return {MV::solve_residual(q, A0v, Xv, MV(nullptr, 0, 0, 1)), bad};
@@ -97,16 +98,40 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
-            "src/sycl/kernel_attrs.hh",
-            "src/sycl/sscp_target.hh",
+            "include/batchlas/device/detail/kernel_attrs.hh",
+            "include/batchlas/device/detail/sscp_target.hh",
             // family: blocked
             "src/ops/potri/kernels/potri_blocked.cc",
             // common
             "src/ops/potri/kernels/potri_cta.cc",
             "src/ops/potri/kernels/potri_native.cc",
             "src/ops/potri/potri_native.hh",
-            "src/ops/potrf/potrf_slm_hole.hh",
+            "src/util/resident_capacity.hh",
             "src/ops/potri/choice.hh",
+            "include/batchlas/device.hh",
+            "include/batchlas/device/arith.hh",
+            "include/batchlas/device/core.hh",
+            "include/batchlas/device/exec.hh",
+            "include/batchlas/device/grid.hh",
+            "include/batchlas/device/interop.hh",
+            "include/batchlas/device/lapack_aux.hh",
+            "include/batchlas/device/level1.hh",
+            "include/batchlas/device/level2.hh",
+            "include/batchlas/device/level3.hh",
+            "include/batchlas/device/operand.hh",
+            "include/batchlas/device/reduce.hh",
+            "include/batchlas/device/scalar.hh",
+            "include/batchlas/device/tier.hh",
+            "include/batchlas/device/view.hh",
+            "include/batchlas/device/workspace.hh",
+            "include/batchlas/util/group-collectives.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn_core.hh",
+            "include/batchlas/device/detail/sg_partition/backend_generic.hh",
+            "include/batchlas/device/detail/sg_partition/backend_nvptx.hh",
+            "include/batchlas/device/detail/sg_partition/backend_spirv.hh",
+            "include/batchlas/device/detail/sg_partition/backend_sscp.hh",
+            "include/batchlas/device/detail/sg_partition/sg_partition.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin

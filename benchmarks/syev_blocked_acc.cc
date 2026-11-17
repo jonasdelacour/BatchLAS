@@ -83,12 +83,12 @@ void run_syev_blocked(miniacc::State& state) {
     }
 }
 
-} // namespace
-
 template <typename Real, Backend B>
-static void ACC_SYEV_BLOCKED(miniacc::State& state) {
+void ACC_SYEV_BLOCKED(miniacc::State& state) {
     run_syev_blocked<Real, B>(state);
 }
+
+}  // namespace
 
 template <typename Benchmark>
 void EigensolverSizesNetlib(Benchmark* b) {
@@ -97,4 +97,4 @@ void EigensolverSizesNetlib(Benchmark* b) {
 
 BATCHLAS_REGISTER_ACCURACY(ACC_SYEV_BLOCKED, EigensolverSizes)
 
-MINI_ACC_MAIN()
+MINI_ACC_MAIN();
