@@ -13,7 +13,7 @@
 #include <src/queue.hh>
 #include <src/util/batch_mask.hh>
 #include <src/util/kernel-trace.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
@@ -33,24 +33,24 @@ inline constexpr int kGramMaxTile = 128;
 // Drops the imaginary part BLAS guarantees is zero on a HERK diagonal. It is
 // zero only up to rounding, and leaving the residue there would make a matrix
 // that is not quite Hermitian, which the eigensolvers downstream do notice.
-template <typename T>
-inline T real_part_of(const T& value) {
-    if constexpr (is_std_complex_v<T>) {
-        return T(value.real(), typename T::value_type(0));
+template <typename Scalar>
+inline Scalar real_part_of(const Scalar& value) {
+    if constexpr (is_std_complex_v<Scalar>) {
+        return Scalar(value.real(), typename Scalar::value_type(0));
     } else {
         return value;
     }
 }
 
-template <typename T, int NTile, int ThreadTile, int KC, bool TransOperand, bool Conjugate>
+template <typename Scalar, int NTile, int ThreadTile, int KC, bool TransOperand, bool Conjugate>
 class SyrkGramTilesKernel;
 
-template <typename T, int NTile, int ThreadTile, int KC, bool TransOperand, bool Conjugate>
+template <typename Scalar, int NTile, int ThreadTile, int KC, bool TransOperand, bool Conjugate>
 Event launch_syrk_gram_tiles(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& A,
-                             const MatrixView<T, MatrixFormat::Dense>& C,
-                             T alpha,
-                             T beta,
+                             const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                             const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                             Scalar alpha,
+                             Scalar beta,
                              Uplo uplo) {
     BATCHLAS_KERNEL_TRACE_SCOPE("syrk_cuda_custom.gram_tiles");
 
@@ -80,10 +80,10 @@ Event launch_syrk_gram_tiles(Queue& ctx,
 
     impl::check_group_count(*ctx, sycl::nd_range<2>(global, local));
     ctx->submit([&](sycl::handler& h) {
-        sycl::local_accessor<T, 1> tile(sycl::range<1>(KC * SPad), h);
+        sycl::local_accessor<Scalar, 1> tile(sycl::range<1>(KC * SPad), h);
 
-        const T* a_ptr = A.data_ptr();
-        T* c_ptr = C.data_ptr();
+        const Scalar* a_ptr = A.data_ptr();
+        Scalar* c_ptr = C.data_ptr();
         const int lda = A.ld();
         const int ldc = C.ld();
         const int stride_a = A.stride();
@@ -92,7 +92,7 @@ Event launch_syrk_gram_tiles(Queue& ctx,
         // The batch mask (null unmasked); one item per work-group, so its return is uniform (I1).
         const std::uint8_t* mask = batchlas::detail::mask_ptr(batchlas::detail::call_mask("syrk", A, C));
 
-        batchlas::impl::parallel_for<SyrkGramTilesKernel<T, NTile, ThreadTile, KC, TransOperand, Conjugate>>(h,
+        batchlas::impl::parallel_for<SyrkGramTilesKernel<Scalar, NTile, ThreadTile, KC, TransOperand, Conjugate>>(h,
             sycl::nd_range<2>(global, local), [=](sycl::nd_item<2> item) {
                 const int bid = static_cast<int>(item.get_group(0));
                 if (bid >= batch || (mask != nullptr && mask[bid] == 0)) {
@@ -107,9 +107,9 @@ Event launch_syrk_gram_tiles(Queue& ctx,
                 const int tr = lower ? bi : bj;   // row tile
                 const int tc = lower ? bj : bi;   // column tile
 
-                const T* Ab = a_ptr + static_cast<std::ptrdiff_t>(bid) * stride_a;
-                T* Cb = c_ptr + static_cast<std::ptrdiff_t>(bid) * stride_c;
-                T* sh = tile.template get_multi_ptr<sycl::access::decorated::no>().get();
+                const Scalar* Ab = a_ptr + static_cast<std::ptrdiff_t>(bid) * stride_a;
+                Scalar* Cb = c_ptr + static_cast<std::ptrdiff_t>(bid) * stride_c;
+                Scalar* sh = tile.template get_multi_ptr<sycl::access::decorated::no>().get();
 
                 // Packet q of row kk lives at q ^ (kk / 4): the aligned stride
                 // alone puts every staging lane in one bank. Whole-packet
@@ -118,12 +118,12 @@ Event launch_syrk_gram_tiles(Queue& ctx,
                     return packet ^ ((kk >> 2) & SwizzleMask);
                 };
 
-                T accum[ThreadTile][ThreadTile];
+                Scalar accum[ThreadTile][ThreadTile];
 BATCHLAS_UNROLL_FULL
                 for (int i = 0; i < ThreadTile; ++i) {
 BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < ThreadTile; ++j) {
-                        accum[i][j] = T(0);
+                        accum[i][j] = Scalar(0);
                     }
                 }
 
@@ -142,7 +142,7 @@ BATCHLAS_UNROLL_FULL
                                 sh[(kk0 + i) * SPad + phys] =
                                     (col_ok && gk < k)
                                     ? Ab[gk + static_cast<std::ptrdiff_t>(col) * lda]
-                                    : T(0);
+                                    : Scalar(0);
                             }
                         }
                     } else {
@@ -158,7 +158,7 @@ BATCHLAS_UNROLL_FULL
                                 sh[kk * SPad + phys + i] =
                                     (k_ok && col < n)
                                     ? Ab[col + static_cast<std::ptrdiff_t>(gk) * lda]
-                                    : T(0);
+                                    : Scalar(0);
                             }
                         }
                     }
@@ -167,9 +167,9 @@ BATCHLAS_UNROLL_FULL
                     if (active) {
 #pragma unroll 4
                         for (int p = 0; p < KC; ++p) {
-                            const T* row = &sh[p * SPad];
-                            T af[ThreadTile];
-                            T bf[ThreadTile];
+                            const Scalar* row = &sh[p * SPad];
+                            Scalar af[ThreadTile];
+                            Scalar bf[ThreadTile];
 BATCHLAS_UNROLL_FULL
                             for (int b = 0; b < Bands; ++b) {
                                 // Invariant: a thread's rows/columns are
@@ -178,16 +178,16 @@ BATCHLAS_UNROLL_FULL
                                 // evidence: docs/perf/level3.md#the-band-split-syrk-bug
                                 const int qa = swizzle(tr * Bands + b, p);
                                 const int qb = swizzle(tc * Bands + b, p);
-                                const TileVec4<T> va = tile_load4(row + qa * 4);
-                                const TileVec4<T> vb = tile_load4(row + qb * 4);
+                                const TileVec4<Scalar> va = tile_load4(row + qa * 4);
+                                const TileVec4<Scalar> vb = tile_load4(row + qb * 4);
 BATCHLAS_UNROLL_FULL
                                 for (int e = 0; e < 4; ++e) {
                                     // Conjugate the operand carrying the ^H (row
                                     // for ConjTrans, column for NoTrans). The
                                     // wrong one is still Hermitian: test vs GEMM.
                                     if constexpr (Conjugate) {
-                                        af[b * 4 + e] = TransOperand ? batchlas::device::detail::conj(va.v[e]) : va.v[e];
-                                        bf[b * 4 + e] = TransOperand ? vb.v[e] : batchlas::device::detail::conj(vb.v[e]);
+                                        af[b * 4 + e] = TransOperand ? batchlas::device::conj(va.v[e]) : va.v[e];
+                                        bf[b * 4 + e] = TransOperand ? vb.v[e] : batchlas::device::conj(vb.v[e]);
                                     } else {
                                         af[b * 4 + e] = va.v[e];
                                         bf[b * 4 + e] = vb.v[e];
@@ -228,8 +228,8 @@ BATCHLAS_UNROLL_FULL
                         if (on_diagonal && (lower ? row < col : row > col)) {
                             continue;
                         }
-                        T* p = &Cb[row + static_cast<std::ptrdiff_t>(col) * ldc];
-                        T value = beta == T(0) ? alpha * accum[i][j]
+                        Scalar* p = &Cb[row + static_cast<std::ptrdiff_t>(col) * ldc];
+                        Scalar value = beta == Scalar(0) ? alpha * accum[i][j]
                                                : alpha * accum[i][j] + beta * *p;
                         // HERK's diagonal is real; drop the rounding residue.
                         if constexpr (Conjugate) {
@@ -248,9 +248,9 @@ BATCHLAS_UNROLL_FULL
 
 // Problem-side support, independent of scalar type and queue. Only \f$n \le\f$
 // kGramMaxTile; above it non-float has no native route (the triangular kernel is float-only).
-template <typename T>
-bool syrk_gram_supported(const MatrixView<T, MatrixFormat::Dense>& A,
-                         const MatrixView<T, MatrixFormat::Dense>& C,
+template <typename Scalar>
+bool syrk_gram_supported(const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& C,
                          Transpose transA,
                          bool conjugated) {
     if (C.rows() != C.cols() || C.rows() <= 0 || C.rows() > kGramMaxTile) {
@@ -275,12 +275,12 @@ bool syrk_gram_supported(const MatrixView<T, MatrixFormat::Dense>& A,
 }
 
 // The tile covers n with as little slack as possible: slack is wasted arithmetic.
-template <typename T, bool Conjugate = false>
+template <typename Scalar, bool Conjugate = false>
 Event syrk_gram_tiles(Queue& ctx,
-                      const MatrixView<T, MatrixFormat::Dense>& A,
-                      const MatrixView<T, MatrixFormat::Dense>& C,
-                      T alpha,
-                      T beta,
+                      const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                      const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                      Scalar alpha,
+                      Scalar beta,
                       Uplo uplo,
                       Transpose transA) {
     const int n = static_cast<int>(C.rows());
@@ -292,12 +292,12 @@ Event syrk_gram_tiles(Queue& ctx,
         // exceeds the work-group register file and the launch is rejected.
         // evidence: docs/perf/level3.md#syrk-gram-tiles-kernel-design
         constexpr int ThreadTile =
-            (NTile == 128 && is_std_complex_v<T>) ? 8 : 4;
+            (NTile == 128 && is_std_complex_v<Scalar>) ? 8 : 4;
         constexpr int KC = 32;
         return trans
-            ? launch_syrk_gram_tiles<T, NTile, ThreadTile, KC, true, Conjugate>(
+            ? launch_syrk_gram_tiles<Scalar, NTile, ThreadTile, KC, true, Conjugate>(
                   ctx, A, C, alpha, beta, uplo)
-            : launch_syrk_gram_tiles<T, NTile, ThreadTile, KC, false, Conjugate>(
+            : launch_syrk_gram_tiles<Scalar, NTile, ThreadTile, KC, false, Conjugate>(
                   ctx, A, C, alpha, beta, uplo);
     };
 
@@ -310,4 +310,4 @@ Event syrk_gram_tiles(Queue& ctx,
     return dispatch(std::integral_constant<int, 128>{});
 }
 
-} // namespace batchlas::backend::detail
+}  // namespace batchlas::backend::detail

@@ -3,15 +3,16 @@
 // a tier -- same ipiv contract, same read-modify-written `info`, same cabs1 pivot metric,
 // so the two must agree on ipiv EXACTLY. BATCHLAS_GETRF_LEAF picks the arm; the default is
 // this leaf (getrf_blocked.cc, evidence: docs/perf/lu.md#lu-the-register-leaf-ab). Same device-code cluster
-// as getrf_cta.cc (EXTENSIONS_CTA_SOURCES), which is where lu_cabs1 and lu_zero live.
+// as getrf_cta.cc (EXTENSIONS_CTA_SOURCES); both call the public ?GETF2 (lapack/getrf.hh).
 // evidence: docs/perf/lu.md#the-register-panel-leaf
 
 #include <src/ops/getrf/getrf_native.hh>
+#include <batchlas/device/lapack/getrf.hh>
 #include <src/ops/getrf/kernels/getrf_panel_reg_device.hh>
 
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <batchlas/error.hh>
 
@@ -23,14 +24,12 @@
 #include <type_traits>
 
 namespace batchlas {
-namespace sycl_getrf {
+namespace ops::getrf {
 
 // At TU namespace scope: a kernel name must not name an internal-linkage entity.
-template <typename T, int NB> class GetrfPanelRegKernel;
+template <typename Scalar, int NB> class GetrfPanelRegKernel;
 
 namespace {
-
-namespace gn = ::batchlas::getrf_native;
 
 // A launch ABORT, not a slowdown, so every cap below is compile-time. The per-BLOCK file
 // is not what binds on sm_89: registers are owned per sub-partition, and the whole-block
@@ -47,12 +46,12 @@ constexpr int kPanelRegMaxRows = 512;    // the tallest panel this kernel is wri
 // evidence: docs/perf/lu.md#the-register-panel-leaf-register-probe
 constexpr int kPanelRegHeadroomPct = 15;
 
-template <typename T>
+template <typename Scalar>
 constexpr int panel_reg_probe_regs() {
-    if constexpr (std::is_same_v<T, float>) return 64;
-    else if constexpr (std::is_same_v<T, double>) return 104;
-    else if constexpr (std::is_same_v<T, std::complex<float>>) return 96;
-    else if constexpr (std::is_same_v<T, std::complex<double>>) return 176;
+    if constexpr (std::is_same_v<Scalar, float>) return 64;
+    else if constexpr (std::is_same_v<Scalar, double>) return 104;
+    else if constexpr (std::is_same_v<Scalar, std::complex<float>>) return 96;
+    else if constexpr (std::is_same_v<Scalar, std::complex<double>>) return 176;
     else return 0;
 }
 
@@ -60,9 +59,9 @@ constexpr int panel_reg_probe_regs() {
 // the ALLOCATED one. evidence: docs/perf/lu.md#the-register-panel-leaf-register-probe
 constexpr int kPanelRegAllocGranularity = 8;
 
-template <typename T>
+template <typename Scalar>
 constexpr int panel_reg_budget_regs() {
-    const int with_headroom = panel_reg_probe_regs<T>() * (100 + kPanelRegHeadroomPct) / 100;
+    const int with_headroom = panel_reg_probe_regs<Scalar>() * (100 + kPanelRegHeadroomPct) / 100;
     return (with_headroom + kPanelRegAllocGranularity - 1) / kPanelRegAllocGranularity *
            kPanelRegAllocGranularity;
 }
@@ -85,9 +84,9 @@ constexpr int kPanelRegImplMaxRows = kPanelRegMaxRows;
 #endif
 
 // 0 spells "this type has no register panel", exactly as getrf_cta_max_n_for_slm's 0 does.
-template <typename T>
+template <typename Scalar>
 constexpr int panel_reg_max_m() {
-    constexpr int regs = panel_reg_budget_regs<T>();
+    constexpr int regs = panel_reg_budget_regs<Scalar>();
     if constexpr (regs < 1) {
         return 0;
     } else {
@@ -116,17 +115,17 @@ constexpr int panel_reg_wg(int m) {
     return (m + kPanelRegWgQuantum - 1) / kPanelRegWgQuantum * kPanelRegWgQuantum;
 }
 
-template <typename T, int NB>
-Event getrf_panel_reg_launch(Queue& ctx, T* a_ptr, int ld, int stride,
+template <typename Scalar, int NB>
+Event getrf_panel_reg_launch(Queue& ctx, Scalar* a_ptr, int ld, int stride,
                              int m, int ncols, int batch,
                              int* piv_ptr, int piv_stride, int piv_base,
                              int32_t* info_ptr, int wg, const std::uint8_t* mask) {
     // std::complex is re-typed HERE, at the pointer boundary: its Annex-G operator* costs
     // an isnan branch and a libcall in device code.
-    using DM = sycl_device::DevMap<T>;
+    using DM = sycl_device::DevMap<Scalar>;
     using D = typename DM::type;
     using R = typename DM::real;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     D* const ap = reinterpret_cast<D*>(a_ptr);
     const int kmax = std::min(m, ncols);
@@ -136,18 +135,18 @@ Event getrf_panel_reg_launch(Queue& ctx, T* a_ptr, int ld, int stride,
         // Under a kilobyte for every instantiation: the 48 KB hole cannot be reached.
         sycl::local_accessor<D, 1> sx(sycl::range<1>(static_cast<std::size_t>(NB)), h);
         sycl::local_accessor<R, 1> rval(
-            sycl::range<1>(static_cast<std::size_t>(gn::kLuRedSlots)), h);
+            sycl::range<1>(static_cast<std::size_t>(device::detail::kRedSlots)), h);
         sycl::local_accessor<int, 1> ridx(
-            sycl::range<1>(static_cast<std::size_t>(gn::kLuRedSlots)), h);
+            sycl::range<1>(static_cast<std::size_t>(device::detail::kRedSlots)), h);
 
-        batchlas::impl::parallel_for<GetrfPanelRegKernel<T, NB>>(h,
+        batchlas::impl::parallel_for<GetrfPanelRegKernel<Scalar, NB>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const int b = static_cast<int>(it.get_group_linear_id());
                 if (mask != nullptr && mask[b] == 0) return;  // I1: before the device body's barriers
-                gn::getf2_panel_reg_device<D, NB>(
+                getrf_native::getf2_panel_reg_device<D, NB>(
                     it, ap + static_cast<std::ptrdiff_t>(b) * strp, ld,
                     m, ncols, kmax,
                     piv_ptr + static_cast<std::ptrdiff_t>(b) * piv_stride + piv_base,
@@ -163,43 +162,43 @@ Event getrf_panel_reg_launch(Queue& ctx, T* a_ptr, int ld, int stride,
 
 // The ONE place the panel width is spelled, and it is NOT the driver's block width: a
 // SHORT final panel arrives here with ncols < NB.
-template <typename T>
+template <typename Scalar>
 int getrf_panel_reg_nb() {
-    return (panel_reg_max_m<T>() > 0) ? 32 : 0;
+    return (panel_reg_max_m<Scalar>() > 0) ? 32 : 0;
 }
 
-template <typename T>
+template <typename Scalar>
 int getrf_panel_reg_max_m() {
-    return panel_reg_max_m<T>();
+    return panel_reg_max_m<Scalar>();
 }
 
 // The ONE admission test, shared by the driver, the debug hook and the entry point.
-template <typename T>
+template <typename Scalar>
 bool getrf_panel_reg_fits(int m, int n, int max_wg) {
     if (m < 1 || n < 1) return false;
-    const int nb = getrf_panel_reg_nb<T>();
+    const int nb = getrf_panel_reg_nb<Scalar>();
     if (nb < 1 || n > nb) return false;
-    if (m > getrf_panel_reg_max_m<T>()) return false;
+    if (m > getrf_panel_reg_max_m<Scalar>()) return false;
     const int wg = panel_reg_wg(m);
-    // kLuRedSlots argmax slots is the cross-sub-group scan's whole capacity.
-    if (wg > kPanelRegWgQuantum * gn::kLuRedSlots) return false;
+    // device::detail::kRedSlots argmax slots is the cross-sub-group scan's whole capacity.
+    if (wg > kPanelRegWgQuantum * device::detail::kRedSlots) return false;
     return wg <= max_wg;
 }
 
 // Test hook: the work-group this panel would launch, 0 when the panel is not eligible.
-template <typename T>
+template <typename Scalar>
 unsigned getrf_panel_reg_debug_launch(Queue& ctx, int m, int n) {
     const int max_wg =
         static_cast<int>(ctx.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
-    if (!getrf_panel_reg_fits<T>(m, n, max_wg)) return 0u;
+    if (!getrf_panel_reg_fits<Scalar>(m, n, max_wg)) return 0u;
     return static_cast<unsigned>(panel_reg_wg(m));
 }
 
 // `piv_stride` is the matrix ORDER, never the panel width; `info_ptr` is READ as well as
 // written, so the caller zeroes it before panel 0.
-template <typename T>
+template <typename Scalar>
 Event getrf_panel_reg_factorize(Queue& ctx,
-                                T* a_ptr, int ld, int stride,
+                                Scalar* a_ptr, int ld, int stride,
                                 int m, int n, int batch,
                                 int* piv_ptr, int piv_stride, int piv_base,
                                 int32_t* info_ptr, const std::uint8_t* mask) {
@@ -217,24 +216,24 @@ Event getrf_panel_reg_factorize(Queue& ctx,
             "requires");
     }
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
-    if (!getrf_panel_reg_fits<T>(m, n, max_wg)) {
+    if (!getrf_panel_reg_fits<Scalar>(m, n, max_wg)) {
         // Thrown, never a silent fallback: a leaf that quietly becomes the other leaf is
         // exactly what a pinned A/B cannot see.
         throw batchlas::unsupported(
             "getrf_panel_reg: a " + std::to_string(m) + "x" + std::to_string(n) +
             " panel is outside this type's register-resident leaf (width <= " +
-            std::to_string(getrf_panel_reg_nb<T>()) + ", height <= " +
-            std::to_string(getrf_panel_reg_max_m<T>()) + ", work-group <= " +
+            std::to_string(getrf_panel_reg_nb<Scalar>()) + ", height <= " +
+            std::to_string(getrf_panel_reg_max_m<Scalar>()) + ", work-group <= " +
             std::to_string(max_wg) + ")");
     }
 
     // `if constexpr`, not the runtime guard above: a plain call INSTANTIATES the kernel
     // even for a type whose table says absent. The `else` is unreachable.
-    if constexpr (panel_reg_max_m<T>() > 0) {
+    if constexpr (panel_reg_max_m<Scalar>() > 0) {
         constexpr int NB = 32;
-        return getrf_panel_reg_launch<T, NB>(ctx, a_ptr, ld, stride, m, n, batch,
-                                             piv_ptr, piv_stride, piv_base, info_ptr,
-                                             panel_reg_wg(m), mask);
+        return getrf_panel_reg_launch<Scalar, NB>(ctx, a_ptr, ld, stride, m, n, batch,
+                                                  piv_ptr, piv_stride, piv_base, info_ptr,
+                                                  panel_reg_wg(m), mask);
     } else {
         throw batchlas::unsupported(
             "getrf_panel_reg: this scalar type has no register-resident panel leaf");
@@ -257,5 +256,5 @@ BATCHLAS_GETRF_PANEL_REG_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_GETRF_PANEL_REG_INSTANTIATE
 
-}  // namespace sycl_getrf
+}  // namespace ops::getrf
 }  // namespace batchlas

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // potri: the inverse from a Cholesky factor by LAPACK's algorithm, trtri then lauum, in place on
 // A's uplo triangle. select::run takes the first entry of the nearest tuned/potri.<device>.txt row
 // that can_run() admits: cta (both steps in one local-memory-resident launch) or blocked:nb (the
@@ -26,55 +27,56 @@ namespace ops::potri {
 
 using select::overloaded;
 
-template <class T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <class Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
-template <class T>
-select::Key key_of(const MV<T>& A) {
+template <class Scalar>
+select::Key key_of(const MV<Scalar>& A) {
     return {{"n", A.rows()}, {"batch", A.batch_size()}};
 }
 
-template <class T>
+template <class Scalar>
 int cta_ceiling(const select::Device& d) {
-    return sycl_potri::cta_max_n<T>(static_cast<std::size_t>(d.slm_budget), d.max_wg);
+    return ops::potri::cta_max_n<Scalar>(static_cast<std::size_t>(d.slm_budget), d.max_wg);
 }
 
 // Correctness only: false means the launch would throw. Both families need a homogeneous batch and
 // a CTA block (the whole matrix, or one nb x nb diagonal block) within the device's local memory.
-template <class T>
-bool can_run(const PotriChoice& c, const select::Device& d, const MV<T>& A) {
+template <class Scalar>
+bool can_run(const PotriChoice& c, const select::Device& d, const MV<Scalar>& A) {
     // cta honours a batch mask; blocked runs its children (trmm, syrk/herk) on the masked views.
     const bool homogeneous = !A.is_heterogeneous() && A.rows() >= 1 && A.batch_size() >= 1 && d.max_wg >= 1;
     const int n = A.rows();
     return std::visit(overloaded{
-        [&](Cta) { return homogeneous && n <= cta_ceiling<T>(d); },
-        [&](Blocked b) { return homogeneous && b.nb >= 1 && std::min(b.nb, n) <= cta_ceiling<T>(d); },
+        [&](Cta) { return homogeneous && n <= cta_ceiling<Scalar>(d); },
+        [&](Blocked b) { return homogeneous && b.nb >= 1 && std::min(b.nb, n) <= cta_ceiling<Scalar>(d); },
     }, c);
 }
 
 // Exactly the chosen family's need: cta none, blocked one part's W and slots plus the batch's flags.
-template <class T>
-std::size_t workspace(Queue& q, const PotriChoice& c, const MV<T>& A) {
+template <class Scalar>
+std::size_t workspace(Queue& q, const PotriChoice& c, const MV<Scalar>& A) {
     return std::visit(overloaded{
         [&](Cta) -> std::size_t { return 0; },
-        [&](Blocked b) { return blocked::workspace<T>(q, A, b.nb); },
+        [&](Blocked b) { return blocked::workspace<Scalar>(q, A, b.nb); },
     }, c);
 }
 
-template <Backend B, class T>
-Event launch(Queue& q, const PotriChoice& c, const MV<T>& A, Uplo uplo, bool full, Span<std::byte> ws,
+template <Backend B, class Scalar>
+Event launch(Queue& q, const PotriChoice& c, const MV<Scalar>& A, Uplo uplo, bool full, Span<std::byte> ws,
              Span<int32_t> info) {
-    if (ws.size() < workspace<T>(q, c, A))
+    if (ws.size() < workspace<Scalar>(q, c, A))
         throw batchlas::workspace_error("potri: workspace is shorter than potri_buffer_size()");
     return std::visit(overloaded{
-        [&](Cta) { return sycl_potri::potri_cta<T>(q, A, uplo, sycl_potri::CtaMode::Potri, A.rows(), full, info); },
-        [&](Blocked b) { return blocked::run<B, T>(q, A, uplo, b.nb, full, ws, info); },
+        [&](Cta) { return ops::potri::potri_cta<Scalar>(q, A, uplo, ops::potri::CtaMode::Potri, A.rows(), full,
+                                                        info); },
+        [&](Blocked b) { return blocked::run<B, Scalar>(q, A, uplo, b.nb, full, ws, info); },
     }, c);
 }
 
 // n below 1 (batch 0 returned earlier, a no-op) or a heterogeneous batch has no kernel.
-template <class T>
-void throw_if_unservable(const MV<T>& A, const char* who) {
+template <class Scalar>
+void throw_if_unservable(const MV<Scalar>& A, const char* who) {
     if (A.is_heterogeneous())
         throw batchlas::internal_error(std::string(who) +
                                        ": a heterogeneous batch (per-item active dims), which no potri kernel serves.");
@@ -85,39 +87,40 @@ void throw_if_unservable(const MV<T>& A, const char* who) {
 
 }  // namespace ops::potri
 
-template <Backend Back, typename T>
-Event potri(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, bool full, Span<std::byte> work_space,
+template <Backend Back, typename Scalar>
+Event potri(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, Uplo uplo, bool full,
+            Span<std::byte> work_space,
             Span<int32_t> info) {
-    potri_validate_params<T>(A, uplo);
+    potri_validate_params<Scalar>(A, uplo);
     (void)detail::call_mask("potri", A);
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
-    ops::potri::throw_if_unservable<T>(A, "potri");
+    ops::potri::throw_if_unservable<Scalar>(A, "potri");
     if (!info.empty() && info.size() < static_cast<std::size_t>(A.batch_size()))
         throw batchlas::invalid_argument("potri: info has " + std::to_string(info.size()) + " entries for a batch of " +
                                          std::to_string(A.batch_size()));
     const coverage::Shape shape{.m = A.rows(), .n = A.rows(), .k = A.rows(), .batch = A.batch_size(), .uplo = uplo};
-    return select::run<Back, T>(
-        ops::potri::spec, ctx, ops::potri::key_of<T>(A), ops::potri::candidates<T>(),
-        [&](const auto& c, const auto& d) { return ops::potri::can_run<T>(c, d, A); }, shape,
+    return select::run<Back, Scalar>(
+        ops::potri::spec, ctx, ops::potri::key_of<Scalar>(A), ops::potri::candidates<Scalar>(),
+        [&](const auto& c, const auto& d) { return ops::potri::can_run<Scalar>(c, d, A); }, shape,
         {{"n", A.rows()}, {"batch", A.batch_size()}},
         [&](const auto& c) {
             // blocked's children chain through A and W, so they need an in-order queue.
             return select::on_in_order_queue(ctx, [&](Queue& q) {
-                return ops::potri::launch<Back, T>(q, c, A, uplo, full, work_space, info);
+                return ops::potri::launch<Back, Scalar>(q, c, A, uplo, full, work_space, info);
             });
         });
 }
 
-template <Backend Back, typename T>
-size_t potri_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
-    potri_validate_params<T>(A, uplo);
+template <Backend Back, typename Scalar>
+size_t potri_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, Uplo uplo) {
+    potri_validate_params<Scalar>(A, uplo);
     (void)detail::call_mask("potri_buffer_size", A);
     if (A.batch_size() == 0) return 0;
-    ops::potri::throw_if_unservable<T>(A, "potri_buffer_size");
-    const auto c = select::pick<Back, T>(
-        ops::potri::spec, ctx, ops::potri::key_of<T>(A), ops::potri::candidates<T>(),
-        [&](const auto& k, const auto& d) { return ops::potri::can_run<T>(k, d, A); });
-    return ops::potri::workspace<T>(ctx, c, A);
+    ops::potri::throw_if_unservable<Scalar>(A, "potri_buffer_size");
+    const auto c = select::pick<Back, Scalar>(
+        ops::potri::spec, ctx, ops::potri::key_of<Scalar>(A), ops::potri::candidates<Scalar>(),
+        [&](const auto& k, const auto& d) { return ops::potri::can_run<Scalar>(k, d, A); });
+    return ops::potri::workspace<Scalar>(ctx, c, A);
 }
 
 #define POTRI_INSTANTIATE(B_, fp) BATCHLAS_INSTANTIATE_OP(B_, fp, potri) BATCHLAS_INSTANTIATE_OP(B_, fp, potri_buffer_size)

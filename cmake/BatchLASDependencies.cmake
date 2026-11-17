@@ -6,7 +6,7 @@
 # missed them, cublas.cc was silently dropped, and the link failed on
 # undefined *_vendor<Backend::CUDA> symbols. Override a library with
 # -DCUDA_<name>_LIBRARY=<path>, e.g. -DCUDA_cusolver_LIBRARY=...
-function(find_nvidia_libs)
+function(batchlas_find_nvidia_libs)
     if(NOT BATCHLAS_CUDA_ENABLED)
         return()
     endif()
@@ -37,7 +37,7 @@ function(find_nvidia_libs)
     endif()
 endfunction()
 
-function(find_rocm_libs)
+function(batchlas_find_rocm_libs)
     set(ROCM_PATH)
     if(DEFINED ENV{ROCM_PATH})
         set(ROCM_PATH "$ENV{ROCM_PATH}")
@@ -113,7 +113,7 @@ endfunction()
 set(BATCHLAS_OPENBLAS_ROOT "" CACHE PATH
     "OpenBLAS prefix whose libopenblas provides LAPACKE and CBLAS (auto-probed under Homebrew on macOS)")
 
-function(find_netlib_libs)
+function(batchlas_find_netlib_libs)
     message(STATUS "Searching for Netlib BLAS/LAPACK libraries")
 
     # Homebrew's keg-only OpenBLAS ships no liblapacke: LAPACKE_* and cblas_* live in
@@ -207,7 +207,7 @@ function(find_netlib_libs)
 endfunction()
 
 if(BATCHLAS_CUDA_ENABLED)
-    find_nvidia_libs()
+    batchlas_find_nvidia_libs()
 endif()
 
 # The CUDA vendor TUs (cublas.cc, cusolver.cc, cusparse.cc) each call into all three libraries,
@@ -234,10 +234,10 @@ if(BATCHLAS_HAS_CUBLAS OR BATCHLAS_HAS_CUSOLVER OR BATCHLAS_HAS_CUSPARSE)
 endif()
 
 if(BATCHLAS_DETECTED_AMD_GPU OR BATCHLAS_ENABLE_ROCM)
-    find_rocm_libs()
+    batchlas_find_rocm_libs()
 endif()
 
-find_netlib_libs()
+batchlas_find_netlib_libs()
 
 # Some BLAS builds dispatch to CPU kernels that compute wrong results; find out
 # now rather than through mysterious numerical test failures later.

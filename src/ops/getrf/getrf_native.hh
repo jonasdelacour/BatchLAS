@@ -17,104 +17,98 @@
 #include <cstdint>
 #include <functional>
 
-namespace batchlas::sycl_getrf {
+namespace batchlas::ops::getrf {
 
 // A RUNTIME local_mem_size budget, not device_limits.hh's build-time constant, and it must
 // cover the pivot-search scratch as well as the tile; 0 = absent. `min_blocks_per_sm` scales
 // the ADVERTISED capacity, residency is getrf_leaf_fits. evidence: docs/perf/lu.md#lu-the-occupancy-rule
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API int getrf_cta_max_n_for_slm(
     std::size_t slm_budget_bytes,
     int min_blocks_per_sm = resident::kMinBlocksPerSm);
 
-template <typename T>
-BATCHLAS_INTERNAL_API bool getrf_blocked_available();
-
 // THE REGISTER-RESIDENT TIER, and the ONE place its ceiling is spelled: a compile-time
 // property of the kernel, so no budget enters. evidence: docs/perf/lu.md#one-spelling-per-ceiling
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API int getrf_tiny_max_n();
 
-inline constexpr int kGetrfTinyWgSize = 64;  // getrf_tiny_dispatch refuses a smaller MAX_WORK_GROUP_SIZE
-
 // NOT zero: a short or empty `info` span means "not requested" and draws pool scratch.
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API std::size_t getrf_tiny_buffer_size(
-    Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A);
+    Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A);
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API Event getrf_tiny_dispatch(Queue& ctx,
-                                                const MatrixView<T, MatrixFormat::Dense>& A,
+                                                const MatrixView<Scalar, MatrixFormat::Dense>& A,
                                                 Span<int64_t> pivots,
                                                 Span<std::byte> workspace,
                                                 Span<int32_t> info);
 
 // Zero is a legitimate size, and neither query may touch A.data_ptr().
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API std::size_t getrf_cta_buffer_size(Queue& ctx,
-                                                        const MatrixView<T, MatrixFormat::Dense>& A);
+                                                        const MatrixView<Scalar, MatrixFormat::Dense>& A);
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API std::size_t getrf_blocked_buffer_size(Queue& ctx,
-                                                            const MatrixView<T, MatrixFormat::Dense>& A);
+                                                            const MatrixView<Scalar, MatrixFormat::Dense>& A);
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API unsigned getrf_blocked_debug_params(Queue& ctx, int n);  // nb | leaf<<16
 
-// The leading panel's leaf AS THE DRIVER WOULD TAKE IT: getrf_blocked_debug_params' leaf
-// field is a pure fit query. 1 resident, 2 global, 3 register, 0 degenerate.
-template <typename T>
+// The leading panel's leaf AS THE DRIVER TAKES IT (debug_params' leaf is a fit query): 1 resident, 2 global, 3 register.
+template <typename Scalar>
 BATCHLAS_INTERNAL_API unsigned getrf_blocked_debug_leaf(Queue& ctx, int n);
 
 // Mandatory: getrf_blocked_dispatch throws on an empty seam (inject the public gemm).
-template <typename T>
+template <typename Scalar>
 using GetrfTrailingGemm = std::function<Event(
     Queue&,
-    const MatrixView<T, MatrixFormat::Dense>&,
-    const MatrixView<T, MatrixFormat::Dense>&,
-    const MatrixView<T, MatrixFormat::Dense>&,
-    T, T, Transpose, Transpose, ComputePrecision)>;
+    const MatrixView<Scalar, MatrixFormat::Dense>&,
+    const MatrixView<Scalar, MatrixFormat::Dense>&,
+    const MatrixView<Scalar, MatrixFormat::Dense>&,
+    Scalar, Scalar, Transpose, Transpose, ComputePrecision)>;
 
 // Positional form of the routed batchlas::trsm -- alpha comes THIRD, not last.
-template <typename T>
+template <typename Scalar>
 using GetrfPanelSolveTrsm = std::function<Event(
     Queue&,
-    const MatrixView<T, MatrixFormat::Dense>&,
-    const MatrixView<T, MatrixFormat::Dense>&,
-    T, Side, Uplo, Transpose, Diag)>;
+    const MatrixView<Scalar, MatrixFormat::Dense>&,
+    const MatrixView<Scalar, MatrixFormat::Dense>&,
+    Scalar, Side, Uplo, Transpose, Diag)>;
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API Event getrf_cta_dispatch(Queue& ctx,
-                                               const MatrixView<T, MatrixFormat::Dense>& A,
+                                               const MatrixView<Scalar, MatrixFormat::Dense>& A,
                                                Span<int64_t> pivots,
                                                Span<std::byte> workspace,
                                                Span<int32_t> info);
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API Event getrf_blocked_dispatch(Queue& ctx,
-                                                   const MatrixView<T, MatrixFormat::Dense>& A,
+                                                   const MatrixView<Scalar, MatrixFormat::Dense>& A,
                                                    Span<int64_t> pivots,
                                                    Span<std::byte> workspace,
                                                    Span<int32_t> info,
-                                                   GetrfTrailingGemm<T> trailing_gemm,
-                                                   GetrfPanelSolveTrsm<T> panel_trsm);
+                                                   GetrfTrailingGemm<Scalar> trailing_gemm,
+                                                   GetrfPanelSolveTrsm<Scalar> panel_trsm);
 
 // Budgets an explicit SLM tree argmax: sycl::reduce_over_group fails to launch at
 // specific byte counts near 48 KB. evidence: docs/perf/lu.md#lu-the-48-kb-launch-hole
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API bool getrf_cta_fits(
     int n, std::size_t slm_budget_bytes,
     int min_blocks_per_sm = resident::kMinBlocksPerSm);
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API bool getrf_cta_fits_rect(
     int m, int n, std::size_t slm_budget_bytes,
     int min_blocks_per_sm = resident::kMinBlocksPerSm);
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API unsigned getrf_cta_debug_launch(Queue& ctx, int m, int n);  // G | wg<<16
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API bool getrf_leaf_fits(int m, int n, std::size_t slm_budget_bytes);
 
 // THE TWO PANEL LEAVES, one contract: `piv_stride` is the matrix ORDER, `piv_base` the
@@ -122,33 +116,33 @@ BATCHLAS_INTERNAL_API bool getrf_leaf_fits(int m, int n, std::size_t slm_budget_
 // The register leaf adds a WIDTH ceiling `nb` (a short final panel arrives with n < nb)
 // and a REGISTER height ceiling `max_m`; 0 = absent. `mask` (null: none) skips inactive items.
 // evidence: docs/perf/lu.md#the-register-panel-leaf
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API int getrf_panel_reg_nb();
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API int getrf_panel_reg_max_m();
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API bool getrf_panel_reg_fits(int m, int n, int max_wg);
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API unsigned getrf_panel_reg_debug_launch(Queue& ctx, int m, int n);
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API Event getrf_panel_reg_factorize(Queue& ctx,
-                                                      T* a_ptr, int ld, int stride,
+                                                      Scalar* a_ptr, int ld, int stride,
                                                       int m, int n, int batch,
                                                       int* piv_ptr, int piv_stride,
                                                       int piv_base, int32_t* info_ptr,
                                                       const std::uint8_t* mask = nullptr);
 
-template <typename T>
+template <typename Scalar>
 BATCHLAS_INTERNAL_API Event getrf_panel_factorize(Queue& ctx,
-                                                  T* a_ptr, int ld, int stride,
+                                                  Scalar* a_ptr, int ld, int stride,
                                                   int m, int n, int batch,
                                                   int* piv_ptr, int piv_stride, int piv_base,
                                                   int32_t* info_ptr,
                                                   bool* used_resident_out,
                                                   const std::uint8_t* mask = nullptr);
 
-}  // namespace batchlas::sycl_getrf
+}  // namespace batchlas::ops::getrf

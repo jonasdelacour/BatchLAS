@@ -87,21 +87,21 @@ The stub-TU layer for absent vendor libraries and the compile-time coverage gate
 
 Wrong answers found, how they hid, and what guards them now.
 
-* **`ormqr` buffer size and call disagreed by 108x.** The route-era `choose_ormqr_provider` returned a forced
+- **`ormqr` buffer size and call disagreed by 108x.** The route-era `choose_ormqr_provider` returned a forced
   provider without checking `ormqr_supports_blocked`, so a forced `blocked` ran on complex `Trans` and on non-GPU
   queues, and a forced `cta`, `two_stage` or `jacobi` ran on the vendor while the query returned the blocked size
   (2560 bytes against 276480). Flat selection prevents both: a pin that fails `can_run` throws, and an op and its
   `*_buffer_size` run the same choice.
-* **`vendor` must be one fieldless family.** Route-era `is_vendor()` let a forced cuBLASDx request count as "the
+- **`vendor` must be one fieldless family.** Route-era `is_vendor()` let a forced cuBLASDx request count as "the
   caller asked for the vendor". cuBLASDx is deleted; `vendor` is the only family that calls a vendor library.
-* **An order-walk fallback inverted GEMM's default.** Taking the first merely supported route moved an \f$8 \times 8 \times 8\f$
+- **An order-walk fallback inverted GEMM's default.** Taking the first merely supported route moved an \f$8 \times 8 \times 8\f$
   batch-1 GEMM from vendor to native. A last resort now applies only when no table entry can run.
-* **Two ROCm defects invisible to the CUDA build** (a `trsm` instantiation in the old parameter order, four
+- **Two ROCm defects invisible to the CUDA build** (a `trsm` instantiation in the old parameter order, four
   orphaned macro-continuation lines), caught by `scripts/rocm_syntax_check.sh`.
-* **Signature divergence between vendor TUs.** `trsm`'s vendor form takes `alpha` last, the public form third;
+- **Signature divergence between vendor TUs.** `trsm`'s vendor form takes `alpha` last, the public form third;
   generated facade bodies would have passed `alpha` as `side`. Each `vendor` family spells its
   `backend::<op>_vendor<B, T>` call by hand, so the hazard is one call site per op.
-* **An instantiation binds as hard as a definition.** `syev` and `ormqr` instantiations lived in
+- **An instantiation binds as hard as a definition.** `syev` and `ormqr` instantiations lived in
   `cusolver.cc`/`cublas.cc` and vanished from builds without those libraries. `scripts/facade_symbol_check.sh`
   guards it.
 

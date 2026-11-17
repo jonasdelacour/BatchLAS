@@ -31,9 +31,9 @@ namespace S = ops::trsm;
 
 constexpr int kMaxCheckedRhs = 32;  // host check cost is order^2 per rhs; sample the rest
 
-template <typename T>
+template <typename Scalar>
 struct TrsmProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     Side side;
     Uplo uplo;
@@ -41,9 +41,9 @@ struct TrsmProblem {
     Diag diag;
     int order, nrhs, batch, brows, bcols, lda, ldb;
     std::size_t sa, sb;
-    T alpha;
-    UnifiedVector<T> A, B0, X;
-    UnifiedVector<T*> pA, pB0, pX;
+    Scalar alpha;
+    UnifiedVector<Scalar> A, B0, X;
+    UnifiedVector<Scalar*> pA, pB0, pX;
     MV Av, B0v, Xv;
 
     TrsmProblem(Queue& q_, Side s, Uplo u, Transpose t, Diag d, int order_, int q_rhs, int batch_, int ld_pad)
@@ -81,7 +81,7 @@ struct TrsmProblem {
     }
     void clear_info() {}
     void run(Span<std::byte>) {
-        (void)trsm<kBackend, T>(q, Av, Xv, alpha, side, uplo, trans, diag);
+        (void)trsm<kBackend, Scalar>(q, Av, Xv, alpha, side, uplo, trans, diag);
         q.wait();
     }
     // Componentwise backward error, max over sampled rhs and rows i of
@@ -91,15 +91,15 @@ struct TrsmProblem {
     // float bound from order ~1024 up (2e-4); componentwise it is ~0.3 against ~5e-8 for a correct
     // float solve at every order.
     std::pair<double, int> verify() {
-        using V = MatrixView<T, MatrixFormat::Dense>;
+        using V = MatrixView<Scalar, MatrixFormat::Dense>;
         const bool left = side == Side::Left;
         std::vector<int> rhs;
         for (int i = 0; i < std::min(nrhs, kMaxCheckedRhs); ++i)
             rhs.push_back(nrhs <= kMaxCheckedRhs ? i : int(std::int64_t(i) * (nrhs - 1) / (kMaxCheckedRhs - 1)));
         const int nr = int(rhs.size());
         const std::size_t len = std::size_t(order) * std::size_t(nr);
-        UnifiedVector<T> xs(len), b0s(len), zero(len, T(0));
-        Matrix<T, MatrixFormat::Dense> tri(order, order);  // A's triangle as trsm reads it (Unit: diagonal 1)
+        UnifiedVector<Scalar> xs(len), b0s(len), zero(len, Scalar(0));
+        Matrix<Scalar, MatrixFormat::Dense> tri(order, order);  // A's triangle as trsm reads it (Unit: diagonal 1)
         // Element (t, i) of rhs i in the packed copy: Left order x nr, Right nr x order.
         auto at = [&](int t, int i) { return left ? std::size_t(i) * std::size_t(order) + std::size_t(t)
                                                   : std::size_t(t) * std::size_t(nr) + std::size_t(i); };
@@ -121,7 +121,7 @@ struct TrsmProblem {
             const V x = left ? V(xs.data(), order, nr, ldp) : V(xs.data(), nr, order, ldp);
             const V b0 = left ? V(b0s.data(), order, nr, ldp) : V(b0s.data(), nr, order, ldp);
             const V z = left ? V(zero.data(), order, nr, ldp) : V(zero.data(), nr, order, ldp);
-            const auto one = V::up(T(1)), nal = -V::up(alpha);
+            const auto one = V::up(Scalar(1)), nal = -V::up(alpha);
             const Transpose nt = Transpose::NoTrans;
             const double e = left ? V::gemm_backward_error(q, a, trans, x, nt, b0, z, one, nal)
                                   : V::gemm_backward_error(q, x, nt, a, trans, b0, z, one, nal);
@@ -154,8 +154,16 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
-            "src/sycl/kernel_attrs.hh",
-            "src/sycl/sscp_target.hh",
+            "include/batchlas/device/detail/kernel_attrs.hh",
+            "include/batchlas/device/detail/sscp_target.hh",
+            "include/batchlas/util/group-collectives.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn_core.hh",
+            "include/batchlas/device/detail/sg_partition/backend_generic.hh",
+            "include/batchlas/device/detail/sg_partition/backend_nvptx.hh",
+            "include/batchlas/device/detail/sg_partition/backend_spirv.hh",
+            "include/batchlas/device/detail/sg_partition/backend_sscp.hh",
+            "include/batchlas/device/detail/sg_partition/sg_partition.hh",
             "src/ops/trsm/kernels/trsm_native.cc",
             "src/ops/trsm/trsm_native.hh",
             // family: sg_left
@@ -163,6 +171,22 @@ public:
             // common
             "src/ops/trsm/trsm_canonical.hh",
             "src/ops/trsm/choice.hh",
+            "include/batchlas/device.hh",
+            "include/batchlas/device/arith.hh",
+            "include/batchlas/device/core.hh",
+            "include/batchlas/device/exec.hh",
+            "include/batchlas/device/grid.hh",
+            "include/batchlas/device/interop.hh",
+            "include/batchlas/device/lapack_aux.hh",
+            "include/batchlas/device/level1.hh",
+            "include/batchlas/device/level2.hh",
+            "include/batchlas/device/level3.hh",
+            "include/batchlas/device/operand.hh",
+            "include/batchlas/device/reduce.hh",
+            "include/batchlas/device/scalar.hh",
+            "include/batchlas/device/tier.hh",
+            "include/batchlas/device/view.hh",
+            "include/batchlas/device/workspace.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin

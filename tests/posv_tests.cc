@@ -19,7 +19,7 @@
 #include <tests/test_utils.hh>
 #include <batchlas/verify/tolerance.hh>
 
-#include <src/kernels/common/solve_native.hh>
+#include <src/ops/posv/posv_native.hh>
 #include <src/ops/potrf/potrf_native.hh>
 #include <src/ops/posv/choice.hh>
 #include <src/ops/potrf/choice.hh>
@@ -40,18 +40,18 @@ using namespace batchlas;
 
 namespace {
 
-template <typename T>
-using RealOf = typename batchlas::base_type<T>::type;
+template <typename Scalar>
+using RealOf = typename batchlas::base_type<Scalar>::type;
 
 // Whether a `native` potrf pin runs a native kernel here: some non-vendor candidate accepts
 // a concrete pin. A pin whose can_run is false throws, so this asks potrf.cc itself.
-template <Backend B, typename T>
-bool potrf_native_runs(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
-    for (const auto& c : ops::potrf::candidates<T>()) {
+template <Backend B, typename Scalar>
+bool potrf_native_runs(Queue& q, const MatrixView<Scalar, MatrixFormat::Dense>& A, Uplo uplo) {
+    for (const auto& c : ops::potrf::candidates<Scalar>()) {
         if (select::family_of(c) == "vendor") continue;
         const select::ScopedPin<ops::potrf::PotrfChoice> pin("potrf", c);
         try {
-            (void)potrf_buffer_size<B, T>(q, A, uplo);
+            (void)potrf_buffer_size<B, Scalar>(q, A, uplo);
             return true;
         } catch (const std::invalid_argument&) {
         }
@@ -59,22 +59,22 @@ bool potrf_native_runs(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A, Up
     return false;
 }
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct PosvConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 
-template <typename T>
+template <typename Scalar>
 struct Sys {
     int n = 0, nrhs = 0, batch = 0;
     int lda = 0, stra = 0, ldb = 0, strb = 0;
-    UnifiedVector<T> a, b;
-    UnifiedVector<T> a0, b0;  // read by device kernels in solve_residual: never host-only memory
-    UnifiedVector<T*> aptr, bptr;
+    UnifiedVector<Scalar> a, b;
+    UnifiedVector<Scalar> a0, b0;  // read by device kernels in solve_residual: never host-only memory
+    UnifiedVector<Scalar*> aptr, bptr;
     UnifiedVector<int32_t> info;
 };
 
@@ -82,22 +82,22 @@ struct Sys {
 // a POISONED pad. THE UNREFERENCED TRIANGLE IS POISONED TOO, which is what makes
 // "the other triangle is neither read nor written" falsifiable: if the kernel read
 // it, every residual would blow up; if it wrote it, the pad check catches it.
-template <typename T>
-Sys<T> make_spd(int n, int nrhs, int batch, Uplo uplo, unsigned seed,
-                bool indefinite = false, bool zero_minor = false) {
-    Sys<T> p;
+template <typename Scalar>
+Sys<Scalar> make_spd(int n, int nrhs, int batch, Uplo uplo, unsigned seed,
+                     bool indefinite = false, bool zero_minor = false) {
+    Sys<Scalar> p;
     p.n = n; p.nrhs = nrhs; p.batch = batch;
     p.lda = n + 5;  p.stra = p.lda * n + 11;
     p.ldb = n + 5;  p.strb = p.ldb * nrhs + 11;
 
-    const T poison = MV<T>::make(-9.75e3, 4.5e3);
-    p.a = UnifiedVector<T>(static_cast<size_t>(p.stra) * batch, poison);
-    p.b = UnifiedVector<T>(static_cast<size_t>(p.strb) * batch, poison);
-    p.aptr = UnifiedVector<T*>(static_cast<size_t>(batch), nullptr);
-    p.bptr = UnifiedVector<T*>(static_cast<size_t>(batch), nullptr);
+    const Scalar poison = MV<Scalar>::make(-9.75e3, 4.5e3);
+    p.a = UnifiedVector<Scalar>(static_cast<size_t>(p.stra) * batch, poison);
+    p.b = UnifiedVector<Scalar>(static_cast<size_t>(p.strb) * batch, poison);
+    p.aptr = UnifiedVector<Scalar*>(static_cast<size_t>(batch), nullptr);
+    p.bptr = UnifiedVector<Scalar*>(static_cast<size_t>(batch), nullptr);
     p.info = UnifiedVector<int32_t>(static_cast<size_t>(batch), int32_t(-12345));
 
-    const Matrix<T> rnd = Matrix<T>::Random(n, n + nrhs, false, batch, seed);  // A, then B; the pad keeps its poison
+    const Matrix<Scalar> rnd = Matrix<Scalar>::Random(n, n + nrhs, false, batch, seed);  // A, then B; the pad keeps its poison
     for (int bi = 0; bi < batch; ++bi) {
         // Build the full Hermitian matrix first, then copy only the owned triangle
         // in: the two triangles must be exact conjugates or the "Upper == Lower"
@@ -105,7 +105,7 @@ Sys<T> make_spd(int n, int nrhs, int batch, Uplo uplo, unsigned seed,
         std::vector<std::complex<double>> full(size_t(n) * n);
         for (int j = 0; j < n; ++j)
             for (int i = j; i < n; ++i) {
-                const T r = rnd(i, j, bi);
+                const Scalar r = rnd(i, j, bi);
                 std::complex<double> v(double(std::real(r)), (i == j) ? 0.0 : double(std::imag(r)));
                 if (i == j) v = std::complex<double>(4.0 * double(n), 0.0);
                 full[size_t(j) * n + i] = v;
@@ -130,7 +130,7 @@ Sys<T> make_spd(int n, int nrhs, int batch, Uplo uplo, unsigned seed,
                 const bool owned = (uplo == Uplo::Lower) ? (i >= j) : (i <= j);
                 if (!owned) continue;
                 const auto v = full[size_t(j) * n + i];
-                p.a[size_t(bi) * p.stra + size_t(j) * p.lda + i] = MV<T>::make(v.real(), v.imag());
+                p.a[size_t(bi) * p.stra + size_t(j) * p.lda + i] = MV<Scalar>::make(v.real(), v.imag());
             }
         for (int k = 0; k < nrhs; ++k)
             for (int i = 0; i < n; ++i)
@@ -141,32 +141,34 @@ Sys<T> make_spd(int n, int nrhs, int batch, Uplo uplo, unsigned seed,
     return p;
 }
 
-template <typename T>
-MatrixView<T, MatrixFormat::Dense> a_view(Sys<T>& p) {
-    return MatrixView<T, MatrixFormat::Dense>(p.a.data(), p.n, p.n, p.lda, p.stra, p.batch,
-                                              p.aptr.data());
+template <typename Scalar>
+MatrixView<Scalar, MatrixFormat::Dense> a_view(Sys<Scalar>& p) {
+    return MatrixView<Scalar, MatrixFormat::Dense>(p.a.data(), p.n, p.n, p.lda, p.stra, p.batch,
+                                                   p.aptr.data());
 }
-template <typename T>
-MatrixView<T, MatrixFormat::Dense> b_view(Sys<T>& p) {
-    return MatrixView<T, MatrixFormat::Dense>(p.b.data(), p.n, p.nrhs, p.ldb, p.strb, p.batch,
-                                              p.bptr.data());
+template <typename Scalar>
+MatrixView<Scalar, MatrixFormat::Dense> b_view(Sys<Scalar>& p) {
+    return MatrixView<Scalar, MatrixFormat::Dense>(p.b.data(), p.n, p.nrhs, p.ldb, p.strb, p.batch,
+                                                   p.bptr.data());
 }
 
-template <typename T>
-double solve_residual(Queue& ctx, const Sys<T>& p, int item, Uplo uplo) {
-    Matrix<T> af(p.n, p.n, 1);  // a0 holds only the uplo triangle: mirror it onto a copy
-    MV<T>::copy(ctx, af, MV<T>(const_cast<T*>(p.a0.data()) + size_t(item) * p.stra, p.n, p.n, p.lda)).wait();
-    if constexpr (is_std_complex_v<T>) af.hermitize(ctx, uplo);
+template <typename Scalar>
+double solve_residual(Queue& ctx, const Sys<Scalar>& p, int item, Uplo uplo) {
+    Matrix<Scalar> af(p.n, p.n, 1);  // a0 holds only the uplo triangle: mirror it onto a copy
+    MV<Scalar>::copy(ctx, af,
+                     MV<Scalar>(const_cast<Scalar*>(p.a0.data()) + size_t(item) * p.stra, p.n, p.n, p.lda)).wait();
+    if constexpr (is_std_complex_v<Scalar>) af.hermitize(ctx, uplo);
     else af.symmetrize(ctx, uplo);
     ctx.wait();
-    return MV<T>::solve_residual(ctx, af, MV<T>(const_cast<T*>(p.b.data()) + size_t(item) * p.strb, p.n, p.nrhs, p.ldb),
-                                 MV<T>(const_cast<T*>(p.b0.data()) + size_t(item) * p.strb, p.n, p.nrhs, p.ldb));
+    return MV<Scalar>::solve_residual(ctx, af, MV<Scalar>(const_cast<Scalar*>(p.b.data()) + size_t(item) * p.strb, p.n, p.nrhs, p.ldb),
+                                      MV<Scalar>(const_cast<Scalar*>(p.b0.data()) + size_t(item) * p.strb, p.n, p.nrhs,
+                                                 p.ldb));
 }
 
 // Everything the kernel may not write: the ld pad, the stride pad, AND the triangle
 // the caller did not give it.
-template <typename T>
-bool untouched_outside_triangle(const Sys<T>& p, Uplo uplo, size_t* where) {
+template <typename Scalar>
+bool untouched_outside_triangle(const Sys<Scalar>& p, Uplo uplo, size_t* where) {
     for (int bi = 0; bi < p.batch; ++bi)
         for (size_t o = 0; o < size_t(p.stra); ++o) {
             const int col = int(o) / p.lda;
@@ -176,7 +178,7 @@ bool untouched_outside_triangle(const Sys<T>& p, Uplo uplo, size_t* where) {
                                ((uplo == Uplo::Lower) ? (row >= col) : (row <= col));
             if (owned) continue;
             const size_t idx = size_t(bi) * p.stra + o;
-            if (std::memcmp(&p.a[idx], &p.a0[idx], sizeof(T)) != 0) { *where = idx; return false; }
+            if (std::memcmp(&p.a[idx], &p.a0[idx], sizeof(Scalar)) != 0) { *where = idx; return false; }
         }
     return true;
 }
@@ -202,14 +204,14 @@ protected:
         return this->ctx->device().type == DeviceType::GPU && this->ctx->device().supports_sub_group_size(32);
     }
 
-    int cap() const { return sycl_posv::posv_tiny_max_n<T>(); }
+    int cap() const { return ops::posv::posv_tiny_max_n<T>(); }
 
     void run_tiny(Sys<T>& p, Uplo uplo) {
         auto A = a_view(p);
         auto B = b_view(p);
-        const size_t need = sycl_posv::posv_tiny_buffer_size<T>(*this->ctx, A, B);
+        const size_t need = ops::posv::posv_tiny_buffer_size<T>(*this->ctx, A, B);
         UnifiedVector<std::byte> ws(need > 0 ? need : size_t(1));
-        (void)sycl_posv::posv_tiny_dispatch<T>(*this->ctx, A, B, uplo,
+        (void)ops::posv::posv_tiny_dispatch<T>(*this->ctx, A, B, uplo,
                                          Span<std::byte>(ws.data(), need), p.info.to_span());
         this->ctx->wait();
     }
@@ -264,16 +266,16 @@ TYPED_TEST(PosvTest, TinyFactorIsBitIdenticalToPotrf) {
     const int cap = this->cap();
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
         for (int n : {4, 8, 9, 16, 17, 32}) {
-            if (n > cap || n > sycl_potrf::potrf_tiny_max_n<T>()) continue;
+            if (n > cap || n > ops::potrf::potrf_tiny_max_n<T>()) continue;
             auto p = make_spd<T>(n, 2, 5, uplo, 888u + unsigned(n));
             auto q = make_spd<T>(n, 2, 5, uplo, 888u + unsigned(n));
 
             this->run_tiny(p, uplo);
 
             auto Aq = a_view(q);
-            const size_t need = sycl_potrf::potrf_tiny_buffer_size<T>(*this->ctx, Aq);
+            const size_t need = ops::potrf::potrf_tiny_buffer_size<T>(*this->ctx, Aq);
             UnifiedVector<std::byte> ws(need > 0 ? need : size_t(1));
-            (void)sycl_potrf::potrf_tiny_dispatch<T>(*this->ctx, Aq, uplo,
+            (void)ops::potrf::potrf_tiny_dispatch<T>(*this->ctx, Aq, uplo,
                                                Span<std::byte>(ws.data(), need),
                                                q.info.to_span());
             this->ctx->wait();
@@ -315,7 +317,7 @@ TYPED_TEST(PosvTest, TinyInfoReportsTheLeadingMinorAndLeavesXFinite) {
 // P4. THE OTHER TRIANGLE IS NEITHER READ NOR WRITTEN (ortho.cc's contract), plus the
 // ld and stride pads; the unreferenced triangle is poisoned, so a read of it would
 // also destroy P1's residual.
-// ARMED BREAK (R9): in tiny_device.hh's tiny_store_lower change `c <= lane` to `c < N`.
+// ARMED BREAK (R9): in lapack/potrf.hh's device::detail::reg_store_lower change `c <= lane` to `c < N`.
 // EXPECTED: RED for Uplo::Lower at every n.
 TYPED_TEST(PosvTest, TinyWritesOnlyItsOwnTriangle) {
     if (!this->native_ok()) GTEST_SKIP() << "the tiny and cta posv tiers are GPU-only";

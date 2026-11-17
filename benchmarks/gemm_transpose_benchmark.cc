@@ -15,14 +15,14 @@ namespace {
 
 inline Transpose transpose_from_arg(int value) {
     switch (value) {
-    case 0:
-        return Transpose::NoTrans;
-    case 1:
-        return Transpose::Trans;
-    case 2:
-        return Transpose::ConjTrans;
-    default:
-        throw batchlas::invalid_argument("transpose arg must be 0=NoTrans, 1=Trans, or 2=ConjTrans");
+        case 0:
+            return Transpose::NoTrans;
+        case 1:
+            return Transpose::Trans;
+        case 2:
+            return Transpose::ConjTrans;
+        default:
+            throw batchlas::invalid_argument("transpose arg must be 0=NoTrans, 1=Trans, or 2=ConjTrans");
     }
 }
 
@@ -44,8 +44,8 @@ inline void GemmTransposeSizesNetlib(minibench::Benchmark* b) {
     }
 }
 
-template <typename T, Backend B>
-static void BM_GEMM_TRANSPOSE(minibench::State& state) {
+template <typename Scalar, Backend B>
+void BM_GEMM_TRANSPOSE(minibench::State& state) {
     const size_t m = state.range(0);
     const size_t n = state.range(1);
     const size_t k = state.range(2);
@@ -58,17 +58,17 @@ static void BM_GEMM_TRANSPOSE(minibench::State& state) {
     const size_t b_rows = transB == Transpose::NoTrans ? k : n;
     const size_t b_cols = transB == Transpose::NoTrans ? n : k;
 
-    auto A = Matrix<T>::Random(a_rows, a_cols, false, batch);
-    auto Bm = Matrix<T>::Random(b_rows, b_cols, false, batch);
-    auto C = Matrix<T>::Random(m, n, false, batch);
+    auto A = Matrix<Scalar>::Random(a_rows, a_cols, false, batch);
+    auto Bm = Matrix<Scalar>::Random(b_rows, b_cols, false, batch);
+    auto C = Matrix<Scalar>::Random(m, n, false, batch);
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
     state.SetKernel(q,
                     std::move(A),
                     std::move(Bm),
                     bench::pristine(C),
-                    T(1),
-                    static_cast<T>(bench_beta()),
+                    Scalar(1),
+                    static_cast<Scalar>(bench_beta()),
                     transA,
                     transB,
                     [](Queue& q, auto&&... xs) {
@@ -78,7 +78,7 @@ static void BM_GEMM_TRANSPOSE(minibench::State& state) {
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 
-} // namespace
+}  // namespace
 
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_GEMM_TRANSPOSE, GemmTransposeSizes);
 

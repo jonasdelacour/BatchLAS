@@ -1,0 +1,57 @@
+# Dynamic SLM bytes per work-group for scripts/sass_parity.py (--smem), for kernels whose
+# local_accessor sizes are known from the launcher. Same row format as sass_parity_wg.txt; a
+# comma list holds representative sizes of an SLM sized at run time (worst verdict over them).
+# Each row cites the launch that fixes the size; a kernel without a row counts static SMEM only.
+
+# src/ops/sygst/kernels/sygst_diag.cc launch_diag: ipw * KB * (diag_ldf + KB + 1) * sizeof(D),
+# ipw = diag_items_per_group<D>(KB) (sygst_native.hh). KB = 0 (run-time order) has no row.
+26496 ::SygstDiagKernel<float, (?:true|false), 32>$
+17152 ::SygstDiagKernel<(?:double|[^,]*Cx<float>), (?:true|false), 32>$
+33792 ::SygstDiagKernel<[^,]*Cx<double>, (?:true|false), 32>$
+18944 ::SygstDiagKernel<float, (?:true|false), 16>$
+31360 ::SygstDiagKernel<(?:double|[^,]*Cx<float>), (?:true|false), 16>$
+26112 ::SygstDiagKernel<[^,]*Cx<double>, (?:true|false), 16>$
+10752 ::SygstDiagKernel<float, (?:true|false), 8>$
+19456 ::SygstDiagKernel<(?:double|[^,]*Cx<float>), (?:true|false), 8>$
+32256 ::SygstDiagKernel<[^,]*Cx<double>, (?:true|false), 8>$
+
+# src/ops/trsm/kernels/trsm_native.cc TrsmCtaKernel: lc N(N+1)/2 + rd N of D, use_div 1 int; Side::Left
+# real types also stage (TILE_ROWS + 1) * wg of D, TILE_ROWS = min(N, 16 f / 8 d), wg = trsm_v1_ladder_wg
+# (run time: the list is wg 32, 64, 128, 256).
+180 ::TrsmCtaKernel<float, 8, \(batchlas::Side\)1>$
+1332,2484,4788,9396 ::TrsmCtaKernel<float, 8, \(batchlas::Side\)0>$
+612 ::TrsmCtaKernel<float, 16, \(batchlas::Side\)1>$
+2788,4964,9316,18020 ::TrsmCtaKernel<float, 16, \(batchlas::Side\)0>$
+2244 ::TrsmCtaKernel<float, 32, \(batchlas::Side\)1>$
+4420,6596,10948,19652 ::TrsmCtaKernel<float, 32, \(batchlas::Side\)0>$
+356 ::TrsmCtaKernel<double, 8, \(batchlas::Side\)1>$
+2664,4968,9576,18792 ::TrsmCtaKernel<double, 8, \(batchlas::Side\)0>$
+1220 ::TrsmCtaKernel<double, 16, \(batchlas::Side\)1>$
+3528,5832,10440,19656 ::TrsmCtaKernel<double, 16, \(batchlas::Side\)0>$
+4484 ::TrsmCtaKernel<double, 32, \(batchlas::Side\)1>$
+6792,9096,13704,22920 ::TrsmCtaKernel<double, 32, \(batchlas::Side\)0>$
+356 ::TrsmCtaKernel<std::complex<float>, 8, \(batchlas::Side\)1>$
+356 ::TrsmCtaKernel<std::complex<float>, 8, \(batchlas::Side\)0>$
+1220 ::TrsmCtaKernel<std::complex<float>, 16, \(batchlas::Side\)1>$
+1220 ::TrsmCtaKernel<std::complex<float>, 16, \(batchlas::Side\)0>$
+4484 ::TrsmCtaKernel<std::complex<float>, 32, \(batchlas::Side\)1>$
+4484 ::TrsmCtaKernel<std::complex<float>, 32, \(batchlas::Side\)0>$
+708 ::TrsmCtaKernel<std::complex<double>, 8, \(batchlas::Side\)1>$
+708 ::TrsmCtaKernel<std::complex<double>, 8, \(batchlas::Side\)0>$
+2436 ::TrsmCtaKernel<std::complex<double>, 16, \(batchlas::Side\)1>$
+2436 ::TrsmCtaKernel<std::complex<double>, 16, \(batchlas::Side\)0>$
+8964 ::TrsmCtaKernel<std::complex<double>, 32, \(batchlas::Side\)1>$
+8964 ::TrsmCtaKernel<std::complex<double>, 32, \(batchlas::Side\)0>$
+
+# src/ops/potri/kernels/potri_cta.cc PotriCtaKernel: St + rdt = cta_slm_bytes(n) (potri_native.hh),
+# potrf_hole_padded((mp + 1) * mp * sizeof(D) + mp * sizeof(R) + 64), mp = n rounded up to TS
+# (TS 4, 2 for complex<double>); n is run time: the list is n = 8, 16, 32, 64.
+384,1216,4416,16960 ::PotriCtaKernel<float>$
+704,2368,8768,33856 ::PotriCtaKernel<double>$
+672,2304,8640,33600 ::PotriCtaKernel<std::complex<float>>$
+1280,4544,17216,67136 ::PotriCtaKernel<std::complex<double>>$
+
+# src/ops/syev/tridiag/tridiag_solver.cc tridiagonal_solver: D n+1, L n, U 2(n+1), V 2n of T when
+# tridiag_smem_fits, (6n + 3) * sizeof(T); n is run time: the list is n = 16, 32, 64, 128, 256.
+396,780,1548,3084,6156 batchlas::tridiagonal_solver<\(batchlas::Backend\)\d+, float>\(
+792,1560,3096,6168,12312 batchlas::tridiagonal_solver<\(batchlas::Backend\)\d+, double>\(

@@ -66,5 +66,5 @@ linalg_layer_tests::LinalgWrappers.ScratchOutlivesKernels
 sytrd_blocked_tests::SytrdBlockedLatrdGridCudaTest.GridMatchesLegacyTridiagonal
 
 # Table content, not multipass (was excused by the per-host ledger, which an acpp tree no longer
-# reads): gemm.sm_120.txt has 0 timed double and cdouble rows (tests/tuned_tables_tests.cc:497).
+# reads): gemm.sm_120.txt has 0 timed double and cdouble rows (tests/tuned_tables_tests.cc:496).
 tuned_tables_tests::TunedTables.Sm120TablesAreDeepLedgerTablesNamingTheirLedger

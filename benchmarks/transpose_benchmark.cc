@@ -7,29 +7,31 @@
 
 using namespace batchlas;
 
+namespace {
+
 // Batched TRANSPOSE benchmark
-template <typename T, Backend B>
-static void BM_TRANSPOSE(minibench::State& state) {
+template <typename Scalar, Backend B>
+void BM_TRANSPOSE(minibench::State& state) {
     const size_t m = state.range(0);
     const size_t n = state.range(1);
     const size_t batch = state.range(2);
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
-    auto A = Matrix<T>::Random(m, n, false, batch);
-    auto B_mat = Matrix<T>::Zeros(n, m, batch);
+    auto A = Matrix<Scalar>::Random(m, n, false, batch);
+    auto B_mat = Matrix<Scalar>::Zeros(n, m, batch);
 
     state.SetKernel(q,
                     std::move(A),
                     std::move(B_mat),
                     [](Queue& q, auto&& A, auto&& B_mat) {
-                        (void)batchlas::transpose<T, MatrixFormat::Dense>(q, A, B_mat);
+                        (void)batchlas::transpose<Scalar, MatrixFormat::Dense>(q, A, B_mat);
                     });
-    state.SetMetric("GB/s", static_cast<double>(batch) * (1e-9 * n * m * sizeof(T)), minibench::Rate);
+    state.SetMetric("GB/s", static_cast<double>(batch) * (1e-9 * n * m * sizeof(Scalar)), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 
-
+}  // namespace
 
 // Register size/batch combinations at static‑init time using macro
 

@@ -37,39 +37,39 @@ using namespace batchlas;
 
 namespace {
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
 const char* uplo_s(Uplo u) { return u == Uplo::Lower ? "L" : "U"; }
 
 // One operand in its own buffer of poison: ld = rows + pad, stride = ld * cols + gap. Items
 // it >= period repeat item it % period (period 0: all distinct).
-template <typename T>
+template <typename Scalar>
 struct Operand {
     int rows = 0, cols = 0, batch = 0, ld = 0, stride = 0;
-    UnifiedVector<T> mem, mem0;
+    UnifiedVector<Scalar> mem, mem0;
     Operand(int r, int c, int b, unsigned seed, bool natural = false, int period = 0)
         : rows(r), cols(c), batch(b), ld(r + (natural ? 0 : 3)), stride(ld * c + (natural ? 0 : 5)),
           mem(std::size_t(stride) * b + 7), mem0(1) {
-        for (std::size_t e = 0; e < mem.size(); ++e) mem[e] = T(1000 + double(e % 97), -500 - double(e % 13));
+        for (std::size_t e = 0; e < mem.size(); ++e) mem[e] = Scalar(1000 + double(e % 97), -500 - double(e % 13));
         std::mt19937 gen(seed);
         std::uniform_real_distribution<double> u(-1, 1);
         const int reps = period > 0 ? std::min(period, b) : b;
         for (int it = 0; it < b; ++it)
             for (int j = 0; j < c; ++j)
                 for (int i = 0; i < r; ++i)
-                    at(it, i, j) = it < reps ? T(u(gen), u(gen)) : at(it % reps, i, j);
+                    at(it, i, j) = it < reps ? Scalar(u(gen), u(gen)) : at(it % reps, i, j);
     }
-    T& at(int it, int i, int j) { return mem[std::size_t(it) * stride + std::size_t(j) * ld + i]; }
-    MV<T> view() { return MV<T>(mem.data(), rows, cols, ld, stride, batch); }
-    MV<T> view0() { return MV<T>(mem0.data(), rows, cols, ld, stride, batch); }
+    Scalar& at(int it, int i, int j) { return mem[std::size_t(it) * stride + std::size_t(j) * ld + i]; }
+    MV<Scalar> view() { return MV<Scalar>(mem.data(), rows, cols, ld, stride, batch); }
+    MV<Scalar> view0() { return MV<Scalar>(mem0.data(), rows, cols, ld, stride, batch); }
     // Poison the triangle opposite `uplo` (the op must not read it); optionally a real diagonal.
     void poison_opposite(Uplo uplo, bool real_diagonal) {
         for (int it = 0; it < batch; ++it)
             for (int j = 0; j < cols; ++j)
                 for (int i = 0; i < rows; ++i) {
-                    if (i == j && real_diagonal) at(it, i, j) = T(at(it, i, j).real(), 0);
-                    if (uplo == Uplo::Lower ? i < j : i > j) at(it, i, j) = T(4096 + i, -2048 - j);
+                    if (i == j && real_diagonal) at(it, i, j) = Scalar(at(it, i, j).real(), 0);
+                    if (uplo == Uplo::Lower ? i < j : i > j) at(it, i, j) = Scalar(4096 + i, -2048 - j);
                 }
     }
     void snapshot() { mem0 = mem; }
@@ -81,7 +81,7 @@ struct Operand {
                 for (int i = 0; i < rows; ++i)
                     if (uplo == Uplo::Lower ? i >= j : i <= j) owned[std::size_t(it) * stride + std::size_t(j) * ld + i] = 1;
         for (std::size_t e = 0; e < mem.size(); ++e)
-            if (!owned[e] && std::memcmp(&mem[e], &mem0[e], sizeof(T)) != 0)
+            if (!owned[e] && std::memcmp(&mem[e], &mem0[e], sizeof(Scalar)) != 0)
                 return ::testing::AssertionFailure() << "wrote element " << e << " outside its triangle";
         return ::testing::AssertionSuccess();
     }
@@ -98,7 +98,7 @@ struct Operand {
                 for (int i = 0; i < rows; ++i) {
                     const std::size_t a = std::size_t(it) * stride + std::size_t(j) * ld + i;
                     const std::size_t b = std::size_t(it % period) * stride + std::size_t(j) * ld + i;
-                    if (std::memcmp(&mem[a], &mem[b], sizeof(T)) != 0)
+                    if (std::memcmp(&mem[a], &mem[b], sizeof(Scalar)) != 0)
                         return ::testing::AssertionFailure() << "item " << it << " (" << i << "," << j << ")";
                 }
         return ::testing::AssertionSuccess();
@@ -125,9 +125,9 @@ std::string traced_choice(const std::string& op, F&& run) {
     return "<no " + op + " trace line>";
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types_complex<Cfg>::type;

@@ -19,6 +19,7 @@
 //
 //   usage: factor_bench <op> <type> <m> <n> <nrhs> <batch> <reps>
 //                       [--route=<pin>] [--csv=<path>] [--arms=a,b,...]
+//                       [--uplo=upper|lower] [--trans=n|t|c] [--mask[=all|alt]]
 //   env:   WARM_S (seconds, default 1.5), LD_PAD (ld = m + LD_PAD)
 //
 #include <batchlas/blas/functions/geqrf.hh>
@@ -68,25 +69,33 @@
 #include <vector>
 
 using namespace batchlas;
+
+namespace {
+
 // The vendor arm is whichever vendor library this build links: cuSOLVER/cuBLAS on
 // CUDA, rocSOLVER/rocBLAS on ROCm. Backend::SYCL (AdaptiveCpp Metal) has no vendor arm,
 // and no double kernels without device fp64.
 #if BATCHLAS_HAS_CUDA_BACKEND
-static constexpr Backend BE = Backend::CUDA;
+constexpr Backend kBackend = Backend::CUDA;
 #define FACTOR_BENCH_FP64 1
 #elif BATCHLAS_HAS_ROCM_BACKEND
-static constexpr Backend BE = Backend::ROCM;
+constexpr Backend kBackend = Backend::ROCM;
 #define FACTOR_BENCH_FP64 1
 #elif BATCHLAS_HAS_SYCL_BACKEND
-static constexpr Backend BE = Backend::SYCL;
+constexpr Backend kBackend = Backend::SYCL;
 #define FACTOR_BENCH_FP64 BATCHLAS_HAS_DEVICE_FP64
 #endif
 
-static double warm_s() { const char* e = std::getenv("WARM_S"); return e ? std::atof(e) : 1.5; }
-static int ld_pad()    { const char* e = std::getenv("LD_PAD"); return e ? std::atoi(e) : 0; }
+double warm_s() { const char* e = std::getenv("WARM_S"); return e ? std::atof(e) : 1.5; }
+int ld_pad()    { const char* e = std::getenv("LD_PAD"); return e ? std::atoi(e) : 0; }
+
+}  // namespace
 
 struct Stat { double med = 0, mean = 0, relsd = 0; };
-static Stat stat_of(std::vector<double> v) {
+
+namespace {
+
+Stat stat_of(std::vector<double> v) {
     if (v.empty()) return {};
     std::sort(v.begin(), v.end());
     Stat s;
@@ -100,13 +109,17 @@ static Stat stat_of(std::vector<double> v) {
     return s;
 }
 
+}  // namespace
+
 // ------------------------------------------------------------- route pins
 enum class OpKind { potrf, getrf, getrs, geqrf, orgqr, gesv, posv };
 
-// P2: the FUSED ops have no vendor arm of their own -- see composed_pins below.
-static bool is_solve_op(OpKind k) { return k == OpKind::gesv || k == OpKind::posv; }
+namespace {
 
-static const char* pin_variable(OpKind k) {
+// P2: the FUSED ops have no vendor arm of their own -- see composed_pins below.
+bool is_solve_op(OpKind k) { return k == OpKind::gesv || k == OpKind::posv; }
+
+const char* pin_variable(OpKind k) {
     switch (k) {
         case OpKind::potrf: return "BATCHLAS_POTRF_ROUTE";
         case OpKind::getrf: return "BATCHLAS_GETRF_ROUTE";
@@ -121,14 +134,14 @@ static const char* pin_variable(OpKind k) {
 
 // The leaf A/B variable per op; nullptr for an op with no leaf seam, which makes an
 // `/leaf=` arm on that op a loud no-op rather than a quiet one.
-static const char* leaf_variable(OpKind op) {
+const char* leaf_variable(OpKind op) {
     switch (op) {
         case OpKind::getrf: return "BATCHLAS_GETRF_LEAF";
         case OpKind::geqrf: return "BATCHLAS_GEQRF_LEAF";
         default: return nullptr;
     }
 }
-static const char* op_text(OpKind k) {
+const char* op_text(OpKind k) {
     switch (k) {
         case OpKind::potrf: return "potrf";
         case OpKind::getrf: return "getrf";
@@ -151,7 +164,7 @@ static const char* op_text(OpKind k) {
 // It is queried INSIDE the ScopedEnvVar scope on purpose: settings() is a pre-main
 // snapshot, and only ScopedEnvVar's reload_settings() makes the pin readable at all.
 template <typename Choice>
-static bool select_pin_parsed(OpKind k) {
+bool select_pin_parsed(OpKind k) {
     const char* raw = settings().routing.route(op_text(k)).get();
     if (raw == nullptr) return false;
     std::string text = raw;
@@ -160,7 +173,7 @@ static bool select_pin_parsed(OpKind k) {
     return select::parse<Choice>(text).has_value();
 }
 
-static bool pin_parsed_now(OpKind k) {
+bool pin_parsed_now(OpKind k) {
     switch (k) {
         case OpKind::potrf: return select_pin_parsed<ops::potrf::PotrfChoice>(k);
         case OpKind::getrf: return select_pin_parsed<ops::getrf::GetrfChoice>(k);
@@ -172,6 +185,8 @@ static bool pin_parsed_now(OpKind k) {
     }
     return false;
 }
+
+}  // namespace
 
 // ------------------------------------------------------------- one arm
 struct Arm {
@@ -190,6 +205,8 @@ struct Arm {
     bool refused = false;  // a pin this shape cannot run: the arm is reported, never timed
 };
 
+namespace {
+
 // P4 needs an A/B the route pin cannot express: both arms are the SAME route
 // (native blocked getrf) and differ only in which panel leaf the driver calls, which
 // is BATCHLAS_GETRF_LEAF. An arm named "blocked/leaf=reg" pins both, for that arm's
@@ -207,7 +224,7 @@ struct Arm {
 // `pin_parsed_now` still proves the OUTER pin landed.
 // A potrf or getrf pin the shape cannot run throws, so `composed` pins tiny only inside its
 // ceiling (16 for cdouble) and the best runnable native tier above it; trsm `cta` likewise.
-static std::vector<std::pair<std::string, std::string>>
+std::vector<std::pair<std::string, std::string>>
 composed_pins(OpKind op, const std::string& arm_name, bool potrf_tiny_fits, bool trsm_cta_fits,
               bool getrf_tiny_fits) {
     if (op == OpKind::gesv) {
@@ -236,10 +253,12 @@ composed_pins(OpKind op, const std::string& arm_name, bool potrf_tiny_fits, bool
 // the fused tiny kernel inside its window, the composition above it. Pinning "native"
 // to `blocked` measured a composition the library never selects at n <= 32 and put
 // posv at 0.25-0.62x where the shipped fused kernel wins 1.1-6.9x.
-static std::string solve_outer_pin(const std::string& arm_name) {
+std::string solve_outer_pin(const std::string& arm_name) {
     if (arm_name == "vendor" || arm_name == "composed") return "blocked";
     return arm_name;
 }
+
+}  // namespace
 
 struct ArmEnv {
     ScopedEnvVar route;
@@ -254,7 +273,9 @@ struct ArmEnv {
     }
 };
 
-static void flag(Arm& a, const char* why) {
+namespace {
+
+void flag(Arm& a, const char* why) {
     a.bad = 1;
     if (!a.reason.empty()) a.reason += "+";
     a.reason += why;
@@ -262,7 +283,7 @@ static void flag(Arm& a, const char* why) {
 
 // A refused pin (std::invalid_argument from choose()) costs only that arm, never the cell.
 // The message goes in a CSV field, so its commas and quotes are replaced.
-static void refuse(Arm& a, const std::invalid_argument& e) {
+void refuse(Arm& a, const std::invalid_argument& e) {
     std::string why = std::string("pin refused: ") + e.what();
     for (char& ch : why)
         if (ch == ',') ch = ';';
@@ -271,7 +292,7 @@ static void refuse(Arm& a, const std::invalid_argument& e) {
     flag(a, why.c_str());
 }
 
-static void gate(Arm& a, bool residual_within_bound, int reps) {
+void gate(Arm& a, bool residual_within_bound, int reps) {
     if (!std::isfinite(a.residual)) flag(a, "residual_nonfinite");
     else if (!residual_within_bound) flag(a, "residual");
     if (!std::isfinite(a.extra)) flag(a, "extra_nonfinite");
@@ -279,6 +300,8 @@ static void gate(Arm& a, bool residual_within_bound, int reps) {
     if (reps > 1 && a.st.relsd > 0.10) flag(a, "relsd");
     if (a.bad == 0) a.reason = "ok";
 }
+
+}  // namespace
 
 struct Cfg {
     OpKind op = OpKind::potrf;
@@ -295,11 +318,17 @@ struct Cfg {
     // potrf/posv only. The grids on docs/perf were Lower-only because this harness could
     // not express anything else, which is why the Upper windows read "untested".
     bool upper = false;
+    Transpose trans = Transpose::NoTrans;  // getrs only
+    // A batch mask on every operand view of the timed call: 0 none, 1 every item active (the
+    // Masked kernel instances at full work), 2 even items only. The checked items are active ones.
+    int mask = 0;
 };
 
-static Uplo up_of(const Cfg& c) { return c.upper ? Uplo::Upper : Uplo::Lower; }
+namespace {
 
-static void emit(const Cfg& c, const Arm& a, std::FILE* csv) {
+Uplo up_of(const Cfg& c) { return c.upper ? Uplo::Upper : Uplo::Lower; }
+
+void emit(const Cfg& c, const Arm& a, std::FILE* csv) {
     char buf[2048];
     std::snprintf(buf, sizeof(buf),
                   "%s,%s,%d,%d,%d,%d,%s,%s,%d,%.6f,%.6f,%.4f,%d,%.3e,%.3e,%d,%d,%s\n",
@@ -312,14 +341,14 @@ static void emit(const Cfg& c, const Arm& a, std::FILE* csv) {
 }
 
 // ------------------------------------------------------------- driver
-template <typename T>
-static int run(const Cfg& c) {
+template <typename Scalar>
+int run(const Cfg& c) {
 #if !BATCHLAS_HAS_GPU_BACKEND
     (void)c;
     throw batchlas::unsupported("factor_bench measures a GPU backend; this build has none");
 #else
-    auto q = std::make_shared<Queue>(Device("gpu"), BE);
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
     const int m = c.m, n = c.n, nrhs = c.nrhs, batch = c.batch;
     const int pad = ld_pad();
@@ -331,9 +360,9 @@ static int run(const Cfg& c) {
     const bool needs_factor = (c.op == OpKind::getrs || c.op == OpKind::orgqr);
 
     const size_t nbatch = size_t(batch);
-    UnifiedVector<T> A0(sa * nbatch), A(sa * nbatch);
+    UnifiedVector<Scalar> A0(sa * nbatch), A(sa * nbatch);
     // THESE ARE VIEWS OVER THE CALLER'S BUFFERS, never Matrix: Matrix's
-    // (const T*, ...) constructor COPIES into its own storage, so factorising a
+    // (const Scalar*, ...) constructor COPIES into its own storage, so factorising a
     // Matrix built that way leaves the array this program checks untouched --
     // which reads as "info == 0 with a huge residual", a wrong-answer report for
     // a correct kernel.
@@ -341,7 +370,7 @@ static int run(const Cfg& c) {
     // data_ptrs(ctx) and throw "data_ptrs target is null" on a view built
     // without one, and sharing a single array between two views is a recorded
     // aliasing trap.
-    UnifiedVector<T*> pA0(nbatch), pA(nbatch);
+    UnifiedVector<Scalar*> pA0(nbatch), pA(nbatch);
     MV A0v(A0.data(), m, n, lda, int(sa), batch, pA0.data());
     MV Av(A.data(), m, n, lda, int(sa), batch, pA.data());
 
@@ -351,12 +380,12 @@ static int run(const Cfg& c) {
     // (src/ops/getrf/getrf_native.hh), min(m, n) per item.
     const int* pivi = reinterpret_cast<const int*>(piv.data());
     const int pstride = kmin;
-    UnifiedVector<T> tau(size_t(kmin) * nbatch);
+    UnifiedVector<Scalar> tau(size_t(kmin) * nbatch);
 
     const bool has_rhs = (c.op == OpKind::getrs) || is_solve_op(c.op);
     const size_t bsz = has_rhs ? sb * nbatch : size_t(1);
-    UnifiedVector<T> B0(bsz), X(bsz);
-    UnifiedVector<T*> pB0(nbatch), pX(nbatch);
+    UnifiedVector<Scalar> B0(bsz), X(bsz);
+    UnifiedVector<Scalar*> pB0(nbatch), pX(nbatch);
     MV B0v, Xv;
     if (has_rhs) {
         B0v = MV(B0.data(), n, nrhs, ldb, int(sb), batch, pB0.data());
@@ -379,28 +408,35 @@ static int run(const Cfg& c) {
     }
     q->wait();
 
+    // The timed call's views carry the mask; copies, the untimed factorisation and checks do not.
+    UnifiedVector<std::uint8_t> bmask(c.mask ? nbatch : size_t(1), std::uint8_t(1));
+    if (c.mask == 2)
+        for (int b = 0; b < batch; ++b) bmask[size_t(b)] = std::uint8_t(b % 2 == 0);
+    const MV Acall = c.mask ? Av.with_batch_mask(bmask.to_span()) : Av;
+    const MV Xcall = (c.mask && has_rhs) ? Xv.with_batch_mask(bmask.to_span()) : Xv;
+
     auto reset_A = [&] { (void)MV::copy(*q, Av, A0v); q->wait(); };
 
     // getrs and orgqr both consume a factorisation. Produce it ONCE, untimed,
     // through the public entry point under the AUTOMATIC route, and keep a host
     // copy, so both arms are handed byte-identical input every rep.
     const size_t fsz = needs_factor ? sa * nbatch : size_t(1);
-    UnifiedVector<T> F(fsz);
+    UnifiedVector<Scalar> F(fsz);
     if (needs_factor) {
         reset_A();
         if (c.op == OpKind::getrs) {
-            const size_t fw = getrf_buffer_size<BE, T>(*q, Av);
+            const size_t fw = getrf_buffer_size<kBackend, Scalar>(*q, Av);
             const size_t fwsz = fw ? fw : size_t(1);
             UnifiedVector<std::byte> fws(fwsz);
-            (void)getrf<BE, T>(*q, Av, piv.to_span(), fws.to_span(), info.to_span());
+            (void)getrf<kBackend, Scalar>(*q, Av, piv.to_span(), fws.to_span(), info.to_span());
         } else {
-            const size_t gw = geqrf_buffer_size<BE, T>(*q, Av, tau.to_span());
+            const size_t gw = geqrf_buffer_size<kBackend, Scalar>(*q, Av, tau.to_span());
             const size_t gwsz = gw ? gw : size_t(1);
             UnifiedVector<std::byte> gws(gwsz);
-            (void)geqrf<BE, T>(*q, Av, tau.to_span(), gws.to_span());
+            (void)geqrf<kBackend, Scalar>(*q, Av, tau.to_span(), gws.to_span());
         }
         q->wait();
-        std::memcpy(F.data(), A.data(), sa * nbatch * sizeof(T));
+        std::memcpy(F.data(), A.data(), sa * nbatch * sizeof(Scalar));
     }
 
     // FACTORIZATION IS DESTRUCTIVE, so the input is restored before EVERY rep.
@@ -408,7 +444,7 @@ static int run(const Cfg& c) {
     // right-hand side; for orgqr it restores the packed reflectors.
     auto reset = [&] {
         if (c.op == OpKind::getrs) { (void)MV::copy(*q, Xv, B0v); q->wait(); }
-        else if (c.op == OpKind::orgqr) { std::memcpy(A.data(), F.data(), sa * nbatch * sizeof(T)); }
+        else if (c.op == OpKind::orgqr) { std::memcpy(A.data(), F.data(), sa * nbatch * sizeof(Scalar)); }
         // A fused solve overwrites A with the factor AND B with X, so both are restored.
         else if (is_solve_op(c.op)) { reset_A(); (void)MV::copy(*q, Xv, B0v); q->wait(); }
         else reset_A();
@@ -430,8 +466,8 @@ static int run(const Cfg& c) {
         }
         a.pin = (pin == "native" && !c.route_pin.empty()) ? c.route_pin : pin;
         if (is_solve_op(c.op)) {
-            a.sub_pins = composed_pins(c.op, pin, n <= sycl_potrf::potrf_tiny_max_n<T>(), n <= sycl_trsm::trsm_cta_max_n<T>(),
-                                       n <= sycl_getrf::getrf_tiny_max_n<T>());
+            a.sub_pins = composed_pins(c.op, pin, n <= ops::potrf::potrf_tiny_max_n<Scalar>(), n <= ops::trsm::trsm_cta_max_n<Scalar>(),
+                                       n <= ops::getrf::getrf_tiny_max_n<Scalar>());
             if (a.pin == pin) a.pin = solve_outer_pin(pin);
         }
         arms.push_back(a);
@@ -451,13 +487,13 @@ static int run(const Cfg& c) {
         size_t need = 0;
         try {
             switch (c.op) {
-                case OpKind::potrf: need = potrf_buffer_size<BE, T>(*q, Av, up_of(c)); break;
-                case OpKind::getrf: need = getrf_buffer_size<BE, T>(*q, Av); break;
-                case OpKind::getrs: need = getrs_buffer_size<BE, T>(*q, Av, Xv, Transpose::NoTrans); break;
-                case OpKind::geqrf: need = geqrf_buffer_size<BE, T>(*q, Av, tau.to_span()); break;
-                case OpKind::orgqr: need = orgqr_buffer_size<BE, T>(*q, Av, tau.to_span()); break;
-                case OpKind::gesv: need = gesv_buffer_size<BE, T>(*q, Av, Xv); break;
-                case OpKind::posv: need = posv_buffer_size<BE, T>(*q, Av, Xv, up_of(c)); break;
+                case OpKind::potrf: need = potrf_buffer_size<kBackend, Scalar>(*q, Acall, up_of(c)); break;
+                case OpKind::getrf: need = getrf_buffer_size<kBackend, Scalar>(*q, Acall); break;
+                case OpKind::getrs: need = getrs_buffer_size<kBackend, Scalar>(*q, Acall, Xcall, c.trans); break;
+                case OpKind::geqrf: need = geqrf_buffer_size<kBackend, Scalar>(*q, Acall, tau.to_span()); break;
+                case OpKind::orgqr: need = orgqr_buffer_size<kBackend, Scalar>(*q, Acall, tau.to_span()); break;
+                case OpKind::gesv: need = gesv_buffer_size<kBackend, Scalar>(*q, Acall, Xcall); break;
+                case OpKind::posv: need = posv_buffer_size<kBackend, Scalar>(*q, Acall, Xcall, up_of(c)); break;
             }
         } catch (const std::invalid_argument& e) {
             refuse(arms[i], e);
@@ -469,16 +505,18 @@ static int run(const Cfg& c) {
 
     auto call = [&] {
         switch (c.op) {
-            case OpKind::potrf: (void)potrf<BE, T>(*q, Av, up_of(c), ws.to_span(), info.to_span()); break;
-            case OpKind::getrf: (void)getrf<BE, T>(*q, Av, piv.to_span(), ws.to_span(), info.to_span()); break;
-            case OpKind::getrs: (void)getrs<BE, T>(*q, Av, Xv, Transpose::NoTrans, piv.to_span(), ws.to_span()); break;
-            case OpKind::geqrf: (void)geqrf<BE, T>(*q, Av, tau.to_span(), ws.to_span()); break;
-            case OpKind::orgqr: (void)orgqr<BE, T>(*q, Av, tau.to_span(), ws.to_span()); break;
+            case OpKind::potrf: (void)potrf<kBackend, Scalar>(*q, Acall, up_of(c), ws.to_span(), info.to_span()); break;
+            case OpKind::getrf: (void)getrf<kBackend, Scalar>(*q, Acall, piv.to_span(), ws.to_span(),
+                                                              info.to_span()); break;
+            case OpKind::getrs: (void)getrs<kBackend, Scalar>(*q, Acall, Xcall, c.trans, piv.to_span(),
+                                                              ws.to_span()); break;
+            case OpKind::geqrf: (void)geqrf<kBackend, Scalar>(*q, Acall, tau.to_span(), ws.to_span()); break;
+            case OpKind::orgqr: (void)orgqr<kBackend, Scalar>(*q, Acall, tau.to_span(), ws.to_span()); break;
             case OpKind::gesv:
-                (void)gesv<BE, T>(*q, Av, Xv, piv.to_span(), ws.to_span(), info.to_span());
+                (void)gesv<kBackend, Scalar>(*q, Acall, Xcall, piv.to_span(), ws.to_span(), info.to_span());
                 break;
             case OpKind::posv:
-                (void)posv<BE, T>(*q, Av, Xv, up_of(c), ws.to_span(), info.to_span());
+                (void)posv<kBackend, Scalar>(*q, Acall, Xcall, up_of(c), ws.to_span(), info.to_span());
                 break;
         }
         q->wait();
@@ -551,19 +589,20 @@ static int run(const Cfg& c) {
             if (!run_arm(a)) continue;
         }
         // Items 0 and batch-1 (item 0 is blind to a wrong stride); within, not pass: arms may be wrong by design.
-        const std::vector<int> items{0, batch - 1};
+        const int last = (c.mask == 2 && (batch - 1) % 2 != 0) ? batch - 2 : batch - 1;
+        const std::vector<int> items{0, last};
         using Check = verify::Check;
         bool within = false;
         switch (c.op) {
             case OpKind::potrf:
                 a.residual = MV::potrf_residual(*q, A0v, Av, up_of(c), items);
-                within = verify::within<T>(Check::factorization, n, a.residual);
+                within = verify::within<Scalar>(Check::factorization, n, a.residual);
                 break;
             case OpKind::getrf: {
                 // Packed 1-based int32 pivots, min(m, n) per item, in the first half of the int64 span.
                 VectorView<int32_t> pivv(reinterpret_cast<int32_t*>(piv.data()), kmin, batch, 1, pstride);
                 a.residual = MV::getrf_residual(*q, A0v, Av, pivv, items);
-                within = verify::within<T>(Check::factorization, n, a.residual);
+                within = verify::within<Scalar>(Check::factorization, n, a.residual);
                 // The discriminating oracle: pivots elementwise against host xGETRF.
                 int mism = 0;
                 std::vector<int32_t> hp;
@@ -583,12 +622,12 @@ static int run(const Cfg& c) {
             case OpKind::gesv:
             case OpKind::posv:
             case OpKind::getrs:
-                a.residual = MV::solve_residual(*q, A0v, Xv, B0v, items);
-                within = verify::within<T>(Check::solve, n, a.residual);
+                a.residual = MV::solve_residual(*q, A0v, c.trans, Xv, B0v, items);
+                within = verify::within<Scalar>(Check::solve, n, a.residual);
                 break;
             case OpKind::geqrf: {
                 using QV = MatrixView<typename MV::promoted_type, MatrixFormat::Dense>;
-                VectorView<T> tauv(tau.data(), kmin, batch, 1, kmin);
+                VectorView<Scalar> tauv(tau.data(), kmin, batch, 1, kmin);
                 a.residual = MV::qr_residual(*q, A0v, Av, tauv, items);
                 double orth = 0;
                 for (int b : items) {
@@ -596,14 +635,14 @@ static int run(const Cfg& c) {
                     orth = verify::nanmax(orth, QV::orthogonality(*q, Q));
                 }
                 a.extra = orth;
-                within = verify::within<T>(Check::factorization, n, a.residual);
-                if (!verify::within<T>(Check::orthogonality, m, orth)) flag(a, "orthogonality");
+                within = verify::within<Scalar>(Check::factorization, n, a.residual);
+                if (!verify::within<Scalar>(Check::orthogonality, m, orth)) flag(a, "orthogonality");
                 break;
             }
             case OpKind::orgqr: {
                 a.residual = MV::orthogonality(*q, Av, items);
                 a.extra = a.residual;
-                within = verify::within<T>(Check::orthogonality, m, a.residual);
+                within = verify::within<Scalar>(Check::orthogonality, m, a.residual);
                 break;
             }
         }
@@ -629,6 +668,8 @@ static int run(const Cfg& c) {
 #endif
 }
 
+}  // namespace
+
 // ------------------------------------------------------------- main
 int main(int argc, char** argv) {
     if (argc < 8) {
@@ -638,6 +679,8 @@ int main(int argc, char** argv) {
             "  op   : potrf getrf getrs geqrf orgqr gesv posv\n"
             "  type : float double cfloat cdouble\n"
             "  --uplo=upper|lower : potrf and posv only, default lower\n"
+            "  --trans=n|t|c      : getrs only, default n\n"
+            "  --mask[=all|alt]   : a batch mask on the timed call (all: every item, alt: even items)\n"
             "  env  : WARM_S (seconds, default 1.5), LD_PAD (ld = m + LD_PAD)\n"
             "prints: op,type,m,n,nrhs,batch,arm,pin,pin_parsed,median_ms,mean_ms,"
             "rel_sd,reps,residual,extra_check,info_nonzero,bad,reason\n");
@@ -666,6 +709,11 @@ int main(int argc, char** argv) {
         else if (a.rfind("--csv=", 0) == 0) c.csv = a.substr(6);
         else if (a == "--uplo=upper") c.upper = true;
         else if (a == "--uplo=lower") c.upper = false;
+        else if (a == "--trans=n") c.trans = Transpose::NoTrans;
+        else if (a == "--trans=t") c.trans = Transpose::Trans;
+        else if (a == "--trans=c") c.trans = Transpose::ConjTrans;
+        else if (a == "--mask" || a == "--mask=all") c.mask = 1;
+        else if (a == "--mask=alt") c.mask = 2;
         else if (a.rfind("--arms=", 0) == 0) {
             // SPLIT ON COMMAS EXACTLY, never a substring test: `--arms=native` under a
             // `find("vendor")` test dropped the vendor arm silently, and `--arms=vendor`
@@ -690,6 +738,10 @@ int main(int argc, char** argv) {
     }
     if (c.m <= 0 || c.n <= 0 || c.batch <= 0 || c.reps <= 0) {
         std::fprintf(stderr, "factor_bench: need m>0 n>0 batch>0 reps>0\n");
+        return 2;
+    }
+    if (c.trans != Transpose::NoTrans && c.op != OpKind::getrs) {
+        std::fprintf(stderr, "factor_bench: --trans is getrs only\n");
         return 2;
     }
     if ((c.op == OpKind::getrs || is_solve_op(c.op)) && c.nrhs <= 0) {

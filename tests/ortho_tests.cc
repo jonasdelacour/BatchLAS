@@ -12,12 +12,12 @@
 
 using namespace batchlas;
 
-std::string GetTestName(Transpose trans, OrthoAlgorithm algo);
-std::string GetAgainstMTestName(Transpose transA, Transpose transM, OrthoAlgorithm algo);
+std::string get_test_name(Transpose trans, OrthoAlgorithm algo);
+std::string get_against_m_test_name(Transpose transA, Transpose transM, OrthoAlgorithm algo);
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct OrthoConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 
@@ -110,7 +110,7 @@ TYPED_TEST(OrthoMatrixTest, OrthogonalizeMatrix) {
     for (auto transA : transposes) {
         for (auto algo : algos) {
             SCOPED_TRACE(test_utils::backend_to_string(BackendType));
-            SCOPED_TRACE(GetTestName(transA, algo));
+            SCOPED_TRACE(get_test_name(transA, algo));
 
             const int m = 10, k = 5, batch_size = 2;
             int rows = (transA == Transpose::NoTrans) ? m : k;
@@ -150,7 +150,7 @@ TYPED_TEST(OrthoAgainstMTest, OrthogonalizeMatrixAgainstM) {
         for (auto transM : transposes) {
             for (auto algo : algos) {
                 SCOPED_TRACE(test_utils::backend_to_string(BackendType));
-                SCOPED_TRACE(GetAgainstMTestName(transA, transM, algo));
+                SCOPED_TRACE(get_against_m_test_name(transA, transM, algo));
 
                 const int dim = 12, nA = 3, nM = 2, batch_size = 2;
 
@@ -237,7 +237,7 @@ TYPED_TEST(OrthoMatrixTest, Cgs2PaddedLd) {
 }
 
 // Helper function for test name generation
-std::string GetTestName(Transpose trans, OrthoAlgorithm algo) {
+std::string get_test_name(Transpose trans, OrthoAlgorithm algo) {
     std::string trans_str = (trans == Transpose::NoTrans) ? "NoTrans" : "Trans";
     std::string algo_str;
     switch (algo) {
@@ -252,7 +252,7 @@ std::string GetTestName(Transpose trans, OrthoAlgorithm algo) {
     return trans_str + "_" + algo_str;
 }
 
-std::string GetAgainstMTestName(Transpose transA, Transpose transM, OrthoAlgorithm algo) {
+std::string get_against_m_test_name(Transpose transA, Transpose transM, OrthoAlgorithm algo) {
     std::string transA_str = (transA == Transpose::NoTrans) ? "NoTrans" : "Trans";
     std::string transM_str = (transM == Transpose::NoTrans) ? "NoTrans" : "Trans";
     std::string algo_str;
@@ -267,4 +267,3 @@ std::string GetAgainstMTestName(Transpose transA, Transpose transM, OrthoAlgorit
     }
     return "A" + transA_str + "_M" + transM_str + "_" + algo_str;
 }
-

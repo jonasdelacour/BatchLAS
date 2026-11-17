@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Native batched POTRF: the CTA leaf kernel and the blocked driver above it.
 //
-// Tests call sycl_potrf::potrf_{cta,blocked}_dispatch DIRECTLY and check a host
+// Tests call ops::potrf::potrf_{cta,blocked}_dispatch DIRECTLY and check a host
 // multiply-back residual computed here: a vendor reference is inert in a vendor-free
 // build. Pinned-facade cases use ScopedPin; potrf_candidates_tests covers every pin.
 // evidence: docs/perf/potrf.md#potrf-correctness-findings
@@ -30,6 +30,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <type_traits>
 #include <random>
 #include <string>
 #include <vector>
@@ -38,50 +39,49 @@ using namespace batchlas;
 
 namespace {
 
-template <typename T>
-using RealOf = typename batchlas::base_type<T>::type;
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using RealOf = typename batchlas::base_type<Scalar>::type;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
-template <typename T>
-inline T host_rand(std::mt19937& gen) {
-    std::uniform_real_distribution<RealOf<T>> d(RealOf<T>(-1), RealOf<T>(1));
-    if constexpr (test_utils::is_complex<T>::value) {
+template <typename Scalar>
+inline Scalar host_rand(std::mt19937& gen) {
+    std::uniform_real_distribution<RealOf<Scalar>> d(RealOf<Scalar>(-1), RealOf<Scalar>(1));
+    if constexpr (test_utils::is_complex<Scalar>::value) {
         const auto re = d(gen), im = d(gen);
-        return T(re, im);
-    }
-    else return d(gen);
+        return Scalar(re, im);
+    } else return d(gen);
 }
 
 // Column-major Hermitian PD matrix A = (M M^H)/n + shift*I. The shift pins the
 // condition number at O(1), so a residual failure is a bug and not conditioning.
-template <typename T>
-std::vector<T> make_spd(int n, unsigned seed, RealOf<T> shift = RealOf<T>(2)) {
-    using R = RealOf<T>;
+template <typename Scalar>
+std::vector<Scalar> make_spd(int n, unsigned seed, RealOf<Scalar> shift = RealOf<Scalar>(2)) {
+    using R = RealOf<Scalar>;
     std::mt19937 gen(seed);
-    std::vector<T> M(static_cast<size_t>(n) * n);
-    for (auto& v : M) v = host_rand<T>(gen);
+    std::vector<Scalar> M(static_cast<size_t>(n) * n);
+    for (auto& v : M) v = host_rand<Scalar>(gen);
 
-    std::vector<T> A(static_cast<size_t>(n) * n, T{});
+    std::vector<Scalar> A(static_cast<size_t>(n) * n, Scalar{});
     for (int i = 0; i < n; ++i) {
         for (int j = 0; j < n; ++j) {
-            T acc{};
+            Scalar acc{};
             for (int k = 0; k < n; ++k) {
                 acc += M[i + static_cast<size_t>(k) * n] *
-                       MV<T>::conj(M[j + static_cast<size_t>(k) * n]);
+                       MV<Scalar>::conj(M[j + static_cast<size_t>(k) * n]);
             }
-            A[i + static_cast<size_t>(j) * n] = acc / T(R(n));
+            A[i + static_cast<size_t>(j) * n] = acc / Scalar(R(n));
         }
     }
     for (int i = 0; i < n; ++i) {
         A[i + static_cast<size_t>(i) * n] =
-            MV<T>::make(std::real(A[i + static_cast<size_t>(i) * n]) + shift, R(0));
+            MV<Scalar>::make(std::real(A[i + static_cast<size_t>(i) * n]) + shift, R(0));
     }
     // Force exact Hermitian symmetry and an exactly real diagonal: the kernel is
     // contractually allowed to ignore imag(diag(A)), so the reference must too.
     for (int i = 0; i < n; ++i) {
         for (int j = 0; j < i; ++j) {
-            A[j + static_cast<size_t>(i) * n] = MV<T>::conj(A[i + static_cast<size_t>(j) * n]);
+            A[j + static_cast<size_t>(i) * n] = MV<Scalar>::conj(A[i + static_cast<size_t>(j) * n]);
         }
     }
     return A;
@@ -92,19 +92,19 @@ std::vector<T> make_spd(int n, unsigned seed, RealOf<T> shift = RealOf<T>(2)) {
 // The row-prefix normalisation below looks gratuitous and is the point: it makes the
 // ORIGINAL diagonal at the failure column positive, so a kernel reading the STALE pivot
 // cannot name it. `negative_cols` must be sorted; c == 0 never discriminates.
-template <typename T>
-std::vector<T> make_planted_ldl(int n, const std::vector<int>& negative_cols, unsigned seed) {
-    using R = RealOf<T>;
+template <typename Scalar>
+std::vector<Scalar> make_planted_ldl(int n, const std::vector<int>& negative_cols, unsigned seed) {
+    using R = RealOf<Scalar>;
     std::mt19937 gen(seed);
     std::uniform_real_distribution<R> d(R(-0.25), R(0.25));
 
-    std::vector<T> L(static_cast<size_t>(n) * n, T{});
+    std::vector<Scalar> L(static_cast<size_t>(n) * n, Scalar{});
     for (int c = 0; c < n; ++c) {
-        L[c + static_cast<size_t>(c) * n] = MV<T>::make(R(1), R(0));
+        L[c + static_cast<size_t>(c) * n] = MV<Scalar>::make(R(1), R(0));
         for (int i = c + 1; i < n; ++i) {
-            if constexpr (test_utils::is_complex<T>::value) {
+            if constexpr (test_utils::is_complex<Scalar>::value) {
                 const auto re = d(gen), im = d(gen);
-                L[i + static_cast<size_t>(c) * n] = T(re, im);
+                L[i + static_cast<size_t>(c) * n] = Scalar(re, im);
             } else {
                 L[i + static_cast<size_t>(c) * n] = d(gen);
             }
@@ -119,54 +119,55 @@ std::vector<T> make_planted_ldl(int n, const std::vector<int>& negative_cols, un
         if (c < 1 || c >= n) continue;
         R ss = R(0);
         for (int p = 0; p < c; ++p) {
-            const T v = L[c + static_cast<size_t>(p) * n];
+            const Scalar v = L[c + static_cast<size_t>(p) * n];
             ss += std::real(v) * std::real(v) + std::imag(v) * std::imag(v);
         }
         if (ss <= R(0)) continue;
         const R scale = std::sqrt(R(2) / ss);
         for (int p = 0; p < c; ++p) {
             L[c + static_cast<size_t>(p) * n] =
-                MV<T>::make(std::real(L[c + static_cast<size_t>(p) * n]) * scale,
-                               std::imag(L[c + static_cast<size_t>(p) * n]) * scale);
+                MV<Scalar>::make(std::real(L[c + static_cast<size_t>(p) * n]) * scale,
+                                 std::imag(L[c + static_cast<size_t>(p) * n]) * scale);
         }
     }
 
-    std::vector<T> A(static_cast<size_t>(n) * n, T{});
+    std::vector<Scalar> A(static_cast<size_t>(n) * n, Scalar{});
     for (int i = 0; i < n; ++i) {
         for (int j = 0; j < n; ++j) {
-            T acc{};
+            Scalar acc{};
             for (int k = 0; k <= std::min(i, j); ++k) {
-                acc += L[i + static_cast<size_t>(k) * n] * MV<T>::make(D[k], R(0)) *
-                       MV<T>::conj(L[j + static_cast<size_t>(k) * n]);
+                acc += L[i + static_cast<size_t>(k) * n] * MV<Scalar>::make(D[k], R(0)) *
+                       MV<Scalar>::conj(L[j + static_cast<size_t>(k) * n]);
             }
             A[i + static_cast<size_t>(j) * n] = acc;
         }
     }
     for (int i = 0; i < n; ++i) {
         A[i + static_cast<size_t>(i) * n] =
-            MV<T>::make(std::real(A[i + static_cast<size_t>(i) * n]), R(0));
+            MV<Scalar>::make(std::real(A[i + static_cast<size_t>(i) * n]), R(0));
     }
     return A;
 }
 
 // ||A - L L^H||_F / ||A||_F (Lower) or ||A - U^H U||_F / ||A||_F (Upper), read from the stored
 // triangle of the factor F (ld) through batchlas::verify; A is the tight Hermitian reference.
-template <typename T>
-double potrf_error(Queue& ctx, const std::vector<T>& A, const T* F, int ld, int n, Uplo uplo) {
-    return MV<T>::potrf_residual(ctx, MV<T>(const_cast<T*>(A.data()), n, n, n), MV<T>(const_cast<T*>(F), n, n, ld), uplo);
+template <typename Scalar>
+double potrf_error(Queue& ctx, const std::vector<Scalar>& A, const Scalar* F, int ld, int n, Uplo uplo) {
+    return MV<Scalar>::potrf_residual(ctx, MV<Scalar>(const_cast<Scalar*>(A.data()), n, n, n), MV<Scalar>(const_cast<Scalar*>(F), n, n, ld), uplo);
 }
 
-template <typename T>
-double potrf_error(Queue& ctx, const std::vector<T>& A, const Matrix<T, MatrixFormat::Dense>& F, int b, Uplo uplo) {
-    return potrf_error<T>(ctx, A, F.data().data() + static_cast<size_t>(b) * F.stride(), F.ld(), F.rows(), uplo);
+template <typename Scalar>
+double potrf_error(Queue& ctx, const std::vector<Scalar>& A, const Matrix<Scalar, MatrixFormat::Dense>& F, int b,
+                   Uplo uplo) {
+    return potrf_error<Scalar>(ctx, A, F.data().data() + static_cast<size_t>(b) * F.stride(), F.ld(), F.rows(), uplo);
 }
 
 // The CTA leaf's pre-migration bound 4 n eps = 8 n u, a factor 1/2 on the kind's 16 n u.
 inline const verify::Slack kLeafSlack{0.5, "kept from this file's leaf tolerance 4 n eps (docs/perf/potrf.md#potrf-correctness-findings)"};
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct PotrfConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 
@@ -199,7 +200,7 @@ protected:
         const std::size_t local_mem =
             this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE);
         const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
-        return sycl_potrf::potrf_cta_max_n_for_slm<T>(budget);
+        return ops::potrf::potrf_cta_max_n_for_slm<T>(budget);
     }
 
     // The order a work-group can hold AT ALL, ignoring the occupancy target. Strictly
@@ -210,7 +211,7 @@ protected:
         const std::size_t local_mem =
             this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE);
         const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
-        return sycl_potrf::potrf_cta_max_n_for_slm<T>(budget, 1);
+        return ops::potrf::potrf_cta_max_n_for_slm<T>(budget, 1);
     }
 
     // Load the `uplo` triangle of `src` into item `b` and POISON the other: the contract
@@ -225,17 +226,16 @@ protected:
         }
     }
 
-
     std::vector<int32_t> run_cta(Matrix<T, MatrixFormat::Dense>& A, Uplo uplo,
                                  bool pass_info_span = true) {
         const int batch = A.batch_size();
-        UnifiedVector<std::byte> ws(sycl_potrf::potrf_cta_buffer_size<T>(*this->ctx, A));
+        UnifiedVector<std::byte> ws(ops::potrf::potrf_cta_buffer_size<T>(*this->ctx, A));
         UnifiedVector<int32_t> info(batch, int32_t(-7));
         if (pass_info_span) {
-            (void)sycl_potrf::potrf_cta_dispatch<T>(*this->ctx, A, uplo, ws.to_span(),
+            (void)ops::potrf::potrf_cta_dispatch<T>(*this->ctx, A, uplo, ws.to_span(),
                                               info.to_span());
         } else {
-            (void)sycl_potrf::potrf_cta_dispatch<T>(*this->ctx, A, uplo, ws.to_span(),
+            (void)ops::potrf::potrf_cta_dispatch<T>(*this->ctx, A, uplo, ws.to_span(),
                                               Span<int32_t>{});
         }
         this->ctx->wait();
@@ -286,6 +286,51 @@ TYPED_TEST(PotrfCtaTest, ResidualBothTriangles) {
     }
 }
 
+// Column 0 of the diagonal block is a(i,0) / sqrt(a00) to within kMaxEps eps, measured against
+// a long double reference. A residual check accepts the bare rsqrt.approx fold NVPTX applied to
+// some float columns; this bound does not. Rows 1..7 only: below the NB = 8 block the panel
+// solve divides instead.
+TYPED_TEST(PotrfCtaTest, FirstColumnReciprocalIsAccurate) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+    // Measured worst (eps): float/cfloat 0.96 (origin/main: 1.19-1.29), double/cdouble 1.15.
+    constexpr double kMaxEps = std::is_same_v<R, float> ? 1.0 : 1.2;
+
+    // Relative error in units of eps(R): unlike ulp-of-result it does not double across a binade.
+    const auto rel_err = [](R got, long double want) {
+        constexpr long double eps = std::numeric_limits<R>::epsilon();
+        return want == 0.0L ? 0.0 : static_cast<double>(std::fabs((got - want) / want) / eps);
+    };
+    for (int n : {8, 32}) {
+        if (n > this->ceiling()) continue;
+        const int batch = 512;
+        for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
+            Matrix<T, MatrixFormat::Dense> A(n, n, batch);
+            std::vector<std::vector<T>> ref(batch);
+            for (int b = 0; b < batch; ++b) {
+                ref[b] = make_spd<T>(n, 31337u + 7u * b + 5u * n);
+                this->load_triangle(A, b, n, ref[b], uplo, MV<T>::make(R(-999), R(777)));
+            }
+            const auto info = this->run_cta(A, uplo);
+            double worst = 0.0;
+            for (int b = 0; b < batch; ++b) {
+                ASSERT_EQ(info[b], 0) << "n=" << n << " b=" << b;
+                const long double r = 1.0L / std::sqrt(static_cast<long double>(std::real(ref[b][0])));
+                for (int i = 1; i < std::min(n, 8); ++i) {
+                    const bool lo = (uplo == Uplo::Lower);
+                    const T a = lo ? ref[b][i] : ref[b][static_cast<size_t>(i) * n];
+                    const T got = lo ? A(i, 0, b) : A(0, i, b);
+                    worst = std::max(worst, rel_err(std::real(got), std::real(a) * r));
+                    worst = std::max(worst, rel_err(std::imag(got), std::imag(a) * r));
+                }
+            }
+            EXPECT_LE(worst, kMaxEps) << "n=" << n << " uplo=" << static_cast<int>(uplo)
+                                      << ": column 0 is not a(i,0) / sqrt(a00) to " << kMaxEps
+                                      << " eps";
+        }
+    }
+}
+
 // The ceiling is a HARD capacity: one past it must not launch, and a `cta` pin refuses it.
 TYPED_TEST(PotrfCtaTest, JustPastTheCeilingHasNoCtaRoute) {
     using T = typename TestFixture::T;
@@ -308,9 +353,9 @@ TYPED_TEST(PotrfCtaTest, JustPastTheCeilingHasNoCtaRoute) {
                      std::invalid_argument);
     }
 
-    UnifiedVector<std::byte> ws(sycl_potrf::potrf_cta_buffer_size<T>(*this->ctx, A));
+    UnifiedVector<std::byte> ws(ops::potrf::potrf_cta_buffer_size<T>(*this->ctx, A));
     UnifiedVector<int32_t> info(1, int32_t(0));
-    EXPECT_THROW((void)sycl_potrf::potrf_cta_dispatch<T>(*this->ctx, A, Uplo::Lower,
+    EXPECT_THROW((void)ops::potrf::potrf_cta_dispatch<T>(*this->ctx, A, Uplo::Lower,
                                                    ws.to_span(), info.to_span()),
                  std::invalid_argument);
 }
@@ -393,7 +438,7 @@ TYPED_TEST(PotrfCtaTest, PackedBatchMatchesSolo) {
         if (n > this->ceiling()) continue;
         const int batch = 8;
 
-        const unsigned geom = sycl_potrf::potrf_cta_debug_launch<T>(*this->ctx, n, batch);
+        const unsigned geom = ops::potrf::potrf_cta_debug_launch<T>(*this->ctx, n, batch);
         ASSERT_NE(geom, 0u) << "n=" << n << " does not fit, which the ceiling check missed";
         const int G = static_cast<int>(geom & 0xffffu);
         if (G <= 1) continue;   // this type does not pack at this n
@@ -681,9 +726,9 @@ TYPED_TEST(PotrfCtaTest, PaddedLeadingDimensionAndNonDefaultStride) {
             }
         }
 
-        UnifiedVector<std::byte> ws(sycl_potrf::potrf_cta_buffer_size<T>(*this->ctx, V));
+        UnifiedVector<std::byte> ws(ops::potrf::potrf_cta_buffer_size<T>(*this->ctx, V));
         UnifiedVector<int32_t> info(batch, int32_t(-7));
-        (void)sycl_potrf::potrf_cta_dispatch<T>(*this->ctx, V, uplo, ws.to_span(), info.to_span());
+        (void)ops::potrf::potrf_cta_dispatch<T>(*this->ctx, V, uplo, ws.to_span(), info.to_span());
         this->ctx->wait();
 
         for (int b = 0; b < batch; ++b) {
@@ -713,18 +758,18 @@ TYPED_TEST(PotrfCtaTest, MeasuredFitCeilings) {
                             : std::is_same_v<T, std::complex<float>> ? 109
                                                                      : 77;
 
-    EXPECT_EQ(sycl_potrf::potrf_cta_max_n_for_slm<T>(97280), advertised);
-    EXPECT_EQ(sycl_potrf::potrf_cta_max_n_for_slm<T>(97280, 1), resident_only);
+    EXPECT_EQ(ops::potrf::potrf_cta_max_n_for_slm<T>(97280), advertised);
+    EXPECT_EQ(ops::potrf::potrf_cta_max_n_for_slm<T>(97280, 1), resident_only);
 
     // The occupancy target really divides the budget rather than being decorative.
-    EXPECT_LT(sycl_potrf::potrf_cta_max_n_for_slm<T>(97280),
-              sycl_potrf::potrf_cta_max_n_for_slm<T>(97280, 1));
+    EXPECT_LT(ops::potrf::potrf_cta_max_n_for_slm<T>(97280),
+              ops::potrf::potrf_cta_max_n_for_slm<T>(97280, 1));
 
     // And each ceiling really is a ceiling of the formula: a bigger budget admits more.
-    EXPECT_LT(sycl_potrf::potrf_cta_max_n_for_slm<T>(97280),
-              sycl_potrf::potrf_cta_max_n_for_slm<T>(101376));
-    EXPECT_LT(sycl_potrf::potrf_cta_max_n_for_slm<T>(97280, 1),
-              sycl_potrf::potrf_cta_max_n_for_slm<T>(101376, 1));
+    EXPECT_LT(ops::potrf::potrf_cta_max_n_for_slm<T>(97280),
+              ops::potrf::potrf_cta_max_n_for_slm<T>(101376));
+    EXPECT_LT(ops::potrf::potrf_cta_max_n_for_slm<T>(97280, 1),
+              ops::potrf::potrf_cta_max_n_for_slm<T>(101376, 1));
 }
 
 // ===========================================================================
@@ -749,12 +794,12 @@ protected:
     struct Blocking { int nb; int W; };
 
     // Both driver seams are required: the public gemm and trsm, as the potrf facade passes them.
-    static sycl_potrf::PotrfTrailingGemm<T> gemm_seam() {
+    static ops::potrf::PotrfTrailingGemm<T> gemm_seam() {
         return [](Queue& c, const MatrixView<T, MatrixFormat::Dense>& a, const MatrixView<T, MatrixFormat::Dense>& b,
                   const MatrixView<T, MatrixFormat::Dense>& r, T al, T be, Transpose ta, Transpose tb,
                   ComputePrecision p) { return gemm<BackendType, T>(c, a, b, r, al, be, ta, tb, p); };
     }
-    static sycl_potrf::PotrfPanelSolve<T> panel_solve() {
+    static ops::potrf::PotrfPanelSolve<T> panel_solve() {
         return [](Queue& c, const MatrixView<T, MatrixFormat::Dense>& a, const MatrixView<T, MatrixFormat::Dense>& b,
                   T alpha, Side s, Uplo u, Transpose t, Diag d) {
             return trsm<BackendType, T>(c, a, b, alpha, s, u, t, d);
@@ -763,7 +808,7 @@ protected:
 
     // The blocking the driver WOULD use; `n` is passed because nb is clamped by it.
     Blocking blocking(int n) const {
-        const unsigned p = sycl_potrf::potrf_blocked_debug_params<T>(*this->ctx, n);
+        const unsigned p = ops::potrf::potrf_blocked_debug_params<T>(*this->ctx, n);
         return Blocking{static_cast<int>(p & 0xffffu), static_cast<int>(p >> 16)};
     }
 
@@ -780,7 +825,6 @@ protected:
         return nb;
     }
 
-
     // Run the blocked driver DIRECTLY. The -12345 info seed is load-bearing: the driver
     // READS info to decide whether an earlier panel failed. info_len < 0 means a full
     // span; 0 the EMPTY span ("not requested"); anything else a SHORT span, likewise not.
@@ -789,15 +833,15 @@ protected:
         Queue& q = queue ? *queue : *this->ctx;
         const int batch = static_cast<int>(V.batch_size());
         UnifiedVector<std::byte> ws(
-            sycl_potrf::potrf_blocked_buffer_size<T>(q, V, uplo));
+            ops::potrf::potrf_blocked_buffer_size<T>(q, V, uplo));
         const int len = (info_len < 0) ? batch : info_len;
         UnifiedVector<int32_t> info(static_cast<size_t>(std::max(len, 1)), int32_t(-12345));
         if (len > 0) {
-            (void)sycl_potrf::potrf_blocked_dispatch<T>(
+            (void)ops::potrf::potrf_blocked_dispatch<T>(
                 q, V, uplo, ws.to_span(),
                 Span<int32_t>(info.data(), static_cast<size_t>(len)), gemm_seam(), panel_solve());
         } else {
-            (void)sycl_potrf::potrf_blocked_dispatch<T>(q, V, uplo, ws.to_span(),
+            (void)ops::potrf::potrf_blocked_dispatch<T>(q, V, uplo, ws.to_span(),
                                                   Span<int32_t>{}, gemm_seam(), panel_solve());
         }
         q.wait();
@@ -1229,13 +1273,13 @@ TYPED_TEST(PotrfBlockedTest, BlockedIsCorrectInsideTheCtaTierAndDrawsNoScratchAt
     Matrix<T, MatrixFormat::Dense> One(nb, nb, 8);
     Matrix<T, MatrixFormat::Dense> Two(nb + 1, nb + 1, 8);
     const std::size_t s1 =
-        sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, One, Uplo::Lower);
+        ops::potrf::potrf_blocked_buffer_size<T>(*this->ctx, One, Uplo::Lower);
     const std::size_t s2 =
-        sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, Two, Uplo::Lower);
+        ops::potrf::potrf_blocked_buffer_size<T>(*this->ctx, Two, Uplo::Lower);
     EXPECT_LT(s1, s2)
         << "the n <= nb single-block case draws the same workspace as the multi-block "
            "case, so the W x W x batch trailing scratch is being allocated for callers "
-           "that never reach the trailing update (ortho.cc:79 is one)";
+           "that never reach the trailing update (ortho.cc:78 is one)";
 
     for (int n : {nb, cap}) {
         if (n < 1) continue;
@@ -1287,9 +1331,9 @@ TYPED_TEST(PotrfBlockedTest, FacadeReachesTheBlockedDriver) {
     for (int b = 0; b < batch; ++b)
         this->load_triangle(direct, b, n, ref[b], Uplo::Lower, MV<T>::make(R(0), R(0)));
     UnifiedVector<std::byte> dws(
-        sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, direct, Uplo::Lower));
+        ops::potrf::potrf_blocked_buffer_size<T>(*this->ctx, direct, Uplo::Lower));
     UnifiedVector<int32_t> dinfo(batch, int32_t(-7));
-    (void)sycl_potrf::potrf_blocked_dispatch<T>(
+    (void)ops::potrf::potrf_blocked_dispatch<T>(
         *this->ctx, direct, Uplo::Lower, dws.to_span(), dinfo.to_span(),
         [](Queue& c, const MatrixView<T, MatrixFormat::Dense>& ga,
            const MatrixView<T, MatrixFormat::Dense>& gb,
@@ -1346,13 +1390,13 @@ TYPED_TEST(PotrfBlockedTest, BlockedDoesNotReadUninitialisedWorkspace) {
         }
 
         const std::size_t bytes =
-            sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, A, Uplo::Lower);
+            ops::potrf::potrf_blocked_buffer_size<T>(*this->ctx, A, Uplo::Lower);
         ASSERT_GT(bytes, 0u);
         UnifiedVector<std::byte> ws(bytes);
         std::memset(ws.data(), 0xFF, bytes);
 
         UnifiedVector<int32_t> info(batch, int32_t(-12345));
-        (void)sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, A, Uplo::Lower,
+        (void)ops::potrf::potrf_blocked_dispatch<T>(*this->ctx, A, Uplo::Lower,
                                               ws.to_span(), info.to_span(), TestFixture::gemm_seam(),
                                               TestFixture::panel_solve());
         this->ctx->wait();
@@ -1374,15 +1418,15 @@ TYPED_TEST(PotrfBlockedTest, BlockedEmptySeamsThrow) {
     const int n = 64, batch = 2;
     Matrix<T, MatrixFormat::Dense> A(n, n, batch);
     UnifiedVector<std::byte> ws(std::max<std::size_t>(
-        1, sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, A, Uplo::Lower)));
+        1, ops::potrf::potrf_blocked_buffer_size<T>(*this->ctx, A, Uplo::Lower)));
     UnifiedVector<int32_t> info(batch, 0);
-    EXPECT_THROW((void)sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, A, Uplo::Lower, ws.to_span(),
-                                                             info.to_span(), sycl_potrf::PotrfTrailingGemm<T>{},
+    EXPECT_THROW((void)ops::potrf::potrf_blocked_dispatch<T>(*this->ctx, A, Uplo::Lower, ws.to_span(),
+                                                             info.to_span(), ops::potrf::PotrfTrailingGemm<T>{},
                                                              TestFixture::panel_solve()),
                  std::invalid_argument);
-    EXPECT_THROW((void)sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, A, Uplo::Lower, ws.to_span(),
+    EXPECT_THROW((void)ops::potrf::potrf_blocked_dispatch<T>(*this->ctx, A, Uplo::Lower, ws.to_span(),
                                                              info.to_span(), TestFixture::gemm_seam(),
-                                                             sycl_potrf::PotrfPanelSolve<T>{}),
+                                                             ops::potrf::PotrfPanelSolve<T>{}),
                  std::invalid_argument);
 }
 
@@ -1509,7 +1553,6 @@ TYPED_TEST(PotrfBlockedTest, FacadeBlockedUpper) {
     }
 }
 
-
 // The TINY tier's cases, in their own file only for length; they are inside this
 // anonymous namespace so make_spd, make_planted_ldl and potrf_error
 // above are the same oracles the CTA cases use.
@@ -1530,17 +1573,17 @@ TEST(PotrfBlocked, NbFollowsScopedEnv) {
     ScopedEnvVar clear_nb("BATCHLAS_POTRF_NB", nullptr);
     ScopedEnvVar clear_w("BATCHLAS_POTRF_W", nullptr);
     ScopedEnvVar pin("BATCHLAS_POTRF_ROUTE", "blocked");
-    const unsigned before = sycl_potrf::potrf_blocked_debug_params<float>(q, n);
+    const unsigned before = ops::potrf::potrf_blocked_debug_params<float>(q, n);
     const size_t bytes_before = potrf_buffer_size(q, A, Uplo::Lower);
     {
         ScopedEnvVar nb("BATCHLAS_POTRF_NB", "16");
         ScopedEnvVar w("BATCHLAS_POTRF_W", "8");
-        const unsigned p = sycl_potrf::potrf_blocked_debug_params<float>(q, n);
+        const unsigned p = ops::potrf::potrf_blocked_debug_params<float>(q, n);
         EXPECT_EQ(p & 0xffffu, 16u) << "nb";
         EXPECT_EQ(p >> 16, 8u) << "W";
         EXPECT_NE(potrf_buffer_size(q, A, Uplo::Lower), bytes_before) << "the product scratch is W x W";
     }
-    EXPECT_EQ(sycl_potrf::potrf_blocked_debug_params<float>(q, n), before) << "the override leaked past its scope";
+    EXPECT_EQ(ops::potrf::potrf_blocked_debug_params<float>(q, n), before) << "the override leaked past its scope";
     EXPECT_EQ(potrf_buffer_size(q, A, Uplo::Lower), bytes_before);
 }
 

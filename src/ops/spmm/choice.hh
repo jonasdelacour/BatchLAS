@@ -12,12 +12,12 @@
 
 namespace batchlas::ops::spmm {
 
-struct Direct : select::NoFields<"direct"> {};  ///< sycl_spmm::spmm_native_csr: CSR only, no GPU gate (native_cpu too)
+struct Direct : select::NoFields<"direct"> {};  ///< ops::spmm::spmm_native_csr: CSR only, no GPU gate (native_cpu too)
 struct Vendor : select::NoFields<"vendor"> {};  ///< backend::spmm_vendor (cuSPARSE, rocSPARSE, netlib) less known-defect shapes
 
 using SpmmChoice = std::variant<Direct, Vendor>;  ///< fieldless: body (by transA), column block, pair load derived
 
-template <typename T>  /// Every compiled choice, in tie-break order (§6.3).
+template <typename Scalar>  /// Every compiled choice, in tie-break order (§6.3).
 constexpr auto candidates() { return select::all_of<SpmmChoice>(); }
 
 inline constexpr std::array<std::string_view, 2> last_resort{"vendor", "direct"};  ///< vendor: every format

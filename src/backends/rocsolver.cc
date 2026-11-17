@@ -15,465 +15,465 @@
 
 namespace batchlas {
 
-    namespace backend {
+namespace backend {
 
-    template <Backend B, typename T>
-    size_t potrf_vendor_buffer_size(Queue& ctx,
-                            const MatrixView<T,MatrixFormat::Dense>& A,
-                            Uplo uplo) {
-        static LinalgHandle<B> handle;
-        handle.setStream(ctx);
-        size_t size = 0;
-        if (A.batch_size() == 1) {
-            size = BumpAllocator::allocation_size<int>(ctx,1);
-        } else {
-            size = BumpAllocator::allocation_size<int>(ctx,A.batch_size());
-        }
-        return size;
+template <Backend B, typename Scalar>
+size_t potrf_vendor_buffer_size(Queue& ctx,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                        Uplo uplo) {
+    static LinalgHandle<B> handle;
+    handle.setStream(ctx);
+    size_t size = 0;
+    if (A.batch_size() == 1) {
+        size = BumpAllocator::allocation_size<int>(ctx, 1);
+    } else {
+        size = BumpAllocator::allocation_size<int>(ctx, A.batch_size());
     }
-
-    } // namespace backend
-
-    namespace backend {
-
-    template <Backend B, typename T>
-    Event potrf_vendor(Queue& ctx,
-                const MatrixView<T, MatrixFormat::Dense>& A,
-                Uplo uplo,
-                Span<std::byte> workspace,
-                Span<int32_t> info_out) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::potrf, "potrf_vendor", B, A);
-        static LinalgHandle<B> handle;
-        BumpAllocator pool(workspace);
-        // rocSOLVER's info is a per-item device array with LAPACK semantics; it
-        // used to be pool scratch nothing read (issue #73). A caller span, when
-        // supplied, replaces the scratch -- so the workspace size is unchanged.
-        auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(A.batch_size()));
-        impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
-            handle.setStream(stream);
-            if (A.batch_size() == 1) {
-                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_spotrf, rocsolver_dpotrf, rocsolver_cpotrf, rocsolver_zpotrf,
-                    handle, enum_convert<BackendLibrary::ROCSOLVER>(uplo), A.rows(), A.data_ptr(), A.ld(), info.data());
-            } else {
-                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_spotrf_strided_batched, rocsolver_dpotrf_strided_batched,
-                    rocsolver_cpotrf_strided_batched, rocsolver_zpotrf_strided_batched,
-                    handle, enum_convert<BackendLibrary::ROCSOLVER>(uplo), A.rows(), A.data_ptr(), A.ld(), A.stride(), info.data(), A.batch_size());
-            }
-        });
-        return ctx.create_event_after_external_work();
-    }
-
-    } // namespace backend
-
-    namespace backend {
-
-    template <Backend B, typename T>
-    Event geqrf_vendor(Queue& ctx,
-                const MatrixView<T, MatrixFormat::Dense>& A,
-                Span<T> tau,
-                Span<std::byte> workspace) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::geqrf, "geqrf_vendor", B, A);
-        static_cast<void>(workspace);
-        static LinalgHandle<B> handle;
-        impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
-            handle.setStream(stream);
-            if (A.batch_size() == 1) {
-                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sgeqrf, rocsolver_dgeqrf,
-                                                             rocsolver_cgeqrf, rocsolver_zgeqrf,
-                                                             handle, A.rows(), A.cols(),
-                                                             A.data_ptr(), A.ld(), tau.data());
-            } else {
-                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sgeqrf_strided_batched,
-                                                             rocsolver_dgeqrf_strided_batched,
-                                                             rocsolver_cgeqrf_strided_batched,
-                                                             rocsolver_zgeqrf_strided_batched,
-                                                             handle, A.rows(), A.cols(),
-                                                             A.data_ptr(), A.ld(), A.stride(),
-                                                             tau.data(), std::min(A.rows(), A.cols()),
-                                                             A.batch_size());
-            }
-        });
-        return ctx.create_event_after_external_work();
-    }
-
-    } // namespace backend
-
-    namespace backend {
-
-    template <Backend B, typename T>
-    size_t geqrf_vendor_buffer_size(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& A,
-                             Span<T> tau) {
-        static_cast<void>(ctx);
-        static_cast<void>(A);
-        static_cast<void>(tau);
-        return 0;
-    }
-
-    } // namespace backend
-
-    namespace backend {
-
-    template <Backend B, typename T>
-    Event ormqr_vendor(Queue& ctx,
-                      const MatrixView<T, MatrixFormat::Dense>& A,
-                      const MatrixView<T, MatrixFormat::Dense>& C,
-                      Side side,
-                      Transpose trans,
-                      Span<T> tau,
-                      Span<std::byte> workspace) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::ormqr, "ormqr_vendor", B, A, C);
-        static_cast<void>(workspace);
-        static LinalgHandle<B> handle;
-        auto m = C.rows();
-        auto n = C.cols();
-        auto k = std::min(A.rows(), A.cols());
-        if (A.batch_size() == 1) {
-            impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
-                handle.setStream(stream);
-                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sormqr, rocsolver_dormqr,
-                                                             rocsolver_cunmqr, rocsolver_zunmqr,
-                                                             handle,
-                                                             enum_convert<BackendLibrary::ROCSOLVER>(side),
-                                                             enum_convert<BackendLibrary::ROCSOLVER>(trans),
-                                                             m, n, k,
-                                                             A.data_ptr(), A.ld(),
-                                                             tau.data(),
-                                                             C.data_ptr(), C.ld());
-            });
-        } else {
-            // On ctx: a fresh Queue is not ordered after ctx's pending work (the geqrf).
-            for (int i = 0; i < A.batch_size(); ++i) {
-                (void)ormqr_vendor<B, T>(ctx,
-                                   A.batch_item(i),
-                                   C.batch_item(i),
-                                   side,
-                                   trans,
-                                   tau.subspan(i * k, k),
-                                   {});
-            }
-        }
-        return ctx.create_event_after_external_work();
-    }
-
-    template <Backend B, typename T>
-    size_t ormqr_vendor_buffer_size(Queue& ctx,
-                                    const MatrixView<T, MatrixFormat::Dense>& A,
-                                    const MatrixView<T, MatrixFormat::Dense>& C,
-                                    Side side,
-                                    Transpose trans,
-                                    Span<T> tau) {
-        static_cast<void>(ctx);
-        static_cast<void>(A);
-        static_cast<void>(C);
-        static_cast<void>(side);
-        static_cast<void>(trans);
-        static_cast<void>(tau);
-        return static_cast<size_t>(0);
-    }
-
-    } // namespace backend
-
-    namespace backend {
-
-    template <Backend B, typename T>
-    Event orgqr_vendor(Queue& ctx,
-                const MatrixView<T, MatrixFormat::Dense>& A,
-                Span<T> tau,
-                Span<std::byte> workspace) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::orgqr, "orgqr_vendor", B, A);
-        static_cast<void>(workspace);
-        static LinalgHandle<B> handle;
-        auto m = A.rows();
-        auto n = A.cols();
-        auto k = std::min(m, n);
-        if (A.batch_size() == 1) {
-            impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
-                handle.setStream(stream);
-                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sorgqr, rocsolver_dorgqr,
-                                                             rocsolver_cungqr, rocsolver_zungqr,
-                                                             handle, m, n, k, A.data_ptr(), A.ld(),
-                                                             tau.data());
-            });
-        } else {
-            // On ctx, the vendor per item: a fresh Queue is not ordered after ctx's pending geqrf.
-            for (int i = 0; i < A.batch_size(); ++i) {
-                (void)orgqr_vendor<B, T>(ctx, A.batch_item(i), tau.subspan(i * k, k), {});
-            }
-        }
-        return ctx.create_event_after_external_work();
-    }
-
-    } // namespace backend
-
-    namespace backend {
-
-    template <Backend B, typename T>
-    size_t orgqr_vendor_buffer_size(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& A,
-                             Span<T> tau) {
-        static_cast<void>(ctx);
-        static_cast<void>(A);
-        static_cast<void>(tau);
-        return 0;
-    }
-
-    } // namespace backend
-
-    namespace backend {
-
-    template <Backend B, typename T>
-    Event getrf_vendor(Queue& ctx,
-                const MatrixView<T, MatrixFormat::Dense>& A,
-                Span<int64_t> pivots,
-                Span<std::byte> workspace,
-                Span<int32_t> info_out) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::getrf, "getrf_vendor", B, A);
-        static LinalgHandle<B> handle;
-        BumpAllocator pool(workspace);
-        // See potrf above (issue #73).
-        auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(A.batch_size()));
-        auto ipiv = pivots.as_span<int>();
-        impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
-            handle.setStream(stream);
-            if (A.batch_size() == 1) {
-                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sgetrf, rocsolver_dgetrf,
-                                                             rocsolver_cgetrf, rocsolver_zgetrf,
-                                                             handle, A.rows(), A.cols(),
-                                                             A.data_ptr(), A.ld(), ipiv.data(),
-                                                             info.data());
-            } else {
-                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sgetrf_strided_batched,
-                                                             rocsolver_dgetrf_strided_batched,
-                                                             rocsolver_cgetrf_strided_batched,
-                                                             rocsolver_zgetrf_strided_batched,
-                                                             handle, A.rows(), A.cols(), A.data_ptr(),
-                                                             A.ld(), A.stride(), ipiv.data(),
-                                                             std::min(A.rows(), A.cols()), info.data(),
-                                                             A.batch_size());
-            }
-        });
-        return ctx.create_event_after_external_work();
-    }
-
-    } // namespace backend
-
-    namespace backend {
-
-    template <Backend B, typename T>
-    size_t getrf_vendor_buffer_size(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& A) {
-        return BumpAllocator::allocation_size<int>(ctx, A.batch_size());
-    }
-
-    } // namespace backend
-
-    namespace backend {
-
-    template <Backend Back, typename T>
-    Event getrs_vendor(Queue& ctx,
-                const MatrixView<T, MatrixFormat::Dense>& A,
-                const MatrixView<T, MatrixFormat::Dense>& B,
-                Transpose transA,
-                Span<int64_t> pivots,
-                Span<std::byte> workspace) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::getrs, "getrs_vendor", Back, A, B);
-        static_cast<void>(workspace);
-        static LinalgHandle<Back> handle;
-        auto ipiv = pivots.as_span<int>();
-        impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
-            handle.setStream(stream);
-            if (A.batch_size() == 1) {
-                call_backend<T, BackendLibrary::ROCSOLVER, Back>(rocsolver_sgetrs, rocsolver_dgetrs,
-                                                             rocsolver_cgetrs, rocsolver_zgetrs,
-                                                             handle,
-                                                             enum_convert<BackendLibrary::ROCSOLVER>(transA),
-                                                             A.rows(), B.cols(),
-                                                             A.data_ptr(), A.ld(), ipiv.data(),
-                                                             B.data_ptr(), B.ld());
-            } else {
-                call_backend<T, BackendLibrary::ROCSOLVER, Back>(rocsolver_sgetrs_strided_batched,
-                                                             rocsolver_dgetrs_strided_batched,
-                                                             rocsolver_cgetrs_strided_batched,
-                                                             rocsolver_zgetrs_strided_batched,
-                                                             handle,
-                                                             enum_convert<BackendLibrary::ROCSOLVER>(transA),
-                                                             A.rows(), B.cols(),
-                                                             A.data_ptr(), A.ld(), A.stride(),
-                                                             ipiv.data(), std::min(A.rows(), A.cols()),
-                                                             B.data_ptr(), B.ld(), B.stride(),
-                                                             A.batch_size());
-            }
-        });
-        return ctx.create_event_after_external_work();
-    }
-
-    } // namespace backend
-
-    namespace backend {
-
-    template <Backend Back, typename T>
-    size_t getrs_vendor_buffer_size(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& A,
-                             const MatrixView<T, MatrixFormat::Dense>& B,
-                             Transpose transA) {
-        static_cast<void>(ctx);
-        static_cast<void>(A);
-        static_cast<void>(B);
-        static_cast<void>(transA);
-        return 0;
-    }
-
-    } // namespace backend
-
-    namespace backend {
-
-    template <Backend B, typename T>
-    Event getri_vendor(Queue& ctx,
-                const MatrixView<T, MatrixFormat::Dense>& A,
-                const MatrixView<T, MatrixFormat::Dense>& C,
-                Span<int64_t> pivots,
-                Span<std::byte> workspace,
-                Span<int32_t> info_out) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::getri, "getri_vendor", B, A, C);
-        static LinalgHandle<B> handle;
-        BumpAllocator pool(workspace);
-        // See potrf above (issue #73).
-        auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(A.batch_size()));
-        auto ipiv = pivots.as_span<int>();
-        // ld- and stride-aware (a no-op when C aliases A, which rocsolver_?getri runs in place).
-        (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, C, A);
-        if (!ctx.in_order()) ctx.wait();
-        impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
-            handle.setStream(stream);
-            if (A.batch_size() == 1) {
-                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sgetri, rocsolver_dgetri,
-                                                             rocsolver_cgetri, rocsolver_zgetri,
-                                                             handle, A.rows(), C.data_ptr(), C.ld(),
-                                                             ipiv.data(), info.data());
-            } else {
-                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sgetri_strided_batched,
-                                                             rocsolver_dgetri_strided_batched,
-                                                             rocsolver_cgetri_strided_batched,
-                                                             rocsolver_zgetri_strided_batched,
-                                                             handle, A.rows(), C.data_ptr(), C.ld(), C.stride(),
-                                                             ipiv.data(), std::min(A.rows(), A.cols()),
-                                                             info.data(), A.batch_size());
-            }
-        });
-        return ctx.create_event_after_external_work();
-    }
-
-    } // namespace backend
-
-    namespace backend {
-
-    template <Backend B, typename T>
-    size_t getri_vendor_buffer_size(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& A) {
-        return BumpAllocator::allocation_size<int>(ctx, A.batch_size());
-    }
-
-    } // namespace backend
-
-    namespace backend {
-
-    template <Backend B, typename T>
-    Event syev_vendor(Queue& ctx,
-                      const MatrixView<T, MatrixFormat::Dense>& A,
-                      Span<typename base_type<T>::type> eigenvalues,
-                      JobType jobtype,
-                      Uplo uplo,
-                      Span<std::byte> workspace,
-                      Span<int32_t> info_out) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::syev, "syev_vendor", B, A);
-        static LinalgHandle<B> handle;
-        BumpAllocator pool(workspace);
-        // rocSOLVER's info is documented per-item LAPACK semantics (see the note
-        // on potrf_vendor above, which already uses info_target). It was
-        // allocated, passed and dropped. Routing the caller's span in only ever
-        // REMOVES a pool draw, so syev_vendor_buffer_size keeps its
-        // unconditional int term and its result does not change.
-        auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(A.batch_size()));
-        auto ws = pool.allocate<typename base_type<T>::type>(ctx, A.rows() * A.batch_size());
-        impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
-            handle.setStream(stream);
-            if (A.batch_size() == 1) {
-                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_ssyev, rocsolver_dsyev, rocsolver_cheev, rocsolver_zheev,
-                    handle, jobtype, uplo,
-                    A.rows(), A.data_ptr(), A.ld(), eigenvalues.data(), ws.data(),
-                    info.data());
-            } else {
-                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_ssyev_strided_batched, rocsolver_dsyevd_strided_batched,
-                    rocsolver_cheevd_strided_batched, rocsolver_zheevd_strided_batched,
-                    handle, jobtype, uplo,
-                    A.rows(), A.data_ptr(), A.ld(), A.stride(), eigenvalues.data(), A.rows(), ws.data(), A.rows(), info.data(), A.batch_size());
-            }
-        });
-        return ctx.create_event_after_external_work();
-    }
-
-    template <Backend B, typename T>
-    size_t syev_vendor_buffer_size(Queue& ctx,
-                                   const MatrixView<T, MatrixFormat::Dense>& A,
-                                   Span<typename base_type<T>::type> /*eigenvalues*/,
-                                   JobType /*jobtype*/,
-                                   Uplo /*uplo*/) {
-        return BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, A.rows() * A.batch_size()) +
-               BumpAllocator::allocation_size<int>(ctx, A.batch_size());
-    }
-
-    // No rocSOLVER gesvd yet. The throwing stub is deliberate: gesvd.hh is declaration-only, so
-    // without it a ROCM build fails to LINK rather than at the call.
-    template <Backend B, typename T>
-    Event gesvd_vendor(Queue& /*ctx*/,
-                       const MatrixView<T, MatrixFormat::Dense>& /*A*/,
-                       Span<typename base_type<T>::type> /*singular_values*/,
-                       const MatrixView<T, MatrixFormat::Dense>& /*U*/,
-                       const MatrixView<T, MatrixFormat::Dense>& /*Vh*/,
-                       SvdVectors /*jobu*/,
-                       SvdVectors /*jobvh*/,
-                       Span<std::byte> /*workspace*/,
-                       Span<int32_t> /*info_out*/) {
-        throw batchlas::unsupported("gesvd_vendor (ROCSOLVER): not implemented");
-    }
-
-    template <Backend B, typename T>
-    size_t gesvd_vendor_buffer_size(Queue& /*ctx*/,
-                                    const MatrixView<T, MatrixFormat::Dense>& /*A*/,
-                                    Span<typename base_type<T>::type> /*singular_values*/,
-                                    const MatrixView<T, MatrixFormat::Dense>& /*U*/,
-                                    const MatrixView<T, MatrixFormat::Dense>& /*Vh*/,
-                                    SvdVectors /*jobu*/,
-                                    SvdVectors /*jobvh*/) {
-        throw batchlas::unsupported("gesvd_vendor_buffer_size (ROCSOLVER): not implemented");
-    }
-
-    } // namespace backend
-
-    // ONLY `backend::*_vendor` rows: a public-op row would duplicate src/ops/.
-    // evidence: docs/design/runtime-internals.md#runtime-internals-vendor-tus-instantiate-only-vendor-symbols
-    #define ROCSOLVER_OPS(B, fp) \
-        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, potrf_vendor) \
-        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, potrf_vendor_buffer_size) \
-        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syev_vendor) \
-        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syev_vendor_buffer_size) \
-        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gesvd_vendor) \
-        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gesvd_vendor_buffer_size) \
-        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, geqrf_vendor) \
-        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, geqrf_vendor_buffer_size) \
-        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getrf_vendor) \
-        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getrf_vendor_buffer_size) \
-        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getrs_vendor) \
-        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getrs_vendor_buffer_size) \
-        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getri_vendor) \
-        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getri_vendor_buffer_size) \
-        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, ormqr_vendor) \
-        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, ormqr_vendor_buffer_size) \
-        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, orgqr_vendor) \
-        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, orgqr_vendor_buffer_size)
-
-    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(ROCSOLVER_OPS, Backend::ROCM)
-
-    #undef ROCSOLVER_OPS
+    return size;
 }
+
+}  // namespace backend
+
+namespace backend {
+
+template <Backend B, typename Scalar>
+Event potrf_vendor(Queue& ctx,
+            const MatrixView<Scalar, MatrixFormat::Dense>& A,
+            Uplo uplo,
+            Span<std::byte> workspace,
+            Span<int32_t> info_out) {
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::potrf, "potrf_vendor", B, A);
+    static LinalgHandle<B> handle;
+    BumpAllocator pool(workspace);
+    // rocSOLVER's info is a per-item device array with LAPACK semantics; it
+    // used to be pool scratch nothing read (issue #73). A caller span, when
+    // supplied, replaces the scratch -- so the workspace size is unchanged.
+    auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(A.batch_size()));
+    impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+        handle.setStream(stream);
+        if (A.batch_size() == 1) {
+            call_backend<Scalar, BackendLibrary::ROCSOLVER, B>(rocsolver_spotrf, rocsolver_dpotrf, rocsolver_cpotrf, rocsolver_zpotrf,
+                handle, enum_convert<BackendLibrary::ROCSOLVER>(uplo), A.rows(), A.data_ptr(), A.ld(), info.data());
+        } else {
+            call_backend<Scalar, BackendLibrary::ROCSOLVER, B>(rocsolver_spotrf_strided_batched, rocsolver_dpotrf_strided_batched,
+                rocsolver_cpotrf_strided_batched, rocsolver_zpotrf_strided_batched,
+                handle, enum_convert<BackendLibrary::ROCSOLVER>(uplo), A.rows(), A.data_ptr(), A.ld(), A.stride(), info.data(), A.batch_size());
+        }
+    });
+    return ctx.create_event_after_external_work();
+}
+
+}  // namespace backend
+
+namespace backend {
+
+template <Backend B, typename Scalar>
+Event geqrf_vendor(Queue& ctx,
+            const MatrixView<Scalar, MatrixFormat::Dense>& A,
+            Span<Scalar> tau,
+            Span<std::byte> workspace) {
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::geqrf, "geqrf_vendor", B, A);
+    (void)workspace;
+    static LinalgHandle<B> handle;
+    impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+        handle.setStream(stream);
+        if (A.batch_size() == 1) {
+            call_backend<Scalar, BackendLibrary::ROCSOLVER, B>(rocsolver_sgeqrf, rocsolver_dgeqrf,
+                                                               rocsolver_cgeqrf, rocsolver_zgeqrf,
+                                                               handle, A.rows(), A.cols(),
+                                                               A.data_ptr(), A.ld(), tau.data());
+        } else {
+            call_backend<Scalar, BackendLibrary::ROCSOLVER, B>(rocsolver_sgeqrf_strided_batched,
+                                                               rocsolver_dgeqrf_strided_batched,
+                                                               rocsolver_cgeqrf_strided_batched,
+                                                               rocsolver_zgeqrf_strided_batched,
+                                                               handle, A.rows(), A.cols(),
+                                                               A.data_ptr(), A.ld(), A.stride(),
+                                                               tau.data(), std::min(A.rows(), A.cols()),
+                                                               A.batch_size());
+        }
+    });
+    return ctx.create_event_after_external_work();
+}
+
+}  // namespace backend
+
+namespace backend {
+
+template <Backend B, typename Scalar>
+size_t geqrf_vendor_buffer_size(Queue& ctx,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         Span<Scalar> tau) {
+    (void)ctx;
+    (void)A;
+    (void)tau;
+    return 0;
+}
+
+}  // namespace backend
+
+namespace backend {
+
+template <Backend B, typename Scalar>
+Event ormqr_vendor(Queue& ctx,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                  Side side,
+                  Transpose trans,
+                  Span<Scalar> tau,
+                  Span<std::byte> workspace) {
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::ormqr, "ormqr_vendor", B, A, C);
+    (void)workspace;
+    static LinalgHandle<B> handle;
+    auto m = C.rows();
+    auto n = C.cols();
+    auto k = std::min(A.rows(), A.cols());
+    if (A.batch_size() == 1) {
+        impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+            handle.setStream(stream);
+            call_backend<Scalar, BackendLibrary::ROCSOLVER, B>(rocsolver_sormqr, rocsolver_dormqr,
+                                                               rocsolver_cunmqr, rocsolver_zunmqr,
+                                                               handle,
+                                                               enum_convert<BackendLibrary::ROCSOLVER>(side),
+                                                               enum_convert<BackendLibrary::ROCSOLVER>(trans),
+                                                               m, n, k,
+                                                               A.data_ptr(), A.ld(),
+                                                               tau.data(),
+                                                               C.data_ptr(), C.ld());
+        });
+    } else {
+        // On ctx: a fresh Queue is not ordered after ctx's pending work (the geqrf).
+        for (int i = 0; i < A.batch_size(); ++i) {
+            (void)ormqr_vendor<B, Scalar>(ctx,
+                               A.batch_item(i),
+                               C.batch_item(i),
+                               side,
+                               trans,
+                               tau.subspan(i * k, k),
+                               {});
+        }
+    }
+    return ctx.create_event_after_external_work();
+}
+
+template <Backend B, typename Scalar>
+size_t ormqr_vendor_buffer_size(Queue& ctx,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                                Side side,
+                                Transpose trans,
+                                Span<Scalar> tau) {
+    (void)ctx;
+    (void)A;
+    (void)C;
+    (void)side;
+    (void)trans;
+    (void)tau;
+    return static_cast<size_t>(0);
+}
+
+}  // namespace backend
+
+namespace backend {
+
+template <Backend B, typename Scalar>
+Event orgqr_vendor(Queue& ctx,
+            const MatrixView<Scalar, MatrixFormat::Dense>& A,
+            Span<Scalar> tau,
+            Span<std::byte> workspace) {
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::orgqr, "orgqr_vendor", B, A);
+    (void)workspace;
+    static LinalgHandle<B> handle;
+    auto m = A.rows();
+    auto n = A.cols();
+    auto k = std::min(m, n);
+    if (A.batch_size() == 1) {
+        impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+            handle.setStream(stream);
+            call_backend<Scalar, BackendLibrary::ROCSOLVER, B>(rocsolver_sorgqr, rocsolver_dorgqr,
+                                                               rocsolver_cungqr, rocsolver_zungqr,
+                                                               handle, m, n, k, A.data_ptr(), A.ld(),
+                                                               tau.data());
+        });
+    } else {
+        // On ctx, the vendor per item: a fresh Queue is not ordered after ctx's pending geqrf.
+        for (int i = 0; i < A.batch_size(); ++i) {
+            (void)orgqr_vendor<B, Scalar>(ctx, A.batch_item(i), tau.subspan(i * k, k), {});
+        }
+    }
+    return ctx.create_event_after_external_work();
+}
+
+}  // namespace backend
+
+namespace backend {
+
+template <Backend B, typename Scalar>
+size_t orgqr_vendor_buffer_size(Queue& ctx,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         Span<Scalar> tau) {
+    (void)ctx;
+    (void)A;
+    (void)tau;
+    return 0;
+}
+
+}  // namespace backend
+
+namespace backend {
+
+template <Backend B, typename Scalar>
+Event getrf_vendor(Queue& ctx,
+            const MatrixView<Scalar, MatrixFormat::Dense>& A,
+            Span<int64_t> pivots,
+            Span<std::byte> workspace,
+            Span<int32_t> info_out) {
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::getrf, "getrf_vendor", B, A);
+    static LinalgHandle<B> handle;
+    BumpAllocator pool(workspace);
+    // See potrf above (issue #73).
+    auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(A.batch_size()));
+    auto ipiv = pivots.as_span<int>();
+    impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+        handle.setStream(stream);
+        if (A.batch_size() == 1) {
+            call_backend<Scalar, BackendLibrary::ROCSOLVER, B>(rocsolver_sgetrf, rocsolver_dgetrf,
+                                                               rocsolver_cgetrf, rocsolver_zgetrf,
+                                                               handle, A.rows(), A.cols(),
+                                                               A.data_ptr(), A.ld(), ipiv.data(),
+                                                               info.data());
+        } else {
+            call_backend<Scalar, BackendLibrary::ROCSOLVER, B>(rocsolver_sgetrf_strided_batched,
+                                                               rocsolver_dgetrf_strided_batched,
+                                                               rocsolver_cgetrf_strided_batched,
+                                                               rocsolver_zgetrf_strided_batched,
+                                                               handle, A.rows(), A.cols(), A.data_ptr(),
+                                                               A.ld(), A.stride(), ipiv.data(),
+                                                               std::min(A.rows(), A.cols()), info.data(),
+                                                               A.batch_size());
+        }
+    });
+    return ctx.create_event_after_external_work();
+}
+
+}  // namespace backend
+
+namespace backend {
+
+template <Backend B, typename Scalar>
+size_t getrf_vendor_buffer_size(Queue& ctx,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A) {
+    return BumpAllocator::allocation_size<int>(ctx, A.batch_size());
+}
+
+}  // namespace backend
+
+namespace backend {
+
+template <Backend Back, typename Scalar>
+Event getrs_vendor(Queue& ctx,
+            const MatrixView<Scalar, MatrixFormat::Dense>& A,
+            const MatrixView<Scalar, MatrixFormat::Dense>& B,
+            Transpose transA,
+            Span<int64_t> pivots,
+            Span<std::byte> workspace) {
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::getrs, "getrs_vendor", Back, A, B);
+    (void)workspace;
+    static LinalgHandle<Back> handle;
+    auto ipiv = pivots.as_span<int>();
+    impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+        handle.setStream(stream);
+        if (A.batch_size() == 1) {
+            call_backend<Scalar, BackendLibrary::ROCSOLVER, Back>(rocsolver_sgetrs, rocsolver_dgetrs,
+                                                         rocsolver_cgetrs, rocsolver_zgetrs,
+                                                         handle,
+                                                         enum_convert<BackendLibrary::ROCSOLVER>(transA),
+                                                         A.rows(), B.cols(),
+                                                         A.data_ptr(), A.ld(), ipiv.data(),
+                                                         B.data_ptr(), B.ld());
+        } else {
+            call_backend<Scalar, BackendLibrary::ROCSOLVER, Back>(rocsolver_sgetrs_strided_batched,
+                                                         rocsolver_dgetrs_strided_batched,
+                                                         rocsolver_cgetrs_strided_batched,
+                                                         rocsolver_zgetrs_strided_batched,
+                                                         handle,
+                                                         enum_convert<BackendLibrary::ROCSOLVER>(transA),
+                                                         A.rows(), B.cols(),
+                                                         A.data_ptr(), A.ld(), A.stride(),
+                                                         ipiv.data(), std::min(A.rows(), A.cols()),
+                                                         B.data_ptr(), B.ld(), B.stride(),
+                                                         A.batch_size());
+        }
+    });
+    return ctx.create_event_after_external_work();
+}
+
+}  // namespace backend
+
+namespace backend {
+
+template <Backend Back, typename Scalar>
+size_t getrs_vendor_buffer_size(Queue& ctx,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                         Transpose transA) {
+    (void)ctx;
+    (void)A;
+    (void)B;
+    (void)transA;
+    return 0;
+}
+
+}  // namespace backend
+
+namespace backend {
+
+template <Backend B, typename Scalar>
+Event getri_vendor(Queue& ctx,
+            const MatrixView<Scalar, MatrixFormat::Dense>& A,
+            const MatrixView<Scalar, MatrixFormat::Dense>& C,
+            Span<int64_t> pivots,
+            Span<std::byte> workspace,
+            Span<int32_t> info_out) {
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::getri, "getri_vendor", B, A, C);
+    static LinalgHandle<B> handle;
+    BumpAllocator pool(workspace);
+    // See potrf above (issue #73).
+    auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(A.batch_size()));
+    auto ipiv = pivots.as_span<int>();
+    // ld- and stride-aware (a no-op when C aliases A, which rocsolver_?getri runs in place).
+    (void)MatrixView<Scalar, MatrixFormat::Dense>::copy(ctx, C, A);
+    if (!ctx.in_order()) ctx.wait();
+    impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+        handle.setStream(stream);
+        if (A.batch_size() == 1) {
+            call_backend<Scalar, BackendLibrary::ROCSOLVER, B>(rocsolver_sgetri, rocsolver_dgetri,
+                                                               rocsolver_cgetri, rocsolver_zgetri,
+                                                               handle, A.rows(), C.data_ptr(), C.ld(),
+                                                               ipiv.data(), info.data());
+        } else {
+            call_backend<Scalar, BackendLibrary::ROCSOLVER, B>(rocsolver_sgetri_strided_batched,
+                                                               rocsolver_dgetri_strided_batched,
+                                                               rocsolver_cgetri_strided_batched,
+                                                               rocsolver_zgetri_strided_batched,
+                                                               handle, A.rows(), C.data_ptr(), C.ld(), C.stride(),
+                                                               ipiv.data(), std::min(A.rows(), A.cols()),
+                                                               info.data(), A.batch_size());
+        }
+    });
+    return ctx.create_event_after_external_work();
+}
+
+}  // namespace backend
+
+namespace backend {
+
+template <Backend B, typename Scalar>
+size_t getri_vendor_buffer_size(Queue& ctx,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A) {
+    return BumpAllocator::allocation_size<int>(ctx, A.batch_size());
+}
+
+}  // namespace backend
+
+namespace backend {
+
+template <Backend B, typename Scalar>
+Event syev_vendor(Queue& ctx,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                  Span<typename base_type<Scalar>::type> eigenvalues,
+                  JobType jobtype,
+                  Uplo uplo,
+                  Span<std::byte> workspace,
+                  Span<int32_t> info_out) {
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::syev, "syev_vendor", B, A);
+    static LinalgHandle<B> handle;
+    BumpAllocator pool(workspace);
+    // rocSOLVER's info is documented per-item LAPACK semantics (see the note
+    // on potrf_vendor above, which already uses info_target). It was
+    // allocated, passed and dropped. Routing the caller's span in only ever
+    // REMOVES a pool draw, so syev_vendor_buffer_size keeps its
+    // unconditional int term and its result does not change.
+    auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(A.batch_size()));
+    auto ws = pool.allocate<typename base_type<Scalar>::type>(ctx, A.rows() * A.batch_size());
+    impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+        handle.setStream(stream);
+        if (A.batch_size() == 1) {
+            call_backend<Scalar, BackendLibrary::ROCSOLVER, B>(rocsolver_ssyev, rocsolver_dsyev, rocsolver_cheev, rocsolver_zheev,
+                handle, jobtype, uplo,
+                A.rows(), A.data_ptr(), A.ld(), eigenvalues.data(), ws.data(),
+                info.data());
+        } else {
+            call_backend<Scalar, BackendLibrary::ROCSOLVER, B>(rocsolver_ssyev_strided_batched, rocsolver_dsyevd_strided_batched,
+                rocsolver_cheevd_strided_batched, rocsolver_zheevd_strided_batched,
+                handle, jobtype, uplo,
+                A.rows(), A.data_ptr(), A.ld(), A.stride(), eigenvalues.data(), A.rows(), ws.data(), A.rows(), info.data(), A.batch_size());
+        }
+    });
+    return ctx.create_event_after_external_work();
+}
+
+template <Backend B, typename Scalar>
+size_t syev_vendor_buffer_size(Queue& ctx,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                               Span<typename base_type<Scalar>::type> /*eigenvalues*/,
+                               JobType /*jobtype*/,
+                               Uplo /*uplo*/) {
+    return BumpAllocator::allocation_size<typename base_type<Scalar>::type>(ctx, A.rows() * A.batch_size()) +
+           BumpAllocator::allocation_size<int>(ctx, A.batch_size());
+}
+
+// No rocSOLVER gesvd yet. The throwing stub is deliberate: gesvd.hh is declaration-only, so
+// without it a ROCM build fails to LINK rather than at the call.
+template <Backend B, typename Scalar>
+Event gesvd_vendor(Queue& /*ctx*/,
+                   const MatrixView<Scalar, MatrixFormat::Dense>& /*A*/,
+                   Span<typename base_type<Scalar>::type> /*singular_values*/,
+                   const MatrixView<Scalar, MatrixFormat::Dense>& /*U*/,
+                   const MatrixView<Scalar, MatrixFormat::Dense>& /*Vh*/,
+                   SvdVectors /*jobu*/,
+                   SvdVectors /*jobvh*/,
+                   Span<std::byte> /*workspace*/,
+                   Span<int32_t> /*info_out*/) {
+    throw batchlas::unsupported("gesvd_vendor (ROCSOLVER): not implemented");
+}
+
+template <Backend B, typename Scalar>
+size_t gesvd_vendor_buffer_size(Queue& /*ctx*/,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& /*A*/,
+                                Span<typename base_type<Scalar>::type> /*singular_values*/,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& /*U*/,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& /*Vh*/,
+                                SvdVectors /*jobu*/,
+                                SvdVectors /*jobvh*/) {
+    throw batchlas::unsupported("gesvd_vendor_buffer_size (ROCSOLVER): not implemented");
+}
+
+}  // namespace backend
+
+// ONLY `backend::*_vendor` rows: a public-op row would duplicate src/ops/.
+// evidence: docs/design/runtime-internals.md#runtime-internals-vendor-tus-instantiate-only-vendor-symbols
+#define ROCSOLVER_OPS(B, fp) \
+    BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, potrf_vendor) \
+    BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, potrf_vendor_buffer_size) \
+    BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syev_vendor) \
+    BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syev_vendor_buffer_size) \
+    BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gesvd_vendor) \
+    BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gesvd_vendor_buffer_size) \
+    BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, geqrf_vendor) \
+    BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, geqrf_vendor_buffer_size) \
+    BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getrf_vendor) \
+    BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getrf_vendor_buffer_size) \
+    BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getrs_vendor) \
+    BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getrs_vendor_buffer_size) \
+    BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getri_vendor) \
+    BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getri_vendor_buffer_size) \
+    BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, ormqr_vendor) \
+    BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, ormqr_vendor_buffer_size) \
+    BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, orgqr_vendor) \
+    BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, orgqr_vendor_buffer_size)
+
+BATCHLAS_FOR_EACH_SCALAR_TYPE_1(ROCSOLVER_OPS, Backend::ROCM)
+
+#undef ROCSOLVER_OPS
+}  // namespace batchlas

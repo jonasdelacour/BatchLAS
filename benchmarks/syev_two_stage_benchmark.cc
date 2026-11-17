@@ -38,10 +38,8 @@ inline void BaselineSizes(minibench::Benchmark* b) {
     b->Args({2048, 32, 0});
 }
 
-} // namespace
-
-template <typename T, Backend B>
-static void BM_SYEV_TWO_STAGE(minibench::State& state) {
+template <typename Scalar, Backend B>
+void BM_SYEV_TWO_STAGE(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const int kd = static_cast<int>(state.range(2));
@@ -57,8 +55,8 @@ static void BM_SYEV_TWO_STAGE(minibench::State& state) {
     batchlas::detail::reload_settings();
 
     auto q = std::make_shared<Queue>(Device("gpu"), B);
-    auto A = Matrix<T>::Random(n, n, true, batch);
-    UnifiedVector<typename base_type<T>::type> W(n * batch);
+    auto A = Matrix<Scalar>::Random(n, n, true, batch);
+    UnifiedVector<typename base_type<Scalar>::type> W(n * batch);
 
     const size_t ws_size = syev_two_stage_buffer_size(
         *q, A, JobType::EigenVectors, Uplo::Lower);
@@ -72,14 +70,14 @@ static void BM_SYEV_TWO_STAGE(minibench::State& state) {
     state.SetMetric("Time (ms)", 1.0, minibench::Reciprocal);
 }
 
-template <typename T, Backend B>
-static void BM_SYEV_BLOCKED_BASELINE(minibench::State& state) {
+template <typename Scalar, Backend B>
+void BM_SYEV_BLOCKED_BASELINE(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
 
     auto q = std::make_shared<Queue>(Device("gpu"), B);
-    auto A = Matrix<T>::Random(n, n, true, batch);
-    UnifiedVector<typename base_type<T>::type> W(n * batch);
+    auto A = Matrix<Scalar>::Random(n, n, true, batch);
+    UnifiedVector<typename base_type<Scalar>::type> W(n * batch);
 
     const size_t ws_size = syev_blocked_buffer_size(
         *q, A, JobType::EigenVectors, Uplo::Lower);
@@ -92,6 +90,8 @@ static void BM_SYEV_BLOCKED_BASELINE(minibench::State& state) {
                     });
     state.SetMetric("Time (ms)", 1.0, minibench::Reciprocal);
 }
+
+}  // namespace
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 MINI_BENCHMARK_REGISTER_SIZES((BM_SYEV_TWO_STAGE<float, batchlas::Backend::CUDA>), Sizes);

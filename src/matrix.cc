@@ -28,8 +28,8 @@ namespace batchlas {
 
 namespace {
 
-template <typename T>
-using csr_random_real_t = typename base_type<T>::type;
+template <typename Scalar>
+using csr_random_real_t = typename base_type<Scalar>::type;
 
 struct CsrRandomPatternParams {
     std::uint64_t multiplier = 0;
@@ -94,36 +94,36 @@ inline std::pair<int, int> csr_random_upper_pair_from_index(std::uint64_t edge_i
     return {row, col};
 }
 
-template <typename T>
-inline csr_random_real_t<T> csr_random_magnitude(const T& value) {
-    if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) {
+template <typename Scalar>
+inline csr_random_real_t<Scalar> csr_random_magnitude(const Scalar& value) {
+    if constexpr (std::is_same_v<Scalar, std::complex<float>> || std::is_same_v<Scalar, std::complex<double>>) {
         return sycl::fabs(value.real()) + sycl::fabs(value.imag());
     } else {
         return sycl::fabs(value);
     }
 }
 
-template <typename T>
-inline T csr_random_conjugate_if_needed(const T& value) {
-    if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) {
+template <typename Scalar>
+inline Scalar csr_random_conjugate_if_needed(const Scalar& value) {
+    if constexpr (std::is_same_v<Scalar, std::complex<float>> || std::is_same_v<Scalar, std::complex<double>>) {
         return std::conj(value);
     } else {
         return value;
     }
 }
 
-template <typename T>
-inline T csr_random_make_diagonal(csr_random_real_t<T> value) {
-    if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) {
-        return T(value, csr_random_real_t<T>(0));
+template <typename Scalar>
+inline Scalar csr_random_make_diagonal(csr_random_real_t<Scalar> value) {
+    if constexpr (std::is_same_v<Scalar, std::complex<float>> || std::is_same_v<Scalar, std::complex<double>>) {
+        return Scalar(value, csr_random_real_t<Scalar>(0));
     } else {
-        return static_cast<T>(value);
+        return static_cast<Scalar>(value);
     }
 }
 
-template <typename T>
-inline T csr_random_scalar(std::uint64_t seed, std::uint64_t stream_id) {
-    return philox::uniform_symmetric<T>(seed, 0, stream_id);
+template <typename Scalar>
+inline Scalar csr_random_scalar(std::uint64_t seed, std::uint64_t stream_id) {
+    return philox::uniform_symmetric<Scalar>(seed, 0, stream_id);
 }
 
 inline int csr_random_nnz_per_matrix(int n, float density) {
@@ -195,9 +195,9 @@ inline std::size_t dense_source_extent(const DenseSourceLayout& src, int rows, i
 }
 
 // Validates a Span source (shape plus length) and hands back its pointer.
-template <typename T>
-inline const T* dense_checked_source(Span<const T> data, int rows, int cols, int ld,
-                                     int stride, int batch_size) {
+template <typename Scalar>
+inline const Scalar* dense_checked_source(Span<const Scalar> data, int rows, int cols, int ld,
+                                          int stride, int batch_size) {
     constexpr const char* ctor = "Matrix(Span<const T> data, rows, cols, ld, stride, batch_size)";
     const auto src = dense_source_layout(ctor, data.data() != nullptr, rows, cols, ld, stride, batch_size);
     const std::size_t required = dense_source_extent(src, rows, cols, batch_size);
@@ -209,9 +209,9 @@ inline const T* dense_checked_source(Span<const T> data, int rows, int cols, int
 }
 
 // The queue-less helpers run on the default device, or the CPU for double on an fp64-less GPU.
-template <typename T>
+template <typename Scalar>
 Queue default_queue_for() {
-    return Queue(Device::default_device_for<T>());
+    return Queue(Device::default_device_for<Scalar>());
 }
 
 }  // namespace
@@ -231,15 +231,15 @@ void copy_batch_mask(Span<std::uint8_t> dst, Span<const std::uint8_t> src) {
 }
 }  // namespace detail
 
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 // Matrix class implementation - Dense format
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 
 // Basic constructor for dense matrix (allocates uninitialized memory)
-template <typename T, MatrixFormat MType>
+template <typename Scalar, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
-Matrix<T, MType>::Matrix(int rows, int cols, int batch_size, int ld, int stride) {
+Matrix<Scalar, MType>::Matrix(int rows, int cols, int batch_size, int ld, int stride) {
     rows_ = rows;
     cols_ = cols;
     batch_size_ = batch_size;
@@ -274,7 +274,7 @@ Matrix<T, MType>::Matrix(int rows, int cols, int batch_size, int ld, int stride)
     }
 
     // Allocate memory for the matrix data
-    values_ = UnifiedVector<T>(static_cast<size_t>(stride_) * batch_size);
+    values_ = UnifiedVector<Scalar>(static_cast<size_t>(stride_) * batch_size);
 
     // If batched, set up the data pointers
     if (batch_size > 1) {
@@ -289,11 +289,11 @@ Matrix<T, MType>::Matrix(int rows, int cols, int batch_size, int ld, int stride)
 // Constructor from existing data (copies the data)
 // (ld, stride) describe the *source* buffer; the destination keeps the caller's leading
 // dimension but packs the batch items back to back (stride_ == ld_ * cols).
-template <typename T, MatrixFormat MType>
+template <typename Scalar, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
-Matrix<T, MType>::Matrix(const T* data, int rows, int cols, int ld,
-                        int stride, int batch_size) {
+Matrix<Scalar, MType>::Matrix(const Scalar* data, int rows, int cols, int ld,
+                              int stride, int batch_size) {
     rows_ = rows;
     cols_ = cols;
     batch_size_ = batch_size;
@@ -315,11 +315,11 @@ Matrix<T, MType>::Matrix(const T* data, int rows, int cols, int ld,
         // Copy column by column so that neither the padding (which need not be part of
         // the caller's allocation) nor the gaps are read.
         if (ld_ > rows) {
-            std::fill(values_.data(), values_.data() + dst_size, T{});
+            std::fill(values_.data(), values_.data() + dst_size, Scalar{});
         }
         for (int b = 0; b < batch_size; ++b) {
             for (int j = 0; j < cols; ++j) {
-                const T* src_col = data + static_cast<std::size_t>(b) * src.stride +
+                const Scalar* src_col = data + static_cast<std::size_t>(b) * src.stride +
                                           static_cast<std::size_t>(j) * static_cast<std::size_t>(src.ld);
                 std::copy(src_col, src_col + rows,
                           values_.data() + static_cast<std::size_t>(b) * dst_stride +
@@ -339,23 +339,23 @@ Matrix<T, MType>::Matrix(const T* data, int rows, int cols, int ld,
 }
 
 // Constructor from an existing span (copies the data, and checks the span length)
-template <typename T, MatrixFormat MType>
+template <typename Scalar, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
-Matrix<T, MType>::Matrix(Span<const T> data, int rows, int cols, int ld,
-                        int stride, int batch_size)
-    : Matrix(dense_checked_source<T>(data, rows, cols, ld, stride, batch_size),
+Matrix<Scalar, MType>::Matrix(Span<const Scalar> data, int rows, int cols, int ld,
+                              int stride, int batch_size)
+    : Matrix(dense_checked_source<Scalar>(data, rows, cols, ld, stride, batch_size),
              rows, cols, ld, stride, batch_size) {}
 
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 // Matrix class implementation - CSR format
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 
 // Basic constructor for CSR sparse matrix (allocates uninitialized memory)
-template <typename T, MatrixFormat MType>
+template <typename Scalar, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires CsrMatrixFormat<M>
-Matrix<T, MType>::Matrix(int rows, int cols, NonZeros nnz, int batch_size) {
+Matrix<Scalar, MType>::Matrix(int rows, int cols, NonZeros nnz, int batch_size) {
     rows_ = rows;
     cols_ = cols;
     batch_size_ = batch_size;
@@ -368,12 +368,12 @@ Matrix<T, MType>::Matrix(int rows, int cols, NonZeros nnz, int batch_size) {
 }
 
 // Constructor from existing data (copies the data)
-template <typename T, MatrixFormat MType>
+template <typename Scalar, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires CsrMatrixFormat<M>
-Matrix<T, MType>::Matrix(const T* values, const int* row_offsets, const int* col_indices,
-                        int rows, int cols, NonZeros nnz, int matrix_stride,
-                        int offset_stride, int batch_size) {
+Matrix<Scalar, MType>::Matrix(const Scalar* values, const int* row_offsets, const int* col_indices,
+                              int rows, int cols, NonZeros nnz, int matrix_stride,
+                              int offset_stride, int batch_size) {
     rows_ = rows;
     cols_ = cols;
     batch_size_ = batch_size;
@@ -390,20 +390,20 @@ Matrix<T, MType>::Matrix(const T* values, const int* row_offsets, const int* col
     bind();
 }
 
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 // Common Matrix class implementations (for all formats)
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 
 // Convert to a different matrix format
-template <typename T, MatrixFormat MType>
+template <typename Scalar, MatrixFormat MType>
 template <MatrixFormat NewMType>
-Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshold) const {
+Matrix<Scalar, NewMType> Matrix<Scalar, MType>::convert_to(const float_t<Scalar>& zero_threshold) const {
     ::batchlas::detail::refuse_batch_mask("Matrix::convert_to", *this);
-    Queue q = default_queue_for<T>(); // Use default queue
+    Queue q = default_queue_for<Scalar>(); // Use default queue
 
     // Handle identity conversion (same format)
     if constexpr (MType == NewMType) {
-        return static_cast<const Matrix<T, NewMType>&>(*this);
+        return static_cast<const Matrix<Scalar, NewMType>&>(*this);
     }
     // Handle Dense to CSR conversion
     else if constexpr (MType == MatrixFormat::Dense && NewMType == MatrixFormat::CSR) {
@@ -413,7 +413,7 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
         int batch_size = this->batch_size_;
         int dense_ld = this->ld();
         int dense_stride = this->stride();
-        const T* dense_data_ptr = this->data().data();
+        const Scalar* dense_data_ptr = this->data().data();
 
         // 1. Count NNZ per row and total NNZ using work-group reductions
         UnifiedVector<int> row_nnz_counts_mem(batch_size * rows, 0);
@@ -426,20 +426,19 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
         const int wg_size = compute_optimal_wg_size(q.device(), KernelType::REDUCTION, rows, batch_size);
 
         // First kernel: Count non-zeros per row
-        q->submit([&](sycl::handler& cgh) {
-            sycl::local_accessor<int, 1> local_counts(sycl::range<1>(wg_size), cgh);
+        q->submit([&](sycl::handler& h) {
+            sycl::local_accessor<int, 1> local_counts(sycl::range<1>(wg_size), h);
 
-            batchlas::impl::parallel_for(cgh,
+            batchlas::impl::parallel_for(h,
                 sycl::nd_range<3>(
                     sycl::range<3>(batch_size, cols, wg_size),
                     sycl::range<3>(1, 1, wg_size)
                 ),
-                [=](sycl::nd_item<3> item) {
-                    const size_t b = item.get_group(0);
-                    const size_t c = item.get_group(1);  // Now working on columns
-                    const size_t local_id = item.get_local_id(2);
-                    const size_t group_size = item.get_local_range(2);
-
+                [=](sycl::nd_item<3> it) {
+                    const size_t b = it.get_group(0);
+                    const size_t c = it.get_group(1);  // Now working on columns
+                    const size_t local_id = it.get_local_id(2);
+                    const size_t group_size = it.get_local_range(2);
 
                     // Process consecutive rows within the same column for better coalescing
                     for (size_t r = local_id; r < rows; r += group_size) {
@@ -447,8 +446,8 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
                         size_t dense_idx = b * dense_stride + c * dense_ld + r;
                         bool is_nonzero = false;
                         // Use zero_threshold instead of comparing with exact zero
-                        if constexpr (std::is_same_v<T, std::complex<float>> ||
-                                      std::is_same_v<T, std::complex<double>>) {
+                        if constexpr (std::is_same_v<Scalar, std::complex<float>> ||
+                                      std::is_same_v<Scalar, std::complex<double>>) {
                             // For complex numbers, check both real and imaginary parts
                             auto val = dense_data_ptr[dense_idx];
                             if (std::abs(val.real()) > zero_threshold || std::abs(val.imag()) > zero_threshold) {
@@ -472,18 +471,18 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
         }).wait();
 
         // Compute per-matrix (per-batch) number of non-zeros using joint_reduce
-        q->submit([&](sycl::handler& cgh) {
+        q->submit([&](sycl::handler& h) {
             auto row_nnz_acc = row_nnz_counts.data();
             auto batch_nnz_acc = batch_nnz_counts.data();
 
-            batchlas::impl::parallel_for(cgh,
+            batchlas::impl::parallel_for(h,
             sycl::nd_range<1>(
                 sycl::range<1>(batch_size * wg_size),
                 sycl::range<1>(wg_size)
             ),
-            [=](sycl::nd_item<1> item) {
-                const size_t b = item.get_group(0); // batch index
-                const size_t local_id = item.get_local_id(0);
+            [=](sycl::nd_item<1> it) {
+                const size_t b = it.get_group(0); // batch index
+                const size_t local_id = it.get_local_id(0);
 
                 // Calculate the begin and end iterators for this batch's row counts
                 auto begin_iter = row_nnz_acc + (b * rows);
@@ -491,7 +490,7 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
 
                 // Use joint_reduce directly on the range of row counts for this batch
                 int total_sum = sycl::joint_reduce(
-                    item.get_group(),
+                    it.get_group(),
                     begin_iter,
                     end_iter,
                     sycl::plus<int>()
@@ -509,7 +508,7 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
             max_nnz = *std::max_element(batch_nnz_counts.begin(), batch_nnz_counts.end());
         }
         // 2. Create row offsets using exclusive scan within each batch
-        Matrix<T, MatrixFormat::CSR> result(rows, cols, NonZeros{max_nnz}, batch_size);
+        Matrix<Scalar, MatrixFormat::CSR> result(rows, cols, NonZeros{max_nnz}, batch_size);
 
         // The scan never writes element 0 of each item and resize() does not zero: zero it all.
         // evidence: docs/design/runtime-internals.md#runtime-internals-matrix-layout-checks
@@ -519,19 +518,19 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
         UnifiedVector<int> batch_offsets(batch_size + 1, 0);
 
         // Second kernel: Compute row offsets using work-group scan
-        q -> submit ([&](sycl::handler& cgh) {
+        q->submit([&](sycl::handler& h) {
             auto row_offsets_acc = result.row_offsets().data();
             auto row_nnz_acc = row_nnz_counts.data();
             auto batch_offsets_acc = batch_offsets.data();
             auto wgs = compute_optimal_wg_size(q.device(), KernelType::SCAN, rows + 1, batch_size);
-            batchlas::impl::parallel_for(cgh,
+            batchlas::impl::parallel_for(h,
                 sycl::nd_range<1>(batch_size * wgs,
                                  wgs),
-                [=](sycl::nd_item<1> item) {
-                    size_t idx_val = item.get_global_id(0);
-                    size_t bix = item.get_group(0);
+                [=](sycl::nd_item<1> it) {
+                    size_t idx_val = it.get_global_id(0);
+                    size_t bix = it.get_group(0);
                     sycl::joint_inclusive_scan(
-                        item.get_group(),
+                        it.get_group(),
                         row_nnz_acc + bix * rows,
                         row_nnz_acc + bix * rows + rows,
                         row_offsets_acc + bix * (rows + 1) + 1,
@@ -544,7 +543,7 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
 
         // 3. Populate CSR values and column indices
         UnifiedVector<int> row_counters(batch_size * rows, 0);
-        q->submit([&](sycl::handler& cgh) {
+        q->submit([&](sycl::handler& h) {
             // Create accessors
             auto row_offsets_acc = result.row_offsets();
             auto col_indices_acc = result.col_indices();
@@ -554,24 +553,24 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
             // Use atomic to track position within each row
             auto row_counters_acc = row_counters.to_span();
             auto wgs = compute_optimal_wg_size(q.device(), KernelType::SPARSE, rows, batch_size);
-            batchlas::impl::parallel_for(cgh,
+            batchlas::impl::parallel_for(h,
                 sycl::nd_range<1>(batch_size * wgs, wgs),
-                [=](sycl::nd_item<1> item) {
-                    size_t local_id = item.get_local_linear_id();
-                    size_t b = item.get_group(0); // batch index
+                [=](sycl::nd_item<1> it) {
+                    size_t local_id = it.get_local_linear_id();
+                    size_t b = it.get_group(0); // batch index
 
-                    for (size_t id = local_id; id < rows*cols; id += item.get_local_range(0)) {
+                    for (size_t id = local_id; id < rows*cols; id += it.get_local_range(0)) {
                         size_t r = id / rows; // Row index
                         size_t c = id % rows; // Column index
 
                         // Calculate dense index (Column-Major)
                         size_t dense_idx = b * dense_stride + c * dense_ld + r;
-                        T val = dense_acc[dense_idx];
+                        Scalar val = dense_acc[dense_idx];
 
                         // Use zero_threshold instead of comparing with exact zero
                         bool is_nonzero = false;
-                        if constexpr (std::is_same_v<T, std::complex<float>> ||
-                                    std::is_same_v<T, std::complex<double>>) {
+                        if constexpr (std::is_same_v<Scalar, std::complex<float>> ||
+                                    std::is_same_v<Scalar, std::complex<double>>) {
                             // For complex numbers, check both real and imaginary parts
                             is_nonzero = std::abs(val.real()) > zero_threshold || std::abs(val.imag()) > zero_threshold;
                         } else {
@@ -608,21 +607,21 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
         int csr_mat_stride = this->matrix_stride();
         int csr_off_stride = this->offset_stride();
 
-        const T* csr_data_ptr = this->data().data();
+        const Scalar* csr_data_ptr = this->data().data();
         const int* csr_row_offsets_ptr = this->row_offsets().data();
         const int* csr_col_indices_ptr = this->col_indices().data();
 
         // 1. Allocate and zero Dense matrix
-        Matrix<T, MatrixFormat::Dense> result(rows, cols, batch_size);
-        result.fill(T(0)); // Important: Initialize dense matrix to zero
+        Matrix<Scalar, MatrixFormat::Dense> result(rows, cols, batch_size);
+        result.fill(Scalar(0)); // Important: Initialize dense matrix to zero
 
-        T* result_data_ptr = result.data().data();
+        Scalar* result_data_ptr = result.data().data();
         int dense_ld = result.ld();
         int dense_stride = result.stride();
 
         // 2. Scatter CSR data into Dense matrix
-        q->submit([&](sycl::handler& cgh) {
-            cgh.parallel_for(sycl::range<2>(batch_size, rows), [=](sycl::id<2> idx) {
+        q->submit([&](sycl::handler& h) {
+            batchlas::impl::parallel_for(h, sycl::range<2>(batch_size, rows), [=](sycl::id<2> idx) {
                 size_t b = idx[0];
                 size_t r = idx[1];
 
@@ -639,7 +638,7 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
                 for (int csr_idx = start_nnz; csr_idx < end_nnz; ++csr_idx) {
                     int idx_in_batch = batch_val_col_base + csr_idx;
                     int c = csr_col_indices_ptr[idx_in_batch];
-                    T val = csr_data_ptr[idx_in_batch];
+                    Scalar val = csr_data_ptr[idx_in_batch];
 
                     // Calculate dense index (Column-Major)
                     size_t dense_idx = b * dense_stride + c * dense_ld + r;
@@ -653,26 +652,24 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
     // Handle other conversions (e.g., Dense to COO, CSR to CSC, etc.)
     else {
         // Throw error for unsupported or unimplemented conversions
-        throw batchlas::unsupported("Conversion between specified matrix formats not supported or implemented.");
+        throw batchlas::unsupported("Matrix::convert_to: Conversion between specified matrix formats not supported or implemented.");
     }
 }
 
-
 // Create a view of a subset of the matrix
-template <typename T, MatrixFormat MType>
-MatrixView<T, MType> Matrix<T, MType>::view(int rows, int cols, int ld, int stride) const {
+template <typename Scalar, MatrixFormat MType>
+MatrixView<Scalar, MType> Matrix<Scalar, MType>::view(int rows, int cols, int ld, int stride) const {
     if constexpr (MType == MatrixFormat::Dense) {
-        return MatrixView<T, MType>(*this, rows, cols,
-                                    ld > 0 ? ld : this->ld(),
-                                    stride > 0 ? stride : this->stride(),
-                                    batch_size_);
+        return MatrixView<Scalar, MType>(*this, rows, cols,
+                                         ld > 0 ? ld : this->ld(),
+                                         stride > 0 ? stride : this->stride(),
+                                         batch_size_);
     } else {
         // This implementation is simplified - in practice, extracting a submatrix from CSR format
         // requires conversion to coordinate format, extracting the submatrix, and converting back
-        throw batchlas::unsupported("Submatrix views of CSR matrices not yet implemented");
+        throw batchlas::unsupported("Matrix::view: Submatrix views of CSR matrices not yet implemented");
     }
 }
-
 
 template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M>
@@ -685,17 +682,17 @@ MatrixView<T, MType>::MatrixView(const VectorView<T>& vector_view, VectorOrienta
       batch_size_(vector_view.batch_size()),
       data_(vector_view.data()) {
     if (orientation == VectorOrientation::Column && vector_view.inc() != 1) {
-        throw batchlas::invalid_argument("Cannot create column matrix view from vector with inc != 1");
+        throw batchlas::invalid_argument("MatrixView::MatrixView: Cannot create column matrix view from vector with inc != 1");
     }
     batch_mask_ = vector_view.batch_mask();
 }
 
 // Copy from another matrix view
-template <typename T, MatrixFormat MType>
-void Matrix<T, MType>::copy_from(const MatrixView<T, MType>& src) {
+template <typename Scalar, MatrixFormat MType>
+void Matrix<Scalar, MType>::copy_from(const MatrixView<Scalar, MType>& src) {
     ::batchlas::detail::refuse_batch_mask("Matrix::copy_from", *this, src);
     if (rows_ != src.rows_ || cols_ != src.cols_ || batch_size_ != src.batch_size_) {
-        throw batchlas::invalid_argument("Matrix dimensions or batch size mismatch in copy_from");
+        throw batchlas::invalid_argument("Matrix::copy_from: Matrix dimensions or batch size mismatch in copy_from");
     }
 
     if constexpr (MType == MatrixFormat::Dense) {
@@ -704,8 +701,8 @@ void Matrix<T, MType>::copy_from(const MatrixView<T, MType>& src) {
         // a batch stride gets in the way. A dense layout is always a set of
         // contiguous column segments, so there is no case left for an
         // element-at-a-time loop.
-        T* dst_ptr = values_.data();
-        const T* src_ptr = src.data().data();
+        Scalar* dst_ptr = values_.data();
+        const Scalar* src_ptr = src.data().data();
         const std::size_t dst_stride = static_cast<std::size_t>(stride_);
         const std::size_t src_stride = static_cast<std::size_t>(src.stride());
         const std::size_t packed = static_cast<std::size_t>(rows_) * static_cast<std::size_t>(cols_);
@@ -715,7 +712,7 @@ void Matrix<T, MType>::copy_from(const MatrixView<T, MType>& src) {
         } else {
             for (int b = 0; b < batch_size_; ++b) {
                 for (int j = 0; j < cols_; ++j) {
-                    const T* src_col = src_ptr + static_cast<std::size_t>(b) * src_stride +
+                    const Scalar* src_col = src_ptr + static_cast<std::size_t>(b) * src_stride +
                                        static_cast<std::size_t>(j) * static_cast<std::size_t>(src.ld());
                     std::copy(src_col, src_col + rows_,
                               dst_ptr + static_cast<std::size_t>(b) * dst_stride +
@@ -731,22 +728,22 @@ void Matrix<T, MType>::copy_from(const MatrixView<T, MType>& src) {
     }
 }
 
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 // Matrix class static method implementations - Dense format only
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 
 // Factory method to create identity matrix with SYCL
-template <typename T, MatrixFormat MType>
+template <typename Scalar, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
-Matrix<T, MType> Matrix<T, MType>::Identity(int n, int batch_size) {
-    Matrix<T, MType> result(n, n, batch_size);
+Matrix<Scalar, MType> Matrix<Scalar, MType>::Identity(int n, int batch_size) {
+    Matrix<Scalar, MType> result(n, n, batch_size);
 
     // Create a queue to submit work to
-    Queue q = default_queue_for<T>();
+    Queue q = default_queue_for<Scalar>();
 
     // Get pointer to the matrix data
-    T* data_ptr = result.values_.data();
+    Scalar* data_ptr = result.values_.data();
 
     // Calculate total number of elements
     size_t total_elements = static_cast<size_t>(n) * n * batch_size;
@@ -756,9 +753,9 @@ Matrix<T, MType> Matrix<T, MType>::Identity(int n, int batch_size) {
         batch_size, n * n, q.device(), KernelType::ELEMENTWISE);
 
     // Submit a kernel to initialize the identity matrix
-    q -> parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-        size_t global_id = item.get_global_id(0);
-        size_t total_work_items = item.get_global_range(0);
+    q->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
+        size_t global_id = it.get_global_id(0);
+        size_t total_work_items = it.get_global_range(0);
 
         // Grid-stride loop to handle large matrices
         for (size_t flat_idx = global_id; flat_idx < total_elements; flat_idx += total_work_items) {
@@ -769,7 +766,7 @@ Matrix<T, MType> Matrix<T, MType>::Identity(int n, int batch_size) {
             size_t j = remainder % n;               // column index
 
             // Set diagonal elements to 1, others to 0
-            data_ptr[b * n * n + i * n + j] = (i == j) ? T(1) : T(0);
+            data_ptr[b * n * n + i * n + j] = (i == j) ? Scalar(1) : Scalar(0);
         }
     }).wait();
 
@@ -777,12 +774,12 @@ Matrix<T, MType> Matrix<T, MType>::Identity(int n, int batch_size) {
 }
 
 // Factory method to create triangular matrix with specific values using SYCL
-template <typename T, MatrixFormat MType>
+template <typename Scalar, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
-Matrix<T, MType> Matrix<T, MType>::Triangular(int n, Uplo uplo, T diagonal_value,
-                                             T non_diagonal_value, int batch_size) {
-    Matrix<T, MType> result(n, n, batch_size);
+Matrix<Scalar, MType> Matrix<Scalar, MType>::Triangular(int n, Uplo uplo, Scalar diagonal_value,
+                                                        Scalar non_diagonal_value, int batch_size) {
+    Matrix<Scalar, MType> result(n, n, batch_size);
     result.fill_triangular(uplo, diagonal_value, non_diagonal_value).wait();
     return result;
 }
@@ -805,9 +802,9 @@ Event MatrixView<T, MType>::fill_triangular(const Queue& ctx, Uplo uplo, T diago
         batch_size, n * n, ctx.device(), KernelType::ELEMENTWISE);
     (void)wg_per_matrix; // the grid-stride loop below covers the batch directly
 
-    ctx -> parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-        const size_t global_id = item.get_global_id(0);
-        const size_t total_work_items = item.get_global_range(0);
+    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
+        const size_t global_id = it.get_global_id(0);
+        const size_t total_work_items = it.get_global_range(0);
         const size_t elements_per_matrix = static_cast<size_t>(n) * static_cast<size_t>(n);
         const size_t total_work = elements_per_matrix * static_cast<size_t>(batch_size);
 
@@ -840,7 +837,7 @@ template <MatrixFormat M>
     requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::fill_triangular_random(const Queue& ctx, Uplo uplo,
                                                     Diag diag,
-                                                    unsigned int seed) const {
+                                                    unsigned seed) const {
     detail::require_device_fp64<T>(ctx, "MatrixView::fill_triangular_random");
     T* data_ptr = data_.data();
     size_t total_elements = data_.size();
@@ -852,9 +849,9 @@ Event MatrixView<T, MType>::fill_triangular_random(const Queue& ctx, Uplo uplo,
     auto [global_size, local_size, wg_per_matrix] = compute_batched_matrix_decomposition(
         batch_size, n * n, ctx.device(), KernelType::ELEMENTWISE);
 
-    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-        size_t global_id = item.get_global_id(0);
-        size_t total_work_items = item.get_global_range(0);
+    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
+        size_t global_id = it.get_global_id(0);
+        size_t total_work_items = it.get_global_range(0);
 
         // Grid-stride loop to handle large matrices
         for (size_t flat_idx = global_id; flat_idx < total_elements; flat_idx += total_work_items) {
@@ -908,9 +905,9 @@ Event MatrixView<T, MType>::triangularize(const Queue& ctx, Uplo uplo,
     auto [global_size, local_size, wg_per_matrix] = compute_batched_matrix_decomposition(
         batch_size, static_cast<int>(elems_per_matrix), ctx.device(), KernelType::ELEMENTWISE);
 
-    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-        size_t global_id = item.get_global_id(0);
-        size_t total_work_items = item.get_global_range(0);
+    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
+        size_t global_id = it.get_global_id(0);
+        size_t total_work_items = it.get_global_range(0);
 
         // Grid-stride loop to handle large matrices
         for (size_t flat_idx = global_id; flat_idx < total_elements; flat_idx += total_work_items) {
@@ -950,8 +947,8 @@ Event MatrixView<T, MType>::symmetrize(const Queue& ctx, Uplo uplo) const {
     auto [global_size, local_size] = compute_nd_range_sizes(
         total_elements, ctx.device(), KernelType::ELEMENTWISE);
 
-    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-        for (size_t flat_idx = item.get_global_id(0); flat_idx < total_elements; flat_idx += item.get_global_range(0)) {
+    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
+        for (size_t flat_idx = it.get_global_id(0); flat_idx < total_elements; flat_idx += it.get_global_range(0)) {
             // Calculate 3D coordinates from flat index
             size_t b = flat_idx / (n * n);          // batch index
             if (mask && !mask[b]) continue;
@@ -1001,8 +998,8 @@ Event MatrixView<T, MType>::hermitize(const Queue& ctx, Uplo uplo) const{
         if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) return std::conj(v);
         else return v;
     };
-    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-        for (size_t flat_idx = item.get_global_id(0); flat_idx < total_elements; flat_idx += item.get_global_range(0)) {
+    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
+        for (size_t flat_idx = it.get_global_id(0); flat_idx < total_elements; flat_idx += it.get_global_range(0)) {
             // Calculate 3D coordinates from flat index
             size_t b = flat_idx / (n * n);          // batch index
             if (mask && !mask[b]) continue;
@@ -1039,33 +1036,34 @@ Event MatrixView<T, MType>::hermitize(const Queue& ctx, Uplo uplo) const{
 }
 
 // Factory method to create random matrix
-template <typename T, MatrixFormat MType>
+template <typename Scalar, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
-Matrix<T, MType> Matrix<T, MType>::Random(int rows, int cols, bool hermitian, int batch_size, unsigned int seed) {
-    Matrix<T, MType> result(rows, cols, batch_size);
+Matrix<Scalar, MType> Matrix<Scalar, MType>::Random(int rows, int cols, bool hermitian, int batch_size, unsigned seed) {
+    Matrix<Scalar, MType> result(rows, cols, batch_size);
     result.fill_random(hermitian, seed).wait();
     return result;
 }
 
-template <typename T, MatrixFormat MType>
+template <typename Scalar, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires CsrMatrixFormat<M>
-Matrix<T, MType> Matrix<T, MType>::RandomSparseHermitian(int n,
-                                                         float density,
-                                                         int batch_size,
-                                                         unsigned int seed,
-                                                         typename base_type<T>::type diagonal_boost,
-                                                         bool shared_pattern) {
-    Matrix<T, MType> result(n, n, NonZeros{csr_random_nnz_per_matrix(n, density)}, batch_size);
-    result.fill_random_sparse_hermitian(default_queue_for<T>(), density, seed, diagonal_boost, shared_pattern).wait();
+Matrix<Scalar, MType> Matrix<Scalar, MType>::RandomSparseHermitian(int n,
+                                                                   float density,
+                                                                   int batch_size,
+                                                                   unsigned seed,
+                                                                   typename base_type<Scalar>::type diagonal_boost,
+                                                                   bool shared_pattern) {
+    Matrix<Scalar, MType> result(n, n, NonZeros{csr_random_nnz_per_matrix(n, density)}, batch_size);
+    result.fill_random_sparse_hermitian(default_queue_for<Scalar>(), density, seed, diagonal_boost,
+                                        shared_pattern).wait();
     return result;
 }
 
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M>
     requires DenseMatrixFormat<M>
-Event MatrixView<T, MType>::fill_random(const Queue& ctx, bool hermitian, unsigned int seed) const {
+Event MatrixView<T, MType>::fill_random(const Queue& ctx, bool hermitian, unsigned seed) const {
     detail::require_device_fp64<T>(ctx, "MatrixView::fill_random");
     T* data_ptr = data_.data();
     size_t total_elements = data_.size();
@@ -1080,8 +1078,8 @@ Event MatrixView<T, MType>::fill_random(const Queue& ctx, bool hermitian, unsign
     auto [global_size, local_size] = compute_nd_range_sizes(
         total_elements, ctx.device(), KernelType::ELEMENTWISE);
 
-    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-        for (size_t idx = item.get_global_id(0); idx < total_elements; idx += item.get_global_range(0)) {
+    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
+        for (size_t idx = it.get_global_id(0); idx < total_elements; idx += it.get_global_range(0)) {
             if (mask && !mask[idx / item_stride]) continue;
             data_ptr[idx] = philox::uniform_symmetric<T>(seed, 0, idx);
         }
@@ -1090,7 +1088,7 @@ Event MatrixView<T, MType>::fill_random(const Queue& ctx, bool hermitian, unsign
     // If hermitian flag is set, enforce Hermitian property using a kernel
     if (hermitian) {
         if (rows != cols) {
-            throw batchlas::invalid_argument("Hermitian matrices must be square");
+            throw batchlas::invalid_argument("MatrixView::fill_random: Hermitian matrices must be square");
         }
 
         int ld = ld_;
@@ -1102,8 +1100,8 @@ Event MatrixView<T, MType>::fill_random(const Queue& ctx, bool hermitian, unsign
             hermitian_elements, ctx.device(), KernelType::ELEMENTWISE);
 
         ctx->parallel_for(sycl::nd_range<1>(herm_global_size, herm_local_size),
-                        [=](sycl::nd_item<1> item) {
-            for (size_t flat = item.get_global_id(0); flat < hermitian_elements; flat += item.get_global_range(0)) {
+                        [=](sycl::nd_item<1> it) {
+            for (size_t flat = it.get_global_id(0); flat < hermitian_elements; flat += it.get_global_range(0)) {
                 size_t b = flat / (rows * cols);
                 if (mask && !mask[b]) continue;
                 size_t rem = flat % (rows * cols);
@@ -1134,29 +1132,29 @@ Event MatrixView<T, MType>::fill_random(const Queue& ctx, bool hermitian, unsign
 
 namespace {
 
-// Uniform [-1, 1) entry (both parts for complex T), a pure function of (seed, flat).
-template <typename T>
-T seeded_uniform(unsigned int seed, std::uint64_t flat, std::uint64_t stream = 0) {
-    return philox::uniform_symmetric<T>(seed, stream, flat);
+// Uniform [-1, 1) entry (both parts for complex Scalar), a pure function of (seed, flat).
+template <typename Scalar>
+Scalar seeded_uniform(unsigned seed, std::uint64_t flat, std::uint64_t stream = 0) {
+    return philox::uniform_symmetric<Scalar>(seed, stream, flat);
 }
 
-template <typename T>
-T conj_of(const T& x) {
-    if constexpr (is_std_complex_v<T>) return std::conj(x);
+template <typename Scalar>
+Scalar conj_of(const Scalar& x) {
+    if constexpr (is_std_complex_v<Scalar>) return std::conj(x);
     else return x;
 }
 
-template <typename T>
-float_t<T> abs2_of(const T& x) {
-    if constexpr (is_std_complex_v<T>) return x.real() * x.real() + x.imag() * x.imag();
+template <typename Scalar>
+float_t<Scalar> abs2_of(const Scalar& x) {
+    if constexpr (is_std_complex_v<Scalar>) return x.real() * x.real() + x.imag() * x.imag();
     else return x * x;
 }
 
 // Off-diagonal entries reach modulus 1 (real) or sqrt(2) (complex): this shift makes every row
 // strictly diagonally dominant.
-template <typename T>
-float_t<T> dominant_shift(int n) {
-    return float_t<T>(is_std_complex_v<T> ? 2 * n : n);
+template <typename Scalar>
+float_t<Scalar> dominant_shift(int n) {
+    return float_t<Scalar>(is_std_complex_v<Scalar> ? 2 * n : n);
 }
 
 // Philox streams for the row permutation and the reflector vectors (values use stream 0), so no
@@ -1179,11 +1177,11 @@ std::size_t square_fill_group_size(const Queue& ctx) {
 }
 
 // One work-group per item; perm is n ints (a local_accessor or a global pointer).
-template <typename T, typename Perm>
-void random_pivoted_item(sycl::nd_item<1> item, Perm perm, T* data, std::size_t ld, std::size_t stride, int n,
-                         std::size_t wg, float_t<T> shift, unsigned int seed) {
-    const std::size_t b = item.get_group(0);
-    const std::size_t lid = item.get_local_id(0);
+template <typename Scalar, typename Perm>
+void random_pivoted_item(sycl::nd_item<1> it, Perm perm, Scalar* data, std::size_t ld, std::size_t stride, int n,
+                         std::size_t wg, float_t<Scalar> shift, unsigned seed) {
+    const std::size_t b = it.get_group(0);
+    const std::size_t lid = it.get_local_id(0);
     const std::size_t N = static_cast<std::size_t>(n);
     if (lid == 0) {
         // Sattolo's shuffle: a uniformly random n-cycle, so no row stays in place.
@@ -1196,39 +1194,39 @@ void random_pivoted_item(sycl::nd_item<1> item, Perm perm, T* data, std::size_t 
             perm[j] = t;
         }
     }
-    sycl::group_barrier(item.get_group());
+    sycl::group_barrier(it.get_group());
     for (std::size_t e = lid; e < N * N; e += wg) {
         const std::size_t i = e % N;
         const std::size_t c = e / N;
         const std::size_t r = static_cast<std::size_t>(perm[i]);
-        T value = seeded_uniform<T>(seed, (b * N + c) * N + r);
-        if (r == c) value += T(shift);
+        Scalar value = seeded_uniform<Scalar>(seed, (b * N + c) * N + r);
+        if (r == c) value += Scalar(shift);
         data[b * stride + c * ld + i] = value;
     }
 }
 
 // One work-group per item; v and s are n entries each (local_accessors or global pointers).
-template <typename T, typename Vec>
-void graded_hermitian_item(sycl::nd_item<1> item, Vec v, Vec s, T* data, std::size_t ld, std::size_t stride, int n,
-                           std::size_t wg, float_t<T> decades, unsigned int seed) {
-    using R = float_t<T>;
-    const auto g = item.get_group();
-    const std::size_t b = item.get_group(0);
-    const std::size_t lid = item.get_local_id(0);
+template <typename Scalar, typename Vec>
+void graded_hermitian_item(sycl::nd_item<1> it, Vec v, Vec s, Scalar* data, std::size_t ld, std::size_t stride, int n,
+                           std::size_t wg, float_t<Scalar> decades, unsigned seed) {
+    using R = float_t<Scalar>;
+    const auto g = it.get_group();
+    const std::size_t b = it.get_group(0);
+    const std::size_t lid = it.get_local_id(0);
     const std::size_t N = static_cast<std::size_t>(n);
-    T* A = data + b * stride;
+    Scalar* A = data + b * stride;
     for (std::size_t e = lid; e < N * N; e += wg) {
         const std::size_t r = e % N;
         const std::size_t c = e / N;
         const R lambda = n == 1 ? R(1) : sycl::pow(R(10), -decades * R(r) / R(n - 1));
-        A[c * ld + r] = r == c ? T(lambda) : T(0);
+        A[c * ld + r] = r == c ? Scalar(lambda) : Scalar(0);
     }
     sycl::group_barrier(g);
     for (std::size_t k = 0; k < N; ++k) {
         R partial = 0;
         for (std::size_t r = lid; r < N; r += wg) {
-            // Real T needs real reflectors, or the complex Q leaves a non-real result.
-            v[r] = seeded_uniform<T>(seed, (b * N + k) * N + r, kReflectorStream);
+            // Real Scalar needs real reflectors, or the complex Q leaves a non-real result.
+            v[r] = seeded_uniform<Scalar>(seed, (b * N + k) * N + r, kReflectorStream);
             partial += abs2_of(v[r]);
         }
         const R vv = portable::reduce_over_group(g, partial, sycl::plus<R>());
@@ -1238,7 +1236,7 @@ void graded_hermitian_item(sycl::nd_item<1> item, Vec v, Vec s, T* data, std::si
         sycl::group_barrier(g);
         // M <- H M H, H = I - 2 v v^H: first the columns (H M), then the rows (M H).
         for (std::size_t c = lid; c < N; c += wg) {
-            T acc = 0;
+            Scalar acc = 0;
             for (std::size_t r = 0; r < N; ++r) acc += conj_of(v[r]) * A[c * ld + r];
             s[c] = acc;
         }
@@ -1250,7 +1248,7 @@ void graded_hermitian_item(sycl::nd_item<1> item, Vec v, Vec s, T* data, std::si
         }
         sycl::group_barrier(g);
         for (std::size_t r = lid; r < N; r += wg) {
-            T acc = 0;
+            Scalar acc = 0;
             for (std::size_t c = 0; c < N; ++c) acc += A[c * ld + r] * v[c];
             s[r] = acc;
         }
@@ -1266,7 +1264,7 @@ void graded_hermitian_item(sycl::nd_item<1> item, Vec v, Vec s, T* data, std::si
         const std::size_t r = e % N;
         const std::size_t c = e / N;
         if (r > c) A[r * ld + c] = conj_of(A[c * ld + r]);
-        else if (r == c) A[c * ld + c] = T(std::real(A[c * ld + c]));
+        else if (r == c) A[c * ld + c] = Scalar(std::real(A[c * ld + c]));
     }
 }
 
@@ -1281,7 +1279,7 @@ BATCHLAS_INTERNAL_API std::size_t set_fill_local_budget(std::size_t bytes) { ret
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M>
     requires DenseMatrixFormat<M>
-Event MatrixView<T, MType>::fill_random_spd(const Queue& ctx, unsigned int seed) const {
+Event MatrixView<T, MType>::fill_random_spd(const Queue& ctx, unsigned seed) const {
     detail::require_device_fp64<T>(ctx, "MatrixView::fill_random_spd");
     if (rows_ != cols_) throw batchlas::invalid_argument("fill_random_spd: the matrix must be square");
     const std::size_t n = static_cast<std::size_t>(rows_);
@@ -1293,8 +1291,8 @@ Event MatrixView<T, MType>::fill_random_spd(const Queue& ctx, unsigned int seed)
     const float_t<T> shift = dominant_shift<T>(rows_);
     const std::uint8_t* mask = detail::mask_ptr(batch_mask_);
     auto [global_size, local_size] = compute_nd_range_sizes(total, ctx.device(), KernelType::ELEMENTWISE);
-    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-        for (size_t flat = item.get_global_id(0); flat < total; flat += item.get_global_range(0)) {
+    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
+        for (size_t flat = it.get_global_id(0); flat < total; flat += it.get_global_range(0)) {
             const std::size_t b = flat / (n * n);
             if (mask && !mask[b]) continue;
             const std::size_t j = (flat / n) % n;
@@ -1312,7 +1310,7 @@ Event MatrixView<T, MType>::fill_random_spd(const Queue& ctx, unsigned int seed)
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M>
     requires DenseMatrixFormat<M>
-Event MatrixView<T, MType>::fill_near_degenerate_hermitian(const Queue& ctx, double noise, unsigned int seed) const {
+Event MatrixView<T, MType>::fill_near_degenerate_hermitian(const Queue& ctx, double noise, unsigned seed) const {
     if (rows_ != cols_) throw batchlas::invalid_argument("fill_near_degenerate_hermitian: the matrix must be square");
     const std::size_t n = static_cast<std::size_t>(rows_);
     const std::size_t total = static_cast<std::size_t>(batch_size_) * n * n;
@@ -1323,8 +1321,8 @@ Event MatrixView<T, MType>::fill_near_degenerate_hermitian(const Queue& ctx, dou
     const float_t<T> eps = static_cast<float_t<T>>(noise);
     const std::uint8_t* mask = detail::mask_ptr(batch_mask_);
     auto [global_size, local_size] = compute_nd_range_sizes(total, ctx.device(), KernelType::ELEMENTWISE);
-    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-        const std::size_t flat = item.get_global_id(0);
+    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
+        const std::size_t flat = it.get_global_id(0);
         if (flat >= total) return;
         const std::size_t b = flat / (n * n);
         if (mask && !mask[b]) return;
@@ -1341,7 +1339,7 @@ Event MatrixView<T, MType>::fill_near_degenerate_hermitian(const Queue& ctx, dou
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M>
     requires DenseMatrixFormat<M>
-Event MatrixView<T, MType>::fill_random_pivoted(const Queue& ctx, unsigned int seed) const {
+Event MatrixView<T, MType>::fill_random_pivoted(const Queue& ctx, unsigned seed) const {
     detail::require_device_fp64<T>(ctx, "MatrixView::fill_random_pivoted");
     if (rows_ != cols_) throw batchlas::invalid_argument("fill_random_pivoted: the matrix must be square");
     const int n = rows_;
@@ -1356,22 +1354,22 @@ Event MatrixView<T, MType>::fill_random_pivoted(const Queue& ctx, unsigned int s
     const std::size_t N = static_cast<std::size_t>(n);
     const sycl::nd_range<1> range(wg * batch, wg);
     if (fill_scratch_fits_local(ctx, sizeof(int) * N)) {
-        ctx->submit([&](sycl::handler& cgh) {
-            sycl::local_accessor<int, 1> perm(sycl::range<1>(N), cgh);
-            batchlas::impl::parallel_for(cgh, range, [=](sycl::nd_item<1> item) {
-                if (mask && !mask[item.get_group(0)]) return;  // uniform per work-group: before the barrier
-                random_pivoted_item<T>(item, perm, data, ld, stride, n, wg, shift, seed);
+        ctx->submit([&](sycl::handler& h) {
+            sycl::local_accessor<int, 1> perm(sycl::range<1>(N), h);
+            batchlas::impl::parallel_for(h, range, [=](sycl::nd_item<1> it) {
+                if (mask && !mask[it.get_group(0)]) return;  // uniform per work-group: before the barrier
+                random_pivoted_item<T>(it, perm, data, ld, stride, n, wg, shift, seed);
             });
         });
         return ctx.get_event();
     }
     UnifiedVector<int> scratch(N * static_cast<std::size_t>(batch));
     int* perm = scratch.data();
-    ctx->submit([&](sycl::handler& cgh) {
-        batchlas::impl::parallel_for(cgh, range, [=](sycl::nd_item<1> item) {
-            const std::size_t b = item.get_group(0);
+    ctx->submit([&](sycl::handler& h) {
+        batchlas::impl::parallel_for(h, range, [=](sycl::nd_item<1> it) {
+            const std::size_t b = it.get_group(0);
             if (mask && !mask[b]) return;
-            random_pivoted_item<T>(item, perm + b * N, data, ld, stride, n, wg, shift, seed);
+            random_pivoted_item<T>(it, perm + b * N, data, ld, stride, n, wg, shift, seed);
         });
     });
     ctx->wait();  // the scratch dies with this frame
@@ -1381,7 +1379,7 @@ Event MatrixView<T, MType>::fill_random_pivoted(const Queue& ctx, unsigned int s
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M>
     requires DenseMatrixFormat<M>
-Event MatrixView<T, MType>::fill_graded_hermitian(const Queue& ctx, double log10_cond, unsigned int seed) const {
+Event MatrixView<T, MType>::fill_graded_hermitian(const Queue& ctx, double log10_cond, unsigned seed) const {
     detail::require_device_fp64<T>(ctx, "MatrixView::fill_graded_hermitian");
     if (rows_ != cols_) throw batchlas::invalid_argument("fill_graded_hermitian: the matrix must be square");
     if (!std::isfinite(log10_cond)) throw batchlas::invalid_argument("fill_graded_hermitian: log10_cond must be finite");
@@ -1398,23 +1396,23 @@ Event MatrixView<T, MType>::fill_graded_hermitian(const Queue& ctx, double log10
     const std::size_t N = static_cast<std::size_t>(n);
     const sycl::nd_range<1> range(wg * batch, wg);
     if (fill_scratch_fits_local(ctx, 2 * sizeof(T) * N)) {
-        ctx->submit([&](sycl::handler& cgh) {
-            sycl::local_accessor<T, 1> v(sycl::range<1>(N), cgh);
-            sycl::local_accessor<T, 1> s(sycl::range<1>(N), cgh);
-            batchlas::impl::parallel_for(cgh, range, [=](sycl::nd_item<1> item) {
-                if (mask && !mask[item.get_group(0)]) return;  // uniform per work-group: before the first barrier
-                graded_hermitian_item<T>(item, v, s, data, ld, stride, n, wg, decades, seed);
+        ctx->submit([&](sycl::handler& h) {
+            sycl::local_accessor<T, 1> v(sycl::range<1>(N), h);
+            sycl::local_accessor<T, 1> s(sycl::range<1>(N), h);
+            batchlas::impl::parallel_for(h, range, [=](sycl::nd_item<1> it) {
+                if (mask && !mask[it.get_group(0)]) return;  // uniform per work-group: before the first barrier
+                graded_hermitian_item<T>(it, v, s, data, ld, stride, n, wg, decades, seed);
             });
         });
         return ctx.get_event();
     }
     UnifiedVector<T> scratch(2 * N * static_cast<std::size_t>(batch));
     T* vs = scratch.data();
-    ctx->submit([&](sycl::handler& cgh) {
-        batchlas::impl::parallel_for(cgh, range, [=](sycl::nd_item<1> item) {
-            const std::size_t b = item.get_group(0);
+    ctx->submit([&](sycl::handler& h) {
+        batchlas::impl::parallel_for(h, range, [=](sycl::nd_item<1> it) {
+            const std::size_t b = it.get_group(0);
             if (mask && !mask[b]) return;
-            graded_hermitian_item<T>(item, vs + 2 * b * N, vs + (2 * b + 1) * N, data, ld, stride, n, wg, decades, seed);
+            graded_hermitian_item<T>(it, vs + 2 * b * N, vs + (2 * b + 1) * N, data, ld, stride, n, wg, decades, seed);
         });
     });
     ctx->wait();  // the scratch dies with this frame
@@ -1426,7 +1424,7 @@ template <MatrixFormat M>
     requires CsrMatrixFormat<M>
 Event MatrixView<T, MType>::fill_random_sparse_hermitian(const Queue& ctx,
                                                          float density,
-                                                         unsigned int seed,
+                                                         unsigned seed,
                                                          typename base_type<T>::type diagonal_boost,
                                                          bool shared_pattern) const {
     detail::require_device_fp64<T>(ctx, "MatrixView::fill_random_sparse_hermitian");
@@ -1629,9 +1627,9 @@ Event MatrixView<T, MType>::fill(const Queue& ctx, T value) const {
     if (use_memset) {
         ctx->memset(data_ptr, char_val, total_elements * sizeof(T));
     } else if (contiguous) {
-        ctx->parallel_for<FillContiguousKernel<T, MType>>(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-            size_t global_id = item.get_global_id(0);
-            size_t total_work_items = item.get_global_range(0);
+        ctx->parallel_for<FillContiguousKernel<T, MType>>(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
+            size_t global_id = it.get_global_id(0);
+            size_t total_work_items = it.get_global_range(0);
 
             // Grid-stride loop to handle large data
             for (size_t idx = global_id; idx < total_elements; idx += total_work_items) {
@@ -1647,9 +1645,9 @@ Event MatrixView<T, MType>::fill(const Queue& ctx, T value) const {
         auto cols = cols_;
         auto data_view = this->kernel_view();
         if constexpr (MType == MatrixFormat::Dense) {
-        ctx->parallel_for<FillNonContiguousKernel<T, MType>>(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-            size_t global_id = item.get_global_id(0);
-            size_t total_work_items = item.get_global_range(0);
+        ctx->parallel_for<FillNonContiguousKernel<T, MType>>(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
+            size_t global_id = it.get_global_id(0);
+            size_t total_work_items = it.get_global_range(0);
 
             // Grid-stride loop to handle large data
             for (size_t flat_idx = global_id; flat_idx < total_elements; flat_idx += total_work_items) {
@@ -1682,35 +1680,35 @@ Event MatrixView<T, MType>::fill_identity(const Queue& ctx, T value) const {
 }
 
 // Factory method to create zeros matrix
-template <typename T, MatrixFormat MType>
+template <typename Scalar, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
-Matrix<T, MType> Matrix<T, MType>::Zeros(int rows, int cols, int batch_size) {
-    Matrix<T, MType> result(rows, cols, batch_size);
-    result.fill(T(0));
+Matrix<Scalar, MType> Matrix<Scalar, MType>::Zeros(int rows, int cols, int batch_size) {
+    Matrix<Scalar, MType> result(rows, cols, batch_size);
+    result.fill(Scalar(0));
     return result;
 }
 
 // Factory method to create ones matrix
-template <typename T, MatrixFormat MType>
+template <typename Scalar, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
-Matrix<T, MType> Matrix<T, MType>::Ones(int rows, int cols, int batch_size) {
-    Matrix<T, MType> result(rows, cols, batch_size);
-    result.fill(T(1));
+Matrix<Scalar, MType> Matrix<Scalar, MType>::Ones(int rows, int cols, int batch_size) {
+    Matrix<Scalar, MType> result(rows, cols, batch_size);
+    result.fill(Scalar(1));
     return result;
 }
 
 // Factory method to create diagonal matrix
-template <typename T, MatrixFormat MType>
+template <typename Scalar, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
-Matrix<T, MType> Matrix<T, MType>::Diagonal(const Span<T>& diag_values, int batch_size) {
+Matrix<Scalar, MType> Matrix<Scalar, MType>::Diagonal(const Span<Scalar>& diag_values, int batch_size) {
     int n = diag_values.size();
-    Matrix<T, MType> result(n, n, batch_size);
+    Matrix<Scalar, MType> result(n, n, batch_size);
 
     // Set all elements to zero
-    result.fill(T(0));
+    result.fill(Scalar(0));
     // Ensure the returned matrix is fully initialized before returning.
     // The fill_diagonal(Span<...>) convenience overload uses an internal Queue;
     // without waiting here, callers can race when they immediately use a different Queue.
@@ -1753,16 +1751,16 @@ Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const VectorView<T>&
     auto [global_size, local_size] = compute_nd_range_sizes(
         total_elements, ctx.device(), KernelType::ELEMENTWISE);
 
-    ctx->submit([=, this](sycl::handler& cgh) {
+    ctx->submit([=, this](sycl::handler& h) {
         auto view = this->kernel_view();
         auto diag = diag_values;
-        batchlas::impl::parallel_for<FillDiagonalVectorKernel<T, MType>>(cgh,
-            sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-                size_t gid = item.get_global_id(0);
+        batchlas::impl::parallel_for<FillDiagonalVectorKernel<T, MType>>(h,
+            sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
+                size_t gid = it.get_global_id(0);
 
                 // Bounds check
                 if (gid >= total_elements) return;
-                for (int flat = gid; flat < total_elements; flat += item.get_global_range(0)) {
+                for (int flat = gid; flat < total_elements; flat += it.get_global_range(0)) {
                     size_t b = flat / n;
                     if (mask && !mask[b]) continue;
                     size_t i = flat % n;
@@ -1795,8 +1793,8 @@ Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const T& diag_value)
     auto [global_size, local_size] = compute_nd_range_sizes(
         total_elements, ctx.device(), KernelType::ELEMENTWISE);
 
-    ctx->parallel_for<FillDiagonalKernel<T, MType>>(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item){
-        for (size_t flat = item.get_global_id(0); flat < total_elements; flat += item.get_global_range(0)) {
+    ctx->parallel_for<FillDiagonalKernel<T, MType>>(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
+        for (size_t flat = it.get_global_id(0); flat < total_elements; flat += it.get_global_range(0)) {
             size_t b = flat / n;
             if (mask && !mask[b]) continue;
             size_t i = flat % n;
@@ -1806,11 +1804,12 @@ Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const T& diag_value)
     return ctx.get_event();
 }
 
-template <typename T, MatrixFormat MType>
+template <typename Scalar, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
-Matrix<T, MType> Matrix<T, MType>::TriDiagToeplitz(int n, T diag, T sub, T super, int batch_size) {
-    Matrix<T, MType> result(n, n, batch_size);
+Matrix<Scalar, MType> Matrix<Scalar, MType>::TriDiagToeplitz(int n, Scalar diag, Scalar sub, Scalar super,
+                                                             int batch_size) {
+    Matrix<Scalar, MType> result(n, n, batch_size);
     // Ensure the returned matrix is fully initialized before returning.
     result.template fill_tridiag_toeplitz<MType>(diag, sub, super).wait();
     return result;
@@ -1834,8 +1833,8 @@ Event MatrixView<T, MType>::fill_tridiag_toeplitz(const Queue& ctx, T diag, T su
         total_elements, ctx.device(), KernelType::ELEMENTWISE);
 
     // Submit a kernel to initialize the tridiagonal Toeplitz matrix
-    ctx -> parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-        for (size_t flat_idx = item.get_global_id(0); flat_idx < total_elements; flat_idx += item.get_global_range(0)) {
+    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
+        for (size_t flat_idx = it.get_global_id(0); flat_idx < total_elements; flat_idx += it.get_global_range(0)) {
             // Calculate 3D coordinates from flat index
             int64_t b = flat_idx / (n * n);          // batch index
             if (mask && !mask[b]) continue;
@@ -1930,12 +1929,12 @@ inline void check_column_major_extent(int rows, int cols, std::size_t ld, std::s
 }  // namespace
 
 // Implement to_column_major using SYCL
-template <typename T, MatrixFormat MType>
+template <typename Scalar, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
-Matrix<T, MType> Matrix<T, MType>::to_column_major(const Queue& ctx, int row_pitch) const {
+Matrix<Scalar, MType> Matrix<Scalar, MType>::to_column_major(const Queue& ctx, int row_pitch) const {
     ::batchlas::detail::refuse_batch_mask("Matrix::to_column_major", *this);
-    detail::require_device_fp64<T>(ctx, "Matrix::to_column_major");
+    detail::require_device_fp64<Scalar>(ctx, "Matrix::to_column_major");
     // The source holds row-major data. Its row pitch is what the caller says it is
     // (default: packed, pitch cols -- allowed only where the layout leaves no room
     // for a padded pitch); its batch items are stride_ apart, which need not be
@@ -1946,11 +1945,11 @@ Matrix<T, MType> Matrix<T, MType>::to_column_major(const Queue& ctx, int row_pit
                                                      values_.size());
 
     // The destination is packed in the target major: ld = rows, stride = rows * cols.
-    Matrix<T, MType> col_major(rows_, cols_, batch_size_);
+    Matrix<Scalar, MType> col_major(rows_, cols_, batch_size_);
 
     // Get pointers to source and destination data
-    const T* src_ptr = values_.data();
-    T* dst_ptr = col_major.values_.data();
+    const Scalar* src_ptr = values_.data();
+    Scalar* dst_ptr = col_major.values_.data();
 
     // Capture dimensions for kernel
     int rows = rows_;
@@ -1967,8 +1966,8 @@ Matrix<T, MType> Matrix<T, MType>::to_column_major(const Queue& ctx, int row_pit
         total_elements, ctx.device(), KernelType::MEMORY_BOUND);
 
     // Submit a kernel to convert from row-major to column-major
-    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-        for (size_t flat_idx = item.get_global_id(0); flat_idx < total_elements; flat_idx += item.get_global_range(0)) {
+    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
+        for (size_t flat_idx = it.get_global_id(0); flat_idx < total_elements; flat_idx += it.get_global_range(0)) {
             // Calculate 3D coordinates from flat index
             size_t b = flat_idx / (static_cast<size_t>(rows) * cols);  // batch index
             size_t remainder = flat_idx % (static_cast<size_t>(rows) * cols);
@@ -1984,23 +1983,23 @@ Matrix<T, MType> Matrix<T, MType>::to_column_major(const Queue& ctx, int row_pit
     return col_major;
 }
 
-template <typename T, MatrixFormat MType>
+template <typename Scalar, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
-Matrix<T, MType> Matrix<T, MType>::to_column_major(int row_pitch) const {
+Matrix<Scalar, MType> Matrix<Scalar, MType>::to_column_major(int row_pitch) const {
     ::batchlas::detail::refuse_batch_mask("Matrix::to_column_major", *this);
     // Builds a queue of its own, and waits on it before returning.
-    Queue q = default_queue_for<T>();
+    Queue q = default_queue_for<Scalar>();
     return to_column_major(q, row_pitch);
 }
 
 // Implement to_row_major using SYCL
-template <typename T, MatrixFormat MType>
+template <typename Scalar, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
-Matrix<T, MType> Matrix<T, MType>::to_row_major(const Queue& ctx) const {
+Matrix<Scalar, MType> Matrix<Scalar, MType>::to_row_major(const Queue& ctx) const {
     ::batchlas::detail::refuse_batch_mask("Matrix::to_row_major", *this);
-    detail::require_device_fp64<T>(ctx, "Matrix::to_row_major");
+    detail::require_device_fp64<Scalar>(ctx, "Matrix::to_row_major");
     // The source is read column-major with this matrix' own ld_/stride_.
     check_column_major_extent(rows_, cols_, static_cast<size_t>(ld_),
                               static_cast<size_t>(stride_), batch_size_, values_.size());
@@ -2010,11 +2009,11 @@ Matrix<T, MType> Matrix<T, MType>::to_row_major(const Queue& ctx) const {
     // column-major-shaped metadata (ld = rows); the pitch is not recoverable from
     // that metadata, which is exactly why to_column_major takes the pitch as an
     // argument and defaults it to "packed" -- the layout produced here.
-    Matrix<T, MType> row_major(rows_, cols_, batch_size_);
+    Matrix<Scalar, MType> row_major(rows_, cols_, batch_size_);
 
     // Get pointers to source and destination data
-    const T* src_ptr = values_.data();
-    T* dst_ptr = row_major.values_.data();
+    const Scalar* src_ptr = values_.data();
+    Scalar* dst_ptr = row_major.values_.data();
 
     // Capture dimensions for kernel
     int rows = rows_;
@@ -2033,8 +2032,8 @@ Matrix<T, MType> Matrix<T, MType>::to_row_major(const Queue& ctx) const {
         total_elements, ctx.device(), KernelType::MEMORY_BOUND);
 
     // Submit a kernel to convert from column-major to row-major
-    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-        for (size_t flat_idx = item.get_global_id(0); flat_idx < total_elements; flat_idx += item.get_global_range(0)) {
+    ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
+        for (size_t flat_idx = it.get_global_id(0); flat_idx < total_elements; flat_idx += it.get_global_range(0)) {
             // Calculate 3D coordinates from flat index
             size_t b = flat_idx / (static_cast<size_t>(rows) * cols);  // batch index
             size_t remainder = flat_idx % (static_cast<size_t>(rows) * cols);
@@ -2050,19 +2049,19 @@ Matrix<T, MType> Matrix<T, MType>::to_row_major(const Queue& ctx) const {
     return row_major;
 }
 
-template <typename T, MatrixFormat MType>
+template <typename Scalar, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
-Matrix<T, MType> Matrix<T, MType>::to_row_major() const {
+Matrix<Scalar, MType> Matrix<Scalar, MType>::to_row_major() const {
     ::batchlas::detail::refuse_batch_mask("Matrix::to_row_major", *this);
     // Builds a queue of its own, and waits on it before returning.
-    Queue q = default_queue_for<T>();
+    Queue q = default_queue_for<Scalar>();
     return to_row_major(q);
 }
 
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 // MatrixView class implementation - Dense format
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 
 // Constructor for dense matrix view
 template <typename T, MatrixFormat MType>
@@ -2101,10 +2100,9 @@ MatrixView<T, MType>::MatrixView(T* data, int rows, int cols, int ld,
     }
 }
 
-
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 // MatrixView class implementation - CSR format
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 
 // Constructor for CSR sparse matrix view
 template <typename T, MatrixFormat MType>
@@ -2120,9 +2118,9 @@ MatrixView<T, MType>::MatrixView(T* data, int* row_offsets, int* col_indices,
             offset_stride_(offset_stride > 0 ? offset_stride : rows + 1), data_ptrs_(data_ptrs, (data_ptrs ? batch_size : 0)) {
 }
 
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 // Common MatrixView implementations (for both Dense and CSR)
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 
 // Constructor for a submatrix view from a Matrix object
 template <typename T, MatrixFormat MType>
@@ -2156,20 +2154,18 @@ MatrixView<T, MType>::MatrixView(
     batch_mask_ = matrix.batch_mask_;
 }
 
-
-
 // Element access (for dense matrices)
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M>
     requires DenseMatrixFormat<M>
 T& MatrixView<T, MType>::at(int row, int col, int batch) {
     if (batch < 0 || batch >= batch_size_) {
-        throw batchlas::out_of_range("Matrix indices out of range");
+        throw batchlas::out_of_range("MatrixView::at: Matrix indices out of range");
     }
     const int batch_rows = rows(batch);
     const int batch_cols = cols(batch);
     if (row < 0 || row >= batch_rows || col < 0 || col >= batch_cols) {
-        throw batchlas::out_of_range("Matrix indices out of range");
+        throw batchlas::out_of_range("MatrixView::at: Matrix indices out of range");
     }
     // The batch term in int64_t: batch * stride_ in int wraps at batch sizes this
     // library targets (a 512x512 float item has stride 262144, so it wraps at b = 8192).
@@ -2181,12 +2177,12 @@ template <MatrixFormat M>
     requires DenseMatrixFormat<M>
 const T& MatrixView<T, MType>::at(int row, int col, int batch) const {
     if (batch < 0 || batch >= batch_size_) {
-        throw batchlas::out_of_range("Matrix indices out of range");
+        throw batchlas::out_of_range("MatrixView::at: Matrix indices out of range");
     }
     const int batch_rows = rows(batch);
     const int batch_cols = cols(batch);
     if (row < 0 || row >= batch_rows || col < 0 || col >= batch_cols) {
-        throw batchlas::out_of_range("Matrix indices out of range");
+        throw batchlas::out_of_range("MatrixView::at: Matrix indices out of range");
     }
     // The batch term in int64_t: batch * stride_ in int wraps at batch sizes this
     // library targets (a 512x512 float item has stride 262144, so it wraps at b = 8192).
@@ -2197,7 +2193,7 @@ const T& MatrixView<T, MType>::at(int row, int col, int batch) const {
 template <typename T, MatrixFormat MType>
 MatrixView<T, MType> MatrixView<T, MType>::batch_item(int batch_index) const {
     if (batch_index < 0 || batch_index >= batch_size_) {
-        throw batchlas::out_of_range("Batch index out of range");
+        throw batchlas::out_of_range("MatrixView::batch_item: Batch index out of range");
     }
 
     MatrixView<T, MType> out;
@@ -2232,19 +2228,19 @@ template <typename T, MatrixFormat MType> struct CopyKernel3D {};
 template <typename T, MatrixFormat MType>
 Event MatrixView<T, MType>::copy(Queue& ctx, const MatrixView<T, MType>& dest, const MatrixView<T, MType>& src) {
     if (src.rows() != dest.rows() || src.cols() != dest.cols() || src.batch_size() != dest.batch_size()) {
-        throw batchlas::invalid_argument("Copy called on incompatible matrices");
+        throw batchlas::invalid_argument("MatrixView::copy: Copy called on incompatible matrices");
     }
-    if constexpr(MType == MatrixFormat::Dense) {
+    if constexpr (MType == MatrixFormat::Dense) {
         if (src.data_ptr() == dest.data_ptr()) return ctx.get_event(); // No-op if same buffer
         // Masked: the memcpy fast paths would write the inactive items, so only the kernel runs.
         const std::uint8_t* mask = detail::mask_ptr(detail::call_mask("copy", dest, src));
         if (!mask && src.stride() == src.rows() * src.cols() && dest.stride() == dest.rows() * dest.cols()) {
-            //If the stride is the same as the size of each matrix just do a straight memcpy
+            // If the stride is the same as the size of each matrix just do a straight memcpy
             auto event = static_cast<EventImpl>(ctx->memcpy(dest.data_.data(), src.data_.data(), src.data().size_bytes()));
             return event;
 #if defined(SYCL_EXT_ONEAPI_MEMCPY2D)  // sycl_ext_oneapi_memcpy2d; without it every strided case takes the copy kernel
-        } else if (!mask && src.ld() == src.rows() && dest.ld() == dest.rows()){
-            //If both leading dimensions are the same as the number of rows we can utilize oneapis 2d copy kernel
+        } else if (!mask && src.ld() == src.rows() && dest.ld() == dest.rows()) {
+            // If both leading dimensions are the same as the number of rows we can utilize oneapis 2d copy kernel
             auto event = static_cast<EventImpl>(ctx->ext_oneapi_memcpy2d(  static_cast<void*>(dest.data_ptr()),
                                                     dest.stride() * sizeof(T),
                                                     static_cast<void*>(src.data_ptr()),
@@ -2261,22 +2257,21 @@ Event MatrixView<T, MType>::copy(Queue& ctx, const MatrixView<T, MType>& dest, c
             return event;
 #endif
         } else {
-            //If neither the ld nor the strides are unit, we need to do essentially a 3D copy
+            // If neither the ld nor the strides are unit, we need to do essentially a 3D copy
             detail::require_device_fp64<T>(ctx, "MatrixView::copy");
             auto [ global_size, local_size ] = compute_nd_range_sizes(
                     static_cast<size_t>(src.rows()) * src.cols() * src.batch_size(),
                     ctx.device(), KernelType::MEMORY_BOUND);
-            auto event = static_cast<EventImpl>(ctx->submit([&](sycl::handler& cgh) {
+            auto event = static_cast<EventImpl>(ctx->submit([&](sycl::handler& h) {
                 auto dest_view = dest.kernel_view();
                 auto src_view  = src.kernel_view();
 
-
-                batchlas::impl::parallel_for<CopyKernel3D<T, MType>>(cgh, sycl::nd_range<1>(global_size, local_size),
-                                [=](sycl::nd_item<1> item) {
-                    size_t gid = item.get_global_id(0);
+                batchlas::impl::parallel_for<CopyKernel3D<T, MType>>(h, sycl::nd_range<1>(global_size, local_size),
+                                [=](sycl::nd_item<1> it) {
+                    size_t gid = it.get_global_id(0);
 
                     // Calculate 3D coordinates from flat index
-                    for (size_t idx = gid; idx < static_cast<size_t>(src_view.rows()) * src_view.cols() * src_view.batch_size(); idx += item.get_global_range(0)) {
+                    for (size_t idx = gid; idx < static_cast<size_t>(src_view.rows()) * src_view.cols() * src_view.batch_size(); idx += it.get_global_range(0)) {
                         size_t b = idx / (static_cast<size_t>(src_view.rows()) * src_view.cols());    // batch index
                         if (mask && !mask[b]) continue;
                         size_t remainder = idx % (static_cast<size_t>(src_view.rows()) * src_view.cols());
@@ -2289,10 +2284,10 @@ Event MatrixView<T, MType>::copy(Queue& ctx, const MatrixView<T, MType>& dest, c
             }));
             return event;
         }
-    } else if constexpr(MType == MatrixFormat::CSR) {
-        throw batchlas::unsupported("CSR copy not implemented yet");
+    } else if constexpr (MType == MatrixFormat::CSR) {
+        throw batchlas::unsupported("MatrixView::copy: CSR copy not implemented yet");
     } else {
-        throw batchlas::unsupported("Unsupported matrix format in copy");
+        throw batchlas::unsupported("MatrixView::copy: Unsupported matrix format in copy");
     }
     return ctx.get_event();
 }
@@ -2300,14 +2295,14 @@ Event MatrixView<T, MType>::copy(Queue& ctx, const MatrixView<T, MType>& dest, c
 template <typename T>
 Event VectorView<T>::copy(Queue& ctx, const VectorView<T>& dest, const VectorView<T>& src) {
     if (src.size() != dest.size() || src.batch_size() != dest.batch_size()) {
-        throw batchlas::invalid_argument("Copy called on incompatible vectors");
+        throw batchlas::invalid_argument("VectorView::copy: Copy called on incompatible vectors");
     }
     if (src.data_ptr() == dest.data_ptr()) return ctx.get_event(); // No-op if same buffer
     // Masked: as MatrixView::copy, only the kernel runs.
     const std::uint8_t* mask = detail::mask_ptr(detail::call_mask("copy", dest, src));
     if (!mask && ((src.stride() == src.size() && dest.stride() == dest.size() && src.inc() == 1 && dest.inc() == 1) ||
         (src.stride() == 1 && dest.stride() == 1 && src.inc() == src.size() && dest.inc() == dest.size()))) {
-        //If the stride is the same as the size of each vector just do a straight memcpy
+        // If the stride is the same as the size of each vector just do a straight memcpy
         auto event = static_cast<EventImpl>(ctx->memcpy(dest.data_.data(), src.data_.data(), src.size() * src.batch_size() * sizeof(T)));
         return event;
 #if defined(SYCL_EXT_ONEAPI_MEMCPY2D)  // sycl_ext_oneapi_memcpy2d; without it every strided case takes the copy kernel
@@ -2337,10 +2332,10 @@ Event VectorView<T>::copy(Queue& ctx, const VectorView<T>& dest, const VectorVie
         return event;
 #endif
     } else {
-        //If neither the ld nor the strides are unit, we need to do essentially a 2D copy
+        // If neither the ld nor the strides are unit, we need to do essentially a 2D copy
         detail::require_device_fp64<T>(ctx, "VectorView::copy");
-        auto event = static_cast<EventImpl>(ctx->submit([&](sycl::handler& cgh) {
-            cgh.parallel_for(sycl::range<2>(src.size(), src.batch_size()),
+        auto event = static_cast<EventImpl>(ctx->submit([&](sycl::handler& h) {
+            batchlas::impl::parallel_for(h, sycl::range<2>(src.size(), src.batch_size()),
                             [=](sycl::id<2> idx) {
                 size_t i = idx[0]; // index
                 size_t b = idx[1]; // batch
@@ -2356,24 +2351,24 @@ template <typename T>
 bool VectorView<T>::all_close(Queue& ctx, const VectorView<T>& a, const VectorView<T>& b, float_t<T> tol) {
     detail::require_device_fp64<T>(ctx, "VectorView::all_close");
     if (a.size() != b.size() || a.batch_size() != b.batch_size()) {
-        throw batchlas::invalid_argument("all_close called on incompatible vectors");
+        throw batchlas::invalid_argument("VectorView::all_close: called on incompatible vectors");
     }
     UnifiedVector<bool> batch_results(a.batch_size());
     // An inactive item compares true without being read.
     const std::uint8_t* mask = detail::mask_ptr(detail::call_mask("all_close", a, b));
 
-    ctx -> submit([&](sycl::handler& cgh) {
+    ctx->submit([&](sycl::handler& h) {
         auto results = batch_results.data();
-        auto group_matches = sycl::local_accessor<int32_t, 1>(sycl::range<1>(a.size()), cgh);
-        batchlas::impl::parallel_for(cgh, sycl::nd_range<1>(sycl::range<1>(a.batch_size() * a.size()), sycl::range<1>(a.size())), [=](sycl::nd_item<1> item) {
-            auto bid = item.get_group(0);
-            auto lid = item.get_local_id(0);
+        auto group_matches = sycl::local_accessor<int32_t, 1>(sycl::range<1>(a.size()), h);
+        batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>(a.batch_size() * a.size()), sycl::range<1>(a.size())), [=](sycl::nd_item<1> it) {
+            auto bid = it.get_group(0);
+            auto lid = it.get_local_id(0);
             if (mask && !mask[bid]) {  // uniform per work-group: before the barrier
                 if (lid == 0) results[bid] = true;
                 return;
             }
             bool is_close = true;
-            auto compare = [=](const auto& x,const auto& y) {
+            auto compare = [=](const auto& x, const auto& y) {
                 auto max_val = std::max(std::abs(x), std::abs(y));
                 if (max_val <= std::numeric_limits<float_t<T>>::epsilon()) {
                     return true; // Both values are effectively zero
@@ -2389,7 +2384,7 @@ bool VectorView<T>::all_close(Queue& ctx, const VectorView<T>& a, const VectorVi
             }
 
             group_matches[lid] = is_close ? 1 : 0;
-            sycl::group_barrier(item.get_group());
+            sycl::group_barrier(it.get_group());
             if (lid == 0) {
                 bool group_all_close = true;
                 for (int64_t idx = 0; idx < a.size(); ++idx) {
@@ -2403,12 +2398,12 @@ bool VectorView<T>::all_close(Queue& ctx, const VectorView<T>& a, const VectorVi
         });
     }).wait();
 
-    ctx -> submit([&](sycl::handler& cgh) {
+    ctx->submit([&](sycl::handler& h) {
         auto results = batch_results.data();
-        batchlas::impl::parallel_for(cgh, sycl::nd_range<1>(sycl::range<1>(std::min(1024, a.batch_size())), sycl::range<1>(std::min(1024, a.batch_size()))), [=](sycl::nd_item<1> item) {
-            auto cta = item.get_group();
+        batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>(std::min(1024, a.batch_size())), sycl::range<1>(std::min(1024, a.batch_size()))), [=](sycl::nd_item<1> it) {
+            auto cta = it.get_group();
             bool result = sycl::joint_reduce(cta, results, results + a.batch_size(), sycl::logical_and<bool>());
-            if (item.get_local_id(0) == 0) {
+            if (it.get_local_id(0) == 0) {
                 results[0] = result;
             }
         });
@@ -2421,25 +2416,24 @@ template <typename T, MatrixFormat MType>
 bool MatrixView<T, MType>::all_close(Queue& ctx, const MatrixView<T, MType>& A, const MatrixView<T, MType>& B, float_t<T> tol) {
     detail::require_device_fp64<T>(ctx, "MatrixView::all_close");
     if (A.rows() != B.rows() || A.cols() != B.cols() || A.batch_size() != B.batch_size()) {
-        throw batchlas::invalid_argument("all_close called on incompatible matrices");
+        throw batchlas::invalid_argument("MatrixView::all_close: called on incompatible matrices");
     }
     UnifiedVector<bool> batch_results(A.batch_size());
     if constexpr (MType == MatrixFormat::Dense) {
         // An inactive item compares true without being read.
         const std::uint8_t* mask = detail::mask_ptr(detail::call_mask("all_close", A, B));
 
-
-        ctx -> submit([&](sycl::handler& cgh) {
+        ctx->submit([&](sycl::handler& h) {
             auto results = batch_results.data();
             auto Aview = A.kernel_view();
             auto Bview = B.kernel_view();
-            auto group_matches = sycl::local_accessor<int32_t, 1>(sycl::range<1>(A.rows()), cgh);
+            auto group_matches = sycl::local_accessor<int32_t, 1>(sycl::range<1>(A.rows()), h);
 
-            batchlas::impl::parallel_for(cgh, sycl::nd_range<1>(sycl::range<1>(A.batch_size() *  A.rows()), sycl::range<1>(A.rows())), [=](sycl::nd_item<1> item) {
-                auto bid = item.get_group(0);
-                auto lid = item.get_local_id(0);
+            batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>(A.batch_size() *  A.rows()), sycl::range<1>(A.rows())), [=](sycl::nd_item<1> it) {
+                auto bid = it.get_group(0);
+                auto lid = it.get_local_id(0);
                 bool is_close = true;
-                auto compare = [=](const auto& x,const auto& y) {
+                auto compare = [=](const auto& x, const auto& y) {
                     auto max_val = std::max(std::abs(x), std::abs(y));
                     if (max_val <= std::numeric_limits<float_t<T>>::epsilon()) {
                         return true; // Both values are effectively zero
@@ -2462,7 +2456,7 @@ bool MatrixView<T, MType>::all_close(Queue& ctx, const MatrixView<T, MType>& A, 
                         is_close = is_close && a_element == b_element;
                     }
                     group_matches[lid] = is_close ? 1 : 0;
-                    sycl::group_barrier(item.get_group());
+                    sycl::group_barrier(it.get_group());
                     if (lid == 0) {
                         bool group_all_close = true;
                         for (int64_t row = 0; row < Aview.rows(); ++row) {
@@ -2473,7 +2467,7 @@ bool MatrixView<T, MType>::all_close(Queue& ctx, const MatrixView<T, MType>& A, 
                         }
                         results[bid] = results[bid] && group_all_close;
                     }
-                    sycl::group_barrier(item.get_group());
+                    sycl::group_barrier(it.get_group());
                     if (!results[bid]) {
                         break; // Early exit if already false
                     }
@@ -2481,17 +2475,17 @@ bool MatrixView<T, MType>::all_close(Queue& ctx, const MatrixView<T, MType>& A, 
             });
         }).wait();
     } else {
-        throw batchlas::unsupported("all_close not implemented for this matrix format");
+        throw batchlas::unsupported("MatrixView::all_close: not implemented for this matrix format");
     }
 
-    ctx -> submit([&](sycl::handler& cgh) {
+    ctx->submit([&](sycl::handler& h) {
         auto results = batch_results.data();
         auto Aview = A.kernel_view();
         auto batch_size = A.batch_size();
-        batchlas::impl::parallel_for(cgh, sycl::nd_range<1>(sycl::range<1>(std::min(1024, batch_size)), sycl::range<1>(std::min(1024, batch_size))), [=](sycl::nd_item<1> item) {
-            auto cta = item.get_group();
+        batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range<1>(std::min(1024, batch_size)), sycl::range<1>(std::min(1024, batch_size))), [=](sycl::nd_item<1> it) {
+            auto cta = it.get_group();
             bool result = sycl::joint_reduce(cta, results, results + batch_size, sycl::logical_and<bool>());
-            if (item.get_local_id(0) == 0) {
+            if (it.get_local_id(0) == 0) {
                 results[0] = result;
             }
         });
@@ -2512,19 +2506,19 @@ void MatrixView<T, MType>::init() const {
     backend_handle_ = createBackendHandle(*this);
 }
 
-template <typename T, MatrixFormat MType>
-Event scale(Queue& ctx, const T& alpha, const MatrixView<T, MType>& matrix) {
-    detail::require_device_fp64<T>(ctx, "scale");
+template <typename Scalar, MatrixFormat MType>
+Event scale(Queue& ctx, const Scalar& alpha, const MatrixView<Scalar, MType>& matrix) {
+    detail::require_device_fp64<Scalar>(ctx, "scale");
     auto [global_size, local_size] = compute_nd_range_sizes(
         static_cast<size_t>(matrix.rows()) * matrix.cols() * matrix.batch_size(),
         ctx.device(), KernelType::ELEMENTWISE);
     if constexpr (MType == MatrixFormat::CSR) {
-        throw batchlas::unsupported("scale not implemented for CSR matrices yet");
+        throw batchlas::unsupported("scale: not implemented for CSR matrices yet");
     } else if constexpr (MType == MatrixFormat::Dense) {
-        return static_cast<EventImpl>(ctx->submit([&](sycl::handler& cgh) {
+        return static_cast<EventImpl>(ctx->submit([&](sycl::handler& h) {
             auto view = matrix.kernel_view();
-            batchlas::impl::parallel_for(cgh, sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-                for (size_t gid = item.get_global_id(0); gid < static_cast<size_t>(view.rows()) * view.cols() * view.batch_size(); gid += item.get_global_range(0)) {
+            batchlas::impl::parallel_for(h, sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
+                for (size_t gid = it.get_global_id(0); gid < static_cast<size_t>(view.rows()) * view.cols() * view.batch_size(); gid += it.get_global_range(0)) {
                     size_t b = gid / (static_cast<size_t>(view.rows()) * view.cols());
                     if (!view.active(b)) continue;
                     size_t rem = gid % (static_cast<size_t>(view.rows()) * view.cols());
@@ -2537,15 +2531,15 @@ Event scale(Queue& ctx, const T& alpha, const MatrixView<T, MType>& matrix) {
     }
 }
 
-template <typename T, MatrixFormat MType>
-Event scale(Queue& ctx, const T& alpha, const VectorView<T>& vector) {
-    detail::require_device_fp64<T>(ctx, "scale");
+template <typename Scalar, MatrixFormat MType>
+Event scale(Queue& ctx, const Scalar& alpha, const VectorView<Scalar>& vector) {
+    detail::require_device_fp64<Scalar>(ctx, "scale");
     auto [global_size, local_size] = compute_nd_range_sizes(
         static_cast<size_t>(vector.size()) * vector.batch_size(),
         ctx.device(), KernelType::ELEMENTWISE);
-    return static_cast<EventImpl>(ctx->submit([&](sycl::handler& cgh) {
-        batchlas::impl::parallel_for(cgh, sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
-            for (size_t gid = item.get_global_id(0); gid < static_cast<size_t>(vector.size()) * vector.batch_size(); gid += item.get_global_range(0)) {
+    return static_cast<EventImpl>(ctx->submit([&](sycl::handler& h) {
+        batchlas::impl::parallel_for(h, sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
+            for (size_t gid = it.get_global_id(0); gid < static_cast<size_t>(vector.size()) * vector.batch_size(); gid += it.get_global_range(0)) {
                 size_t b = gid / vector.size();
                 if (!vector.active(b)) continue;
                 size_t i = gid % vector.size();
@@ -2555,22 +2549,21 @@ Event scale(Queue& ctx, const T& alpha, const VectorView<T>& vector) {
     }));
 }
 
-
 template <typename T, MatrixFormat MType>
 void MatrixView<T, MType>::init_data_ptr_array(Queue& ctx, Span<T*> target) const {
     if (target.data() == nullptr) target = data_ptrs_;
     auto [start_ptr, stride, data_ptrs] = std::make_tuple(this->data_ptr(), stride_, target);
     if (!data_ptrs.data()) {
-        throw batchlas::invalid_argument("data_ptrs target is null");
+        throw batchlas::invalid_argument("MatrixView::init_data_ptr_array: data_ptrs target is null");
     }
     if (data_ptrs.size() < static_cast<std::size_t>(batch_size_)) {
-        throw batchlas::invalid_argument("data_ptrs target is smaller than batch_size");
+        throw batchlas::invalid_argument("MatrixView::init_data_ptr_array: data_ptrs target is smaller than batch_size");
     }
     if (!start_ptr) {
-        throw batchlas::invalid_argument("start_ptr is null");
+        throw batchlas::invalid_argument("MatrixView::init_data_ptr_array: start_ptr is null");
     }
-    ctx->submit([&](sycl::handler& cgh) {
-        cgh.parallel_for(sycl::range<1>(batch_size_), [=](sycl::id<1> idx) {
+    ctx->submit([&](sycl::handler& h) {
+        batchlas::impl::parallel_for(h, sycl::range<1>(batch_size_), [=](sycl::id<1> idx) {
             size_t b = idx[0];
             data_ptrs[b] = start_ptr + b * stride;
         });
@@ -2595,9 +2588,9 @@ BackendMatrixHandle<T, MType>& MatrixView<T, MType>::operator*() const {
     return *backend_handle_;
 }
 
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 // Explicit template instantiations
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 
 // Dense Matrix instantiations
 template class Matrix<float, MatrixFormat::Dense>;
@@ -2664,15 +2657,15 @@ template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>
 template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::Identity(int, int);
 template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::Identity(int, int);
 
-template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::Random(int, int, bool, int, unsigned int);
-template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::Random(int, int, bool, int, unsigned int);
-template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::Random(int, int, bool, int, unsigned int);
-template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::Random(int, int, bool, int, unsigned int);
+template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::Random(int, int, bool, int, unsigned);
+template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::Random(int, int, bool, int, unsigned);
+template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::Random(int, int, bool, int, unsigned);
+template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::Random(int, int, bool, int, unsigned);
 
-template Matrix<float, MatrixFormat::CSR> Matrix<float, MatrixFormat::CSR>::RandomSparseHermitian(int, float, int, unsigned int, base_type<float>::type, bool);
-template Matrix<double, MatrixFormat::CSR> Matrix<double, MatrixFormat::CSR>::RandomSparseHermitian(int, float, int, unsigned int, base_type<double>::type, bool);
-template Matrix<std::complex<float>, MatrixFormat::CSR> Matrix<std::complex<float>, MatrixFormat::CSR>::RandomSparseHermitian(int, float, int, unsigned int, base_type<std::complex<float>>::type, bool);
-template Matrix<std::complex<double>, MatrixFormat::CSR> Matrix<std::complex<double>, MatrixFormat::CSR>::RandomSparseHermitian(int, float, int, unsigned int, base_type<std::complex<double>>::type, bool);
+template Matrix<float, MatrixFormat::CSR> Matrix<float, MatrixFormat::CSR>::RandomSparseHermitian(int, float, int, unsigned, base_type<float>::type, bool);
+template Matrix<double, MatrixFormat::CSR> Matrix<double, MatrixFormat::CSR>::RandomSparseHermitian(int, float, int, unsigned, base_type<double>::type, bool);
+template Matrix<std::complex<float>, MatrixFormat::CSR> Matrix<std::complex<float>, MatrixFormat::CSR>::RandomSparseHermitian(int, float, int, unsigned, base_type<std::complex<float>>::type, bool);
+template Matrix<std::complex<double>, MatrixFormat::CSR> Matrix<std::complex<double>, MatrixFormat::CSR>::RandomSparseHermitian(int, float, int, unsigned, base_type<std::complex<double>>::type, bool);
 
 template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::Zeros(int, int, int);
 template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::Zeros(int, int, int);
@@ -2718,7 +2711,7 @@ template Matrix<float, MatrixFormat::Dense> Matrix<float, MatrixFormat::Dense>::
 template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::Dense>::TriDiagToeplitz(int, double, double, double, int);
 template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::Dense>::TriDiagToeplitz(int, std::complex<float>, std::complex<float>, std::complex<float>, int);
 template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::Dense>::TriDiagToeplitz(int, std::complex<double>, std::complex<double>, std::complex<double>, int);
-//----------------------------------------------------------------------
+// ----------------------------------------------------------------------
 // Matrix conversion instantiations
 template Matrix<float, MatrixFormat::CSR> Matrix<float, MatrixFormat::Dense>::convert_to<MatrixFormat::CSR>(const float&) const;
 template Matrix<double, MatrixFormat::CSR> Matrix<double, MatrixFormat::Dense>::convert_to<MatrixFormat::CSR>(const double&) const;
@@ -2729,48 +2722,47 @@ template Matrix<double, MatrixFormat::Dense> Matrix<double, MatrixFormat::CSR>::
 template Matrix<std::complex<float>, MatrixFormat::Dense> Matrix<std::complex<float>, MatrixFormat::CSR>::convert_to<MatrixFormat::Dense>(const float&) const;
 template Matrix<std::complex<double>, MatrixFormat::Dense> Matrix<std::complex<double>, MatrixFormat::CSR>::convert_to<MatrixFormat::Dense>(const double&) const;
 
-//----------------------------------------------------------------------
-
+// ----------------------------------------------------------------------
 
 // fill instantiations
-template Event MatrixView<float, MatrixFormat::Dense>::fill_random(const Queue&, bool, unsigned int) const;
-template Event MatrixView<double, MatrixFormat::Dense>::fill_random(const Queue&, bool, unsigned int) const;
-template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_random(const Queue&, bool, unsigned int) const;
-template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_random(const Queue&, bool, unsigned int) const;
+template Event MatrixView<float, MatrixFormat::Dense>::fill_random(const Queue&, bool, unsigned) const;
+template Event MatrixView<double, MatrixFormat::Dense>::fill_random(const Queue&, bool, unsigned) const;
+template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_random(const Queue&, bool, unsigned) const;
+template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_random(const Queue&, bool, unsigned) const;
 
-template Event MatrixView<float, MatrixFormat::CSR>::fill_random_sparse_hermitian(const Queue&, float, unsigned int, base_type<float>::type, bool) const;
-template Event MatrixView<double, MatrixFormat::CSR>::fill_random_sparse_hermitian(const Queue&, float, unsigned int, base_type<double>::type, bool) const;
-template Event MatrixView<std::complex<float>, MatrixFormat::CSR>::fill_random_sparse_hermitian(const Queue&, float, unsigned int, base_type<std::complex<float>>::type, bool) const;
-template Event MatrixView<std::complex<double>, MatrixFormat::CSR>::fill_random_sparse_hermitian(const Queue&, float, unsigned int, base_type<std::complex<double>>::type, bool) const;
+template Event MatrixView<float, MatrixFormat::CSR>::fill_random_sparse_hermitian(const Queue&, float, unsigned, base_type<float>::type, bool) const;
+template Event MatrixView<double, MatrixFormat::CSR>::fill_random_sparse_hermitian(const Queue&, float, unsigned, base_type<double>::type, bool) const;
+template Event MatrixView<std::complex<float>, MatrixFormat::CSR>::fill_random_sparse_hermitian(const Queue&, float, unsigned, base_type<std::complex<float>>::type, bool) const;
+template Event MatrixView<std::complex<double>, MatrixFormat::CSR>::fill_random_sparse_hermitian(const Queue&, float, unsigned, base_type<std::complex<double>>::type, bool) const;
 
 template Event MatrixView<float, MatrixFormat::Dense>::fill_triangular(const Queue&, Uplo, float, float) const;
 template Event MatrixView<double, MatrixFormat::Dense>::fill_triangular(const Queue&, Uplo, double, double) const;
 template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_triangular(const Queue&, Uplo, std::complex<float>, std::complex<float>) const;
 template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_triangular(const Queue&, Uplo, std::complex<double>, std::complex<double>) const;
 
-template Event MatrixView<float, MatrixFormat::Dense>::fill_triangular_random(const Queue&, Uplo, Diag, unsigned int) const;
-template Event MatrixView<double, MatrixFormat::Dense>::fill_triangular_random(const Queue&, Uplo, Diag, unsigned int) const;
-template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_triangular_random(const Queue&, Uplo, Diag, unsigned int) const;
-template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_triangular_random(const Queue&, Uplo, Diag, unsigned int) const;
+template Event MatrixView<float, MatrixFormat::Dense>::fill_triangular_random(const Queue&, Uplo, Diag, unsigned) const;
+template Event MatrixView<double, MatrixFormat::Dense>::fill_triangular_random(const Queue&, Uplo, Diag, unsigned) const;
+template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_triangular_random(const Queue&, Uplo, Diag, unsigned) const;
+template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_triangular_random(const Queue&, Uplo, Diag, unsigned) const;
 
-template Event MatrixView<float, MatrixFormat::Dense>::fill_random_spd(const Queue&, unsigned int) const;
-template Event MatrixView<float, MatrixFormat::Dense>::fill_near_degenerate_hermitian(const Queue&, double, unsigned int) const;
-template Event MatrixView<double, MatrixFormat::Dense>::fill_random_spd(const Queue&, unsigned int) const;
-template Event MatrixView<double, MatrixFormat::Dense>::fill_near_degenerate_hermitian(const Queue&, double, unsigned int) const;
-template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_random_spd(const Queue&, unsigned int) const;
-template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_near_degenerate_hermitian(const Queue&, double, unsigned int) const;
-template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_random_spd(const Queue&, unsigned int) const;
-template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_near_degenerate_hermitian(const Queue&, double, unsigned int) const;
+template Event MatrixView<float, MatrixFormat::Dense>::fill_random_spd(const Queue&, unsigned) const;
+template Event MatrixView<float, MatrixFormat::Dense>::fill_near_degenerate_hermitian(const Queue&, double, unsigned) const;
+template Event MatrixView<double, MatrixFormat::Dense>::fill_random_spd(const Queue&, unsigned) const;
+template Event MatrixView<double, MatrixFormat::Dense>::fill_near_degenerate_hermitian(const Queue&, double, unsigned) const;
+template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_random_spd(const Queue&, unsigned) const;
+template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_near_degenerate_hermitian(const Queue&, double, unsigned) const;
+template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_random_spd(const Queue&, unsigned) const;
+template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_near_degenerate_hermitian(const Queue&, double, unsigned) const;
 
-template Event MatrixView<float, MatrixFormat::Dense>::fill_random_pivoted(const Queue&, unsigned int) const;
-template Event MatrixView<double, MatrixFormat::Dense>::fill_random_pivoted(const Queue&, unsigned int) const;
-template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_random_pivoted(const Queue&, unsigned int) const;
-template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_random_pivoted(const Queue&, unsigned int) const;
+template Event MatrixView<float, MatrixFormat::Dense>::fill_random_pivoted(const Queue&, unsigned) const;
+template Event MatrixView<double, MatrixFormat::Dense>::fill_random_pivoted(const Queue&, unsigned) const;
+template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_random_pivoted(const Queue&, unsigned) const;
+template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_random_pivoted(const Queue&, unsigned) const;
 
-template Event MatrixView<float, MatrixFormat::Dense>::fill_graded_hermitian(const Queue&, double, unsigned int) const;
-template Event MatrixView<double, MatrixFormat::Dense>::fill_graded_hermitian(const Queue&, double, unsigned int) const;
-template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_graded_hermitian(const Queue&, double, unsigned int) const;
-template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_graded_hermitian(const Queue&, double, unsigned int) const;
+template Event MatrixView<float, MatrixFormat::Dense>::fill_graded_hermitian(const Queue&, double, unsigned) const;
+template Event MatrixView<double, MatrixFormat::Dense>::fill_graded_hermitian(const Queue&, double, unsigned) const;
+template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::fill_graded_hermitian(const Queue&, double, unsigned) const;
+template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::fill_graded_hermitian(const Queue&, double, unsigned) const;
 
 template Event MatrixView<float, MatrixFormat::Dense>::fill_tridiag_toeplitz(const Queue&, float, float, float) const;
 template Event MatrixView<double, MatrixFormat::Dense>::fill_tridiag_toeplitz(const Queue&, double, double, double) const;
@@ -2839,7 +2831,6 @@ template MatrixView<std::complex<float>, MatrixFormat::Dense>::MatrixView(
 template MatrixView<std::complex<double>, MatrixFormat::Dense>::MatrixView(
     const VectorView<std::complex<double>>&, VectorOrientation);
 
-
 template MatrixView<float, MatrixFormat::Dense>::MatrixView(
     const MatrixView<float, MatrixFormat::Dense>&, int, int, int, int, int);
 template MatrixView<double, MatrixFormat::Dense>::MatrixView(
@@ -2880,5 +2871,4 @@ template const std::complex<double>& MatrixView<std::complex<double>, MatrixForm
 template const std::array<float, 2>& MatrixView<std::array<float, 2>, MatrixFormat::Dense>::at<MatrixFormat::Dense>(int, int, int) const;
 template const std::array<double, 2>& MatrixView<std::array<double, 2>, MatrixFormat::Dense>::at<MatrixFormat::Dense>(int, int, int) const;
 
-
-} // namespace batchlas
+}  // namespace batchlas

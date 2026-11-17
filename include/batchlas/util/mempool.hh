@@ -42,14 +42,15 @@ struct BumpAllocator {
 
     /// @brief A sizing pool: an effectively unbounded, maximally aligned fictitious region.
     ///
-    /// Give a real pool required_bytes() and the same call sequence succeeds, with at most one
-    /// alignment quantum to spare.
+    /// Give a real pool required_bytes() and the same call sequence succeeds whatever the alignment
+    /// of its base, with under two alignment quanta to spare on an aligned base.
     /// @warning The pointers it hands out are non-null and aligned (views can be built over them)
     ///          but unbacked: sizing code must never touch their contents, launch a kernel, or
     ///          test `data() != nullptr` to mean "a workspace was passed".
     /// @return a new sizing pool
-    // Exact because every alignment is one uniform value (device_align >= 16 >= alignof(T)), so
-    // offsets from the base match a real pool's. evidence: docs/design/workspace.md#workspace-bumpallocator-sizing-mode
+    // From any base a real pool never runs ahead of a copy started at its first quantum-aligned
+    // address (< quantum bytes in), which replays this one exactly.
+    // evidence: docs/design/workspace.md#workspace-bumpallocator-sizing-mode
     static BumpAllocator measuring() { return BumpAllocator(measure_tag{}); }
 
     /// @brief True for a pool made by measuring().
@@ -58,26 +59,28 @@ struct BumpAllocator {
 
     /// @brief Bytes a real pool must be given for the call sequence so far to succeed.
     ///
-    /// Rounded up to the coarsest alignment the sequence asked for.
+    /// Rounded up to the coarsest alignment the sequence asked for, plus one such quantum: the
+    /// worst-case padding from a real base address (any alignment) to its first aligned slice.
     /// @return required byte count; 0 when nothing was allocated
     /// @throws batchlas::api_misuse on a pool not made by measuring()
     // Rounding is load-bearing: callers add a callee's size into their total and re-serve it
     // with allocate<std::byte>(), which rounds again.
     inline size_t required_bytes() const {
         if (!measuring_) {
-            throw batchlas::api_misuse("BumpAllocator::required_bytes() on a real pool; use BumpAllocator::measuring().");
+            throw batchlas::api_misuse("BumpAllocator::required_bytes: called on a real pool; use BumpAllocator::measuring().");
         }
         if (align_quantum_ == 0) return high_water_;
-        return (high_water_ + align_quantum_ - 1) & ~(align_quantum_ - 1);
+        // The allocation's own alignment is not trusted: acpp/Metal reports 512 B and hands out 256 B.
+        return ((high_water_ + align_quantum_ - 1) & ~(align_quantum_ - 1)) + align_quantum_;
     }
 
     /// @brief Alignment in bytes of an allocation of `T` on `device`.
     /// @param[in] device  device whose base-address alignment applies
     /// @return \f$\max(16,\ \mathrm{MEM\_BASE\_ADDR\_ALIGN}/8,\ \mathrm{alignof}(T))\f$ bytes
-    template<typename T>
-    constexpr inline static auto alignment(const Device& device){
+    template <typename T>
+    static inline constexpr auto alignment(const Device& device) {
         // 16-byte floor: vendors commonly require it and SYCL cannot query it.
-        auto device_align_bytes = std::max((size_t)16, (size_t)device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN)/8);
+        auto device_align_bytes = std::max(static_cast<size_t>(16), static_cast<size_t>(device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN))/8);
         return std::max(device_align_bytes, static_cast<std::uintptr_t>(alignof(T)));
     }
 
@@ -85,8 +88,8 @@ struct BumpAllocator {
     /// @param[in] device  device whose alignment rule applies
     /// @param[in] size    number of elements
     /// @return \f$\mathrm{size} \cdot \mathrm{sizeof}(T)\f$ rounded up to a multiple of alignment<T>()
-    template<typename T>
-    constexpr inline static size_t allocation_size(const Device& device, size_t size){
+    template <typename T>
+    static inline constexpr size_t allocation_size(const Device& device, size_t size) {
         if (size == 0) return 0; // Handle zero size allocation gracefully
         std::uintptr_t total_size = size * sizeof(T);
         return (total_size + alignment<T>(device) - 1) & ~(alignment<T>(device) - 1);
@@ -96,8 +99,8 @@ struct BumpAllocator {
     /// @param[in] ctx   queue whose device's alignment rule applies
     /// @param[in] size  number of elements
     /// @return the same byte count as the `Device` overload
-    template<typename T>
-    constexpr inline static size_t allocation_size(Queue& ctx, size_t size)   {return allocation_size<T>(ctx.device(), size);}
+    template <typename T>
+    static inline constexpr size_t allocation_size(Queue& ctx, size_t size)   {return allocation_size<T>(ctx.device(), size);}
 
     /// @brief Carve `size` elements of `T`, aligned to alignment<T>(), off the front of the pool.
     /// @tparam T element type
@@ -105,18 +108,18 @@ struct BumpAllocator {
     /// @param[in] size    number of elements; 0 returns an empty Span and consumes nothing
     /// @return the allocated elements (uninitialised; unbacked in a sizing pool)
     /// @throws batchlas::workspace_error if the pool has fewer than allocation_size<T>() bytes left
-    template<typename T>
-    constexpr inline Span<T> allocate(const Device& device, size_t size){
+    template <typename T>
+    inline constexpr Span<T> allocate(const Device& device, size_t size) {
         if (size == 0) return {};
-        size_t alloc_size = allocation_size<T>(device,size);
-        if (alloc_size > byte_size){
-            throw batchlas::workspace_error("Attempted to allocate " + std::to_string(alloc_size) + " bytes from a BumpAllocator with only " + std::to_string(byte_size) + " bytes remaining.");
+        size_t alloc_size = allocation_size<T>(device, size);
+        if (alloc_size > byte_size) {
+            throw batchlas::workspace_error("BumpAllocator::allocate: Attempted to allocate " + std::to_string(alloc_size) + " bytes from a BumpAllocator with only " + std::to_string(byte_size) + " bytes remaining.");
         }
 
         void* aligned = data;
         size_t remaining = byte_size;
         if (std::align(alignment<T>(device), size * sizeof(T), aligned, remaining) == nullptr) {
-            throw batchlas::workspace_error("Failed to align BumpAllocator storage for requested allocation.");
+            throw batchlas::workspace_error("BumpAllocator::allocate: Failed to align BumpAllocator storage for requested allocation.");
         }
 
         if (measuring_) {
@@ -142,8 +145,8 @@ struct BumpAllocator {
     /// @param[in] size  number of elements; 0 returns an empty Span and consumes nothing
     /// @return the allocated elements (uninitialised; unbacked in a sizing pool)
     /// @throws batchlas::workspace_error if the pool has fewer than allocation_size<T>() bytes left
-    template<typename T>
-    constexpr inline Span<T> allocate(Queue& ctx, size_t size) {return allocate<T>(ctx.device(), size);}
+    template <typename T>
+    inline constexpr Span<T> allocate(Queue& ctx, size_t size) {return allocate<T>(ctx.device(), size);}
 
     /// @brief The still-unclaimed tail of the pool.
     ///
@@ -155,7 +158,7 @@ struct BumpAllocator {
         if (measuring_) {
             // Callees sized against remaining().size() must be converted deliberately
             // (see iluk / syevx_lobpcg), never implicitly.
-            throw batchlas::api_misuse("BumpAllocator::remaining() is not available in sizing mode.");
+            throw batchlas::api_misuse("BumpAllocator::remaining: not available in sizing mode.");
         }
         return Span<std::byte>(static_cast<std::byte*>(data), byte_size);
     }
@@ -165,13 +168,13 @@ struct BumpAllocator {
     /// @throws batchlas::workspace_error if fewer than `bytes` remain
     inline void consume(size_t bytes) {
         if (bytes > byte_size) {
-            throw batchlas::workspace_error("BumpAllocator::consume called with more bytes than remain.");
+            throw batchlas::workspace_error("BumpAllocator::consume: called with more bytes than remain.");
         }
         data = static_cast<std::byte*>(data) + bytes;
         byte_size -= bytes;
     }
 
-    private:
+private:
 
         struct measure_tag {};
 

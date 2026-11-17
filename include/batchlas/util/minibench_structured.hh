@@ -51,7 +51,7 @@ inline void set_kernel_from_tuple(StateT& state,
                       (std::move(adapter)));
 }
 
-} // namespace detail
+}  // namespace detail
 
 template <typename Q, typename... Args>
 inline void State::SetKernel(std::shared_ptr<Q> q, Args&&... args) {
@@ -69,4 +69,4 @@ inline void State::SetKernel(std::shared_ptr<Q> q, Args&&... args) {
                                  std::make_index_sequence<N - 1>{});
 }
 
-} // namespace minibench
+}  // namespace minibench

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // syev_align (fullerenes plan P2.5): eigenvector continuity across a degenerate spectrum. The
 // acceptance case is the Hueckel (adjacency) matrix of Ih C60, whose levels are 1-, 3-, 4-, 5- and
 // 9-fold: a basis rotated at random inside every degenerate subspace must come back as the
@@ -35,8 +36,8 @@ namespace ts = test_support;
 using ts::Live;
 using verify::Check;
 
-template <typename T>
-using Real = batchlas::float_t<T>;
+template <typename Scalar>
+using Real = batchlas::float_t<Scalar>;
 
 using SyevAlignTestTypes = typename test_utils::backend_types<ts::Config>::type;
 
@@ -95,59 +96,62 @@ std::vector<int> cluster_starts(const R* lam, int m, double tol) {
 // Block-unitary Q per item: eigenvectors of a random Hermitian block-diagonal H whose block c is
 // shifted by 10 c (so sorted eigenvectors keep the block order), times a random sign or phase per
 // column. No shared generator draws a random unitary with a prescribed block structure.
-template <typename T, Backend B>
-Matrix<T> block_unitary(Queue& q, const std::vector<int>& starts, int n, int batch, unsigned seed) {
-    Matrix<T> R = Matrix<T>::Random(n, n, true, batch, seed);
-    Matrix<T> H = Matrix<T>::Zeros(n, n, batch);
+template <typename Scalar, Backend B>
+Matrix<Scalar> block_unitary(Queue& q, const std::vector<int>& starts, int n, int batch, unsigned seed) {
+    Matrix<Scalar> R = Matrix<Scalar>::Random(n, n, true, batch, seed);
+    Matrix<Scalar> H = Matrix<Scalar>::Zeros(n, n, batch);
     for (int b = 0; b < batch; ++b)
         for (size_t c = 0; c + 1 < starts.size(); ++c)
             for (int j = starts[c]; j < starts[c + 1]; ++j) {
                 for (int i = starts[c]; i < starts[c + 1]; ++i) H(i, j, b) = R(i, j, b);
-                H(j, j, b) += T(Real<T>(10.0 * double(c)));
+                H(j, j, b) += Scalar(Real<Scalar>(10.0 * double(c)));
             }
-    UnifiedVector<Real<T>> w(size_t(n) * batch);
-    UnifiedVector<std::byte> ws(syev_buffer_size<B, T>(q, H, w.to_span(), JobType::EigenVectors, Uplo::Lower));
-    syev<B, T>(q, H, w.to_span(), JobType::EigenVectors, Uplo::Lower, ws.to_span()).wait();
+    UnifiedVector<Real<Scalar>> w(size_t(n) * batch);
+    UnifiedVector<std::byte> ws(syev_buffer_size<B, Scalar>(q, H, w.to_span(), JobType::EigenVectors, Uplo::Lower));
+    syev<B, Scalar>(q, H, w.to_span(), JobType::EigenVectors, Uplo::Lower, ws.to_span()).wait();
     std::mt19937 gen(seed + 1);
     std::uniform_real_distribution<double> ang(0.0, 2.0 * M_PI);
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < n; ++j) {
-            T ph;
+            Scalar ph;
             const double a = ang(gen);
-            if constexpr (is_std_complex_v<T>) ph = T(Real<T>(std::cos(a)), Real<T>(std::sin(a)));
-            else ph = T(a < M_PI ? 1 : -1);
+            if constexpr (is_std_complex_v<Scalar>) ph = Scalar(Real<Scalar>(std::cos(a)), Real<Scalar>(std::sin(a)));
+            else ph = Scalar(a < M_PI ? 1 : -1);
             for (int i = 0; i < n; ++i) H(i, j, b) *= ph;
         }
     return H;
 }
 
-template <typename T, Backend B>
-void align(Queue& q, const MatrixView<T>& Vold, UnifiedVector<Real<T>>& lam, const MatrixView<T>& V, double tol) {
-    UnifiedVector<std::byte> ws(syev_align_buffer_size<B, T>(q, Vold, lam.to_span(), V));
-    syev_align<B, T>(q, Vold, lam.to_span(), V, Real<T>(tol), ws.to_span()).wait();
+template <typename Scalar, Backend B>
+void align(Queue& q, const MatrixView<Scalar>& Vold, UnifiedVector<Real<Scalar>>& lam, const MatrixView<Scalar>& V,
+           double tol) {
+    UnifiedVector<std::byte> ws(syev_align_buffer_size<B, Scalar>(q, Vold, lam.to_span(), V));
+    syev_align<B, Scalar>(q, Vold, lam.to_span(), V, Real<Scalar>(tol), ws.to_span()).wait();
 }
 
 // max over items of ||Ref - X||_F / ||Ref||_F: qr_reconstruction with R = I.
-template <typename T>
-double distance(Queue& q, const MatrixView<T>& Ref, const MatrixView<T>& X) {
-    return MatrixView<T>::qr_reconstruction(q, Ref, X, Matrix<T>::Identity(X.cols(), X.batch_size()), X.all_items());
+template <typename Scalar>
+double distance(Queue& q, const MatrixView<Scalar>& Ref, const MatrixView<Scalar>& X) {
+    return MatrixView<Scalar>::qr_reconstruction(q, Ref, X, Matrix<Scalar>::Identity(X.cols(), X.batch_size()),
+                                                 X.all_items());
 }
 
 // The C60 eigenbasis (V_old, ld 65) and its eigenvalues, `batch` identical items.
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct C60 {
     static constexpr int n = 60;
-    Matrix<T> Vold;
-    UnifiedVector<Real<T>> lam;
-    C60(Queue& q, int batch) : Vold(ts::padded<T>(n, n, batch, 5)), lam(size_t(n) * batch) {
+    Matrix<Scalar> Vold;
+    UnifiedVector<Real<Scalar>> lam;
+    C60(Queue& q, int batch) : Vold(ts::padded<Scalar>(n, n, batch, 5)), lam(size_t(n) * batch) {
         const std::vector<int> adj = c60_adjacency();
-        Matrix<T> A(n, n, batch);
+        Matrix<Scalar> A(n, n, batch);
         for (int b = 0; b < batch; ++b)
             for (int j = 0; j < n; ++j)
-                for (int i = 0; i < n; ++i) A(i, j, b) = T(Real<T>(adj[i * n + j]));
-        UnifiedVector<std::byte> ws(syev_buffer_size<B, T>(q, A, lam.to_span(), JobType::EigenVectors, Uplo::Lower));
-        syev<B, T>(q, A, lam.to_span(), JobType::EigenVectors, Uplo::Lower, ws.to_span()).wait();
-        ts::store<T>(Vold, A);
+                for (int i = 0; i < n; ++i) A(i, j, b) = Scalar(Real<Scalar>(adj[i * n + j]));
+        UnifiedVector<std::byte> ws(syev_buffer_size<B,
+                                    Scalar>(q, A, lam.to_span(), JobType::EigenVectors, Uplo::Lower));
+        syev<B, Scalar>(q, A, lam.to_span(), JobType::EigenVectors, Uplo::Lower, ws.to_span()).wait();
+        ts::store<Scalar>(Vold, A);
     }
 };
 

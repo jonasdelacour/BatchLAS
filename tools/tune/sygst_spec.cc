@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // sygst for the tuner (docs/design/flat-kernel-selection.md §6.1): a Hermitian A0 (fill_random) and an
 // SPD B factored once, untimed, by the public potrf under Auto, at every itype and triangle (table keys).
 // Each run is checked on the default items by ||P - F Q F^H|| / ||P|| (MatrixView::similarity_residual,
@@ -26,15 +27,15 @@ namespace {
 
 namespace I = ops::sygst;
 
-template <class T>
+template <typename Scalar>
 struct SygstProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     int n, batch, ld, itype;
     Uplo uplo;
     std::size_t stride;
-    UnifiedVector<T> A0, L, A, X;
-    UnifiedVector<T*> pA0, pL, pA, pX;
+    UnifiedVector<Scalar> A0, L, A, X;
+    UnifiedVector<Scalar*> pA0, pL, pA, pX;
     MV A0v, Lv, Av, Xv;
     UnifiedVector<std::int32_t> info;
 
@@ -48,8 +49,8 @@ struct SygstProblem {
           info(std::size_t(batch_), 0) {
         (void)A0v.fill_random(q, true, 4242);
         (void)Lv.fill_random_spd(q, 12345);
-        UnifiedVector<std::byte> fws(std::max<std::size_t>(1, potrf_buffer_size<kBackend, T>(q, Lv, uplo)));
-        (void)potrf<kBackend, T>(q, Lv, uplo, fws.to_span(), info.to_span());
+        UnifiedVector<std::byte> fws(std::max<std::size_t>(1, potrf_buffer_size<kBackend, Scalar>(q, Lv, uplo)));
+        (void)potrf<kBackend, Scalar>(q, Lv, uplo, fws.to_span(), info.to_span());
         (void)Lv.triangularize(q, uplo, Diag::NonUnit);
         q.wait();
         for (int b = 0; b < batch; ++b)
@@ -62,20 +63,20 @@ struct SygstProblem {
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < n; ++i) {
                     const std::size_t o = std::size_t(b) * stride;
-                    const T v = L[o + std::size_t(i) * ld + j];
-                    if constexpr (is_std_complex_v<T>) A[o + std::size_t(j) * ld + i] = std::conj(v);
+                    const Scalar v = L[o + std::size_t(i) * ld + j];
+                    if constexpr (is_std_complex_v<Scalar>) A[o + std::size_t(j) * ld + i] = std::conj(v);
                     else A[o + std::size_t(j) * ld + i] = v;
                 }
         return Av;
     }
-    std::size_t workspace() { return sygst_buffer_size<kBackend, T>(q, Av, Lv, itype, uplo); }
+    std::size_t workspace() { return sygst_buffer_size<kBackend, Scalar>(q, Av, Lv, itype, uplo); }
     void reset() {
         (void)MV::copy(q, Av, A0v);
         q.wait();
     }
     void clear_info() {}
     void run(Span<std::byte> ws) {
-        (void)sygst<kBackend, T>(q, Av, Lv, itype, uplo, ws);
+        (void)sygst<kBackend, Scalar>(q, Av, Lv, itype, uplo, ws);
         q.wait();
     }
     std::pair<double, int> verify() {
@@ -108,11 +109,47 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
-            "src/sycl/kernel_attrs.hh",
+            "include/batchlas/device/detail/kernel_attrs.hh",
+            "include/batchlas/device/detail/sscp_target.hh",
             "src/ops/sygst/choice.hh",  // vendor (LAPACKE, host only) has no GPU source of its own
             // family: blocked
             "src/ops/sygst/sygst_native.hh",
             "src/ops/sygst/kernels/sygst_diag.cc",
+            // common
+            "include/batchlas/device.hh",
+            "include/batchlas/device/arith.hh",
+            "include/batchlas/device/core.hh",
+            "include/batchlas/device/exec.hh",
+            "include/batchlas/device/grid.hh",
+            "include/batchlas/device/interop.hh",
+            "include/batchlas/device/lapack/sygst.hh",
+            "include/batchlas/device/lapack_aux.hh",
+            "include/batchlas/device/level1.hh",
+            "include/batchlas/device/level2.hh",
+            "include/batchlas/device/level3.hh",
+            "include/batchlas/device/level3/cfg.hh",
+            "include/batchlas/device/level3/copy_async.hh",
+            "include/batchlas/device/level3/epilogue.hh",
+            "include/batchlas/device/level3/group.hh",
+            "include/batchlas/device/level3/mma.hh",
+            "include/batchlas/device/level3/packet.hh",
+            "include/batchlas/device/level3/pipeline.hh",
+            "include/batchlas/device/level3/schedule.hh",
+            "include/batchlas/device/level3/stage.hh",
+            "include/batchlas/device/operand.hh",
+            "include/batchlas/device/reduce.hh",
+            "include/batchlas/device/scalar.hh",
+            "include/batchlas/device/tier.hh",
+            "include/batchlas/device/view.hh",
+            "include/batchlas/device/workspace.hh",
+            "include/batchlas/util/group-collectives.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn_core.hh",
+            "include/batchlas/device/detail/sg_partition/backend_generic.hh",
+            "include/batchlas/device/detail/sg_partition/backend_nvptx.hh",
+            "include/batchlas/device/detail/sg_partition/backend_spirv.hh",
+            "include/batchlas/device/detail/sg_partition/backend_sscp.hh",
+            "include/batchlas/device/detail/sg_partition/sg_partition.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin

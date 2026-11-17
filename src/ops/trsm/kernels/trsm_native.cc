@@ -12,8 +12,9 @@
 #include <src/linalg-impl.hh>
 #include <src/util/resident_capacity.hh>
 #include <src/sycl/device_scalar.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/util/batch_mask.hh>
+#include <batchlas/device/arith.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -23,9 +24,10 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <batchlas/device.hh>
 #include <batchlas/settings.hh>
 
-namespace batchlas::sycl_trsm {
+namespace batchlas::ops::trsm {
 
 namespace {
 
@@ -45,10 +47,6 @@ constexpr int trsm_max_bucket() {
     return 32;
 }
 
-// Packed lower triangle, row-major by s: N(N+1)/2 elements. All threads read the
-// same Lc(s,t) at a step, so this is an SLM broadcast and bank layout is moot.
-constexpr int tri_idx(int s, int t) { return s * (s + 1) / 2 + t; }
-
 // Side::Left staging tile height, in ELEMENTS: two 32 B sectors' worth, so a
 // lane-group's column read fills them. evidence: docs/perf/trsm.md#the-sideleft-staging-tile
 template <typename D>
@@ -62,21 +60,21 @@ constexpr bool trsm_stage_left() {
     return sizeof(D) <= 8 && !sycl_device::dev_is_complex_v<D>;
 }
 
-template <typename T, int N, Side SideV>
+template <typename Scalar, int N, Side SideV>
 class TrsmCtaKernel;
 
 }  // namespace
 
-template <typename T, int N, Side SideV>
+template <typename Scalar, int N, Side SideV>
 Event trsm_native_v1(Queue& ctx,
-                     const MatrixView<T, MatrixFormat::Dense>& A,
-                     const MatrixView<T, MatrixFormat::Dense>& B,
-                     T alpha,
+                     const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                     const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                     Scalar alpha,
                      Uplo uplo,
                      Transpose transA,
                      Diag diag) {
-    using D = typename sycl_device::DevMap<T>::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    using D = typename sycl_device::DevMap<Scalar>::type;
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     const Canonical can = canonicalise(SideV, uplo, transA, diag);
 
@@ -135,178 +133,85 @@ Event trsm_native_v1(Queue& ctx,
         D alpha_d;
         __builtin_memcpy(&alpha_d, &alpha, sizeof(D));
 
-        batchlas::impl::parallel_for<TrsmCtaKernel<T, N, SideV>>(h,
+        batchlas::impl::parallel_for<TrsmCtaKernel<Scalar, N, SideV>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(bs) * groups * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
+                using Ar = device::arith_t<device::arith::Fma, D>;
+                constexpr bool kLeft = (SideV == Side::Left);
                 const int wg_id = static_cast<int>(it.get_group_linear_id());
                 const int b = wg_id / groups;
                 // A work-group serves one item (I1): uniform, before the first barrier.
                 if (mask != nullptr && mask[b] == 0) return;
-                const int lane = static_cast<int>(it.get_local_linear_id());
-                const int u = (wg_id % groups) * wg + lane;
+                const device::RtGroup<> ex{it};
+                const int lane = ex.lid();
+                const int u0 = (wg_id % groups) * wg;   // this group's first column
+                const int u = u0 + lane;
                 const bool live = (u < q);
 
-                const D* Ab = a_ptr + static_cast<std::ptrdiff_t>(b) * stride_a;
                 D* Bb = b_ptr + static_cast<std::ptrdiff_t>(b) * stride_b;
+                // ConjTrans conjugates INCLUDING THE DIAGONAL, so rd below inverts conj(d).
+                const device::CanonTri<const D, kLeft> L{a_ptr + static_cast<std::ptrdiff_t>(b) * stride_a, lda, n,
+                                                      fwd, do_trans, do_conj};
 
                 D* sLc = lc.template get_multi_ptr<sycl::access::decorated::no>().get();
                 D* sRd = rd.template get_multi_ptr<sycl::access::decorated::no>().get();
                 int* sDiv = use_div.template get_multi_ptr<sycl::access::decorated::no>().get();
                 D* sTile = tile.template get_multi_ptr<sycl::access::decorated::no>().get();
-                const int u0 = (wg_id % groups) * wg;   // this group's first column
 
                 if (lane == 0) sDiv[0] = 0;
-
-                // rho(s) = fwd ? s : n-1-s maps canonical to stored index, and the
-                // operand order of Lc is swapped between the sides. ConjTrans
-                // conjugates INCLUDING THE DIAGONAL, so rd below inverts conj(d).
-                for (size_t idx = lane; idx < tri_elems; idx += static_cast<size_t>(wg)) {
-                    int s = 0;
-                    while (tri_idx(s + 1, 0) <= static_cast<int>(idx)) ++s;
-                    const int t = static_cast<int>(idx) - tri_idx(s, 0);
-
-                    D v;
-                    if (s >= n || t >= n) {
-                        v = (s == t) ? sycl_device::dev_one<D>() : D{};
-                    } else {
-                        const int rs = fwd ? s : (n - 1 - s);
-                        const int rt = fwd ? t : (n - 1 - t);
-                        const int r = (SideV == Side::Left) ? rs : rt;
-                        const int c = (SideV == Side::Left) ? rt : rs;
-                        v = do_trans
-                                ? Ab[c + static_cast<std::ptrdiff_t>(r) * lda]   // A(c,r)
-                                : Ab[r + static_cast<std::ptrdiff_t>(c) * lda];  // A(r,c)
-                        if (do_conj) v = sycl_device::dev_conj(v);
-                    }
-                    sLc[idx] = v;
-                }
-
+                device::tp_pack_lower<N>(ex, L, n, sLc);
                 // REQUIRED; without it the solve returns WRONG ANSWERS: sLc is
                 // written strided by lane and read by a different lane, and lane 0
                 // zeroes sDiv[0] while any lane may store 1. The race cannot show
                 // at wg == 32, i.e. below roughly q*batch = 65k -- the whole suite.
                 // evidence: docs/perf/trsm.md#the-missing-group-barrier
-                sycl::group_barrier(it.get_group());
+                // Mem::Global fences both spaces, as the legacy sycl::group_barrier did.
+                ex.barrier(device::Mem::Global);
+                // A non-finite 1/Lc(s,s) flips the group-uniform flag back to division.
+                device::tp_diag_recip<N, Ar>(ex, sLc, n, unit, sRd, sDiv);
+                ex.barrier(device::Mem::Global);
+                const device::TpDiag<D> dg{sLc, sRd, unit, sDiv[0] != 0};
+                // L x = b row by row: the dot from zero, then b(s) read and subtracted, TpDiag's step.
+                const auto Lp = device::packed<Uplo::Lower, device::PackOrder::ByRows>(static_cast<const D*>(sLc), N);
+                using device::alg::DiagApply, device::alg::DotThenSub, device::alg::SerialRows, device::arith::Fma;
 
-                // The recurrence multiplies by rd[s] = 1/Lc(s,s), which is inf
-                // where a division would stay finite; a thread seeing a non-finite
-                // reciprocal flips a group-uniform flag back to division.
-                for (int s = lane; s < N; s += wg) {
-                    D r = sycl_device::dev_one<D>();
-                    if (s < n && !unit) {
-                        const D d = sLc[tri_idx(s, s)];
-                        r = sycl_device::dev_recip(d);
-                        if (!sycl_device::dev_isfinite(r)) {
-                            sycl::atomic_ref<int, sycl::memory_order::relaxed,
-                                             sycl::memory_scope::work_group,
-                                             sycl::access::address_space::local_space>(sDiv[0])
-                                .store(1);
-                            r = sycl_device::dev_one<D>();
-                        }
-                    }
-                    sRd[s] = r;
-                }
-
-                sycl::group_barrier(it.get_group());
-
-                const bool divide = (sDiv[0] != 0);
-
-                const std::ptrdiff_t unit_s =
-                    (SideV == Side::Left) ? 1 : static_cast<std::ptrdiff_t>(ldb);
-                const std::ptrdiff_t du =
-                    (SideV == Side::Left) ? static_cast<std::ptrdiff_t>(ldb) : 1;
-                const std::ptrdiff_t b0 = fwd ? 0 : static_cast<std::ptrdiff_t>(n - 1) * unit_s;
-                const std::ptrdiff_t ds = fwd ? unit_s : -unit_s;
-
-                const auto left_addr = [&](int s_can, int col) -> std::ptrdiff_t {
-                    const int row = fwd ? s_can : (n - 1 - s_can);
-                    return static_cast<std::ptrdiff_t>(row) +
-                           static_cast<std::ptrdiff_t>(col) * ldb;
-                };
-
-                constexpr int STEP   = kStageLeft ? TILE_ROWS : N;
-                constexpr int ROUNDS = (N + STEP - 1) / STEP;
-
-                D x[N];
-BATCHLAS_UNROLL_FULL
-                for (int k = 0; k < ROUNDS; ++k) {
-                    if constexpr (kStageLeft) {
-                        // Barrier BEFORE overwriting the tile: last round's reads
-                        // must have retired. Both barriers sit outside every `live`
-                        // test -- a barrier only some lanes reach is undefined.
-                        sycl::group_barrier(it.get_group());
-                        // r varies fastest: lanes read consecutive ROWS.
-                        for (int i = lane; i < TILE_ROWS * wg; i += wg) {
-                            const int r = i % TILE_ROWS;
-                            const int c = i / TILE_ROWS;
-                            const int s_can = k * TILE_ROWS + r;
-                            const int col = u0 + c;
-                            D v{};
-                            if (s_can < n && col < q) v = Bb[left_addr(s_can, col)];
-                            sTile[c * (TILE_ROWS + 1) + r] = v;
-                        }
-                        sycl::group_barrier(it.get_group());
-                    }
-
-BATCHLAS_UNROLL_FULL
-                    for (int j = 0; j < STEP; ++j) {
-                        const int s = k * STEP + j;
-                        if (s >= N) continue;    // folds away when STEP divides N
-                        D acc = D{};
-BATCHLAS_UNROLL_FULL
-                        for (int t = 0; t < N; ++t) {
-                            if (t < s) sycl_device::fma_acc(acc, sLc[tri_idx(s, t)], x[t]);
-                        }
-                        D rhs = D{};
-                        if (live && s < n) {
-                            if constexpr (kStageLeft) {
-                                rhs = sycl_device::dev_mul(
-                                    alpha_d, sTile[lane * (TILE_ROWS + 1) + j]);
-                            } else {
-                                rhs = sycl_device::dev_mul(
-                                    alpha_d,
-                                    Bb[b0 + static_cast<std::ptrdiff_t>(s) * ds + u * du]);
-                            }
-                        }
-                        D v = sycl_device::dev_sub(rhs, acc);
-                        if (!unit) {
-                            v = divide ? sycl_device::dev_div(v, sLc[tri_idx(s, s)])
-                                       : sycl_device::dev_mul(v, sRd[s]);
-                        }
-                        x[s] = v;
-                    }
-                }
-
+                device::Frag<D, N> x;
                 if constexpr (kStageLeft) {
+                    constexpr int ROUNDS = (N + TILE_ROWS - 1) / TILE_ROWS;
+                    const device::FlipRows<D> Bc{Bb, ldb, n, q, fwd};
+                    D* my_col = sTile + lane * (TILE_ROWS + 1);
 BATCHLAS_UNROLL_FULL
                     for (int k = 0; k < ROUNDS; ++k) {
-                        sycl::group_barrier(it.get_group());
-                        // The guard is on the STEP, not on `live`: a non-live
-                        // lane's column is one the store below refuses to write.
+                        // Barrier BEFORE overwriting the tile (last round's reads); no
+                        // barrier sits under `live`: one only some lanes reach is undefined.
+                        ex.barrier(device::Mem::Global);
+                        device::lacpy_tile_in<TILE_ROWS, TILE_ROWS + 1>(ex, Bc, k * TILE_ROWS, u0, sTile);
+                        ex.barrier(device::Mem::Global);
+                        device::trsv<Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, DiagApply, SerialRows<TILE_ROWS>, Fma, DotThenSub>(
+                            device::Thread{}, Lp, dg, x, N, k * TILE_ROWS, [&](int s) {
+                            D rhs{};
+                            if (live && s < n) rhs = Ar::mul(alpha_d, my_col[s - k * TILE_ROWS]);
+                            return rhs;
+                        });
+                    }
 BATCHLAS_UNROLL_FULL
-                        for (int j = 0; j < TILE_ROWS; ++j) {
-                            const int s = k * TILE_ROWS + j;
-                            if (s < N) sTile[lane * (TILE_ROWS + 1) + j] = x[s];
-                        }
-                        sycl::group_barrier(it.get_group());
-                        for (int i = lane; i < TILE_ROWS * wg; i += wg) {
-                            const int r = i % TILE_ROWS;
-                            const int c = i / TILE_ROWS;
-                            const int s_can = k * TILE_ROWS + r;
-                            const int col = u0 + c;
-                            if (s_can < n && col < q) {
-                                Bb[left_addr(s_can, col)] = sTile[c * (TILE_ROWS + 1) + r];
-                            }
-                        }
+                    for (int k = 0; k < ROUNDS; ++k) {
+                        // A non-live lane's column is one lacpy_tile_out refuses to write.
+                        ex.barrier(device::Mem::Global);
+                        device::frag_copy_out<TILE_ROWS>(x, k * TILE_ROWS, my_col);
+                        ex.barrier(device::Mem::Global);
+                        device::lacpy_tile_out<TILE_ROWS, TILE_ROWS + 1>(ex, sTile, Bc, k * TILE_ROWS, u0);
                     }
                 } else {
-BATCHLAS_UNROLL_FULL
-                    for (int s = 0; s < N; ++s) {
-                        if (live && s < n) {
-                            Bb[b0 + static_cast<std::ptrdiff_t>(s) * ds + u * du] = x[s];
-                        }
-                    }
+                    const auto bu = device::CanonRhs<D, kLeft>(Bb, n, ldb, fwd).rhs(u);
+                    device::trsv<Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, DiagApply, SerialRows<N>, Fma, DotThenSub>(
+                        device::Thread{}, Lp, dg, x, N, 0, [&](int s) {
+                        D rhs{};
+                        if (live && s < n) rhs = Ar::mul(alpha_d, bu(s));
+                        return rhs;
+                    });
+                    device::store(x, bu, live ? n : 0);
                 }
             });
     });
@@ -314,16 +219,16 @@ BATCHLAS_UNROLL_FULL
     return ctx.get_event();
 }
 
-template <typename T, Side SideV>
+template <typename Scalar, Side SideV>
 Event trsm_native_v1_buckets(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& A,
-                             const MatrixView<T, MatrixFormat::Dense>& B,
-                             T alpha, Uplo uplo, Transpose transA, Diag diag) {
-    using D_ = typename sycl_device::DevMap<T>::type;
+                             const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                             const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                             Scalar alpha, Uplo uplo, Transpose transA, Diag diag) {
+    using D_ = typename sycl_device::DevMap<Scalar>::type;
     switch (smallest_bucket_ge(static_cast<int>(A.rows()))) {
-        case 8:  return trsm_native_v1<T, 8, SideV>(ctx, A, B, alpha, uplo, transA, diag);
-        case 16: return trsm_native_v1<T, 16, SideV>(ctx, A, B, alpha, uplo, transA, diag);
-        case 32: return trsm_native_v1<T, 32, SideV>(ctx, A, B, alpha, uplo, transA, diag);
+        case 8:  return trsm_native_v1<Scalar, 8, SideV>(ctx, A, B, alpha, uplo, transA, diag);
+        case 16: return trsm_native_v1<Scalar, 16, SideV>(ctx, A, B, alpha, uplo, transA, diag);
+        case 32: return trsm_native_v1<Scalar, 32, SideV>(ctx, A, B, alpha, uplo, transA, diag);
         default: break;
     }
     {
@@ -361,23 +266,23 @@ inline int trsm_outer_block(int cta_nb, Side side) {
     return rounded >= cta_nb ? rounded : cta_nb;
 }
 
-template <typename T>
+template <typename Scalar>
 Event trsm_native_blocked(Queue& ctx,
-                          const MatrixView<T, MatrixFormat::Dense>& A,
-                          const MatrixView<T, MatrixFormat::Dense>& B,
-                          T alpha,
+                          const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                          const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                          Scalar alpha,
                           Side side,
                           Uplo uplo,
                           Transpose transA,
                           Diag diag,
-                          TrsmTrailingGemm<T> trailing_gemm) {
+                          TrsmTrailingGemm<Scalar> trailing_gemm) {
     if (!trailing_gemm) {
         throw batchlas::invalid_argument("trsm_native_blocked: trailing_gemm is required (pass the public gemm)");
     }
     const Canonical can = canonicalise(side, uplo, transA, diag);
     const int n = static_cast<int>(A.rows());
     const int q = static_cast<int>(side == Side::Left ? B.cols() : B.rows());
-    const int nb = trsm_cta_max_n<T>();          // the CTA capacity: the INNER block
+    const int nb = trsm_cta_max_n<Scalar>();          // the CTA capacity: the INNER block
     const int outer_nb = trsm_outer_block(nb, side);  // the trailing-update block
 
     const int lda = A.ld(), ldb = B.ld();
@@ -386,9 +291,9 @@ Event trsm_native_blocked(Queue& ctx,
 
     // Every block re-attaches the call's batch mask, which the raw-pointer view drops.
     const auto mask = batchlas::detail::call_mask("trsm", A, B);
-    auto sub = [&mask](const MatrixView<T, MatrixFormat::Dense>& V,
+    auto sub = [&mask](const MatrixView<Scalar, MatrixFormat::Dense>& V,
                        int r0, int nr, int c0, int nc, int ld, int stride, int batch) {
-        return MatrixView<T, MatrixFormat::Dense>(
+        return MatrixView<Scalar, MatrixFormat::Dense>(
             V.data_ptr() + static_cast<std::ptrdiff_t>(c0) * ld + r0,
             nr, nc, ld, stride, batch).with_batch_mask(mask);
     };
@@ -397,7 +302,7 @@ Event trsm_native_blocked(Queue& ctx,
     // [n-b, n-a) when not. Both levels go through this, sharing one convention.
     auto stored_off = [&](int a, int b) { return can.fwd ? a : (n - b); };
 
-    auto apply_update = [&](int t_lo, int t_hi, int p_lo, int p_hi, T beta) {
+    auto apply_update = [&](int t_lo, int t_hi, int p_lo, int p_hi, Scalar beta) {
         const int m = t_hi - t_lo;
         const int k = p_hi - p_lo;
         const int r0 = stored_off(t_lo, t_hi);
@@ -418,20 +323,20 @@ Event trsm_native_blocked(Queue& ctx,
 
         if (side == Side::Left) {
             // C(m x q) := -op(Aoff)(m x k) * X(k x q) + beta*C
-            (void)trailing_gemm(ctx, Aoff, X, C, T(-1), beta,
+            (void)trailing_gemm(ctx, Aoff, X, C, Scalar(-1), beta,
                           transA, Transpose::NoTrans,
                           ComputePrecision::Default);
         } else {
             // C(q x m) := -X(q x k) * op(Aoff)(k x m) + beta*C. X GOES IN THE A
             // POSITION: with the A block first, C would have at most nb rows
             // against the required q.
-            (void)trailing_gemm(ctx, X, Aoff, C, T(-1), beta,
+            (void)trailing_gemm(ctx, X, Aoff, C, Scalar(-1), beta,
                           Transpose::NoTrans, transA,
                           ComputePrecision::Default);
         }
     };
 
-    auto solve_diag = [&](int lo, int hi, T alpha_eff) {
+    auto solve_diag = [&](int lo, int hi, Scalar alpha_eff) {
         const int m = hi - lo;
         const int r0 = stored_off(lo, hi);
         const auto Adiag = sub(A, r0, m, r0, m, lda, sa, bs);
@@ -439,7 +344,7 @@ Event trsm_native_blocked(Queue& ctx,
                                                : sub(B, 0, q, r0, m, ldb, sb, bs);
         // (void) on an Event: deliberate. This Queue is in-order, so the next submission
         // is already ordered after this one and the Event carries nothing the caller needs.
-        (void)trsm_native_v1_dispatch<T>(ctx, Adiag, Bblk, alpha_eff, side, uplo, transA, diag);
+        (void)trsm_native_v1_dispatch<Scalar>(ctx, Adiag, Bblk, alpha_eff, side, uplo, transA, diag);
     };
 
     // TWO LEVELS: the outer applies the whole solved prefix to a panel in one fat
@@ -453,9 +358,9 @@ Event trsm_native_blocked(Queue& ctx,
             const int hi = std::min(HI, lo + nb);
             const bool first_touch_is_here = (LO == 0);
             if (lo > LO) {
-                apply_update(lo, hi, LO, lo, first_touch_is_here ? alpha : T(1));
+                apply_update(lo, hi, LO, lo, first_touch_is_here ? alpha : Scalar(1));
             }
-            const T alpha_eff = (LO == 0 && lo == 0) ? alpha : T(1);
+            const Scalar alpha_eff = (LO == 0 && lo == 0) ? alpha : Scalar(1);
             solve_diag(lo, hi, alpha_eff);
 
             // Block i+1's GEMM reads what block i's solve just wrote; an
@@ -467,18 +372,18 @@ Event trsm_native_blocked(Queue& ctx,
     return ctx.get_event();
 }
 
-template <typename T>
+template <typename Scalar>
 Event trsm_native_v1_dispatch(Queue& ctx,
-                              const MatrixView<T, MatrixFormat::Dense>& A,
-                              const MatrixView<T, MatrixFormat::Dense>& B,
-                              T alpha,
+                              const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                              const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                              Scalar alpha,
                               Side side,
                               Uplo uplo,
                               Transpose transA,
                               Diag diag) {
     return (side == Side::Left)
-               ? trsm_native_v1_buckets<T, Side::Left>(ctx, A, B, alpha, uplo, transA, diag)
-               : trsm_native_v1_buckets<T, Side::Right>(ctx, A, B, alpha, uplo, transA, diag);
+               ? trsm_native_v1_buckets<Scalar, Side::Left>(ctx, A, B, alpha, uplo, transA, diag)
+               : trsm_native_v1_buckets<Scalar, Side::Right>(ctx, A, B, alpha, uplo, transA, diag);
 }
 
 template Event trsm_native_v1_dispatch<float>(
@@ -519,9 +424,4 @@ template Event trsm_native_blocked<std::complex<double>>(
     const MatrixView<std::complex<double>, MatrixFormat::Dense>&, std::complex<double>,
     Side, Uplo, Transpose, Diag, TrsmTrailingGemm<std::complex<double>>);
 
-template <> bool trsm_blocked_available<float>()                { return true; }
-template <> bool trsm_blocked_available<double>()               { return true; }
-template <> bool trsm_blocked_available<std::complex<float>>()  { return true; }
-template <> bool trsm_blocked_available<std::complex<double>>() { return true; }
-
-}  // namespace batchlas::sycl_trsm
+}  // namespace batchlas::ops::trsm

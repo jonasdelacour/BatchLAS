@@ -5,13 +5,22 @@
 #include <batchlas/backend_config.h>
 #include <benchmarks/bench_utils.hh>
 
-static int last_arg = 0;
-static void dummy_bench(minibench::State& state) { last_arg = state.range(0); }
-MINI_BENCHMARK_REGISTER_SIZES((dummy_bench), [](auto* b){ b->Args({1}); });
+namespace {
+
+int last_arg = 0;
+void dummy_bench(minibench::State& state) { last_arg = state.range(0); }
+
+}  // namespace
+
+MINI_BENCHMARK_REGISTER_SIZES((dummy_bench), [](auto* b) { b->Args({1}); });
+
+namespace {
 
 // Benchmarks used for backend/type filtering
-static int called_fc = 0;
-static int called_dn = 0;
+int called_fc = 0;
+int called_dn = 0;
+
+}  // namespace
 
 template <typename T, batchlas::Backend B>
 static void typed_bench(minibench::State&) {}
@@ -19,19 +28,19 @@ static void typed_bench(minibench::State&) {}
 #if BATCHLAS_HAS_CUDA_BACKEND
 template <>
 void typed_bench<float, batchlas::Backend::CUDA>(minibench::State&) { ++called_fc; }
-BATCHLAS_BENCH_CUDA(typed_bench, [](auto* b){ b->Args({1}); });
+BATCHLAS_BENCH_CUDA(typed_bench, [](auto* b) { b->Args({1}); });
 #endif
 
 #if BATCHLAS_HAS_ROCM_BACKEND
 template <>
 void typed_bench<float, batchlas::Backend::ROCM>(minibench::State&) { ++called_fc; }
-BATCHLAS_BENCH_ROCM(typed_bench, [](auto* b){ b->Args({1}); });
+BATCHLAS_BENCH_ROCM(typed_bench, [](auto* b) { b->Args({1}); });
 #endif
 
 #if BATCHLAS_HAS_HOST_BACKEND
 template <>
 void typed_bench<double, batchlas::Backend::NETLIB>(minibench::State&) { ++called_dn; }
-MINI_BENCHMARK_REGISTER_SIZES((typed_bench<double, batchlas::Backend::NETLIB>), [](auto* b){ b->Args({1}); });
+MINI_BENCHMARK_REGISTER_SIZES((typed_bench<double, batchlas::Backend::NETLIB>), [](auto* b) { b->Args({1}); });
 #endif
 
 TEST(MiniBenchCliTest, OverridesRegisteredArgs) {
@@ -45,7 +54,7 @@ TEST(MiniBenchCliTest, OverridesRegisteredArgs) {
     }
 
     auto it = std::find_if(minibench::registry().begin(), minibench::registry().end(),
-                           [](const auto& b){ return b.name.find("dummy_bench") != std::string::npos; });
+                           [](const auto& b) { return b.name.find("dummy_bench") != std::string::npos; });
     ASSERT_NE(it, minibench::registry().end());
     auto& bench = *it;
     ASSERT_EQ(bench.args_list.size(), 1u);
@@ -79,6 +88,6 @@ TEST(MiniBenchCliTest, BackendTypeFiltering) {
     EXPECT_EQ(called_dn, 0);
     EXPECT_GT(called_fc, 0);
 #else
-    GTEST_SKIP() << "No supported backend compiled";
+    GTEST_SKIP() << "no supported backend compiled";
 #endif
 }

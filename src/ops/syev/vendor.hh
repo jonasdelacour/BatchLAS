@@ -14,22 +14,22 @@
 
 namespace batchlas::ops::syev::detail {
 
-template <Backend B, typename T, typename... Args>  /// backend::syev_vendor. @throws NoRouteError without the library.
+template <Backend B, typename Scalar, typename... Args>  /// backend::syev_vendor. @throws NoRouteError without the library.
 Event syev_vendor_or_throw(Args&&... args) {
     if constexpr (!batchlas::select::solver_vendor_available<B>) {
-        batchlas::select::throw_no_vendor_route<T>(batchlas::Op::syev, B, batchlas::select::kSolverLibrary<B>);
+        batchlas::select::throw_no_vendor_route<Scalar>(batchlas::Op::syev, B, batchlas::select::kSolverLibrary<B>);
     } else {
-        return batchlas::backend::syev_vendor<B, T>(std::forward<Args>(args)...);
+        return batchlas::backend::syev_vendor<B, Scalar>(std::forward<Args>(args)...);
     }
 }
 
-template <Backend B, typename T, typename... Args>  /// Its workspace size. @throws NoRouteError without the library.
+template <Backend B, typename Scalar, typename... Args>  /// Its workspace size. @throws NoRouteError without the library.
 std::size_t syev_vendor_buffer_size_or_throw(Args&&... args) {
     if constexpr (!batchlas::select::solver_vendor_available<B>) {
-        batchlas::select::throw_no_vendor_route<T>(batchlas::Op::syev, B, batchlas::select::kSolverLibrary<B>);
+        batchlas::select::throw_no_vendor_route<Scalar>(batchlas::Op::syev, B, batchlas::select::kSolverLibrary<B>);
     } else {
-        return batchlas::backend::syev_vendor_buffer_size<B, T>(std::forward<Args>(args)...);
+        return batchlas::backend::syev_vendor_buffer_size<B, Scalar>(std::forward<Args>(args)...);
     }
 }
 
-} // namespace batchlas::ops::syev::detail
+}  // namespace batchlas::ops::syev::detail

@@ -82,13 +82,13 @@ void expect_spectrum(const MatrixView<Scalar, MatrixFormat::Dense>& A0, Vector<S
     expect_values_err<Scalar>(A0.rows(), spectrum_error(A0, d, e, items), slack);
 }
 
-template <typename T, Backend B>
+template <typename Real, Backend B>
 struct SytrdBlockedConfig {
-    using ScalarType = T;
+    using ScalarType = Real;
     static constexpr Backend BackendVal = B;
 };
 
-} // namespace
+}  // namespace
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 using SytrdBlockedTestTypes = ::testing::Types<SytrdBlockedConfig<float, Backend::CUDA>, SytrdBlockedConfig<double, Backend::CUDA>>;

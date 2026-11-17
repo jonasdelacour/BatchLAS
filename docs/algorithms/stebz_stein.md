@@ -35,8 +35,8 @@ and counts tiny pivots as non-positive, which defines
 With monotone (correctly rounded) arithmetic the computed \f$\nu\f$ is nondecreasing in \f$x\f$,
 the invariant bisection needs [5].
 
-- recurrence and guard: `src/ops/syev/tridiag/stebz.cc:L47-L58`
-- \f$\pi_{\min}\f$: `src/ops/syev/tridiag/stebz.cc:L139`, `L144`, `L154`
+- recurrence and guard: [`src/ops/syev/tridiag/stebz.cc:L48-L57`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stebz.cc#L48-L57)
+- \f$\pi_{\min}\f$: [`src/ops/syev/tridiag/stebz.cc:L139`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stebz.cc#L139), [`L144`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stebz.cc#L144), [`L154`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stebz.cc#L154)
 
 ## stebz: start interval and tolerance
 
@@ -56,14 +56,14 @@ Bisection stops at interval width
 \varepsilon \max\bigl(|g_l|,|g_u|,1\bigr) & \text{otherwise.} \end{cases}
 \f]
 
-- bounds: `src/ops/syev/tridiag/stebz.cc:L133-L144`; widening: `src/ops/syev/tridiag/stebz.cc:L148-L153`
-- \f$\tau\f$: `src/ops/syev/tridiag/stebz.cc:L164-L165`
+- bounds: [`src/ops/syev/tridiag/stebz.cc:L133-L144`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stebz.cc#L133-L144); widening: [`src/ops/syev/tridiag/stebz.cc:L148-L153`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stebz.cc#L148-L153)
+- \f$\tau\f$: [`src/ops/syev/tridiag/stebz.cc:L164-L165`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stebz.cc#L164-L165)
 
 ## stebz: bisection
 
 A value range becomes an index range: the eigenvalues in \f$(v_l, v_u]\f$ are
 \f$\lambda_j\f$, \f$j \in [\nu(v_l), \nu(v_u) - 1]\f$, so \f$m = \nu(v_u) - \nu(v_l)\f$
-(`src/ops/syev/tridiag/stebz.cc:L172-L181`). For each wanted \f$j\f$ bisection keeps
+([`src/ops/syev/tridiag/stebz.cc:L172-L181`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stebz.cc#L172-L181)). For each wanted \f$j\f$ bisection keeps
 \f$\nu(a) \le j < \nu(b)\f$, i.e. \f$\lambda_j \in (a, b]\f$:
 
 ```text
@@ -76,18 +76,18 @@ repeat at most max_iterations (128) times:
 w_j := a + (b - a)/2
 ```
 
-- loop: `src/ops/syev/tridiag/stebz.cc:L196-L209`; output and descending order: `src/ops/syev/tridiag/stebz.cc:L211-L213`
+- loop: [`src/ops/syev/tridiag/stebz.cc:L196-L209`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stebz.cc#L196-L209); output and descending order: [`src/ops/syev/tridiag/stebz.cc:L211-L213`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stebz.cc#L211-L213)
 
 One bit per step: at most \f$\lceil \log_2((g_u - g_l)/\tau) \rceil\f$ counts per eigenvalue. Each
 computed count is the exact count of a matrix within a few ulps of \f$T\f$, so if the width test
 ends the loop, \f$|w_j - \lambda_j| \le \tau/2 + O(\varepsilon\|T\|)\f$ [2, 5]. An early stop
 (cap or midpoint guard) is not reported; callers clear `info`
-(e.g. `src/ops/syevx/kernels/syevx_direct_subset.cc:L91`).
+(e.g. [`src/ops/syevx/kernels/syevx_direct_subset.cc:L91`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syevx/kernels/syevx_direct_subset.cc#L91)).
 
 **Kernel.** One work-group per batch item, \f$\min(256, k)\f$ work-items
-(`src/ops/syev/tridiag/stebz.cc:L109-L111`); group reductions give \f$g_l^0, g_u^0,
-\max_i e_i^2\f$ (`src/ops/syev/tridiag/stebz.cc:L142-L144`). Each work-item bisects every
-`local_size`-th wanted index (`src/ops/syev/tridiag/stebz.cc:L191-L192`); no global workspace.
+([`src/ops/syev/tridiag/stebz.cc:L109-L111`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stebz.cc#L109-L111)); group reductions give \f$g_l^0, g_u^0,
+\max_i e_i^2\f$ ([`src/ops/syev/tridiag/stebz.cc:L142-L144`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stebz.cc#L142-L144)). Each work-item bisects every
+`local_size`-th wanted index ([`src/ops/syev/tridiag/stebz.cc:L191-L192`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stebz.cc#L191-L192)); no global workspace.
 
 ## stein: inverse iteration
 
@@ -102,27 +102,27 @@ One step scales the \f$u_i\f$ component by \f$1/(\lambda_i - \mu_j)\f$; with
 \f$|\lambda_j - \mu_j| = O(\varepsilon\|T\|)\f$ one or two steps suffice for a well-separated
 \f$\lambda_j\f$, and the near-singular solve is benign because its error lies mostly along
 \f$u_j\f$ [4]. With \f$\|T\|_\infty\f$ clamped below by \f$\sigma\f$
-(`src/ops/syev/tridiag/stein.cc:L172-L185`), `stein` runs per vector \f$j\f$:
+([`src/ops/syev/tridiag/stein.cc:L173-L182`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stein.cc#L173-L182)), `stein` runs per vector \f$j\f$:
 
 0. **Shift and start.** \f$\mu_j = w_j\f$, except that if
    \f$|w_j - w_{j-1}| < \varepsilon\|T\|_\infty\f$ then \f$\mu_j = w_j + j\,\varepsilon\|T\|_\infty\f$
-   so coincident eigenvalues give distinct systems (`src/ops/syev/tridiag/stein.cc:L213-L219`); the
+   so coincident eigenvalues give distinct systems ([`src/ops/syev/tridiag/stein.cc:L213-L219`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stein.cc#L213-L219)); the
    offset grows with \f$j\f$, up to \f$(k-1)\varepsilon\|T\|_\infty\f$, weakening the argument
-   above for large \f$k\f$. \f$x^{(0)}\f$ is uniform in \f$[-1,1)\f$ from a seeded LCG (`src/ops/syev/tridiag/stein.cc:L93-L96`, `L221-L225`).
-1. Normalise \f$x \leftarrow x/\|x\|_2\f$ (`src/ops/syev/tridiag/stein.cc:L228-L233`).
-2. Rebuild \f$T - \mu_j I\f$ (`src/ops/syev/tridiag/stein.cc:L237-L244`) and factor it by LU with
+   above for large \f$k\f$. \f$x^{(0)}\f$ is uniform in \f$[-1,1)\f$ from a seeded LCG ([`src/ops/syev/tridiag/stein.cc:L93-L96`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stein.cc#L93-L96), [`L221-L225`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stein.cc#L221-L225)).
+1. Normalise \f$x \leftarrow x/\|x\|_2\f$ ([`src/ops/syev/tridiag/stein.cc:L228-L233`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stein.cc#L228-L233)).
+2. Rebuild \f$T - \mu_j I\f$ ([`src/ops/syev/tridiag/stein.cc:L237-L242`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stein.cc#L237-L242)) and factor it by LU with
    partial pivoting as in `dgttrf` [6]:
    \f$T - \mu_j I = P_1 L_1 P_2 L_2 \cdots P_{n-1} L_{n-1} U\f$, each \f$P_i\f$ the identity or the
    swap of rows \f$i, i+1\f$, each \f$L_i\f$ an elementary unit lower bidiagonal matrix, \f$U\f$
-   upper with two superdiagonals (`src/ops/syev/tridiag/stein.cc:L46-L68`). A non-interchanged
+   upper with two superdiagonals ([`src/ops/syev/tridiag/stein.cc:L46-L68`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stein.cc#L46-L68)). A non-interchanged
    pivot (and \f$u_{nn}\f$) smaller than \f$\varepsilon\|T\|_\infty\f$ becomes
    \f$\pm\varepsilon\|T\|_\infty\f$, cf. `dlagts` with `job = -1` [8].
 3. Solve by applying \f$L_i^{-1}P_i\f$ in turn, then back-substituting with \f$U\f$
-   (`src/ops/syev/tridiag/stein.cc:L75-L88`); rescale by \f$1/\|y\|_\infty\f$ against overflow
-   (`src/ops/syev/tridiag/stein.cc:L249-L254`).
+   ([`src/ops/syev/tridiag/stein.cc:L75-L88`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stein.cc#L75-L88)); rescale by \f$1/\|y\|_\infty\f$ against overflow
+   ([`src/ops/syev/tridiag/stein.cc:L249-L254`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stein.cc#L249-L254)).
 
 Steps 1-3 repeat a fixed `max_iterations` (default 3) times with no convergence test; the result is
-normalised in the 2-norm into column \f$z_j\f$ of \f$Z\f$ (`src/ops/syev/tridiag/stein.cc:L257-L261`).
+normalised in the 2-norm into column \f$z_j\f$ of \f$Z\f$ ([`src/ops/syev/tridiag/stein.cc:L257-L261`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stein.cc#L257-L261)).
 
 ## stein: reorthogonalisation within clusters
 
@@ -135,20 +135,20 @@ cluster. Each vector is orthogonalised against its cluster predecessors by modif
 z_j \leftarrow z_j - (z_i^T z_j)\, z_i, \quad i = c, \dots, j-1; \qquad z_j \leftarrow z_j / \|z_j\|_2 .
 \f]
 
-- gap tolerance: `src/ops/syev/tridiag/stein.cc:L286-L295`; split: `src/ops/syev/tridiag/stein.cc:L305-L309`
-- projections: `src/ops/syev/tridiag/stein.cc:L310-L320`; renormalisation: `src/ops/syev/tridiag/stein.cc:L322-L337`
+- gap tolerance: [`src/ops/syev/tridiag/stein.cc:L286-L295`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stein.cc#L286-L295); split: [`src/ops/syev/tridiag/stein.cc:L305-L309`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stein.cc#L305-L309)
+- projections: [`src/ops/syev/tridiag/stein.cc:L310-L320`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stein.cc#L310-L320); renormalisation: [`src/ops/syev/tridiag/stein.cc:L322-L337`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stein.cc#L322-L337)
 
 Cost: \f$O(n\,k_c^2)\f$ for a cluster of \f$k_c\f$ vectors.
 
 **Kernels.**
 
 - `SteinIterateKernel`: one work-group per batch item, \f$\min(256, k)\f$ work-items, each handling
-  every `local_size`-th vector (`src/ops/syev/tridiag/stein.cc:L146-L148`, `L192`); serial LU and
+  every `local_size`-th vector ([`src/ops/syev/tridiag/stein.cc:L146-L148`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stein.cc#L146-L148), [`L192`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stein.cc#L192)); serial LU and
   solve in global workspace.
 - `SteinOrthoKernel`: one work-group per batch item; vectors in sequence, each dot product and AXPY
   parallel over rows.
 - Per-item counts \f$m_b\f$: only the first \f$\min(\max(m_b,0),k)\f$ columns are computed; the rest
-  are zeroed so uniform-width back-transforms stay exact (`src/ops/syev/tridiag/stein.cc:L189-L200`).
+  are zeroed so uniform-width back-transforms stay exact ([`src/ops/syev/tridiag/stein.cc:L189-L200`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/stein.cc#L189-L200)).
 
 ## stebz: differences from LAPACK
 
@@ -169,26 +169,26 @@ Cost: \f$O(n\,k_c^2)\f$ for a cluster of \f$k_c\f$ vectors.
 
 - @ref algo_syevx route `DirectSubset`: `stebz` ascending (required by the clustering), then `stein`
   with per-item counts \f$m_b\f$ only when eigenvectors are wanted
-  (`src/ops/syevx/kernels/syevx_direct_subset.cc:L249-L275`, guard `L263`).
+  ([`src/ops/syevx/kernels/syevx_direct_subset.cc:L249-L275`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syevx/kernels/syevx_direct_subset.cc#L249-L275), guard [`L263`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syevx/kernels/syevx_direct_subset.cc#L263)).
 - @ref algo_syev routes `blocked` and `two_stage`, eigenvalues only: `stebz` over all indices
-  (`src/ops/syev/kernels/syev_blocked.cc:L234-L257`, `L397-L419`;
-  `src/ops/syev/kernels/syev_two_stage.cc:L245-L263`).
+  ([`src/ops/syev/kernels/syev_blocked.cc:L234-L257`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/kernels/syev_blocked.cc#L234-L257), [`L397-L419`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/kernels/syev_blocked.cc#L397-L419);
+  [`src/ops/syev/kernels/syev_two_stage.cc:L245-L263`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/kernels/syev_two_stage.cc#L245-L263)).
 
 ## tridiagonal_solver: explicit shifted QR
 
-Public low-level API (`include/batchlas/blas/extensions.hh:L695`), no internal route (maintained
+Public low-level API ([`include/batchlas/blas/extensions.hh:L695`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/include/batchlas/blas/extensions.hh#L695)), no internal route (maintained
 solvers: @ref algo_steqr). One 32-wide work-group per item; on the leading block of order \f$p\f$:
 
 - **Deflation**: iterate while \f$|e_{p-1}| > \varepsilon(|d_{p-1}| + |d_p|)\f$, at most 30 steps
-  (`src/ops/syev/tridiag/tridiag_solver.cc:L226-L229`); a failure throws `convergence_error`
-  (`src/ops/syev/tridiag/tridiag_solver.cc:L273-L274`).
+  ([`src/ops/syev/tridiag/tridiag_solver.cc:L226-L229`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/tridiag_solver.cc#L226-L229)); a failure throws `convergence_error`
+  ([`src/ops/syev/tridiag/tridiag_solver.cc:L273-L274`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/tridiag_solver.cc#L273-L274)).
 - **Shift**: the Wilkinson shift \f$\mu\f$, the eigenvalue of the trailing \f$2\times 2\f$ block
-  closer to \f$d_p\f$ [1, §8.3] (`src/ops/syev/tridiag/tridiag_solver.cc:L230-L231`).
-- **Step**: \f$T \leftarrow T - \mu I\f$ (`src/ops/syev/tridiag/tridiag_solver.cc:L62-L63`);
+  closer to \f$d_p\f$ [1, §8.3] ([`src/ops/syev/tridiag/tridiag_solver.cc:L230-L231`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/tridiag_solver.cc#L230-L231)).
+- **Step**: \f$T \leftarrow T - \mu I\f$ ([`src/ops/syev/tridiag/tridiag_solver.cc:L62-L63`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/tridiag_solver.cc#L62-L63));
   \f$T = H_1 \cdots H_{p-1} R\f$ with \f$2\times 2\f$ Householder reflectors \f$H_i\f$ on rows
-  \f$i, i+1\f$ (`src/ops/syev/tridiag/tridiag_solver.cc:L76-L99`); then
-  \f$T \leftarrow R H_1 \cdots H_{p-1} + \mu I\f$ (`src/ops/syev/tridiag/tridiag_solver.cc:L101-L136`)
-  and \f$Q \leftarrow Q H_1 \cdots H_{p-1}\f$ (`src/ops/syev/tridiag/tridiag_solver.cc:L233-L235`).
+  \f$i, i+1\f$ ([`src/ops/syev/tridiag/tridiag_solver.cc:L76-L99`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/tridiag_solver.cc#L76-L99)); then
+  \f$T \leftarrow R H_1 \cdots H_{p-1} + \mu I\f$ ([`src/ops/syev/tridiag/tridiag_solver.cc:L101-L136`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/tridiag_solver.cc#L101-L136))
+  and \f$Q \leftarrow Q H_1 \cdots H_{p-1}\f$ ([`src/ops/syev/tridiag/tridiag_solver.cc:L233-L235`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/tridiag/tridiag_solver.cc#L233-L235)).
 
 ## stebz_stein: references
 
