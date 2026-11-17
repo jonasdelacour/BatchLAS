@@ -92,7 +92,6 @@ function(batchlas_install_package)
     # find it fails at the FIRST #include rather than at link.
     install(FILES
         "${PROJECT_BINARY_DIR}/include/batchlas/backend_config.h"
-        "${PROJECT_BINARY_DIR}/include/batchlas/device_limits.hh"
         "${PROJECT_BINARY_DIR}/include/batchlas/export.hh"
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/batchlas"
     )

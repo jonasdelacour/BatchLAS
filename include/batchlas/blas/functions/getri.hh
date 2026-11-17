@@ -21,33 +21,32 @@ namespace batchlas {
 // Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
 // src/util/template-instantiations.hh. Keep in sync with the declarations below.
 namespace sig {
-template <typename T>
+template <typename Scalar>
 using getri = Event(Queue&,
-                    const MatrixView<T, MatrixFormat::Dense>&,
-                    const MatrixView<T, MatrixFormat::Dense>&,
+                    const MatrixView<Scalar, MatrixFormat::Dense>&,
+                    const MatrixView<Scalar, MatrixFormat::Dense>&,
                     Span<int64_t>, Span<std::byte>, Span<int32_t>);
 
-template <typename T>
+template <typename Scalar>
 using getri_buffer_size = size_t(Queue&,
-                                 const MatrixView<T, MatrixFormat::Dense>&);
+                                 const MatrixView<Scalar, MatrixFormat::Dense>&);
 
 // Vendor signatures are spelled out, not aliased: a vendor parameter list can differ.
-template <typename T>
+template <typename Scalar>
 using getri_vendor = Event(Queue&,
-                           const MatrixView<T, MatrixFormat::Dense>&,
-                           const MatrixView<T, MatrixFormat::Dense>&,
+                           const MatrixView<Scalar, MatrixFormat::Dense>&,
+                           const MatrixView<Scalar, MatrixFormat::Dense>&,
                            Span<int64_t>,
                            Span<std::byte>,
                            Span<int32_t>);
 
-template <typename T>
+template <typename Scalar>
 using getri_vendor_buffer_size = size_t(Queue&,
-                                        const MatrixView<T, MatrixFormat::Dense>&);
+                                        const MatrixView<Scalar, MatrixFormat::Dense>&);
 }  // namespace sig
 
-
 /// @brief Validates A for getri_buffer_size(): non-negative extents only.
-/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @tparam Scalar  scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in] A  batch of LU factors getri_buffer_size() will get; only the extents are read
 /// @throws batchlas::invalid_argument on negative extents
 /// @ingroup api_factorizations_lowlevel
@@ -56,8 +55,8 @@ using getri_vendor_buffer_size = size_t(Queue&,
 // functions of A alone; neither checks squareness, agreement of A and C, or the
 // pivots length (a non-square A fails can_run(Blocked) and goes to the vendor).
 // evidence: docs/design/vendor-independence.md#positional-validators-reject-only-what-no-route-can-serve
-template <typename T>
-inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
+template <typename Scalar>
+inline void getri_validate_params(const MatrixView<Scalar, MatrixFormat::Dense>& A) {
     if (A.rows() < 0 || A.cols() < 0) {
         throw batchlas::invalid_argument(
             "getri: Matrix dimensions cannot be negative (A: rows=" +
@@ -66,16 +65,16 @@ inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
 }
 
 /// @brief Validates A and C for the positional getri(): non-negative extents, C not aliasing A.
-/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @tparam Scalar  scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in] A  batch of LU factors getri() will get; only the extents and data pointer are read
 /// @param[in] C  batch of outputs getri() will get; only the extents and data pointer are read
 /// @throws batchlas::invalid_argument on negative extents of A or C, or if a non-empty C
 ///         starts at A's storage (getri is out of place on every backend)
 /// @ingroup api_factorizations_lowlevel
-template <typename T>
-inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
-                                  const MatrixView<T, MatrixFormat::Dense>& C) {
-    getri_validate_params<T>(A);
+template <typename Scalar>
+inline void getri_validate_params(const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                  const MatrixView<Scalar, MatrixFormat::Dense>& C) {
+    getri_validate_params<Scalar>(A);
     if (C.rows() < 0 || C.cols() < 0) {
         throw batchlas::invalid_argument(
             "getri: Matrix dimensions cannot be negative (C: rows=" +
@@ -86,7 +85,6 @@ inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
     }
 }
 
-
 /// @brief Batched inverse \f$ C = A^{-1} \f$ from the LU factors produced by getrf().
 ///
 /// A and @p pivots must be exactly what getrf() produced on the same backend
@@ -95,7 +93,7 @@ inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 ///
 /// Asynchronous: C and @p info are readable after the returned event is waited on.
 /// @tparam B  backend; the backend-deducing overload takes it from `ctx.backend()`
-/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @tparam Scalar  scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in]  ctx        queue the kernels are enqueued on
 /// @param[in]  A          batch of \f$n \times n\f$ LU factors from getrf(); not modified
 /// @param[out] C          batch of \f$n \times n\f$ outputs, receives \f$ A^{-1} \f$; must not alias A
@@ -114,10 +112,10 @@ inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 /// @note The workspace size does not depend on whether @p info is requested.
 /// @ingroup api_factorizations
 // evidence: docs/design/vendor-independence.md#per-item-info-spans-for-potrf-getrf-and-getri
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event getri(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A,
-                         const MatrixView<T, MatrixFormat::Dense>& C,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& C,
                          Span<int64_t> pivots,
                          Span<std::byte> workspace,
                          Span<int32_t> info);
@@ -131,13 +129,13 @@ BATCHLAS_API Event getri(Queue& ctx,
 /// @return event of the last enqueued kernel
 /// @ingroup api_factorizations
 // Not a defaulted `info`: the sig:: aliases are function types (see potrf.hh).
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 inline Event getri(Queue& ctx,
-            const MatrixView<T, MatrixFormat::Dense>& A,
-            const MatrixView<T, MatrixFormat::Dense>& C,
+            const MatrixView<Scalar, MatrixFormat::Dense>& A,
+            const MatrixView<Scalar, MatrixFormat::Dense>& C,
             Span<int64_t> pivots,
             Span<std::byte> workspace) {
-        return getri<B,T>(ctx, A, C, pivots, workspace, Span<int32_t>{});
+        return getri<B, Scalar>(ctx, A, C, pivots, workspace, Span<int32_t>{});
 }
 
 /// @brief Workspace, in bytes, that getri() needs for A on this queue.
@@ -147,12 +145,11 @@ inline Event getri(Queue& ctx,
 /// @param[in] A    batch of \f$n \times n\f$ LU factors getri() will get; only the shape is read
 /// @return bytes to pass as the `workspace` span of getri()
 /// @ingroup api_factorizations_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t getri_buffer_size(Queue& ctx,
-                                      const MatrixView<T, MatrixFormat::Dense>& A);
+                                      const MatrixView<Scalar, MatrixFormat::Dense>& A);
 
 }  // namespace batchlas
-
 
 namespace batchlas::backend {
 
@@ -169,23 +166,22 @@ namespace batchlas::backend {
 /// @ingroup api_dispatch
 // DECLARATION ONLY: the public getri is defined in src/ops/getri/getri.cc.
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event getri_vendor(Queue& ctx,
-                                const MatrixView<T, MatrixFormat::Dense>& A,
-                                const MatrixView<T, MatrixFormat::Dense>& C,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& C,
                                 Span<int64_t> pivots,
                                 Span<std::byte> workspace,
                                 Span<int32_t> info_out);
-
 
 /// @brief Workspace query of the vendor arm of getri().
 /// @param[in] ctx  queue the call will run on
 /// @param[in] A    batch of \f$n \times n\f$ LU factors the call will get; only the shape is read
 /// @return bytes to pass as the `workspace` span of backend::getri_vendor()
 /// @ingroup api_dispatch
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t getri_vendor_buffer_size(Queue& ctx,
-                                             const MatrixView<T, MatrixFormat::Dense>& A);
+                                             const MatrixView<Scalar, MatrixFormat::Dense>& A);
 
 }  // namespace batchlas::backend
 

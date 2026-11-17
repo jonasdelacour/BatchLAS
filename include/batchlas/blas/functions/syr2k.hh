@@ -12,26 +12,25 @@ namespace batchlas {
 // Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
 // src/util/template-instantiations.hh. Keep in sync with the declarations below.
 namespace sig {
-template <typename T>
+template <typename Scalar>
 using syr2k = Event(Queue&,
-                    const MatrixView<T, MatrixFormat::Dense>&,
-                    const MatrixView<T, MatrixFormat::Dense>&,
-                    const MatrixView<T, MatrixFormat::Dense>&,
-                    T, T, Uplo, Transpose);
+                    const MatrixView<Scalar, MatrixFormat::Dense>&,
+                    const MatrixView<Scalar, MatrixFormat::Dense>&,
+                    const MatrixView<Scalar, MatrixFormat::Dense>&,
+                    Scalar, Scalar, Uplo, Transpose);
 
 // Spelled out, not aliased to sig::syr2k: a vendor parameter order may differ
 // from the public one (trsm's alpha is last).
-template <typename T>
+template <typename Scalar>
 using syr2k_vendor = Event(Queue&,
-                          const MatrixView<T, MatrixFormat::Dense>&,
-                          const MatrixView<T, MatrixFormat::Dense>&,
-                          const MatrixView<T, MatrixFormat::Dense>&,
-                          T,
-                          T,
+                          const MatrixView<Scalar, MatrixFormat::Dense>&,
+                          const MatrixView<Scalar, MatrixFormat::Dense>&,
+                          const MatrixView<Scalar, MatrixFormat::Dense>&,
+                          Scalar,
+                          Scalar,
                           Uplo,
                           Transpose);
 }  // namespace sig
-
 
 /// @brief Batched symmetric rank-2k update.
 ///
@@ -86,8 +85,7 @@ BATCHLAS_API Event syr2k(Queue& ctx,
                          Uplo uplo,
                          Transpose transA);
 
-} // namespace batchlas
-
+}  // namespace batchlas
 
 namespace batchlas::backend {
 
@@ -127,7 +125,6 @@ namespace batchlas {
 
 // Owning-argument (`f(ctx, Matrix, ...)`) and backend-deducing (`f(ctx, ...)`)
 // overloads; see blas/queue-dispatch.hh.
-
 
 BATCHLAS_DISPATCH_ON_QUEUE(syr2k)
 

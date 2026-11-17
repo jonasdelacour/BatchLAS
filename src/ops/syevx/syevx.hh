@@ -22,9 +22,9 @@ namespace detail {
 // The iterative arms (LOBPCG, Filtered) on a masked call: refused before any write wherever a
 // child they reach refuses the mask. Asked by the dispatcher before its m fill, by each arm's
 // entry and by each arm's size query. evidence: docs/design/masked-batches.md#masked-batches-refusal-policy
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 void syevx_iterative_refuse_mask(const Queue& /*ctx*/, const char* who, Span<const std::uint8_t> mask,
-                                 const SyevxParams<T>& params, bool lobpcg) {
+                                 const SyevxParams<Scalar>& params, bool lobpcg) {
     if (mask.empty()) return;
     const std::string w(who);
     if constexpr (B == Backend::NETLIB) {

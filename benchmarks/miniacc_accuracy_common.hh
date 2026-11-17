@@ -22,11 +22,11 @@ namespace miniacc_acc {
 
 using namespace batchlas;
 
-template <typename Real>
+template <typename Scalar>
 inline const char* dtype_name() {
-    if constexpr (std::is_same_v<Real, float>) return "float";
-    if constexpr (std::is_same_v<Real, double>) return "double";
-    if constexpr (std::is_same_v<Real, std::complex<float>>) return "complex64";
+    if constexpr (std::is_same_v<Scalar, float>) return "float";
+    if constexpr (std::is_same_v<Scalar, double>) return "double";
+    if constexpr (std::is_same_v<Scalar, std::complex<float>>) return "complex64";
     return "complex128";
 }
 
@@ -267,4 +267,4 @@ inline void record_eigensolver_metrics(miniacc::State& state,
     }
 }
 
-} // namespace miniacc_acc
+}  // namespace miniacc_acc

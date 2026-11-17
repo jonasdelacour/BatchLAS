@@ -53,17 +53,17 @@ inline double spread(std::size_t item, std::size_t e, int salt) {
     return double(int(h % 2001) - 1000) / 1000.0;
 }
 
-template <typename T>
-void fill(T* p, std::size_t elems, std::size_t per, int salt, bool identical, double scale = 1.0) {
+template <typename Scalar>
+void fill(Scalar* p, std::size_t elems, std::size_t per, int salt, bool identical, double scale = 1.0) {
     for (std::size_t e = 0; e < elems; ++e) {
         const std::size_t item = identical ? 0 : e / per;
-        p[e] = MatrixView<T>::make(spread(item, e % per, salt) * scale, spread(item, e % per, salt + 1) * scale);
+        p[e] = MatrixView<Scalar>::make(spread(item, e % per, salt) * scale, spread(item, e % per, salt + 1) * scale);
     }
 }
 
-template <typename T>
-void poison_all(T* p, std::size_t elems) {
-    std::fill_n(p, elems, test_support::poison<T>());
+template <typename Scalar>
+void poison_all(Scalar* p, std::size_t elems) {
+    std::fill_n(p, elems, test_support::poison<Scalar>());
 }
 
 // A per-item output `per` elements long at a batch stride of `stride` elements.
@@ -90,38 +90,39 @@ std::string label(const Shape& s) {
 }
 
 // Each item's n x n block made Hermitian (real diagonal), from its upper triangle.
-template <typename T>
-void make_hermitian(Matrix<T>& A, int batch) {
+template <typename Scalar>
+void make_hermitian(Matrix<Scalar>& A, int batch) {
     const std::int64_t n = A.rows(), ld = A.ld(), stride = A.stride();
     for (int b = 0; b < batch; ++b) {
-        T* p = A.data_ptr() + b * stride;
+        Scalar* p = A.data_ptr() + b * stride;
         for (std::int64_t j = 0; j < n; ++j) {
-            p[j + j * ld] = T(std::real(p[j + j * ld]));
+            p[j + j * ld] = Scalar(std::real(p[j + j * ld]));
             for (std::int64_t i = 0; i < j; ++i) {
-                if constexpr (std::is_same_v<T, typename base_type<T>::type>) p[j + i * ld] = p[i + j * ld];
+                if constexpr (std::is_same_v<Scalar, typename base_type<Scalar>::type>) p[j + i * ld] = p[i + j * ld];
                 else p[j + i * ld] = std::conj(p[i + j * ld]);
             }
         }
     }
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct GesvdProblem {
-    using Real = typename base_type<T>::type;
+    using Real = typename base_type<Scalar>::type;
     Queue& q;
     Shape s;
     int k;
-    Matrix<T> A, U, Vh;
+    Matrix<Scalar> A, U, Vh;
     UnifiedVector<Real> S;
     UnifiedVector<int32_t> info;
 
     static int rows_or_1(SvdVectors j, int64_t v) { return j == SvdVectors::None ? 1 : int(v); }
     GesvdProblem(Queue& queue, const Shape& shape)
-        : q(queue), s(shape), k(std::min(shape.m, shape.n)), A(test_support::padded<T>(shape.m, shape.n, shape.batch)),
-          U(test_support::padded<T>(rows_or_1(shape.jobu, shape.m), rows_or_1(shape.jobu, svd_u_cols(shape.jobu, shape.m, k)),
-                                    shape.batch)),
-          Vh(test_support::padded<T>(rows_or_1(shape.jobvh, svd_vh_rows(shape.jobvh, shape.n, k)),
-                                     rows_or_1(shape.jobvh, shape.n), shape.batch)),
+        : q(queue), s(shape), k(std::min(shape.m, shape.n)), A(test_support::padded<Scalar>(shape.m, shape.n,
+                                                                                            shape.batch)),
+          U(test_support::padded<Scalar>(rows_or_1(shape.jobu, shape.m), rows_or_1(shape.jobu, svd_u_cols(shape.jobu, shape.m, k)),
+                                         shape.batch)),
+          Vh(test_support::padded<Scalar>(rows_or_1(shape.jobvh, svd_vh_rows(shape.jobvh, shape.n, k)),
+                                          rows_or_1(shape.jobvh, shape.n), shape.batch)),
           S(std::size_t(k) * shape.batch), info(std::size_t(shape.batch)) {}
 
     mc::Case make_case(bool masked_reference) {
@@ -142,14 +143,14 @@ struct GesvdProblem {
         c.call = [this](Span<const std::uint8_t> mask, Span<std::byte> ws) {
             const auto a = A.view().with_batch_mask(mask), u = U.view().with_batch_mask(mask),
                        vh = Vh.view().with_batch_mask(mask);
-            if (s.herm) (void)gesvd<B, T>(q, a, S.to_span(), u, vh, s.jobu, s.jobvh, *s.herm, ws, info.to_span());
-            else (void)gesvd<B, T>(q, a, S.to_span(), u, vh, s.jobu, s.jobvh, ws, info.to_span());
+            if (s.herm) (void)gesvd<B, Scalar>(q, a, S.to_span(), u, vh, s.jobu, s.jobvh, *s.herm, ws, info.to_span());
+            else (void)gesvd<B, Scalar>(q, a, S.to_span(), u, vh, s.jobu, s.jobvh, ws, info.to_span());
         };
         c.buffer_size = [this](Span<const std::uint8_t> mask) {
             const auto a = A.view().with_batch_mask(mask), u = U.view().with_batch_mask(mask),
                        vh = Vh.view().with_batch_mask(mask);
-            return s.herm ? gesvd_buffer_size<B, T>(q, a, S.to_span(), u, vh, s.jobu, s.jobvh, *s.herm)
-                          : gesvd_buffer_size<B, T>(q, a, S.to_span(), u, vh, s.jobu, s.jobvh);
+            return s.herm ? gesvd_buffer_size<B, Scalar>(q, a, S.to_span(), u, vh, s.jobu, s.jobvh, *s.herm)
+                          : gesvd_buffer_size<B, Scalar>(q, a, S.to_span(), u, vh, s.jobu, s.jobvh);
         };
         c.outputs = [this] {
             return std::vector<mc::Output>{mc::Output::matrix("A", A.view()), mc::Output::matrix("U", U.view()),
@@ -162,20 +163,20 @@ struct GesvdProblem {
 };
 
 // gebrd (m >= n): A, then d, e, tauq, taup at batch strides with a gap of 2.
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct GebrdProblem {
-    using Real = typename base_type<T>::type;
+    using Real = typename base_type<Scalar>::type;
     enum class Kernel { Unblocked, Cta, Blocked };
     Queue& q;
     Kernel kernel;
     int m, n, batch;
     bool identical;
-    Matrix<T> A;
+    Matrix<Scalar> A;
     UnifiedVector<Real> d, e;
-    UnifiedVector<T> tq, tp;
+    UnifiedVector<Scalar> tq, tp;
 
     GebrdProblem(Queue& queue, Kernel which, int rows, int cols, int b, bool same)
-        : q(queue), kernel(which), m(rows), n(cols), batch(b), identical(same), A(test_support::padded<T>(rows, cols, b)),
+        : q(queue), kernel(which), m(rows), n(cols), batch(b), identical(same), A(test_support::padded<Scalar>(rows, cols, b)),
           d(std::size_t(cols + 2) * b), e(std::size_t(cols + 1) * b), tq(std::size_t(cols + 2) * b),
           tp(std::size_t(cols + 2) * b) {}
 
@@ -183,8 +184,8 @@ struct GebrdProblem {
     VectorView<Real> ev(Span<const std::uint8_t> mk) {
         return VectorView<Real>(e.data(), n - 1, batch, 1, n + 1).with_batch_mask(mk);
     }
-    VectorView<T> tv(UnifiedVector<T>& t, Span<const std::uint8_t> mk) {
-        return VectorView<T>(t.data(), n, batch, 1, n + 2).with_batch_mask(mk);
+    VectorView<Scalar> tv(UnifiedVector<Scalar>& t, Span<const std::uint8_t> mk) {
+        return VectorView<Scalar>(t.data(), n, batch, 1, n + 2).with_batch_mask(mk);
     }
 
     mc::Case make_case() {
@@ -203,14 +204,15 @@ struct GebrdProblem {
         };
         c.call = [this](Span<const std::uint8_t> mk, Span<std::byte> ws) {
             const auto a = A.view().with_batch_mask(mk);
-            if (kernel == Kernel::Unblocked) (void)gebrd_unblocked<B, T>(q, a, dv(mk), ev(mk), tv(tq, mk), tv(tp, mk));
-            if (kernel == Kernel::Cta) (void)gebrd_cta<B, T>(q, a, dv(mk), ev(mk), tv(tq, mk), tv(tp, mk));
-            if (kernel == Kernel::Blocked) (void)gebrd_blocked<B, T>(q, a, dv(mk), ev(mk), tv(tq, mk), tv(tp, mk), ws, 8);
+            if (kernel == Kernel::Unblocked) (void)gebrd_unblocked<B, Scalar>(q, a, dv(mk), ev(mk), tv(tq, mk),
+                                                                              tv(tp, mk));
+            if (kernel == Kernel::Cta) (void)gebrd_cta<B, Scalar>(q, a, dv(mk), ev(mk), tv(tq, mk), tv(tp, mk));
+            if (kernel == Kernel::Blocked) (void)gebrd_blocked<B, Scalar>(q, a, dv(mk), ev(mk), tv(tq, mk), tv(tp, mk), ws, 8);
         };
         if (kernel == Kernel::Blocked)
             c.buffer_size = [this](Span<const std::uint8_t> mk) {
-                return gebrd_blocked_buffer_size<B, T>(q, A.view().with_batch_mask(mk), dv(mk), ev(mk), tv(tq, mk),
-                                                       tv(tp, mk), 8);
+                return gebrd_blocked_buffer_size<B, Scalar>(q, A.view().with_batch_mask(mk), dv(mk), ev(mk), tv(tq, mk),
+                                                            tv(tp, mk), 8);
             };
         c.outputs = [this] {
             return std::vector<mc::Output>{mc::Output::matrix("A", A.view()), strided("d", d.data(), n, n + 2),
@@ -334,23 +336,23 @@ struct BdsdcProblem {
 
 // ormbr: A holds gebrd-shaped reflectors (|tau| <= 1/8), C is the operand. 'Q' is Left, order
 // a.rows(); 'P' is Right, order a.cols(). tau is packed by batch (ormbr's contract).
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct OrmbrProblem {
     Queue& q;
     char vect;
     int am, an, cm, cn, batch, block;
     Transpose trans;
-    Matrix<T> A, C;
-    UnifiedVector<T> tau;
+    Matrix<Scalar> A, C;
+    UnifiedVector<Scalar> tau;
 
     int ntau() const { return std::min(am, an); }
     OrmbrProblem(Queue& queue, char v, int a_rows, int a_cols, int c_rows, int c_cols, int b, Transpose t, int nb)
         : q(queue), vect(v), am(a_rows), an(a_cols), cm(c_rows), cn(c_cols), batch(b), block(nb), trans(t),
-          A(test_support::padded<T>(a_rows, a_cols, b)), C(test_support::padded<T>(c_rows, c_cols, b)),
+          A(test_support::padded<Scalar>(a_rows, a_cols, b)), C(test_support::padded<Scalar>(c_rows, c_cols, b)),
           tau(std::size_t(std::min(a_rows, a_cols)) * b) {}
 
-    VectorView<T> tv(Span<const std::uint8_t> mk) {
-        return VectorView<T>(tau.data(), ntau(), batch, 1, ntau()).with_batch_mask(mk);
+    VectorView<Scalar> tv(Span<const std::uint8_t> mk) {
+        return VectorView<Scalar>(tau.data(), ntau(), batch, 1, ntau()).with_batch_mask(mk);
     }
     Side side() const { return vect == 'Q' ? Side::Left : Side::Right; }
 
@@ -366,11 +368,11 @@ struct OrmbrProblem {
             fill(tau.data(), tau.size(), std::size_t(ntau()), 13, false, 1.0 / 8);
         };
         c.call = [this](Span<const std::uint8_t> mk, Span<std::byte> ws) {
-            (void)ormbr<B, T>(q, A.view().with_batch_mask(mk), tv(mk), C.view().with_batch_mask(mk), vect, side(), trans, ws, block);
+            (void)ormbr<B, Scalar>(q, A.view().with_batch_mask(mk), tv(mk), C.view().with_batch_mask(mk), vect, side(), trans, ws, block);
         };
         c.buffer_size = [this](Span<const std::uint8_t> mk) {
-            return ormbr_buffer_size<B, T>(q, A.view().with_batch_mask(mk), tv(mk), C.view().with_batch_mask(mk), vect,
-                                           side(), trans, block);
+            return ormbr_buffer_size<B, Scalar>(q, A.view().with_batch_mask(mk), tv(mk), C.view().with_batch_mask(mk),
+                                                vect, side(), trans, block);
         };
         c.outputs = [this] { return std::vector<mc::Output>{mc::Output::matrix("C", C.view())}; };
         return c;
@@ -653,33 +655,64 @@ std::string first_code_line(const std::string& path, const char* token, const ch
     return found;
 }
 
-// gebrd_cta's work-group barriers are reached by every partition only when no partition returns
-// early (I2). Metal tolerates a partial barrier (W2c's revert of ormqx_cta stayed green there), so
-// this source scan, not a numerical case, holds the property: from the kernel's launch to the end
-// of its anonymous namespace no code line returns, and `live` reads the mask.
-TEST(GebrdCtaSource, NoEarlyReturnInThePackedKernelAndLiveReadsTheMask) {
-    const std::string path = BATCHLAS_GEBRD_CTA_CC_PATH;
-    const char* launch = "parallel_for<GebrdCTAKernel";
-    // Positive controls first: every assertion below is an absence.
-    ASSERT_FALSE(first_code_line(path, launch).empty()) << path << " does not hold gebrd_cta's kernel launch";
-    ASSERT_FALSE(first_code_line(path, "it.barrier(", launch).empty()) << "no work-group barrier after the launch";
-    const std::string live = first_code_line(path, "const bool live", launch);
-    ASSERT_FALSE(live.empty()) << "the packed kernel has no live predicate";
-    EXPECT_FALSE(first_code_line(path, "mask[prob_id]", launch).empty()) << "live does not read the mask: " << live;
+// Code lines (comments stripped) of `path` from the first one containing `from` up to the first
+// that starts with `stop` (exclusive): the scan window of a kernel or a function body.
+std::vector<std::string> code_lines(const std::string& path, const char* from, const char* stop) {
+    std::vector<std::string> out;
     std::FILE* f = std::fopen(path.c_str(), "r");
-    ASSERT_NE(f, nullptr) << path;
+    if (!f) return out;
     char line[8192];
-    bool in_kernel = false;
+    bool in = false;
     while (std::fgets(line, sizeof(line), f)) {
         const std::string text(line);
         const std::size_t cut = text.find("//");
         const std::string code = cut == std::string::npos ? text : text.substr(0, cut);
-        if (code.find(launch) != std::string::npos) in_kernel = true;
-        if (!in_kernel) continue;
-        if (text.rfind("} // namespace", 0) == 0 || text.rfind("}  // namespace", 0) == 0) break;  // the kernel's TU scope ends
-        EXPECT_EQ(code.find("return"), std::string::npos) << "a return inside gebrd_cta's packed kernel: " << text;
+        if (!in) in = code.find(from) != std::string::npos;
+        if (!in) continue;
+        if (!out.empty() && text.rfind(stop, 0) == 0) break;
+        out.push_back(code);
     }
     std::fclose(f);
+    return out;
+}
+
+// gebrd_cta's work-group barriers are reached by every partition only when no partition returns
+// early (I2). Metal tolerates a partial barrier (W2c's revert of ormqx_cta stayed green there), so
+// this source scan, not a numerical case, holds the property: neither the packed kernel (from its
+// launch to the end of the TU's anonymous namespace) nor gebd2_tile (lapack/gebrd.hh, the body
+// holding the barriers) has a code line that returns, the public device::gebrd the kernel calls
+// returns only after gebd2_tile, and `live` reads the mask.
+TEST(GebrdCtaSource, NoEarlyReturnInThePackedKernelAndLiveReadsTheMask) {
+    const std::string path = BATCHLAS_GEBRD_CTA_CC_PATH;
+    const std::string tile_path = BATCHLAS_GEBRD_HH_PATH;
+    const char* launch = "parallel_for<GebrdCTAKernel";
+    // Positive controls first: every assertion below is an absence.
+    ASSERT_FALSE(first_code_line(path, launch).empty()) << path << " does not hold gebrd_cta's kernel launch";
+    const char* body = "void gebd2_tile(";
+    const char* op = "int gebrd(";
+    ASSERT_FALSE(first_code_line(path, "device::gebrd<", launch).empty()) << "the kernel does not call device::gebrd";
+    ASSERT_FALSE(first_code_line(tile_path, "gebd2_tile<T>(", op).empty()) << "device::gebrd does not call gebd2_tile";
+    const auto op_lines = code_lines(tile_path, op, "}");
+    ASSERT_GT(op_lines.size(), 3u) << "the device::gebrd scan window is empty";
+    bool past_body = false;
+    for (const auto& code : op_lines) {
+        if (code.find("return") != std::string::npos)
+            EXPECT_TRUE(past_body && code.find("return 0;") != std::string::npos) << "an early return in device::gebrd: " << code;
+        past_body = past_body || code.find("gebd2_tile<T>(") != std::string::npos;
+    }
+    ASSERT_FALSE(first_code_line(tile_path, body).empty()) << tile_path << " does not define gebd2_tile";
+    ASSERT_FALSE(first_code_line(tile_path, "it.barrier(", body).empty()) << "no work-group barrier in gebd2_tile";
+    const std::string live = first_code_line(path, "const bool live", launch);
+    ASSERT_FALSE(live.empty()) << "the packed kernel has no live predicate";
+    EXPECT_FALSE(first_code_line(path, "mask[prob_id]", launch).empty()) << "live does not read the mask: " << live;
+    const auto kernel = code_lines(path, launch, "}  // namespace");
+    const auto tile = code_lines(tile_path, body, "}");
+    ASSERT_GT(kernel.size(), 10u) << "the packed kernel scan window is empty";
+    ASSERT_GT(tile.size(), 10u) << "the gebd2_tile scan window is empty";
+    for (const auto& code : kernel)
+        EXPECT_EQ(code.find("return"), std::string::npos) << "a return inside the packed kernel: " << code;
+    for (const auto& code : tile)
+        EXPECT_EQ(code.find("return"), std::string::npos) << "a return inside gebd2_tile: " << code;
 }
 #endif  // BATCHLAS_GEBRD_CTA_CC_PATH
 

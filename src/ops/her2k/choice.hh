@@ -23,9 +23,9 @@ using Her2kChoice = std::variant<Triangular, Fold, Vendor>;  ///< fieldless: til
 
 /// Every compiled choice, in tie-break order. No complex<double> triangular: its accumulators alone
 /// fill the register file, and its four staged tiles exceed 48 KB of local memory.
-template <typename T>
+template <typename Scalar>
 constexpr auto candidates() {
-    if constexpr (std::is_same_v<T, std::complex<float>>) return select::all_of<Her2kChoice>();
+    if constexpr (std::is_same_v<Scalar, std::complex<float>>) return select::all_of<Her2kChoice>();
     else return std::array<Her2kChoice, 2>{Fold{}, Vendor{}};
 }
 
@@ -42,9 +42,9 @@ inline constexpr std::array<int, 7> grid_batch{1, 2, 3, 128, 1024, 8192, 32768};
 
 inline constexpr int kFoldWg = 256;  ///< fold_hermitian's work-group (expand_group_shape)
 inline constexpr int kTriangularWg = 256;  ///< syr2k_triangular_tiles' \f$16 \times 16\f$ work-group
-template <typename T>
+template <typename Scalar>
 constexpr std::int64_t triangular_slm_bytes() {  ///< four staged \f$8 \times 128\f$ operand tiles
-    return std::int64_t(4) * 8 * 128 * std::int64_t(sizeof(T));
+    return std::int64_t(4) * 8 * 128 * std::int64_t(sizeof(Scalar));
 }
 
 }  // namespace batchlas::ops::her2k

@@ -164,7 +164,7 @@ unswept); end to end 1.03–1.15x.
 
 ## gesvd: complex general on the blocked path {#gesvd-complex-general-on-the-blocked-path}
 
-`gebrd` reduces complex \f$A\f$ to a *real* bidiagonal (real-beta `zlarfg`, `src/ops/gesvd/gebrd/larfg_real_beta.hh`), the
+`gebrd` reduces complex \f$A\f$ to a *real* bidiagonal (real-beta `zlarfg`, `include/batchlas/device/lapack/gebrd.hh`), the
 real `bdsdc` solves it, its vectors are widened into \f$U\f$ and \f$V^H\f$, and the complex `unmbr` runs unchanged; \f$m < n\f$
 solves \f$A^H\f$. complex\<float\>, ms per call, `blocked` vs `jacobi`: \f$n = 33\f$ b2048 N/N 3.43 vs 39.7; \f$n = 64\f$ b2048 A/A
 13.76 vs 464.6; \f$n = 64\f$ b128 A/A 2.83 vs 33.0. Above 64 (no route before): 6.64 / 32.7 / 379.0 ms at \f$n = 128\f$ / \f$256\f$ / \f$512\f$,

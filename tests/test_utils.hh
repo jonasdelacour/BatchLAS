@@ -7,6 +7,7 @@
 #include <batchlas/blas/enums.hh>
 #include <batchlas/error.hh>
 #include <batchlas/util/sycl-device-queue.hh>
+#include <sycl/sycl.hpp>
 #include <batchlas/verify/tolerance.hh>
 #include <complex>
 #include <type_traits>
@@ -31,6 +32,17 @@ inline constexpr const char* kSlmCappedReason =
 #else
     "acpp without BATCHLAS_ACPP_SLM_OPTIN: 48 KiB local memory per work-group (no CUDA opt-in)";
 #endif
+
+// True when Device::default_device() can name a device. With none visible it throws
+// std::out_of_range (vector::_M_range_check), so a fixture that builds a Queue skips on false.
+inline bool sycl_device_visible() {
+    using batchlas::Device;
+    using batchlas::DeviceType;
+    static const bool any = !Device::get_devices(DeviceType::GPU).empty() ||
+                            !Device::get_devices(DeviceType::CPU).empty() ||
+                            !Device::get_devices(DeviceType::HOST).empty();
+    return any;
+}
 
 // True when @p msg reports a kernel with no device image (runtimes word it differently) AND
 // BATCHLAS_TEST_ALLOW_MISSING_KERNEL=1: only then may the caller skip. Otherwise it rethrows and
@@ -99,17 +111,17 @@ inline bool should_run_backend(batchlas::Backend backend) {
     return false;  // Filter doesn't match, skip
 }
 
-template <typename T>
-inline constexpr bool is_float_type_v = std::is_same_v<batchlas::float_t<T>, float>;
+template <typename Scalar>
+inline constexpr bool is_float_type_v = std::is_same_v<batchlas::float_t<Scalar>, float>;
 
-template <typename T>
-inline constexpr bool is_double_type_v = std::is_same_v<batchlas::float_t<T>, double>;
+template <typename Scalar>
+inline constexpr bool is_double_type_v = std::is_same_v<batchlas::float_t<Scalar>, double>;
 
 template <typename T>
 inline constexpr bool is_complex_type_v = batchlas::is_std_complex_v<T>;
 
 // Runtime filtering for float types - portable version using template specialization
-template <typename T>
+template <typename Scalar>
 inline bool should_run_float_type() {
     const char* env = std::getenv("BATCHLAS_TEST_FLOAT_TYPE");
     if (!env) return true;  // No filter, run all
@@ -118,11 +130,11 @@ inline bool should_run_float_type() {
     std::transform(type_filter.begin(), type_filter.end(), type_filter.begin(), ::tolower);
 
     if (type_filter == "float") {
-        return is_float_type_v<T>;
+        return is_float_type_v<Scalar>;
     } else if (type_filter == "double") {
-        return is_double_type_v<T>;
+        return is_double_type_v<Scalar>;
     } else if (type_filter == "complex") {
-        return is_complex_type_v<T>;
+        return is_complex_type_v<Scalar>;
     }
 
     return false;  // Filter doesn't match, skip
@@ -236,36 +248,43 @@ struct backend_types_complex {
 
 // Choose one available GPU backend at compile time
 #if BATCHLAS_HAS_CUDA_BACKEND
-constexpr batchlas::Backend gpu_backend = batchlas::Backend::CUDA;
+constexpr batchlas::Backend kGpuBackend = batchlas::Backend::CUDA;
 #elif BATCHLAS_HAS_ROCM_BACKEND
-constexpr batchlas::Backend gpu_backend = batchlas::Backend::ROCM;
+constexpr batchlas::Backend kGpuBackend = batchlas::Backend::ROCM;
 #elif BATCHLAS_HAS_SYCL_BACKEND
-constexpr batchlas::Backend gpu_backend = batchlas::Backend::SYCL;
+constexpr batchlas::Backend kGpuBackend = batchlas::Backend::SYCL;
 #endif
 
 // The backend a native-kernel test pins (tests that call the CUDA-or-SYCL native kernels
 // directly): CUDA, else SYCL (AdaptiveCpp Metal). A build with neither keeps CUDA, whose
 // Queue constructor throws, which is how these tests behaved before SYCL existed.
 #if BATCHLAS_HAS_CUDA_BACKEND
-constexpr batchlas::Backend native_gpu_backend = batchlas::Backend::CUDA;
+constexpr batchlas::Backend kNativeGpuBackend = batchlas::Backend::CUDA;
 #elif BATCHLAS_HAS_SYCL_BACKEND
-constexpr batchlas::Backend native_gpu_backend = batchlas::Backend::SYCL;
+constexpr batchlas::Backend kNativeGpuBackend = batchlas::Backend::SYCL;
 #else
-constexpr batchlas::Backend native_gpu_backend = batchlas::Backend::CUDA;
+constexpr batchlas::Backend kNativeGpuBackend = batchlas::Backend::CUDA;
 #endif
 
 // True when the native GPU backend has no double kernels (Metal: no device fp64).
-inline constexpr bool native_gpu_lacks_fp64 =
-    native_gpu_backend == batchlas::Backend::SYCL && !BATCHLAS_HAS_DEVICE_FP64;
+inline constexpr bool kNativeGpuLacksFp64 =
+    kNativeGpuBackend == batchlas::Backend::SYCL && !BATCHLAS_HAS_DEVICE_FP64;
 
-// T for a native-kernel case written in double: double (or complex<double>) where the native
+// True when Scalar is double or std::complex<double> and the device has no aspect::fp64 (Metal):
+// device LA fixtures skip such a type instead of failing the kernel build or launch.
+template <typename Scalar> bool lacks_fp64(const sycl::device& d) {
+    using R = typename batchlas::base_type<Scalar>::type;
+    return std::is_same_v<R, double> && !d.has(sycl::aspect::fp64);
+}
+
+// Scalar for a native-kernel case written in double: double (or complex<double>) where the native
 // GPU backend has it, else the float type of the same kind, so the kernel still launches.
-template <typename T>
+template <typename Scalar>
 using native_gpu_scalar_t = std::conditional_t<
-    native_gpu_lacks_fp64,
-    std::conditional_t<std::is_same_v<T, double>, float,
-                       std::conditional_t<std::is_same_v<T, std::complex<double>>, std::complex<float>, T>>,
-    T>;
+    kNativeGpuLacksFp64,
+    std::conditional_t<std::is_same_v<Scalar, double>, float,
+                       std::conditional_t<std::is_same_v<Scalar, std::complex<double>>, std::complex<float>, Scalar>>,
+    Scalar>;
 
 // The work-group ceiling of SYCL dims 0/1 of a 2-D/3-D launch (CUDA grid z/y). Grid-ceiling
 // tests launch at kCudaGridYZ and one past it; on an Apple GPU (acpp Metal) the cap is the
@@ -279,12 +298,12 @@ inline std::int64_t expected_grid_yz(std::string_view device_family) {
 // Utility traits and helper functions
 template <typename T>
 struct is_complex : std::false_type {};
-template <typename T>
-struct is_complex<std::complex<T>> : std::true_type {};
+template <typename Real>
+struct is_complex<std::complex<Real>> : std::true_type {};
 
-template <typename T>
-inline void expect_near(const T& a, const T& b, typename batchlas::base_type<T>::type tol) {
-    if constexpr (is_complex<T>::value) {
+template <typename Scalar>
+inline void expect_near(const Scalar& a, const Scalar& b, typename batchlas::base_type<Scalar>::type tol) {
+    if constexpr (is_complex<Scalar>::value) {
         EXPECT_NEAR(a.real(), b.real(), tol);
         EXPECT_NEAR(a.imag(), b.imag(), tol);
     } else {
@@ -293,18 +312,18 @@ inline void expect_near(const T& a, const T& b, typename batchlas::base_type<T>:
 }
 
 // batchlas::verify::pass (recorded) with value, bound, kind and n in the failure message.
-template <typename T>
+template <typename Scalar>
 ::testing::AssertionResult verify_pass(batchlas::verify::Check kind, int n, double value) {
-    if (batchlas::verify::pass<T>(kind, n, value)) return ::testing::AssertionSuccess();
+    if (batchlas::verify::pass<Scalar>(kind, n, value)) return ::testing::AssertionSuccess();
     return ::testing::AssertionFailure() << batchlas::verify::detail::kind_name(kind) << ": value " << value << " exceeds bound "
-                                         << batchlas::verify::bound<T>(kind, n) << " (n=" << n << ")";
+                                         << batchlas::verify::bound<Scalar>(kind, n) << " (n=" << n << ")";
 }
 
-template <typename T>
+template <typename Scalar>
 ::testing::AssertionResult verify_pass(batchlas::verify::Check kind, int n, double value, batchlas::verify::Slack slack) {
-    if (batchlas::verify::pass<T>(kind, n, value, slack)) return ::testing::AssertionSuccess();
+    if (batchlas::verify::pass<Scalar>(kind, n, value, slack)) return ::testing::AssertionSuccess();
     return ::testing::AssertionFailure() << batchlas::verify::detail::kind_name(kind) << ": value " << value << " exceeds bound "
-                                         << batchlas::verify::bound<T>(kind, n, slack) << " (n=" << n << ", slack " << slack.factor
+                                         << batchlas::verify::bound<Scalar>(kind, n, slack) << " (n=" << n << ", slack " << slack.factor
                                          << " (" << slack.reason << "))";
 }
 
@@ -335,12 +354,12 @@ protected:
     void SetUp() override {
         // Runtime filtering
         if (!should_run_backend(BackendType)) {
-            GTEST_SKIP() << "Backend filtered by BATCHLAS_TEST_BACKEND environment variable";
+            GTEST_SKIP() << "backend filtered by BATCHLAS_TEST_BACKEND environment variable";
         }
 
         // Use portable template-based type filtering instead of typeid().name()
         if (!should_run_float_type<ScalarType>()) {
-            GTEST_SKIP() << "Float type filtered by BATCHLAS_TEST_FLOAT_TYPE environment variable";
+            GTEST_SKIP() << "float type filtered by BATCHLAS_TEST_FLOAT_TYPE environment variable";
         }
 
         // The queue carries the backend. Tests are typed on a Backend, so bind
@@ -362,7 +381,7 @@ protected:
                 }
                 throw;
             } catch (const std::exception& e) {
-                GTEST_SKIP() << "Queue construction failed: " << e.what();
+                GTEST_SKIP() << "queue construction failed: " << e.what();
             }
         } else {
 #if !BATCHLAS_HAS_CPU_TARGET
@@ -379,7 +398,7 @@ protected:
     }
 };
 
-} // namespace test_utils
+}  // namespace test_utils
 
 // EXPECT_VERIFY(T, Check::solve, n, value); EXPECT_VERIFY_SLACK(T, kind, n, value, Slack{factor, "reason"}).
 #define EXPECT_VERIFY(T, kind, n, value) EXPECT_TRUE(::test_utils::verify_pass<T>((kind), (n), (value)))

@@ -6,21 +6,23 @@
 
 using namespace batchlas;
 
-template <typename T, Backend B>
-static void BM_SYRK(minibench::State& state) {
+namespace {
+
+template <typename Scalar, Backend B>
+void BM_SYRK(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t k = state.range(1);
     const size_t batch = state.range(3);
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    auto A = Matrix<T>::Random(n, k, false, batch);
-    auto C = Matrix<T>::Random(n, n, false, batch);
+    auto A = Matrix<Scalar>::Random(n, k, false, batch);
+    auto C = Matrix<Scalar>::Random(n, n, false, batch);
 
     state.SetKernel(q,
                     std::move(A),
                     bench::pristine(C),
-                    T(1),
-                    T(1),
+                    Scalar(1),
+                    Scalar(1),
                     Uplo::Lower,
                     Transpose::NoTrans,
                     [](Queue& q, auto&&... xs) {
@@ -31,6 +33,8 @@ static void BM_SYRK(minibench::State& state) {
                     minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 BATCHLAS_REGISTER_BENCHMARK(BM_SYRK, CubeBatchSizes);
 

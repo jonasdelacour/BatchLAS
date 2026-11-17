@@ -55,14 +55,12 @@ inline void OrmqrBlockedBenchSizesNetlib(Benchmark* b) {
     }
 }
 
-} // namespace
-
 // Batched blocked ORMQR (LARFT+GEMM WY) benchmark.
 //
 // This benchmarks the blocked implementation directly (ormqr_blocked) while still
 // supporting batched inputs by looping over batch items (matching backend behavior).
-template <typename T, Backend B>
-static void BM_ORMQR_BLOCKED(minibench::State& state) {
+template <typename Scalar, Backend B>
+void BM_ORMQR_BLOCKED(minibench::State& state) {
     const int n = state.range(0);
     const int batch = state.range(1);
     const Side side = parse_side(state.range(2));
@@ -71,8 +69,8 @@ static void BM_ORMQR_BLOCKED(minibench::State& state) {
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
-    auto A = Matrix<T>::Random(n, n, /*hermitian=*/false, batch, /*seed=*/2026);
-    UnifiedVector<T> tau_storage(static_cast<size_t>(n) * static_cast<size_t>(batch));
+    auto A = Matrix<Scalar>::Random(n, n, /*hermitian=*/false, batch, /*seed=*/2026);
+    UnifiedVector<Scalar> tau_storage(static_cast<size_t>(n) * static_cast<size_t>(batch));
 
     // Build reflectors via QR once (outside timed region).
     size_t geqrf_ws = geqrf_buffer_size(*q, A, tau_storage.to_span());
@@ -81,15 +79,15 @@ static void BM_ORMQR_BLOCKED(minibench::State& state) {
     q->wait();
 
     // Apply to identity to avoid numerical blow-up across iterations.
-    auto C = Matrix<T>::Identity(n, batch);
+    auto C = Matrix<Scalar>::Identity(n, batch);
 
-    size_t ws_bytes = ormqr_blocked_buffer_size<B, T>(*q,
-                                                     A,
-                                                     C,
-                                                     side,
-                                                     trans,
-                                                     tau_storage.to_span(),
-                                                     block_size);
+    size_t ws_bytes = ormqr_blocked_buffer_size<B, Scalar>(*q,
+                                                           A,
+                                                           C,
+                                                           side,
+                                                           trans,
+                                                           tau_storage.to_span(),
+                                                           block_size);
     UnifiedVector<std::byte> ws(ws_bytes);
 
     // Approx flop model from LAPACK lawn18 appendix C (same as ormqr_benchmark.cc).
@@ -104,14 +102,14 @@ static void BM_ORMQR_BLOCKED(minibench::State& state) {
                       Side side,
                       Transpose trans,
                       int block_size) {
-        return ormqr_blocked<B, T>(*q,
-                                  A,
-                                  C,
-                                  side,
-                                  trans,
-                                  tau_storage.to_span(),
-                                  ws.to_span(),
-                                  block_size);
+        return ormqr_blocked<B, Scalar>(*q,
+                                        A,
+                                        C,
+                                        side,
+                                        trans,
+                                        tau_storage.to_span(),
+                                        ws.to_span(),
+                                        block_size);
     };
 
     state.SetKernel(q,
@@ -126,6 +124,8 @@ static void BM_ORMQR_BLOCKED(minibench::State& state) {
     state.SetMetric("GFLOPS", gflops_nominal, minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_ORMQR_BLOCKED, OrmqrBlockedBenchSizes);
 

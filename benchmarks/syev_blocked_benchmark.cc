@@ -34,11 +34,9 @@ inline void SyevBlockedBenchSizesNetlib(Benchmark* b) {
     }
 }
 
-} // namespace
-
 // Blocked SYEV-like benchmark (sytrd_blocked + stedc + ormqr_blocked).
-template <typename T, Backend B>
-static void BM_SYEV_BLOCKED(minibench::State& state) {
+template <typename Scalar, Backend B>
+void BM_SYEV_BLOCKED(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const int jobz_i = static_cast<int>(state.range(2));
@@ -47,8 +45,8 @@ static void BM_SYEV_BLOCKED(minibench::State& state) {
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
-    auto A = Matrix<T>::Random(n, n, /*hermitian=*/true, batch);
-    UnifiedVector<typename base_type<T>::type> W(n * batch);
+    auto A = Matrix<Scalar>::Random(n, n, /*hermitian=*/true, batch);
+    UnifiedVector<typename base_type<Scalar>::type> W(n * batch);
 
     const size_t ws_size = syev_blocked_buffer_size(*q,
                                                          A,
@@ -70,6 +68,8 @@ static void BM_SYEV_BLOCKED(minibench::State& state) {
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * flops), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / static_cast<double>(batch)) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 BATCHLAS_BENCH_CUDA_ALL_TYPES(BM_SYEV_BLOCKED, SyevBlockedBenchSizes);

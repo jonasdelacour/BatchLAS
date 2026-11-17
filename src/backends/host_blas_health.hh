@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
+#pragma once
 // The host dgemm health probe and its diagnostic, shared by the NETLIB backend (netlib_lapack.cc) and
 // batchlas::verify's double LAPACKE references (src/verify/engine.cc), which call LAPACKE directly.
-#pragma once
 
 #include <batchlas/backend_config.h>
 

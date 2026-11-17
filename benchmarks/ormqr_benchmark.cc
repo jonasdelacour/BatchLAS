@@ -6,9 +6,11 @@
 
 using namespace batchlas;
 
+namespace {
+
 // Single ORMQR benchmark
 template <typename T, Backend B>
-static void BM_ORMQR(minibench::State& state) {
+void BM_ORMQR(minibench::State& state) {
     const size_t m = state.range(0);
     const size_t n = state.range(1);
     const size_t batch = state.range(2);
@@ -39,10 +41,10 @@ static void BM_ORMQR(minibench::State& state) {
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * (4 * m * n * n - 2 * n * n * n + 3 * n * n)), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 
-    //Appendix C https://www.netlib.org/lapack/lawnspdf/lawn18.pdf
+    // Appendix C https://www.netlib.org/lapack/lawnspdf/lawn18.pdf
 }
 
-
+}  // namespace
 
 BATCHLAS_REGISTER_BENCHMARK(BM_ORMQR, SquareBatchSizes);
 

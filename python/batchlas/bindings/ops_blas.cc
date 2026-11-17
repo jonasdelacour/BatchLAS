@@ -6,11 +6,11 @@ namespace batchlas::python {
 
 namespace {
 
-template <typename T>
-DenseMatrixT<T> make_gemm_output(const DenseMatrixT<T>& a,
-                                 const DenseMatrixT<T>& b,
-                                 Transpose trans_a,
-                                 Transpose trans_b) {
+template <typename Scalar>
+DenseMatrixT<Scalar> make_gemm_output(const DenseMatrixT<Scalar>& a,
+                                      const DenseMatrixT<Scalar>& b,
+                                      Transpose trans_a,
+                                      Transpose trans_b) {
     if (a.batch_size() != b.batch_size()) {
         throw py::value_error("dense batch sizes must match");
     }
@@ -23,7 +23,7 @@ DenseMatrixT<T> make_gemm_output(const DenseMatrixT<T>& a,
         if (k_a != k_b) {
             throw py::value_error("inner dimensions do not match for gemm");
         }
-        return DenseMatrixT<T>(m, n, a.batch_size());
+        return DenseMatrixT<Scalar>(m, n, a.batch_size());
     }
 
     const int batch_size = a.batch_size();
@@ -45,7 +45,7 @@ DenseMatrixT<T> make_gemm_output(const DenseMatrixT<T>& a,
         max_cols = std::max(max_cols, b_cols);
     }
 
-    DenseMatrixT<T> result(max_rows, max_cols, batch_size);
+    DenseMatrixT<Scalar> result(max_rows, max_cols, batch_size);
     UnifiedVector<int> rows_meta(static_cast<std::size_t>(batch_size));
     UnifiedVector<int> cols_meta(static_cast<std::size_t>(batch_size));
     for (int batch = 0; batch < batch_size; ++batch) {
@@ -59,20 +59,20 @@ DenseMatrixT<T> make_gemm_output(const DenseMatrixT<T>& a,
 // BLAS updates read C as well as writing it (C <- alpha * op(A) op(B) + beta * C).
 // When the caller supplies an accumulator we start from a copy of it; otherwise we
 // allocate a fresh buffer, which is only meaningful when beta == 0.
-template <typename T>
-DenseMatrixT<T> resolve_accumulator(const py::object& c_object,
-                                    DenseMatrixT<T>&& fallback,
-                                    const T& beta,
-                                    const char* where) {
+template <typename Scalar>
+DenseMatrixT<Scalar> resolve_accumulator(const py::object& c_object,
+                                         DenseMatrixT<Scalar>&& fallback,
+                                         const Scalar& beta,
+                                         const char* where) {
     if (c_object.is_none()) {
-        if (beta != T(0)) {
+        if (beta != Scalar(0)) {
             throw py::value_error(std::string(where) +
                                   ": beta != 0 requires an existing C; pass it via out=");
         }
         return std::move(fallback);
     }
     const DenseMatrix& wrapper = py::cast<const DenseMatrix&>(c_object);
-    const auto* typed = std::get_if<DenseMatrixT<T>>(&wrapper.storage);
+    const auto* typed = std::get_if<DenseMatrixT<Scalar>>(&wrapper.storage);
     if (typed == nullptr) {
         throw py::value_error(std::string(where) + ": out dtype must match the operand dtype");
     }
@@ -89,27 +89,27 @@ DenseMatrixT<T> resolve_accumulator(const py::object& c_object,
     return typed->clone();
 }
 
-template <typename T>
-Vector<T> resolve_accumulator_vector(const py::object& y_object,
-                                     Vector<T>&& fallback,
-                                     const T& beta,
-                                     const char* where) {
+template <typename Scalar>
+Vector<Scalar> resolve_accumulator_vector(const py::object& y_object,
+                                          Vector<Scalar>&& fallback,
+                                          const Scalar& beta,
+                                          const char* where) {
     if (y_object.is_none()) {
-        if (beta != T(0)) {
+        if (beta != Scalar(0)) {
             throw py::value_error(std::string(where) +
                                   ": beta != 0 requires an existing y; pass it via out=");
         }
         return std::move(fallback);
     }
     const DenseVector& wrapper = py::cast<const DenseVector&>(y_object);
-    const auto* typed = std::get_if<Vector<T>>(&wrapper.storage);
+    const auto* typed = std::get_if<Vector<Scalar>>(&wrapper.storage);
     if (typed == nullptr) {
         throw py::value_error(std::string(where) + ": out dtype must match the operand dtype");
     }
     if (typed->size() != fallback.size() || typed->batch_size() != fallback.batch_size()) {
         throw py::value_error(std::string(where) + ": out has the wrong shape for this operation");
     }
-    Vector<T> copy(typed->size(), typed->batch_size());
+    Vector<Scalar> copy(typed->size(), typed->batch_size());
     const auto source = typed->data();
     for (int batch = 0; batch < typed->batch_size(); ++batch) {
         for (int index = 0; index < typed->size(); ++index) {
@@ -120,7 +120,7 @@ Vector<T> resolve_accumulator_vector(const py::object& y_object,
     return copy;
 }
 
-template <typename T>
+template <typename Scalar>
 DenseVector dense_gemv_impl(const DenseMatrix& a_wrapper,
                             const DenseVector& x_wrapper,
                             const py::object& alpha_object,
@@ -130,8 +130,8 @@ DenseVector dense_gemv_impl(const DenseMatrix& a_wrapper,
                             const std::optional<std::string>& device_name,
                             const py::object& y_object) {
     ensure_same_dtype(a_wrapper, x_wrapper, "matrix and vector dtypes must match");
-    const auto& a = std::get<DenseMatrixT<T>>(a_wrapper.storage);
-    const auto& x = std::get<Vector<T>>(x_wrapper.storage);
+    const auto& a = std::get<DenseMatrixT<Scalar>>(a_wrapper.storage);
+    const auto& x = std::get<Vector<Scalar>>(x_wrapper.storage);
     if (a.batch_size() != x.batch_size()) {
         throw py::value_error("matrix and vector batch sizes must match");
     }
@@ -142,19 +142,20 @@ DenseVector dense_gemv_impl(const DenseMatrix& a_wrapper,
         throw py::value_error("matrix/vector dimensions do not match for gemv");
     }
 
-    const T alpha = scalar_from_object<T>(alpha_object);
-    const T beta = scalar_from_object<T>(beta_object);
-    Vector<T> y = resolve_accumulator_vector<T>(y_object, Vector<T>(y_size, a.batch_size()), beta, "gemv");
+    const Scalar alpha = scalar_from_object<Scalar>(alpha_object);
+    const Scalar beta = scalar_from_object<Scalar>(beta_object);
+    Vector<Scalar> y = resolve_accumulator_vector<Scalar>(y_object, Vector<Scalar>(y_size, a.batch_size()), beta,
+                                                          "gemv");
     Queue& queue = acquire_queue(device_name, backend);
-    visit_backend<T>(queue, [&](auto backend_tag) {
+    visit_backend<Scalar>(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
-        batchlas::gemv<B, T>(queue, a.view(), x, y, alpha, beta, trans_a);
+        batchlas::gemv<B, Scalar>(queue, a.view(), x, y, alpha, beta, trans_a);
     });
     queue.wait();
     return wrap_vector(std::move(y));
 }
 
-template <typename T>
+template <typename Real>
 DenseMatrix dense_symm_impl(const DenseMatrix& a_wrapper,
                             const DenseMatrix& b_wrapper,
                             const py::object& alpha_object,
@@ -164,28 +165,28 @@ DenseMatrix dense_symm_impl(const DenseMatrix& a_wrapper,
                             Backend backend,
                             const std::optional<std::string>& device_name,
                             const py::object& c_object) {
-    static_assert(std::is_floating_point_v<T>, "symm only supports real dtypes");
+    static_assert(std::is_floating_point_v<Real>, "symm only supports real dtypes");
     ensure_same_dtype(a_wrapper, b_wrapper, "matrix dtypes must match");
-    const auto& a = std::get<DenseMatrixT<T>>(a_wrapper.storage);
-    const auto& b = std::get<DenseMatrixT<T>>(b_wrapper.storage);
+    const auto& a = std::get<DenseMatrixT<Real>>(a_wrapper.storage);
+    const auto& b = std::get<DenseMatrixT<Real>>(b_wrapper.storage);
     if (a.batch_size() != b.batch_size()) {
         throw py::value_error("matrix batch sizes must match");
     }
 
-    const T alpha = scalar_from_object<T>(alpha_object);
-    const T beta = scalar_from_object<T>(beta_object);
-    DenseMatrixT<T> c =
-        resolve_accumulator<T>(c_object, DenseMatrixT<T>(b.rows(), b.cols(), b.batch_size()), beta, "symm");
+    const Real alpha = scalar_from_object<Real>(alpha_object);
+    const Real beta = scalar_from_object<Real>(beta_object);
+    DenseMatrixT<Real> c =
+        resolve_accumulator<Real>(c_object, DenseMatrixT<Real>(b.rows(), b.cols(), b.batch_size()), beta, "symm");
     Queue& queue = acquire_queue(device_name, backend);
-    visit_backend<T>(queue, [&](auto backend_tag) {
+    visit_backend<Real>(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
-        batchlas::symm<B, T>(queue, a.view(), b.view(), c.view(), alpha, beta, side, uplo);
+        batchlas::symm<B, Real>(queue, a.view(), b.view(), c.view(), alpha, beta, side, uplo);
     });
     queue.wait();
     return wrap_dense(std::move(c));
 }
 
-template <typename T>
+template <typename Real>
 DenseMatrix dense_syrk_impl(const DenseMatrix& a_wrapper,
                             const py::object& alpha_object,
                             const py::object& beta_object,
@@ -194,22 +195,22 @@ DenseMatrix dense_syrk_impl(const DenseMatrix& a_wrapper,
                             Backend backend,
                             const std::optional<std::string>& device_name,
                             const py::object& c_object) {
-    static_assert(std::is_floating_point_v<T>, "syrk only supports real dtypes");
-    const auto& a = std::get<DenseMatrixT<T>>(a_wrapper.storage);
+    static_assert(std::is_floating_point_v<Real>, "syrk only supports real dtypes");
+    const auto& a = std::get<DenseMatrixT<Real>>(a_wrapper.storage);
     const int n = trans_a == Transpose::NoTrans ? a.rows() : a.cols();
-    const T alpha = scalar_from_object<T>(alpha_object);
-    const T beta = scalar_from_object<T>(beta_object);
-    DenseMatrixT<T> c = resolve_accumulator<T>(c_object, DenseMatrixT<T>(n, n, a.batch_size()), beta, "syrk");
+    const Real alpha = scalar_from_object<Real>(alpha_object);
+    const Real beta = scalar_from_object<Real>(beta_object);
+    DenseMatrixT<Real> c = resolve_accumulator<Real>(c_object, DenseMatrixT<Real>(n, n, a.batch_size()), beta, "syrk");
     Queue& queue = acquire_queue(device_name, backend);
-    visit_backend<T>(queue, [&](auto backend_tag) {
+    visit_backend<Real>(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
-        batchlas::syrk<B, T>(queue, a.view(), c.view(), alpha, beta, uplo, trans_a);
+        batchlas::syrk<B, Real>(queue, a.view(), c.view(), alpha, beta, uplo, trans_a);
     });
     queue.wait();
     return wrap_dense(std::move(c));
 }
 
-template <typename T>
+template <typename Real>
 DenseMatrix dense_syr2k_impl(const DenseMatrix& a_wrapper,
                              const DenseMatrix& b_wrapper,
                              const py::object& alpha_object,
@@ -219,27 +220,27 @@ DenseMatrix dense_syr2k_impl(const DenseMatrix& a_wrapper,
                              Backend backend,
                              const std::optional<std::string>& device_name,
                              const py::object& c_object) {
-    static_assert(std::is_floating_point_v<T>, "syr2k only supports real dtypes");
+    static_assert(std::is_floating_point_v<Real>, "syr2k only supports real dtypes");
     ensure_same_dtype(a_wrapper, b_wrapper, "matrix dtypes must match");
-    const auto& a = std::get<DenseMatrixT<T>>(a_wrapper.storage);
-    const auto& b = std::get<DenseMatrixT<T>>(b_wrapper.storage);
+    const auto& a = std::get<DenseMatrixT<Real>>(a_wrapper.storage);
+    const auto& b = std::get<DenseMatrixT<Real>>(b_wrapper.storage);
     if (a.batch_size() != b.batch_size()) {
         throw py::value_error("matrix batch sizes must match");
     }
     const int n = trans_a == Transpose::NoTrans ? a.rows() : a.cols();
-    const T alpha = scalar_from_object<T>(alpha_object);
-    const T beta = scalar_from_object<T>(beta_object);
-    DenseMatrixT<T> c = resolve_accumulator<T>(c_object, DenseMatrixT<T>(n, n, a.batch_size()), beta, "syr2k");
+    const Real alpha = scalar_from_object<Real>(alpha_object);
+    const Real beta = scalar_from_object<Real>(beta_object);
+    DenseMatrixT<Real> c = resolve_accumulator<Real>(c_object, DenseMatrixT<Real>(n, n, a.batch_size()), beta, "syr2k");
     Queue& queue = acquire_queue(device_name, backend);
-    visit_backend<T>(queue, [&](auto backend_tag) {
+    visit_backend<Real>(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
-        batchlas::syr2k<B, T>(queue, a.view(), b.view(), c.view(), alpha, beta, uplo, trans_a);
+        batchlas::syr2k<B, Real>(queue, a.view(), b.view(), c.view(), alpha, beta, uplo, trans_a);
     });
     queue.wait();
     return wrap_dense(std::move(c));
 }
 
-template <typename T>
+template <typename Scalar>
 DenseMatrix dense_hemm_impl(const DenseMatrix& a_wrapper,
                             const DenseMatrix& b_wrapper,
                             const py::object& alpha_object,
@@ -250,25 +251,25 @@ DenseMatrix dense_hemm_impl(const DenseMatrix& a_wrapper,
                             const std::optional<std::string>& device_name,
                             const py::object& c_object) {
     ensure_same_dtype(a_wrapper, b_wrapper, "matrix dtypes must match");
-    const auto& a = std::get<DenseMatrixT<T>>(a_wrapper.storage);
-    const auto& b = std::get<DenseMatrixT<T>>(b_wrapper.storage);
+    const auto& a = std::get<DenseMatrixT<Scalar>>(a_wrapper.storage);
+    const auto& b = std::get<DenseMatrixT<Scalar>>(b_wrapper.storage);
     if (a.batch_size() != b.batch_size()) {
         throw py::value_error("matrix batch sizes must match");
     }
-    const T alpha = scalar_from_object<T>(alpha_object);
-    const T beta = scalar_from_object<T>(beta_object);
-    DenseMatrixT<T> c =
-        resolve_accumulator<T>(c_object, DenseMatrixT<T>(b.rows(), b.cols(), b.batch_size()), beta, "hemm");
+    const Scalar alpha = scalar_from_object<Scalar>(alpha_object);
+    const Scalar beta = scalar_from_object<Scalar>(beta_object);
+    DenseMatrixT<Scalar> c =
+        resolve_accumulator<Scalar>(c_object, DenseMatrixT<Scalar>(b.rows(), b.cols(), b.batch_size()), beta, "hemm");
     Queue& queue = acquire_queue(device_name, backend);
-    visit_backend<T>(queue, [&](auto backend_tag) {
+    visit_backend<Scalar>(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
-        batchlas::hemm<B, T>(queue, a.view(), b.view(), c.view(), alpha, beta, side, uplo);
+        batchlas::hemm<B, Scalar>(queue, a.view(), b.view(), c.view(), alpha, beta, side, uplo);
     });
     queue.wait();
     return wrap_dense(std::move(c));
 }
 
-template <typename T>
+template <typename Scalar>
 DenseMatrix dense_herk_impl(const DenseMatrix& a_wrapper,
                             const py::object& alpha_object,
                             const py::object& beta_object,
@@ -277,22 +278,23 @@ DenseMatrix dense_herk_impl(const DenseMatrix& a_wrapper,
                             Backend backend,
                             const std::optional<std::string>& device_name,
                             const py::object& c_object) {
-    using real_type = typename base_type<T>::type;
-    const auto& a = std::get<DenseMatrixT<T>>(a_wrapper.storage);
+    using real_type = typename base_type<Scalar>::type;
+    const auto& a = std::get<DenseMatrixT<Scalar>>(a_wrapper.storage);
     const int n = trans_a == Transpose::NoTrans ? a.rows() : a.cols();
     const real_type alpha = scalar_from_object<real_type>(alpha_object);
     const real_type beta = scalar_from_object<real_type>(beta_object);
-    DenseMatrixT<T> c = resolve_accumulator<T>(c_object, DenseMatrixT<T>(n, n, a.batch_size()), T(beta), "herk");
+    DenseMatrixT<Scalar> c = resolve_accumulator<Scalar>(c_object, DenseMatrixT<Scalar>(n, n, a.batch_size()),
+                                                         Scalar(beta), "herk");
     Queue& queue = acquire_queue(device_name, backend);
-    visit_backend<T>(queue, [&](auto backend_tag) {
+    visit_backend<Scalar>(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
-        batchlas::herk<B, T>(queue, a.view(), c.view(), alpha, beta, uplo, trans_a);
+        batchlas::herk<B, Scalar>(queue, a.view(), c.view(), alpha, beta, uplo, trans_a);
     });
     queue.wait();
     return wrap_dense(std::move(c));
 }
 
-template <typename T>
+template <typename Scalar>
 DenseMatrix dense_her2k_impl(const DenseMatrix& a_wrapper,
                              const DenseMatrix& b_wrapper,
                              const py::object& alpha_object,
@@ -302,27 +304,28 @@ DenseMatrix dense_her2k_impl(const DenseMatrix& a_wrapper,
                              Backend backend,
                              const std::optional<std::string>& device_name,
                              const py::object& c_object) {
-    using real_type = typename base_type<T>::type;
+    using real_type = typename base_type<Scalar>::type;
     ensure_same_dtype(a_wrapper, b_wrapper, "matrix dtypes must match");
-    const auto& a = std::get<DenseMatrixT<T>>(a_wrapper.storage);
-    const auto& b = std::get<DenseMatrixT<T>>(b_wrapper.storage);
+    const auto& a = std::get<DenseMatrixT<Scalar>>(a_wrapper.storage);
+    const auto& b = std::get<DenseMatrixT<Scalar>>(b_wrapper.storage);
     if (a.batch_size() != b.batch_size()) {
         throw py::value_error("matrix batch sizes must match");
     }
     const int n = trans_a == Transpose::NoTrans ? a.rows() : a.cols();
-    const T alpha = scalar_from_object<T>(alpha_object);
+    const Scalar alpha = scalar_from_object<Scalar>(alpha_object);
     const real_type beta = scalar_from_object<real_type>(beta_object);
-    DenseMatrixT<T> c = resolve_accumulator<T>(c_object, DenseMatrixT<T>(n, n, a.batch_size()), T(beta), "her2k");
+    DenseMatrixT<Scalar> c = resolve_accumulator<Scalar>(c_object, DenseMatrixT<Scalar>(n, n, a.batch_size()),
+                                                         Scalar(beta), "her2k");
     Queue& queue = acquire_queue(device_name, backend);
-    visit_backend<T>(queue, [&](auto backend_tag) {
+    visit_backend<Scalar>(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
-        batchlas::her2k<B, T>(queue, a.view(), b.view(), c.view(), alpha, beta, uplo, trans_a);
+        batchlas::her2k<B, Scalar>(queue, a.view(), b.view(), c.view(), alpha, beta, uplo, trans_a);
     });
     queue.wait();
     return wrap_dense(std::move(c));
 }
 
-template <typename T>
+template <typename Scalar>
 DenseMatrix dense_trmm_impl(const DenseMatrix& a_wrapper,
                             const DenseMatrix& b_wrapper,
                             const py::object& alpha_object,
@@ -333,24 +336,24 @@ DenseMatrix dense_trmm_impl(const DenseMatrix& a_wrapper,
                             Backend backend,
                             const std::optional<std::string>& device_name) {
     ensure_same_dtype(a_wrapper, b_wrapper, "matrix dtypes must match");
-    const auto& a = std::get<DenseMatrixT<T>>(a_wrapper.storage);
-    const auto& b = std::get<DenseMatrixT<T>>(b_wrapper.storage);
+    const auto& a = std::get<DenseMatrixT<Scalar>>(a_wrapper.storage);
+    const auto& b = std::get<DenseMatrixT<Scalar>>(b_wrapper.storage);
     if (a.batch_size() != b.batch_size()) {
         throw py::value_error("matrix batch sizes must match");
     }
 
-    DenseMatrixT<T> c(b.rows(), b.cols(), b.batch_size());
-    const T alpha = scalar_from_object<T>(alpha_object);
+    DenseMatrixT<Scalar> c(b.rows(), b.cols(), b.batch_size());
+    const Scalar alpha = scalar_from_object<Scalar>(alpha_object);
     Queue& queue = acquire_queue(device_name, backend);
-    visit_backend<T>(queue, [&](auto backend_tag) {
+    visit_backend<Scalar>(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
-        batchlas::trmm<B, T>(queue, a.view(), b.view(), c.view(), alpha, side, uplo, trans_a, diag);
+        batchlas::trmm<B, Scalar>(queue, a.view(), b.view(), c.view(), alpha, side, uplo, trans_a, diag);
     });
     queue.wait();
     return wrap_dense(std::move(c));
 }
 
-template <typename T>
+template <typename Scalar>
 DenseMatrix dense_trsm_impl(const DenseMatrix& a_wrapper,
                             const DenseMatrix& b_wrapper,
                             const py::object& alpha_object,
@@ -361,19 +364,19 @@ DenseMatrix dense_trsm_impl(const DenseMatrix& a_wrapper,
                             Backend backend,
                             const std::optional<std::string>& device_name) {
     ensure_same_dtype(a_wrapper, b_wrapper, "matrix dtypes must match");
-    const auto& a = std::get<DenseMatrixT<T>>(a_wrapper.storage);
-    DenseMatrixT<T> out = std::get<DenseMatrixT<T>>(b_wrapper.storage).clone();
-    const T alpha = scalar_from_object<T>(alpha_object);
+    const auto& a = std::get<DenseMatrixT<Scalar>>(a_wrapper.storage);
+    DenseMatrixT<Scalar> out = std::get<DenseMatrixT<Scalar>>(b_wrapper.storage).clone();
+    const Scalar alpha = scalar_from_object<Scalar>(alpha_object);
     Queue& queue = acquire_queue(device_name, backend);
-    visit_backend<T>(queue, [&](auto backend_tag) {
+    visit_backend<Scalar>(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
-        batchlas::trsm<B, T>(queue, a.view(), out.view(), alpha, side, uplo, trans_a, diag);
+        batchlas::trsm<B, Scalar>(queue, a.view(), out.view(), alpha, side, uplo, trans_a, diag);
     });
     queue.wait();
     return wrap_dense(std::move(out));
 }
 
-template <typename T>
+template <typename Scalar>
 DenseMatrix sparse_spmm_impl(const SparseMatrix& a_wrapper,
                              const DenseMatrix& b_wrapper,
                              const py::object& alpha_object,
@@ -384,8 +387,8 @@ DenseMatrix sparse_spmm_impl(const SparseMatrix& a_wrapper,
                              const std::optional<std::string>& device_name,
                              const py::object& c_object) {
     ensure_same_dtype(a_wrapper, b_wrapper, "sparse and dense dtypes must match");
-    const auto& a = std::get<SparseMatrixT<T>>(a_wrapper.storage);
-    const auto& b = std::get<DenseMatrixT<T>>(b_wrapper.storage);
+    const auto& a = std::get<SparseMatrixT<Scalar>>(a_wrapper.storage);
+    const auto& b = std::get<DenseMatrixT<Scalar>>(b_wrapper.storage);
     if (a.batch_size() != b.batch_size()) {
         throw py::value_error("sparse and dense batch sizes must match");
     }
@@ -397,21 +400,22 @@ DenseMatrix sparse_spmm_impl(const SparseMatrix& a_wrapper,
         throw py::value_error("inner dimensions do not match for spmm");
     }
 
-    const T alpha = scalar_from_object<T>(alpha_object);
-    const T beta = scalar_from_object<T>(beta_object);
-    DenseMatrixT<T> c = resolve_accumulator<T>(c_object, DenseMatrixT<T>(m, n, b.batch_size()), beta, "spmm");
+    const Scalar alpha = scalar_from_object<Scalar>(alpha_object);
+    const Scalar beta = scalar_from_object<Scalar>(beta_object);
+    DenseMatrixT<Scalar> c = resolve_accumulator<Scalar>(c_object, DenseMatrixT<Scalar>(m, n, b.batch_size()), beta,
+                                                         "spmm");
     Queue& queue = acquire_queue(device_name, backend);
-    run_backend_with_workspace<T>(
+    run_backend_with_workspace<Scalar>(
         queue,
         [&](auto backend_tag) {
             constexpr Backend B = decltype(backend_tag)::value;
-            return batchlas::spmm_buffer_size<B, T, MatrixFormat::CSR>(queue, a.view(), b.view(), c.view(), alpha,
-                                                                       beta, trans_a, trans_b);
+            return batchlas::spmm_buffer_size<B, Scalar, MatrixFormat::CSR>(queue, a.view(), b.view(), c.view(), alpha,
+                                                                            beta, trans_a, trans_b);
         },
         [&](auto backend_tag, Span<std::byte> workspace) {
             constexpr Backend B = decltype(backend_tag)::value;
-            batchlas::spmm<B, T, MatrixFormat::CSR>(queue, a.view(), b.view(), c.view(), alpha, beta, trans_a,
-                                                    trans_b, workspace);
+            batchlas::spmm<B, Scalar, MatrixFormat::CSR>(queue, a.view(), b.view(), c.view(), alpha, beta, trans_a,
+                                                         trans_b, workspace);
         });
     queue.wait();
     return wrap_dense(std::move(c));

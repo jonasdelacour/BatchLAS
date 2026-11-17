@@ -88,7 +88,6 @@ class SteqrOptions:
     sort_order: str = "ascending"
     cta_wg_size_multiplier: int = 0  # 0: tuned per dtype and size
     cta_shift_strategy: str = "lapack"
-    cta_update_scheme: str = "exp"
 
 
 @dataclass(slots=True)
@@ -113,7 +112,6 @@ class JacobiOptions:
 class StedcOptions:
     recursion_threshold: int = 0
     algorithm: str = "auto"  # merge-tree driver: "auto", "levels" or "recursive"
-    secular_solver: str = "rocm"
     leaf_steqr_params: SteqrOptions = field(default_factory=SteqrOptions)
     merge_variant: str = "auto"
     merge_threads: int = 128

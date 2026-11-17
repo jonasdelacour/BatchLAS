@@ -52,9 +52,9 @@ private:
 };
 
 // w (n eigenvalues per item, packed) as an n x 1 matrix per item, for the bit-identity checks.
-template <typename R>
-batchlas::MatrixView<R, batchlas::MatrixFormat::Dense> items_of(const batchlas::UnifiedVector<R>& w, int n) {
-    return {const_cast<R*>(w.data()), n, 1, n, n, static_cast<int>(w.size()) / n};
+template <typename Real>
+batchlas::MatrixView<Real, batchlas::MatrixFormat::Dense> items_of(const batchlas::UnifiedVector<Real>& w, int n) {
+    return {const_cast<Real*>(w.data()), n, 1, n, n, static_cast<int>(w.size()) / n};
 }
 
 }  // namespace sygvd_test

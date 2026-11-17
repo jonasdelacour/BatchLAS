@@ -49,12 +49,12 @@ namespace om = batchlas::ops::ormqr;
 using C = om::OrmqrChoice;
 using Pin = select::ScopedPin<C>;
 using cd = std::complex<double>;
-template <typename T>
-using MVof = MatrixView<T, MatrixFormat::Dense>;
-template <typename T>
-using RealOf = typename batchlas::base_type<T>::type;
-template <typename T>
-constexpr bool kCx = test_utils::is_complex<T>::value;
+template <typename Scalar>
+using MVof = MatrixView<Scalar, MatrixFormat::Dense>;
+template <typename Scalar>
+using RealOf = typename batchlas::base_type<Scalar>::type;
+template <typename Scalar>
+constexpr bool kCx = test_utils::is_complex<Scalar>::value;
 
 template <typename T>
 bool same_bits(T a, T b) {
@@ -88,37 +88,37 @@ std::string name(const C& c, const Spec& s) { return select::to_string(c) + " " 
 // A (m x k reflectors) and C in one buffer of large finite poison at padded lds and strides.
 // A's diagonal and upper triangle hold in-range poison: the reflectors are unit lower, so a
 // kernel that reads either answers wrongly. tau makes each H_j unitary with a nonzero
-// imaginary part for complex T, so op(Q) stays well conditioned and a conjugation bug shows.
-template <typename T>
+// imaginary part for complex Scalar, so op(Q) stays well conditioned and a conjugation bug shows.
+template <typename Scalar>
 struct Apply {
     Spec s;
     Region a, c;
-    UnifiedVector<T> mem, tau;
-    std::vector<T> mem0;
-    UnifiedVector<T*> aptr, cptr;
+    UnifiedVector<Scalar> mem, tau;
+    std::vector<Scalar> mem0;
+    UnifiedVector<Scalar*> aptr, cptr;
 
-    MVof<T> A() { return {mem.data() + a.off, s.m, s.k, a.ld, a.stride, s.batch, aptr.data()}; }
-    MVof<T> Cm() { return {mem.data() + c.off, c.rows, c.cols, c.ld, c.stride, s.batch, cptr.data()}; }
-    Span<T> Tau() { return tau.to_span(); }
+    MVof<Scalar> A() { return {mem.data() + a.off, s.m, s.k, a.ld, a.stride, s.batch, aptr.data()}; }
+    MVof<Scalar> Cm() { return {mem.data() + c.off, c.rows, c.cols, c.ld, c.stride, s.batch, cptr.data()}; }
+    Span<Scalar> Tau() { return tau.to_span(); }
     std::size_t ai(int it, int i, int j) const { return a.off + std::size_t(it) * a.stride + std::size_t(j) * a.ld + i; }
     std::size_t ci(int it, int i, int j) const { return c.off + std::size_t(it) * c.stride + std::size_t(j) * c.ld + i; }
 };
 
-template <typename T>
-Apply<T> make_apply(const Spec& s) {
-    Apply<T> p;
+template <typename Scalar>
+Apply<Scalar> make_apply(const Spec& s) {
+    Apply<Scalar> p;
     p.s = s;
     p.a = {0, s.m, s.k, s.m + 3, (s.m + 3) * s.k + 5};
     const int cr = s.side == Side::Left ? s.m : s.q, cc = s.side == Side::Left ? s.q : s.m;
     p.c = {std::size_t(p.a.stride) * s.batch + 11, cr, cc, cr + 2, (cr + 2) * cc + 7};
-    p.mem = UnifiedVector<T>(p.c.off + std::size_t(p.c.stride) * s.batch + 13, MVof<T>::make(-999, 777));
-    p.tau = UnifiedVector<T>(std::size_t(std::max(1, s.k)) * s.batch, MVof<T>::make(0, 0));
-    p.aptr = UnifiedVector<T*>(s.batch, nullptr);
-    p.cptr = UnifiedVector<T*>(s.batch, nullptr);
+    p.mem = UnifiedVector<Scalar>(p.c.off + std::size_t(p.c.stride) * s.batch + 13, MVof<Scalar>::make(-999, 777));
+    p.tau = UnifiedVector<Scalar>(std::size_t(std::max(1, s.k)) * s.batch, MVof<Scalar>::make(0, 0));
+    p.aptr = UnifiedVector<Scalar*>(s.batch, nullptr);
+    p.cptr = UnifiedVector<Scalar*>(s.batch, nullptr);
     std::mt19937 gen(s.seed);
     std::uniform_real_distribution<double> u(-1, 1);
     const int reps = s.period > 0 ? std::min(s.period, s.batch) : s.batch;
-    const double theta = kCx<T> ? 0.7 : 0.0;
+    const double theta = kCx<Scalar> ? 0.7 : 0.0;
     for (int it = 0; it < s.batch; ++it) {
         const int r = it % reps;
         for (int j = 0; j < s.k; ++j) {
@@ -128,20 +128,20 @@ Apply<T> make_apply(const Spec& s) {
                     p.mem[p.ai(it, i, j)] = p.mem[p.ai(r, i, j)];
                     continue;
                 }
-                T v = MVof<T>::make(300, -200);
+                Scalar v = MVof<Scalar>::make(300, -200);
                 if (i > j) {
                     const auto re = u(gen), im = u(gen);
-                    v = MVof<T>::make(re / std::sqrt(double(s.m)), im / std::sqrt(double(s.m)));
+                    v = MVof<Scalar>::make(re / std::sqrt(double(s.m)), im / std::sqrt(double(s.m)));
                 }
                 p.mem[p.ai(it, i, j)] = v;
-                if (i > j) norm2 += std::norm(MVof<T>::up(v));
+                if (i > j) norm2 += std::norm(MVof<Scalar>::up(v));
             }
             if (it != r) {
                 p.tau[std::size_t(it) * s.k + j] = p.tau[std::size_t(r) * s.k + j];
                 continue;
             }
             const cd t = (1.0 + std::polar(1.0, theta)) / norm2;
-            p.tau[std::size_t(it) * s.k + j] = MVof<T>::make(t.real(), t.imag());
+            p.tau[std::size_t(it) * s.k + j] = MVof<Scalar>::make(t.real(), t.imag());
         }
         for (int j = 0; j < p.c.cols; ++j)
             for (int i = 0; i < p.c.rows; ++i)
@@ -149,7 +149,7 @@ Apply<T> make_apply(const Spec& s) {
                     p.mem[p.ci(it, i, j)] = p.mem[p.ci(r, i, j)];
                 } else {
                     const auto re = u(gen), im = u(gen);
-                    p.mem[p.ci(it, i, j)] = MVof<T>::make(re, im);
+                    p.mem[p.ci(it, i, j)] = MVof<Scalar>::make(re, im);
                 }
     }
     p.mem0.assign(p.mem.begin(), p.mem.end());
@@ -158,15 +158,15 @@ Apply<T> make_apply(const Spec& s) {
 
 // Componentwise |C - op(Q) C0| / (|op(Q)||C0|) (Side::Right: C0 op(Q)) for one item, with
 // Q = H_0 ... H_{k-1} (m x m) formed by MatrixView::form_q from the stored reflectors and tau.
-template <typename T>
-double apply_error(Queue& ctx, const Apply<T>& p, int it) {
+template <typename Scalar>
+double apply_error(Queue& ctx, const Apply<Scalar>& p, int it) {
     const Spec& s = p.s;
-    using D = typename MVof<T>::promoted_type;
-    T* m0 = const_cast<T*>(p.mem0.data());
-    const MVof<T> F(m0 + p.a.off, s.m, s.k, p.a.ld, p.a.stride, s.batch);
-    const auto Q = MVof<T>::form_q(ctx, F, VectorView<T>(p.tau.data(), s.k, s.batch, 1, s.k), it, s.m);
-    const auto C0 = MVof<T>(m0 + p.ci(it, 0, 0), p.c.rows, p.c.cols, p.c.ld).template astype<D>();
-    const auto C = MVof<T>(p.mem.data() + p.ci(it, 0, 0), p.c.rows, p.c.cols, p.c.ld).template astype<D>();
+    using D = typename MVof<Scalar>::promoted_type;
+    Scalar* m0 = const_cast<Scalar*>(p.mem0.data());
+    const MVof<Scalar> F(m0 + p.a.off, s.m, s.k, p.a.ld, p.a.stride, s.batch);
+    const auto Q = MVof<Scalar>::form_q(ctx, F, VectorView<Scalar>(p.tau.data(), s.k, s.batch, 1, s.k), it, s.m);
+    const auto C0 = MVof<Scalar>(m0 + p.ci(it, 0, 0), p.c.rows, p.c.cols, p.c.ld).template astype<D>();
+    const auto C = MVof<Scalar>(p.mem.data() + p.ci(it, 0, 0), p.c.rows, p.c.cols, p.c.ld).template astype<D>();
     if (s.side == Side::Left)
         return MVof<D>::gemm_backward_error(ctx, Q, s.trans, C0, Transpose::NoTrans, C0, C, D(1), D(0));
     return MVof<D>::gemm_backward_error(ctx, C0, Transpose::NoTrans, Q, s.trans, C0, C, D(1), D(0));
@@ -241,9 +241,9 @@ void install_table(const std::string& dtype, const std::string& dev, const std::
     select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;

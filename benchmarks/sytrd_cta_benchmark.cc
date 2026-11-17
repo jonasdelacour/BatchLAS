@@ -22,11 +22,9 @@ inline void SytrdCtaBenchSizes(Benchmark* b) {
     }
 }
 
-} // namespace
-
 // Batched SYTRD-CTA benchmark
-template <typename T, Backend B>
-static void BM_SYTRD_CTA(minibench::State& state) {
+template <typename Scalar, Backend B>
+void BM_SYTRD_CTA(minibench::State& state) {
 #if BATCHLAS_HAS_CUDA_BACKEND
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
@@ -39,16 +37,16 @@ static void BM_SYTRD_CTA(minibench::State& state) {
     const double total_flops = (4.0 / 3.0) * double(n) * double(n) * double(n) * double(batch);
 
     auto q = std::make_shared<Queue>(Device("gpu"), B);
-    auto A = Matrix<T>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/2025);
-    auto d = Vector<T>::zeros(n, batch);
-    auto e = Vector<T>::zeros(n - 1, batch);
-    auto tau = Vector<T>::zeros(n - 1, batch);
+    auto A = Matrix<Scalar>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/2025);
+    auto d = Vector<Scalar>::zeros(n, batch);
+    auto e = Vector<Scalar>::zeros(n - 1, batch);
+    auto tau = Vector<Scalar>::zeros(n - 1, batch);
     UnifiedVector<std::byte> ws_dummy(1, std::byte{0});
 
     state.SetKernel(
         q,
-        bench::pristine(A), //sytrd mutates A so if it is not kept pristine between runs the speed results will change between runs.
-        d,e,tau,uplo,ws_dummy,wg_mult,
+        bench::pristine(A), // sytrd mutates A so if it is not kept pristine between runs the speed results will change between runs.
+        d, e, tau, uplo, ws_dummy, wg_mult,
         [](Queue& q, auto&&... xs) {
             (void)sytrd_cta(q, std::forward<decltype(xs)>(xs)...);
         });
@@ -58,6 +56,8 @@ static void BM_SYTRD_CTA(minibench::State& state) {
     (void)state;
 #endif
 }
+
+}  // namespace
 
 // Register size/batch combinations at static-init time
 BATCHLAS_BENCH_CUDA(BM_SYTRD_CTA, SytrdCtaBenchSizes);

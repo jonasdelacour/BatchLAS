@@ -36,16 +36,16 @@ namespace S = ops::syev;
 
 constexpr double kPoison = 1e6;
 
-template <typename T>
+template <typename Scalar>
 struct SyevProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
-    using R = typename base_type<T>::type;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+    using R = typename base_type<Scalar>::type;
     Queue& q;
     JobType jobz;
     int n, batch, ld;
     std::size_t stride;
-    UnifiedVector<T> A0, A;
-    UnifiedVector<T*> pA0, pA;
+    UnifiedVector<Scalar> A0, A;
+    UnifiedVector<Scalar*> pA0, pA;
     MV A0v, Av;
     UnifiedVector<R> w;
     UnifiedVector<std::int32_t> info;
@@ -62,7 +62,7 @@ struct SyevProblem {
         (void)MV::copy(q, MV(A.data(), ld, n, ld, int(stride), batch), MV(A0.data(), ld, n, ld, int(stride), batch));
         q.wait();  // the padding keeps its poison
     }
-    std::size_t workspace() { return syev_buffer_size<kBackend, T>(q, Av, w.to_span(), jobz, Uplo::Lower); }
+    std::size_t workspace() { return syev_buffer_size<kBackend, Scalar>(q, Av, w.to_span(), jobz, Uplo::Lower); }
     void reset() {
         (void)MV::copy(q, Av, A0v);
         q.wait();
@@ -72,7 +72,7 @@ struct SyevProblem {
         for (R& x : w) x = R(kPoison);
     }
     void run(Span<std::byte> ws) {
-        (void)syev<kBackend, T>(q, Av, w.to_span(), jobz, Uplo::Lower, ws, info.to_span());
+        (void)syev<kBackend, Scalar>(q, Av, w.to_span(), jobz, Uplo::Lower, ws, info.to_span());
         q.wait();
     }
     std::pair<double, int> verify() {
@@ -91,10 +91,10 @@ struct SyevProblem {
         for (int b : items)
             for (double x : ref[std::size_t(b)]) scale = std::max(scale, std::fabs(x));
         const VectorView<R> wv(w.data(), n, batch);
-        double worst = MV::values_error(wv, ref, scale) / verify::bound<T>(verify::Check::values, n);
+        double worst = MV::values_error(wv, ref, scale) / verify::bound<Scalar>(verify::Check::values, n);
         if (jobz != JobType::EigenVectors) return {worst, bad};
-        worst = verify::nanmax(worst, MV::eigen_residual(q, A0v, Av, wv) / verify::bound<T>(verify::Check::eigen_residual, n));
-        const double orth = MV::orthogonality(q, Av) / verify::bound<T>(verify::Check::orthogonality_rotations, n);
+        worst = verify::nanmax(worst, MV::eigen_residual(q, A0v, Av, wv) / verify::bound<Scalar>(verify::Check::eigen_residual, n));
+        const double orth = MV::orthogonality(q, Av) / verify::bound<Scalar>(verify::Check::orthogonality_rotations, n);
         return {verify::nanmax(worst, orth), bad};
     }
 };
@@ -116,16 +116,16 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
-            "src/sycl/kernel_attrs.hh",
-            "src/sycl/sscp_target.hh",
+            "include/batchlas/device/detail/kernel_attrs.hh",
+            "include/batchlas/device/detail/sscp_target.hh",
             "include/batchlas/util/group-collectives.hh",
-            "src/kernels/common/sg_partition/backend_amdgcn.hh",
-            "src/kernels/common/sg_partition/backend_amdgcn_core.hh",
-            "src/kernels/common/sg_partition/backend_generic.hh",
-            "src/kernels/common/sg_partition/backend_nvptx.hh",
-            "src/kernels/common/sg_partition/backend_spirv.hh",
-            "src/kernels/common/sg_partition/backend_sscp.hh",
-            "src/kernels/common/sg_partition/sg_partition.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn_core.hh",
+            "include/batchlas/device/detail/sg_partition/backend_generic.hh",
+            "include/batchlas/device/detail/sg_partition/backend_nvptx.hh",
+            "include/batchlas/device/detail/sg_partition/backend_spirv.hh",
+            "include/batchlas/device/detail/sg_partition/backend_sscp.hh",
+            "include/batchlas/device/detail/sg_partition/sg_partition.hh",
             // family: cta
             "src/ops/syev/kernels/syev_cta.cc",
             "src/ops/ormqr/kernels/ormqr_cta.cc",
@@ -148,10 +148,11 @@ public:
             "src/ops/syev/sytrd/sytrd_sb2st_hh.hh",
             // common
             "src/ops/syev/sytrd/sytrd_cta.cc",
-            "src/ops/syev/sytrd/sytrd_cta_device.hh",
+            "include/batchlas/device/lapack/sytrd.hh",
+            "include/batchlas/device/lapack/syev.hh",
             "src/ops/syev/steqr/steqr.cc",
             "src/ops/syev/steqr/steqr_cta.cc",
-            "src/ops/syev/steqr/steqr_cta_device.hh",
+            "include/batchlas/device/lapack/steqr.hh",
             "src/ops/syev/steqr/steqr_wg.cc",
             "src/ops/syev/steqr/steqr_internal.hh",
             "src/ops/syev/stedc/stedc.cc",
@@ -160,13 +161,32 @@ public:
             "src/ops/syev/stedc/stedc_merge_cta.cc",
             "src/ops/syev/stedc/stedc_merge_kernels.cc",
             "src/ops/syev/stedc/stedc_merge_kernels.hh",
-            "src/ops/syev/stedc/stedc_secular.cc",
-            "src/ops/syev/stedc/stedc_secular.hh",
             "src/ops/ormqr/kernels/ormqr_blocked.cc",
             "src/kernels/common/larft_wy.hh",
             "src/ops/syev/kernels/uplo_mirror.cc",
             "src/ops/syev/uplo_mirror.hh",
             "src/ops/syev/choice.hh",
+            "include/batchlas/device.hh",
+            "include/batchlas/device/arith.hh",
+            "include/batchlas/device/core.hh",
+            "include/batchlas/device/exec.hh",
+            "include/batchlas/device/grid.hh",
+            "include/batchlas/device/interop.hh",
+            "include/batchlas/device/lapack/laed2.hh",
+            "include/batchlas/device/lapack/laed3.hh",
+            "include/batchlas/device/lapack/laed4.hh",
+            "include/batchlas/device/lapack/larft.hh",
+            "include/batchlas/device/lapack_aux.hh",
+            "include/batchlas/device/level1.hh",
+            "include/batchlas/device/level2.hh",
+            "include/batchlas/device/level3.hh",
+            "include/batchlas/device/operand.hh",
+            "include/batchlas/device/reduce.hh",
+            "include/batchlas/device/scalar.hh",
+            "include/batchlas/device/sg_partition.hh",
+            "include/batchlas/device/tier.hh",
+            "include/batchlas/device/view.hh",
+            "include/batchlas/device/workspace.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin
@@ -176,10 +196,23 @@ public:
         // family: blocked "include/batchlas/tuning_params.hh"
         // blocked and two_stage call the public gemm and trmm (stedc, ormqr_blocked); blocked syr2k, two_stage geqrf.
         // family: blocked "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/kernels/gemm_launch.hh" "src/ops/gemm/kernels/gemm_rows.hh" "src/ops/gemm/kernels/gemm_shard.cc.in" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/choice.hh" "src/ops/trmm/trmm.cc" "src/ops/syr2k/syr2k.cc"
-        // family: blocked "src/ops/gemm/kernels/accessors.hh" "src/ops/gemm/kernels/epilogue_linear.hh" "src/ops/gemm/kernels/load_policies.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_256x128.hh" "src/ops/gemm/kernels/copy_async.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh" "src/ops/gemm/kernels/register_launchers.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/register_wide_transposed.hh" "src/ops/gemm/kernels/small_batched.hh" "src/ops/gemm/kernels/tiled_general.hh"
+        // family: blocked "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_256x128.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh" "src/ops/gemm/kernels/register_launchers.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/register_wide_transposed.hh" "src/ops/gemm/kernels/small_batched.hh" "src/ops/gemm/kernels/tiled_general.hh"
         // family: two_stage "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/kernels/gemm_launch.hh" "src/ops/gemm/kernels/gemm_rows.hh" "src/ops/gemm/kernels/gemm_shard.cc.in" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/choice.hh" "src/ops/trmm/trmm.cc"
-        // family: two_stage "src/ops/gemm/kernels/accessors.hh" "src/ops/gemm/kernels/epilogue_linear.hh" "src/ops/gemm/kernels/load_policies.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_256x128.hh" "src/ops/gemm/kernels/copy_async.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh" "src/ops/gemm/kernels/register_launchers.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/register_wide_transposed.hh" "src/ops/gemm/kernels/small_batched.hh" "src/ops/gemm/kernels/tiled_general.hh"
+        // family: two_stage "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_256x128.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh" "src/ops/gemm/kernels/register_launchers.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/register_wide_transposed.hh" "src/ops/gemm/kernels/small_batched.hh" "src/ops/gemm/kernels/tiled_general.hh"
         // family: two_stage "src/ops/geqrf/kernels/geqrf_blocked.cc" "src/ops/geqrf/kernels/geqrf_cta.cc" "src/ops/geqrf/kernels/geqrf_tiny.cc" "src/ops/geqrf/choice.hh"
+        // The include/batchlas/device/ headers each family's kernels include.
+        // family: blocked "include/batchlas/device/level3/cfg.hh" "include/batchlas/device/level3/copy_async.hh"
+        // family: blocked "include/batchlas/device/level3/epilogue.hh" "include/batchlas/device/level3/mma.hh"
+        // family: blocked "include/batchlas/device/level3/packet.hh" "include/batchlas/device/level3/pipeline.hh"
+        // family: blocked "include/batchlas/device/level3/schedule.hh" "include/batchlas/device/level3/stage.hh"
+        // family: jacobi "include/batchlas/device/lapack/jacobi.hh"
+        // family: two_stage "include/batchlas/device/lapack/geqrf.hh" "include/batchlas/device/lapack/larfb.hh"
+        // family: two_stage "include/batchlas/device/lapack/sb2st.hh" "include/batchlas/device/level3/cfg.hh"
+        // family: two_stage "include/batchlas/device/lapack/sy2sb.hh"
+        // family: two_stage "include/batchlas/device/level3/copy_async.hh" "include/batchlas/device/level3/epilogue.hh"
+        // family: two_stage "include/batchlas/device/level3/group.hh" "include/batchlas/device/level3/mma.hh"
+        // family: two_stage "include/batchlas/device/level3/packet.hh" "include/batchlas/device/level3/pipeline.hh"
+        // family: two_stage "include/batchlas/device/level3/schedule.hh" "include/batchlas/device/level3/stage.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/syev_spec.cc"; }

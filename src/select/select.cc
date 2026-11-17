@@ -148,7 +148,7 @@ std::vector<const Table*> load_tables(TableState& st, std::string_view op, std::
                 parsed = parse_tables(read_text(), name);
             } catch (const internal_error& e) {
                 if (!is_override) throw;
-                throw invalid_argument(std::string("BATCHLAS_TUNED_DIR: ") + e.what());
+                throw batchlas::invalid_argument(std::string("BATCHLAS_TUNED_DIR: ") + e.what());
             }
             for (Table& part : parsed) {
                 auto* t = new Table(std::move(part));
@@ -309,7 +309,7 @@ Table parse_one(std::string_view text, std::string_view file, bool by_dtype) {
     bool have_keys = false;
     int line_no = 0;
     auto fail = [&](const std::string& why) {
-        throw internal_error(t.file + ":" + std::to_string(line_no) + ": " + why);
+        throw batchlas::internal_error(t.file + ":" + std::to_string(line_no) + ": " + why);
     };
     for (std::string_view raw : detail::split(text, '\n')) {
         ++line_no;
@@ -449,7 +449,7 @@ std::vector<Table> parse_tables(std::string_view text, std::string_view file) {
     for (TableRow& r : rows) {
         const std::string& dtype = r.keys[0];
         if (dtype != "float" && dtype != "double" && dtype != "cfloat" && dtype != "cdouble")
-            throw internal_error(all.file + ":" + std::to_string(r.line) + ": unknown dtype '" + dtype + "'");
+            throw batchlas::internal_error(all.file + ":" + std::to_string(r.line) + ": unknown dtype '" + dtype + "'");
         auto t = std::find_if(out.begin(), out.end(), [&](const Table& x) { return x.dtype == dtype; });
         if (t == out.end()) {
             Table part = all;
@@ -480,8 +480,8 @@ const TableRow* Table::nearest(const Key& key) const {
         const auto it = std::find_if(key.begin(), key.end(), [&](const KeyField& f) { return f.name == keys[i].name; });
         if (it == key.end()) {
             const std::string what = file + ": key '" + keys[i].name + "' not supplied by the op";
-            if (is_override) throw invalid_argument("BATCHLAS_TUNED_DIR: " + what);
-            throw internal_error(what);
+            if (is_override) throw batchlas::invalid_argument("BATCHLAS_TUNED_DIR: " + what);
+            throw batchlas::internal_error(what);
         }
         kv[i] = it->value;
         memo_key += it->value;

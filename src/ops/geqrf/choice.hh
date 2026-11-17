@@ -21,7 +21,7 @@ struct Vendor : select::NoFields<"vendor"> {};    ///< backend::geqrf_vendor; ne
 using GeqrfChoice = std::variant<Tiny, Cta, Blocked, Vendor>;  ///< fieldless: buckets, packing, nb, leaf derived
 
 /// Every compiled choice, once, in tie-break order (§6.3): narrowest first, vendor last.
-template <typename T>
+template <typename Scalar>
 constexpr auto candidates() { return select::all_of<GeqrfChoice>(); }
 
 inline constexpr select::OpSpec spec{Op::geqrf, select::Lib::factorization};  ///< last resort (§5.5): blocked, vendor

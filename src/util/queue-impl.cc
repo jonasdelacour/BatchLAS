@@ -13,7 +13,7 @@ namespace {
 class QueueGetEventNoopKernel;
 class QueueEnqueueNoopKernel;
 class QueueExternalWorkBarrierKernel;
-}
+}  // namespace
 
 // Out-of-line members must be in namespace batchlas; the kernel-name tags above stay global on
 // purpose. evidence: docs/design/runtime-internals.md#runtime-internals-namespace-placement-of-out-of-line-definitions
@@ -32,7 +32,6 @@ Event& Event::operator=(EventImpl&& impl) {
 
 Event::Event(Event&& other) = default;
 
-
 Event::~Event() = default;
 
 void Event::wait() const {impl_->wait();}
@@ -49,7 +48,6 @@ std::optional<std::pair<std::uint64_t, std::uint64_t>> Event::profiling_command_
 
 EventImpl* Event::operator ->() const {return impl_.get();}
 EventImpl& Event::operator *() const {return *impl_;}
-
 
 namespace {
 // An Apple GPU through acpp Metal: no fp64, and no double kernels can be JIT-compiled for it.
@@ -297,7 +295,6 @@ void WorkspaceLease::release_(bool diagnose_out_of_order) noexcept {
     seq_ = 0;
 }
 
-
 QueueImpl* Queue::operator->() const {
     return impl_.get();
 }
@@ -307,7 +304,7 @@ QueueImpl& Queue::operator*() const {
 }
 
 void Queue::enqueue(Event& event) {
-    if(event.impl_.get() == nullptr) return;
+    if (event.impl_.get() == nullptr) return;
     // Ensure the queue is ordered after `event`.
     // A command group with only depends_on() is not guaranteed to create an actual
     // scheduling node on all backends. Use a barrier when available, else fall
@@ -329,7 +326,7 @@ void Queue::enqueue(Event& event) {
     }
     sycl::event e = impl_->submit([&](sycl::handler& h) {
         h.depends_on(static_cast<sycl::event>(*event));
-        h.single_task<QueueEnqueueNoopKernel>([]() {});
+        h.single_task<QueueEnqueueNoopKernel>([] {});
     });
 #if BATCHLAS_SYCL_IMPL_ACPP
     if (!in_order_) impl_->pending_ = e;
@@ -361,7 +358,7 @@ Event Queue::get_event() const {
         // ext_oneapi_submit_barrier and may throw unsupported-feature errors.
     }
     EventImpl event = impl_->submit([&](sycl::handler& h) {
-        h.single_task<QueueGetEventNoopKernel>([]() {});
+        h.single_task<QueueGetEventNoopKernel>([] {});
     });
     return event;
 }
@@ -378,18 +375,17 @@ Event Queue::create_event_after_external_work() {
     } catch (const sycl::exception&) {
     }
     EventImpl event = impl_->submit([&](sycl::handler& h) {
-        h.single_task<QueueExternalWorkBarrierKernel>([]() {});
+        h.single_task<QueueExternalWorkBarrierKernel>([] {});
     });
     return event;
 }
 
-std::vector<Device> Device::get_devices(DeviceType type){
+std::vector<Device> Device::get_devices(DeviceType type) {
     std::vector<Device> devices(QueueImpl::device_arrays.at(static_cast<int>(type)).size());
     std::generate(devices.begin(), devices.end(),
         [i = size_t{0}, type]() mutable { return Device(i++, type); });
     return devices;
 }
-
 
 std::string Device::get_name() const  {
     return QueueImpl::device_arrays.at(static_cast<int>(type)).at(idx).get_info<sycl::info::device::name>();
@@ -402,7 +398,7 @@ Vendor Device::get_vendor() const {
 size_t Device::get_property(DeviceProperty property) const {
     auto d = QueueImpl::device_arrays.at(static_cast<int>(type)).at(idx);
 
-    switch(int(property)){
+    switch (int(property)) {
         case 0: return d.get_info<sycl::info::device::max_work_group_size>();
         case 1: return d.get_info<sycl::info::device::max_clock_frequency>();
         case 2: return d.get_info<sycl::info::device::max_compute_units>();

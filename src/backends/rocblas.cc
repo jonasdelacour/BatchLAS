@@ -15,283 +15,286 @@
 
 namespace batchlas {
 
-    namespace backend {
+namespace backend {
 
-    template <Backend Back, typename T>
-    Event gemm_vendor(Queue& ctx,
-               const MatrixView<T,MatrixFormat::Dense>& A,
-               const MatrixView<T,MatrixFormat::Dense>& B,
-               const MatrixView<T,MatrixFormat::Dense>& C,
-               T alpha,
-               T beta,
-               Transpose transA,
-               Transpose transB,
-               ComputePrecision precision) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::gemm, "gemm_vendor", Back, A, B, C);
-        if (!gemm_batch_dimensions_compatible(A, B, C, transA, transB)) {
-            throw batchlas::invalid_argument("gemm: incompatible matrix dimensions");
-        }
+template <Backend Back, typename Scalar>
+Event gemm_vendor(Queue& ctx,
+           const MatrixView<Scalar, MatrixFormat::Dense>& A,
+           const MatrixView<Scalar, MatrixFormat::Dense>& B,
+           const MatrixView<Scalar, MatrixFormat::Dense>& C,
+           Scalar alpha,
+           Scalar beta,
+           Transpose transA,
+           Transpose transB,
+           ComputePrecision precision) {
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::gemm, "gemm_vendor", Back, A, B, C);
+    if (!gemm_batch_dimensions_compatible(A, B, C, transA, transB)) {
+        throw batchlas::invalid_argument("gemm: incompatible matrix dimensions");
+    }
 
-        if (gemm_has_heterogeneous_batch(A, B, C)) {
-            // The loop, the m==0/n==0 skips, the k==0 -> scale(beta) substitution
-            // and the empty-batch Event live in detail::gemm_heterogeneous_loop
-            // (src/backends/gemm_heterogeneous.hh) so that a vendor-free build has
-            // them too; only the per-item terminal is backend-specific. The
-            // public gemm splits its own heterogeneous batches before choosing,
-            // so this serves direct callers only. The empty-batch Event is
-            // create_event_after_external_work() here as it was before -- the work
-            // leaves the SYCL queue -- which is what that helper already hardcodes.
-            return detail::gemm_heterogeneous_loop<T>(ctx, A, B, C, beta, transA, transB,
-                [&](const auto& A_i, const auto& B_i, const auto& C_i) {
-                    return gemm_vendor<Back, T>(ctx, A_i, B_i, C_i, alpha, beta, transA, transB, precision);
-                });
-        }
+    if (gemm_has_heterogeneous_batch(A, B, C)) {
+        // The loop, the m==0/n==0 skips, the k==0 -> scale(beta) substitution
+        // and the empty-batch Event live in detail::gemm_heterogeneous_loop
+        // (src/backends/gemm_heterogeneous.hh) so that a vendor-free build has
+        // them too; only the per-item terminal is backend-specific. The
+        // public gemm splits its own heterogeneous batches before choosing,
+        // so this serves direct callers only. The empty-batch Event is
+        // create_event_after_external_work() here as it was before -- the work
+        // leaves the SYCL queue -- which is what that helper already hardcodes.
+        return detail::gemm_heterogeneous_loop<Scalar>(ctx, A, B, C, beta, transA, transB,
+            [&](const auto& A_i, const auto& B_i, const auto& C_i) {
+                return gemm_vendor<Back, Scalar>(ctx, A_i, B_i, C_i, alpha, beta, transA, transB, precision);
+            });
+    }
 
-        static LinalgHandle<Back> handle;
-        auto [m, k] = get_effective_dims(A, transA);
-        auto [kB, n] = get_effective_dims(B, transB);
-        auto compute_type = enum_convert<BackendLibrary::ROCBLAS, T>(precision);
-        impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
-            handle.setStream(stream);
-            alignas(16) auto alpha_h = alpha;  // as cublas.cc: closures are 8-aligned
-            alignas(16) auto beta_h = beta;
-            if (A.batch_size() <= 1) {
-                call_backend<T, BackendLibrary::ROCBLAS, Back>(rocblas_sgemm, rocblas_dgemm, rocblas_cgemm, rocblas_zgemm,
-                                 handle, transA, transB,
-                                    m, n, k,
-                                    &alpha_h,
-                                    A.data_ptr(), A.ld(),
-                                    B.data_ptr(), B.ld(),
-                                    &beta_h,
-                                    C.data_ptr(), C.ld());
-            } else {
-                call_backend<T, BackendLibrary::ROCBLAS, Back>(rocblas_sgemm_strided_batched, rocblas_dgemm_strided_batched,
-                                rocblas_cgemm_strided_batched, rocblas_zgemm_strided_batched,
-                                handle,
-                                transA, transB,
+    static LinalgHandle<Back> handle;
+    auto [m, k] = get_effective_dims(A, transA);
+    auto [kB, n] = get_effective_dims(B, transB);
+    auto compute_type = enum_convert<BackendLibrary::ROCBLAS, Scalar>(precision);
+    impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+        handle.setStream(stream);
+        alignas(16) auto alpha_h = alpha;  // as cublas.cc: closures are 8-aligned
+        alignas(16) auto beta_h = beta;
+        if (A.batch_size() <= 1) {
+            call_backend<Scalar, BackendLibrary::ROCBLAS, Back>(rocblas_sgemm, rocblas_dgemm, rocblas_cgemm,
+                                                                rocblas_zgemm, handle, transA, transB,
                                 m, n, k,
                                 &alpha_h,
-                                A.data_ptr(), A.ld(), A.stride(),
-                                B.data_ptr(), B.ld(), B.stride(),
+                                A.data_ptr(), A.ld(),
+                                B.data_ptr(), B.ld(),
                                 &beta_h,
-                                C.data_ptr(), C.ld(), C.stride(),
-                                A.batch_size());
-            }
-        });
-        return ctx.create_event_after_external_work();
-    }
-
-    } // namespace backend
-
-    namespace backend {
-
-    template <Backend B, typename T>
-    Event gemv_vendor(Queue& ctx,
-        const MatrixView<T,MatrixFormat::Dense>& A,
-        const VectorView<T>& X,
-        const VectorView<T>& Y,
-        T alpha,
-        T beta,
-        Transpose transA) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::gemv, "gemv_vendor", B, A, X, Y);
-        static LinalgHandle<B> handle;
-        auto m = A.rows();
-        auto n = A.cols();
-        auto batch_size = A.batch_size();
-        impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
-            handle.setStream(stream);
-            alignas(16) auto alpha_h = alpha;  // as cublas.cc: closures are 8-aligned
-            alignas(16) auto beta_h = beta;
-            if (batch_size <= 1) {
-                call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_sgemv, rocblas_dgemv, rocblas_cgemv, rocblas_zgemv,
-                    handle, enum_convert<BackendLibrary::ROCBLAS>(transA), m, n, &alpha_h,
-                    A.data_ptr(), A.ld(), X.data_ptr(), X.inc(), &beta_h, Y.data_ptr(), Y.inc());
-            } else {
-                call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_sgemv_strided_batched, rocblas_dgemv_strided_batched,
-                    rocblas_cgemv_strided_batched, rocblas_zgemv_strided_batched,
-                    handle, enum_convert<BackendLibrary::ROCBLAS>(transA), m, n, &alpha_h,
-                    A.data_ptr(), A.ld(), A.stride(), X.data_ptr(), X.inc(), X.stride(), &beta_h, Y.data_ptr(), Y.inc(), Y.stride(), batch_size);
-            }
-        });
-        return ctx.create_event_after_external_work();
-    }
-
-    } // namespace backend
-
-    namespace backend {
-
-    template <Backend B, typename T>
-    Event trsm_vendor(Queue& ctx,
-               const MatrixView<T,MatrixFormat::Dense>& A,
-               const MatrixView<T,MatrixFormat::Dense>& Bmat,
-               Side side,
-               Uplo uplo,
-               Transpose transA,
-               Diag diag,
-               T alpha) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::trsm, "trsm_vendor", B, A, Bmat);
-        // Parameter order matches backend::trsm_vendor as cuBLAS defines it:
-        // alpha LAST, unlike the public trsm, which takes it third. The two
-        // orders coexisted for as long as each TU declared its own public trsm;
-        // now that one declaration serves every backend, they have to agree.
-
-        static LinalgHandle<B> handle;
-        auto [kB, n] = get_effective_dims(Bmat, Transpose::NoTrans);
-        auto batch_size = A.batch_size();
-        trsm_validate_params(A, Bmat, side, uplo, transA, diag);
-        impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
-            handle.setStream(stream);
-            alignas(16) auto alpha_h = alpha;  // as cublas.cc: closures are 8-aligned
-            if (batch_size == 1) {
-                call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_strsm, rocblas_dtrsm, rocblas_ctrsm, rocblas_ztrsm,
-                    handle, enum_convert<BackendLibrary::ROCBLAS>(side), enum_convert<BackendLibrary::ROCBLAS>(uplo),
-                    enum_convert<BackendLibrary::ROCBLAS>(transA), enum_convert<BackendLibrary::ROCBLAS>(diag),
-                    kB, n, &alpha_h, A.data_ptr(), A.ld(), Bmat.data_ptr(), Bmat.ld());
-            } else {
-                call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_strsm_strided_batched, rocblas_dtrsm_strided_batched,
-                    rocblas_ctrsm_strided_batched, rocblas_ztrsm_strided_batched,
-                    handle, enum_convert<BackendLibrary::ROCBLAS>(side), enum_convert<BackendLibrary::ROCBLAS>(uplo),
-                    enum_convert<BackendLibrary::ROCBLAS>(transA), enum_convert<BackendLibrary::ROCBLAS>(diag),
-                    kB, n, &alpha_h, A.data_ptr(), A.ld(), A.stride(), Bmat.data_ptr(), Bmat.ld(), Bmat.stride(), batch_size);
-            }
-        });
-        return ctx.create_event_after_external_work();
-    }
-
-    } // namespace backend
-
-    namespace backend {
-
-    template <Backend B, RealScalar T>
-    Event syrk_vendor(Queue& ctx,
-               const MatrixView<T, MatrixFormat::Dense>& A,
-               const MatrixView<T, MatrixFormat::Dense>& C,
-               T alpha,
-               T beta,
-               Uplo uplo,
-               Transpose transA) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::syrk, "syrk_vendor", B, A, C);
-        static LinalgHandle<B> handle;
-
-        const auto [n, k] = backend::shape::validate_rank_k<batchlas::invalid_argument>("syrk", A, C, transA, /*hermitian=*/false);
-
-        // The two complex slots have no callee because this overload is
-        // constrained to a real T; the complex rank-k update is herk.
-        impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
-            handle.setStream(stream);
-            alignas(16) auto alpha_h = alpha;  // as cublas.cc: closures are 8-aligned
-            alignas(16) auto beta_h = beta;
-            auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
-                                     const MatrixView<T, MatrixFormat::Dense>& C_i) {
-                call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_ssyrk, rocblas_dsyrk, nullptr, nullptr,
-                    handle, uplo, transA, n, k, &alpha_h,
-                    A_i.data_ptr(), A_i.ld(), &beta_h,
-                    C_i.data_ptr(), C_i.ld());
-            };
-
-            backend::for_each_batch_item(launch_single, A, C);
-        });
-        return ctx.create_event_after_external_work();
-    }
-
-    } // namespace backend
-
-    namespace backend {
-
-    template <Backend B, RealScalar T>
-    Event syr2k_vendor(Queue& ctx,
-                const MatrixView<T, MatrixFormat::Dense>& A,
-                const MatrixView<T, MatrixFormat::Dense>& Bmat,
-                const MatrixView<T, MatrixFormat::Dense>& C,
-                T alpha,
-                T beta,
-                Uplo uplo,
-                Transpose transA) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::syr2k, "syr2k_vendor", B, A, Bmat, C);
-        static LinalgHandle<B> handle;
-
-        const auto [n, k] = backend::shape::validate_rank_2k<batchlas::invalid_argument>("syr2k", A, Bmat, C, transA, /*hermitian=*/false);
-
-        // The two complex slots have no callee because this overload is
-        // constrained to a real T; the complex rank-2k update is her2k.
-        impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
-            handle.setStream(stream);
-            alignas(16) auto alpha_h = alpha;  // as cublas.cc: closures are 8-aligned
-            alignas(16) auto beta_h = beta;
-            auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
-                                     const MatrixView<T, MatrixFormat::Dense>& B_i,
-                                     const MatrixView<T, MatrixFormat::Dense>& C_i) {
-                call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_ssyr2k, rocblas_dsyr2k, nullptr, nullptr,
-                    handle, uplo, transA, n, k, &alpha_h,
-                    A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(), &beta_h,
-                    C_i.data_ptr(), C_i.ld());
-            };
-
-            backend::for_each_batch_item(launch_single, A, Bmat, C);
-        });
-        return ctx.create_event_after_external_work();
-    }
-
-    } // namespace backend
-
-    namespace backend {
-
-    template <Backend B, typename T>
-    Event trmm_vendor(Queue& ctx,
-               const MatrixView<T, MatrixFormat::Dense>& A,
-               const MatrixView<T, MatrixFormat::Dense>& Bmat,
-               const MatrixView<T, MatrixFormat::Dense>& C,
-               T alpha,
-               Side side,
-               Uplo uplo,
-               Transpose transA,
-               Diag diag) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::trmm, "trmm_vendor", B, A, Bmat, C);
-        static LinalgHandle<B> handle;
-
-        const auto [m, n, k] = backend::shape::validate_product<batchlas::invalid_argument>("trmm", A, Bmat, C, side);
-        static_cast<void>(k);  // rocblas_?trmm takes A's order from side, not as an argument
-
-        // ROCm >= 6.3 14-arg out-of-place form: ..., A, lda, B, ldb, C, ldc (B input, C output).
-        impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
-            handle.setStream(stream);
-            alignas(16) auto alpha_h = alpha;  // as cublas.cc: closures are 8-aligned
-            auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
-                                     const MatrixView<T, MatrixFormat::Dense>& B_i,
-                                     const MatrixView<T, MatrixFormat::Dense>& C_i) {
-                call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_strmm, rocblas_dtrmm, rocblas_ctrmm, rocblas_ztrmm,
-                    handle, side, uplo, transA, diag, m, n, &alpha_h,
-                    A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(),
-                    C_i.data_ptr(), C_i.ld());
-            };
-
-            backend::for_each_batch_item(launch_single, A, Bmat, C);
-        });
-        return ctx.create_event_after_external_work();
-    }
-
-    } // namespace backend
-
-    // Add further solver routines analogous to cuBLAS implementations using rocSOLVER
-
-    // ONLY `backend::*_vendor` rows (public ops live in src/ops/). sig::trsm_vendor is
-    // NOT sig::trsm: alpha last. evidence: docs/design/runtime-internals.md#runtime-internals-vendor-tus-instantiate-only-vendor-symbols
-    #define ROCBLAS_OPS(B, fp) \
-        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gemm_vendor) \
-        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gemv_vendor) \
-        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, trsm_vendor) \
-        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, trmm_vendor)
-
-    // syrk/syr2k: real only (no complex-symmetric wrapper; that dtype has no ROCm route).
-    // There is no complex-only table here: rocBLAS carries no symm/hemm/herk/her2k
-    // wrapper at all, which is why hemm/herk/her2k's vendor can_run refuses ROCm.
-    #define ROCBLAS_REAL_OPS(B, fp) \
-        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syrk_vendor) \
-        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syr2k_vendor)
-
-    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(ROCBLAS_OPS, Backend::ROCM)
-    BATCHLAS_FOR_EACH_REAL_TYPE_1(ROCBLAS_REAL_OPS, Backend::ROCM)
-
-    #undef ROCBLAS_OPS
-    #undef ROCBLAS_REAL_OPS
+                                C.data_ptr(), C.ld());
+        } else {
+            call_backend<Scalar, BackendLibrary::ROCBLAS, Back>(rocblas_sgemm_strided_batched,
+                                                                rocblas_dgemm_strided_batched,
+                            rocblas_cgemm_strided_batched, rocblas_zgemm_strided_batched,
+                            handle,
+                            transA, transB,
+                            m, n, k,
+                            &alpha_h,
+                            A.data_ptr(), A.ld(), A.stride(),
+                            B.data_ptr(), B.ld(), B.stride(),
+                            &beta_h,
+                            C.data_ptr(), C.ld(), C.stride(),
+                            A.batch_size());
+        }
+    });
+    return ctx.create_event_after_external_work();
 }
+
+}  // namespace backend
+
+namespace backend {
+
+template <Backend B, typename Scalar>
+Event gemv_vendor(Queue& ctx,
+    const MatrixView<Scalar, MatrixFormat::Dense>& A,
+    const VectorView<Scalar>& X,
+    const VectorView<Scalar>& Y,
+    Scalar alpha,
+    Scalar beta,
+    Transpose transA) {
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::gemv, "gemv_vendor", B, A, X, Y);
+    static LinalgHandle<B> handle;
+    auto m = A.rows();
+    auto n = A.cols();
+    auto batch_size = A.batch_size();
+    impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+        handle.setStream(stream);
+        alignas(16) auto alpha_h = alpha;  // as cublas.cc: closures are 8-aligned
+        alignas(16) auto beta_h = beta;
+        if (batch_size <= 1) {
+            call_backend<Scalar, BackendLibrary::ROCBLAS, B>(rocblas_sgemv, rocblas_dgemv, rocblas_cgemv, rocblas_zgemv,
+                handle, enum_convert<BackendLibrary::ROCBLAS>(transA), m, n, &alpha_h,
+                A.data_ptr(), A.ld(), X.data_ptr(), X.inc(), &beta_h, Y.data_ptr(), Y.inc());
+        } else {
+            call_backend<Scalar, BackendLibrary::ROCBLAS, B>(rocblas_sgemv_strided_batched,
+                                                             rocblas_dgemv_strided_batched,
+                rocblas_cgemv_strided_batched, rocblas_zgemv_strided_batched,
+                handle, enum_convert<BackendLibrary::ROCBLAS>(transA), m, n, &alpha_h,
+                A.data_ptr(), A.ld(), A.stride(), X.data_ptr(), X.inc(), X.stride(), &beta_h, Y.data_ptr(), Y.inc(), Y.stride(), batch_size);
+        }
+    });
+    return ctx.create_event_after_external_work();
+}
+
+}  // namespace backend
+
+namespace backend {
+
+template <Backend B, typename Scalar>
+Event trsm_vendor(Queue& ctx,
+           const MatrixView<Scalar, MatrixFormat::Dense>& A,
+           const MatrixView<Scalar, MatrixFormat::Dense>& Bmat,
+           Side side,
+           Uplo uplo,
+           Transpose transA,
+           Diag diag,
+           Scalar alpha) {
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::trsm, "trsm_vendor", B, A, Bmat);
+    // Parameter order matches backend::trsm_vendor as cuBLAS defines it:
+    // alpha LAST, unlike the public trsm, which takes it third. The two
+    // orders coexisted for as long as each TU declared its own public trsm;
+    // now that one declaration serves every backend, they have to agree.
+
+    static LinalgHandle<B> handle;
+    auto [kB, n] = get_effective_dims(Bmat, Transpose::NoTrans);
+    auto batch_size = A.batch_size();
+    trsm_validate_params(A, Bmat, side, uplo, transA, diag);
+    impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+        handle.setStream(stream);
+        alignas(16) auto alpha_h = alpha;  // as cublas.cc: closures are 8-aligned
+        if (batch_size == 1) {
+            call_backend<Scalar, BackendLibrary::ROCBLAS, B>(rocblas_strsm, rocblas_dtrsm, rocblas_ctrsm, rocblas_ztrsm,
+                handle, enum_convert<BackendLibrary::ROCBLAS>(side), enum_convert<BackendLibrary::ROCBLAS>(uplo),
+                enum_convert<BackendLibrary::ROCBLAS>(transA), enum_convert<BackendLibrary::ROCBLAS>(diag),
+                kB, n, &alpha_h, A.data_ptr(), A.ld(), Bmat.data_ptr(), Bmat.ld());
+        } else {
+            call_backend<Scalar, BackendLibrary::ROCBLAS, B>(rocblas_strsm_strided_batched,
+                                                             rocblas_dtrsm_strided_batched,
+                rocblas_ctrsm_strided_batched, rocblas_ztrsm_strided_batched,
+                handle, enum_convert<BackendLibrary::ROCBLAS>(side), enum_convert<BackendLibrary::ROCBLAS>(uplo),
+                enum_convert<BackendLibrary::ROCBLAS>(transA), enum_convert<BackendLibrary::ROCBLAS>(diag),
+                kB, n, &alpha_h, A.data_ptr(), A.ld(), A.stride(), Bmat.data_ptr(), Bmat.ld(), Bmat.stride(), batch_size);
+        }
+    });
+    return ctx.create_event_after_external_work();
+}
+
+}  // namespace backend
+
+namespace backend {
+
+template <Backend B, RealScalar T>
+Event syrk_vendor(Queue& ctx,
+           const MatrixView<T, MatrixFormat::Dense>& A,
+           const MatrixView<T, MatrixFormat::Dense>& C,
+           T alpha,
+           T beta,
+           Uplo uplo,
+           Transpose transA) {
+    ::batchlas::detail::refuse_batch_mask<T>(Op::syrk, "syrk_vendor", B, A, C);
+    static LinalgHandle<B> handle;
+
+    const auto [n, k] = backend::shape::validate_rank_k<batchlas::invalid_argument>("syrk", A, C, transA, /*hermitian=*/false);
+
+    // The two complex slots have no callee because this overload is
+    // constrained to a real T; the complex rank-k update is herk.
+    impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+        handle.setStream(stream);
+        alignas(16) auto alpha_h = alpha;  // as cublas.cc: closures are 8-aligned
+        alignas(16) auto beta_h = beta;
+        auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
+                                 const MatrixView<T, MatrixFormat::Dense>& C_i) {
+            call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_ssyrk, rocblas_dsyrk, nullptr, nullptr,
+                handle, uplo, transA, n, k, &alpha_h,
+                A_i.data_ptr(), A_i.ld(), &beta_h,
+                C_i.data_ptr(), C_i.ld());
+        };
+
+        backend::for_each_batch_item(launch_single, A, C);
+    });
+    return ctx.create_event_after_external_work();
+}
+
+}  // namespace backend
+
+namespace backend {
+
+template <Backend B, RealScalar T>
+Event syr2k_vendor(Queue& ctx,
+            const MatrixView<T, MatrixFormat::Dense>& A,
+            const MatrixView<T, MatrixFormat::Dense>& Bmat,
+            const MatrixView<T, MatrixFormat::Dense>& C,
+            T alpha,
+            T beta,
+            Uplo uplo,
+            Transpose transA) {
+    ::batchlas::detail::refuse_batch_mask<T>(Op::syr2k, "syr2k_vendor", B, A, Bmat, C);
+    static LinalgHandle<B> handle;
+
+    const auto [n, k] = backend::shape::validate_rank_2k<batchlas::invalid_argument>("syr2k", A, Bmat, C, transA, /*hermitian=*/false);
+
+    // The two complex slots have no callee because this overload is
+    // constrained to a real T; the complex rank-2k update is her2k.
+    impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+        handle.setStream(stream);
+        alignas(16) auto alpha_h = alpha;  // as cublas.cc: closures are 8-aligned
+        alignas(16) auto beta_h = beta;
+        auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
+                                 const MatrixView<T, MatrixFormat::Dense>& B_i,
+                                 const MatrixView<T, MatrixFormat::Dense>& C_i) {
+            call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_ssyr2k, rocblas_dsyr2k, nullptr, nullptr,
+                handle, uplo, transA, n, k, &alpha_h,
+                A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(), &beta_h,
+                C_i.data_ptr(), C_i.ld());
+        };
+
+        backend::for_each_batch_item(launch_single, A, Bmat, C);
+    });
+    return ctx.create_event_after_external_work();
+}
+
+}  // namespace backend
+
+namespace backend {
+
+template <Backend B, typename Scalar>
+Event trmm_vendor(Queue& ctx,
+           const MatrixView<Scalar, MatrixFormat::Dense>& A,
+           const MatrixView<Scalar, MatrixFormat::Dense>& Bmat,
+           const MatrixView<Scalar, MatrixFormat::Dense>& C,
+           Scalar alpha,
+           Side side,
+           Uplo uplo,
+           Transpose transA,
+           Diag diag) {
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::trmm, "trmm_vendor", B, A, Bmat, C);
+    static LinalgHandle<B> handle;
+
+    const auto [m, n, k] = backend::shape::validate_product<batchlas::invalid_argument>("trmm", A, Bmat, C, side);
+    (void)k;  // rocblas_?trmm takes A's order from side, not as an argument
+
+    // ROCm >= 6.3 14-arg out-of-place form: ..., A, lda, B, ldb, C, ldc (B input, C output).
+    impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
+        handle.setStream(stream);
+        alignas(16) auto alpha_h = alpha;  // as cublas.cc: closures are 8-aligned
+        auto launch_single = [&](const MatrixView<Scalar, MatrixFormat::Dense>& A_i,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& B_i,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& C_i) {
+            call_backend<Scalar, BackendLibrary::ROCBLAS, B>(rocblas_strmm, rocblas_dtrmm, rocblas_ctrmm, rocblas_ztrmm,
+                handle, side, uplo, transA, diag, m, n, &alpha_h,
+                A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(),
+                C_i.data_ptr(), C_i.ld());
+        };
+
+        backend::for_each_batch_item(launch_single, A, Bmat, C);
+    });
+    return ctx.create_event_after_external_work();
+}
+
+}  // namespace backend
+
+// Add further solver routines analogous to cuBLAS implementations using rocSOLVER
+
+// ONLY `backend::*_vendor` rows (public ops live in src/ops/). sig::trsm_vendor is
+// NOT sig::trsm: alpha last. evidence: docs/design/runtime-internals.md#runtime-internals-vendor-tus-instantiate-only-vendor-symbols
+#define ROCBLAS_OPS(B, fp) \
+    BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gemm_vendor) \
+    BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gemv_vendor) \
+    BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, trsm_vendor) \
+    BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, trmm_vendor)
+
+// syrk/syr2k: real only (no complex-symmetric wrapper; that dtype has no ROCm route).
+// There is no complex-only table here: rocBLAS carries no symm/hemm/herk/her2k
+// wrapper at all, which is why hemm/herk/her2k's vendor can_run refuses ROCm.
+#define ROCBLAS_REAL_OPS(B, fp) \
+    BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syrk_vendor) \
+    BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syr2k_vendor)
+
+BATCHLAS_FOR_EACH_SCALAR_TYPE_1(ROCBLAS_OPS, Backend::ROCM)
+BATCHLAS_FOR_EACH_REAL_TYPE_1(ROCBLAS_REAL_OPS, Backend::ROCM)
+
+#undef ROCBLAS_OPS
+#undef ROCBLAS_REAL_OPS
+}  // namespace batchlas
