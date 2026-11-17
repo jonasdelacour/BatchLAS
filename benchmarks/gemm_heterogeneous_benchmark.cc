@@ -40,32 +40,32 @@ inline HeterogeneousPattern make_shrinking_pattern(int max_m, int max_n, int k, 
 
     for (int batch_index = 0; batch_index < batch; ++batch_index) {
         switch (batch_index % 3) {
-        case 0:
-            pattern.a_rows[batch_index] = max_m;
-            pattern.a_cols[batch_index] = k;
-            pattern.b_rows[batch_index] = k;
-            pattern.b_cols[batch_index] = max_n;
-            pattern.c_rows[batch_index] = max_m;
-            pattern.c_cols[batch_index] = max_n;
-            pattern.total_flops += 2.0 * static_cast<double>(max_m) * static_cast<double>(max_n) * static_cast<double>(k);
-            break;
-        case 1:
-            pattern.a_rows[batch_index] = half_m;
-            pattern.a_cols[batch_index] = k;
-            pattern.b_rows[batch_index] = k;
-            pattern.b_cols[batch_index] = half_n;
-            pattern.c_rows[batch_index] = half_m;
-            pattern.c_cols[batch_index] = half_n;
-            pattern.total_flops += 2.0 * static_cast<double>(half_m) * static_cast<double>(half_n) * static_cast<double>(k);
-            break;
-        default:
-            pattern.a_rows[batch_index] = 0;
-            pattern.a_cols[batch_index] = k;
-            pattern.b_rows[batch_index] = k;
-            pattern.b_cols[batch_index] = 0;
-            pattern.c_rows[batch_index] = 0;
-            pattern.c_cols[batch_index] = 0;
-            break;
+            case 0:
+                pattern.a_rows[batch_index] = max_m;
+                pattern.a_cols[batch_index] = k;
+                pattern.b_rows[batch_index] = k;
+                pattern.b_cols[batch_index] = max_n;
+                pattern.c_rows[batch_index] = max_m;
+                pattern.c_cols[batch_index] = max_n;
+                pattern.total_flops += 2.0 * static_cast<double>(max_m) * static_cast<double>(max_n) * static_cast<double>(k);
+                break;
+            case 1:
+                pattern.a_rows[batch_index] = half_m;
+                pattern.a_cols[batch_index] = k;
+                pattern.b_rows[batch_index] = k;
+                pattern.b_cols[batch_index] = half_n;
+                pattern.c_rows[batch_index] = half_m;
+                pattern.c_cols[batch_index] = half_n;
+                pattern.total_flops += 2.0 * static_cast<double>(half_m) * static_cast<double>(half_n) * static_cast<double>(k);
+                break;
+            default:
+                pattern.a_rows[batch_index] = 0;
+                pattern.a_cols[batch_index] = k;
+                pattern.b_rows[batch_index] = k;
+                pattern.b_cols[batch_index] = 0;
+                pattern.c_rows[batch_index] = 0;
+                pattern.c_cols[batch_index] = 0;
+                break;
         }
     }
 
@@ -109,7 +109,7 @@ void run_heterogeneous_variant(minibench::State& state,
     state.SetMetric("GFLOPS", pattern.total_flops * 1e-9, minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / static_cast<double>(batch)) * 1e6, minibench::Reciprocal);
 
-    state.SetPrepare([q, A, B, C, C0]() {
+    state.SetPrepare([q, A, B, C, C0] {
         (void)A->view().set_access_device(*q);
         (void)B->view().set_access_device(*q);
         (void)C->view().set_access_device(*q);
@@ -121,11 +121,11 @@ void run_heterogeneous_variant(minibench::State& state,
         q->wait();
     });
 
-    state.SetBeforeEachRun([q, C, C0]() {
+    state.SetBeforeEachRun([q, C, C0] {
         MatrixView<float>::copy(*q, C->view(), C0->view()).wait();
     });
 
-    state.SetTimedKernelMs(bench::make_event_timed_kernel_ms(q, [q, A, B, C, env]() {
+    state.SetTimedKernelMs(bench::make_event_timed_kernel_ms(q, [q, A, B, C, env] {
         (void)gemm(*q,
                                           A->view(),
                                           B->view(),
@@ -139,11 +139,11 @@ void run_heterogeneous_variant(minibench::State& state,
 }
 
 #if BATCHLAS_HAS_CUDA_BACKEND
-static int register_cuda_heterogeneous_benchmarks = []() {
+int register_cuda_heterogeneous_benchmarks = [] {
     HeterogeneousGemmSizes(minibench::RegisterBenchmark(
         "BM_GEMM_heterogeneous_vendor<float, Backend::CUDA>",
         [](minibench::State& state) {
-            run_heterogeneous_variant(state, []() {
+            run_heterogeneous_variant(state, [] {
                 return std::make_tuple(
                     std::make_shared<ScopedEnvVar>("BATCHLAS_GEMM_ROUTE", "vendor")
                 );
@@ -153,7 +153,7 @@ static int register_cuda_heterogeneous_benchmarks = []() {
     HeterogeneousGemmSizes(minibench::RegisterBenchmark(
         "BM_GEMM_heterogeneous_native<float, Backend::CUDA>",
         [](minibench::State& state) {
-            run_heterogeneous_variant(state, []() {
+            run_heterogeneous_variant(state, [] {
                 return std::make_tuple(
                     std::make_shared<ScopedEnvVar>("BATCHLAS_GEMM_ROUTE", "native")
                 );
@@ -163,6 +163,6 @@ static int register_cuda_heterogeneous_benchmarks = []() {
 }();
 #endif
 
-} // namespace
+}  // namespace
 
 MINI_BENCHMARK_MAIN();

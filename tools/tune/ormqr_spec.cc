@@ -35,16 +35,16 @@ Transpose trans_of(const std::string& w) {
     return w == "N" ? Transpose::NoTrans : (w == "T" ? Transpose::Trans : Transpose::ConjTrans);
 }
 
-template <typename T>
+template <typename Scalar>
 struct OrmqrProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     Side side;
     Transpose trans;
     int m, k, nq, batch, lda, crows, ccols, ldc;
     std::size_t sa, sc;
-    UnifiedVector<T> A0, A, tau, C0, C;
-    UnifiedVector<T*> pA0, pA, pC0, pC;
+    UnifiedVector<Scalar> A0, A, tau, C0, C;
+    UnifiedVector<Scalar*> pA0, pA, pC0, pC;
     MV A0v, Av, C0v, Cv;
 
     OrmqrProblem(Queue& q_, Side s, Transpose t, int m_, int k_, int q_rhs, int batch_, int ld_pad)
@@ -59,11 +59,12 @@ struct OrmqrProblem {
           Cv(C.data(), crows, ccols, ldc, int(sc), batch, pC.data()) {
         (void)A0v.fill_random(q, false, 6161);
         (void)C0v.fill_random(q, false, 777);
-        UnifiedVector<std::byte> ws(std::max<std::size_t>(1, geqrf_buffer_size<kBackend, T>(q, A0v, tau.to_span())));
-        (void)geqrf<kBackend, T>(q, A0v, tau.to_span(), ws.to_span());
+        UnifiedVector<std::byte> ws(std::max<std::size_t>(1, geqrf_buffer_size<kBackend,
+                                                          Scalar>(q, A0v, tau.to_span())));
+        (void)geqrf<kBackend, Scalar>(q, A0v, tau.to_span(), ws.to_span());
         q.wait();
     }
-    std::size_t workspace() { return ormqr_buffer_size<kBackend, T>(q, Av, Cv, side, trans, tau.to_span()); }
+    std::size_t workspace() { return ormqr_buffer_size<kBackend, Scalar>(q, Av, Cv, side, trans, tau.to_span()); }
     void reset() {  // A too: a family that edits its reflectors in place must not hand the next arm its edit
         (void)MV::copy(q, Av, A0v);
         (void)MV::copy(q, Cv, C0v);
@@ -71,14 +72,14 @@ struct OrmqrProblem {
     }
     void clear_info() {}
     void run(Span<std::byte> ws) {
-        (void)ormqr<kBackend, T>(q, Av, Cv, side, trans, tau.to_span(), ws);
+        (void)ormqr<kBackend, Scalar>(q, Av, Cv, side, trans, tau.to_span(), ws);
         q.wait();
     }
     std::pair<double, int> verify() {
         using P = typename MV::promoted_type;
         using PV = MatrixView<P, MatrixFormat::Dense>;
         const auto items = Cv.default_items();
-        auto Q = MV::form_q(q, A0v, VectorView<T>(tau.data(), k, batch, 1, k), items, m);
+        auto Q = MV::form_q(q, A0v, VectorView<Scalar>(tau.data(), k, batch, 1, k), items, m);
         auto c0 = C0v.template astype<P>(items), c = Cv.template astype<P>(items);
         const Transpose nt = Transpose::NoTrans;
         const auto all = Q.all_items();
@@ -87,12 +88,6 @@ struct OrmqrProblem {
                 0};
     }
 };
-
-std::vector<std::string> ints(const auto& xs) {
-    std::vector<std::string> out;
-    for (int v : xs) out.push_back(std::to_string(v));
-    return out;
-}
 
 class OrmqrSpec final : public OpSpec {
 public:
@@ -129,9 +124,16 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
-            "src/sycl/kernel_attrs.hh",
-            "src/sycl/sscp_target.hh",
+            "include/batchlas/device/detail/kernel_attrs.hh",
+            "include/batchlas/device/detail/sscp_target.hh",
             "include/batchlas/util/group-collectives.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn_core.hh",
+            "include/batchlas/device/detail/sg_partition/backend_generic.hh",
+            "include/batchlas/device/detail/sg_partition/backend_nvptx.hh",
+            "include/batchlas/device/detail/sg_partition/backend_spirv.hh",
+            "include/batchlas/device/detail/sg_partition/backend_sscp.hh",
+            "include/batchlas/device/detail/sg_partition/sg_partition.hh",
             // family: blocked
             "src/ops/ormqr/kernels/ormqr_blocked.cc",
             "include/batchlas/internal/ormqr_blocked.hh",
@@ -146,9 +148,23 @@ public:
         // ormqr blocked's WY width and batch chunk come from tuning_params.hh; its updates call the public
         // gemm and trmm.
         // family: blocked "include/batchlas/tuning_params.hh"
-        // family: blocked "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/kernels/gemm_launch.hh" "src/ops/gemm/kernels/gemm_rows.hh" "src/ops/gemm/kernels/gemm_shard.cc.in" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/kernels/accessors.hh" "src/ops/gemm/kernels/epilogue_linear.hh" "src/ops/gemm/kernels/load_policies.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_256x128.hh" "src/ops/gemm/kernels/copy_async.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh"
+        // family: blocked "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/kernels/gemm_launch.hh" "src/ops/gemm/kernels/gemm_rows.hh" "src/ops/gemm/kernels/gemm_shard.cc.in" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_256x128.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh"
         // family: blocked "src/ops/gemm/kernels/register_launchers.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/register_wide_transposed.hh" "src/ops/gemm/kernels/small_batched.hh" "src/ops/gemm/kernels/tiled_general.hh" "src/ops/gemm/choice.hh" "src/ops/gemm/gemm.cc"
         // family: blocked "src/ops/trmm/choice.hh" "src/ops/trmm/trmm.cc" "src/ops/trmm/kernels/trmm_triangular_tiles.hh" "src/kernels/common/triangular_tiles.hh" "src/kernels/common/triangular_expand.hh" "src/backends/level3_shape.hh" "src/expansion_budget.hh"
+        // The include/batchlas/device/ headers each family's kernels include.
+        // family: blocked "include/batchlas/device.hh" "include/batchlas/device/arith.hh"
+        // family: blocked "include/batchlas/device/core.hh" "include/batchlas/device/exec.hh"
+        // family: blocked "include/batchlas/device/grid.hh" "include/batchlas/device/interop.hh"
+        // family: blocked "include/batchlas/device/lapack/larft.hh" "include/batchlas/device/lapack_aux.hh"
+        // family: blocked "include/batchlas/device/level1.hh" "include/batchlas/device/level2.hh"
+        // family: blocked "include/batchlas/device/level3.hh" "include/batchlas/device/level3/cfg.hh"
+        // family: blocked "include/batchlas/device/level3/copy_async.hh" "include/batchlas/device/level3/epilogue.hh"
+        // family: blocked "include/batchlas/device/level3/mma.hh" "include/batchlas/device/level3/packet.hh"
+        // family: blocked "include/batchlas/device/level3/pipeline.hh" "include/batchlas/device/level3/schedule.hh"
+        // family: blocked "include/batchlas/device/level3/stage.hh" "include/batchlas/device/operand.hh"
+        // family: blocked "include/batchlas/device/reduce.hh" "include/batchlas/device/scalar.hh"
+        // family: blocked "include/batchlas/device/tier.hh" "include/batchlas/device/view.hh"
+        // family: blocked "include/batchlas/device/workspace.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/ormqr_spec.cc"; }

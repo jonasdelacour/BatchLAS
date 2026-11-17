@@ -26,20 +26,20 @@ namespace {
 
 namespace H2 = ops::her2k;
 
-template <typename T>
+template <typename Scalar>
 struct Her2kProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
-    using R = float_t<T>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+    using R = float_t<Scalar>;
     Queue& q;
     int n, k, batch, lda, ldc;
     std::size_t sa, sc;
-    T alpha;
+    Scalar alpha;
     R beta;
-    UnifiedVector<T> A, B, C0, C;
+    UnifiedVector<Scalar> A, B, C0, C;
 
     Her2kProblem(Queue& q_, int n_, int k_, int batch_, int pad)
         : q(q_), n(n_), k(k_), batch(batch_), lda(n_ + pad), ldc(n_ + pad), sa(std::size_t(lda) * std::size_t(k_)),
-          sc(std::size_t(ldc) * std::size_t(n_)), alpha(T(1.25, -0.5)), beta(R(0.75)), A(sa * std::size_t(batch_)),
+          sc(std::size_t(ldc) * std::size_t(n_)), alpha(Scalar(1.25, -0.5)), beta(R(0.75)), A(sa * std::size_t(batch_)),
           B(sa * std::size_t(batch_)), C0(sc * std::size_t(batch_)), C(sc * std::size_t(batch_)) {
         (void)view(A, n, k, lda, sa).fill_random(q, false, 9191);
         (void)view(B, n, k, lda, sa).fill_random(q, false, 9192);
@@ -47,12 +47,13 @@ struct Her2kProblem {
         q.wait();
         for (int b = 0; b < batch; ++b)
             for (int c = 0; c < n; ++c) {
-                T* col = C0.data() + std::size_t(b) * sc + std::size_t(c) * std::size_t(ldc);
-                col[c] = T(col[c].real(), R(0));
-                for (int r = 0; r < c; ++r) col[r] = T(1e6, -1e6);
+                Scalar* col = C0.data() + std::size_t(b) * sc + std::size_t(c) * std::size_t(ldc);
+                col[c] = Scalar(col[c].real(), R(0));
+                for (int r = 0; r < c; ++r) col[r] = Scalar(1e6, -1e6);
             }
     }
-    MV view(UnifiedVector<T>& v, int r, int c, int ld, std::size_t s) { return MV(v.data(), r, c, ld, int(s), batch); }
+    MV view(UnifiedVector<Scalar>& v, int r, int c, int ld,
+            std::size_t s) { return MV(v.data(), r, c, ld, int(s), batch); }
     void reset() {  // beta != 0 accumulates into C
         (void)MV::copy(q, view(C, n, n, ldc, sc), view(C0, n, n, ldc, sc));
         q.wait();
@@ -64,8 +65,8 @@ struct Her2kProblem {
     }
     void clear_info() {}
     void run(Span<std::byte>) {
-        (void)her2k<kBackend, T>(q, view(A, n, k, lda, sa), view(B, n, k, lda, sa), view(C, n, n, ldc, sc), alpha,
-                                 beta, Uplo::Lower, Transpose::NoTrans);
+        (void)her2k<kBackend, Scalar>(q, view(A, n, k, lda, sa), view(B, n, k, lda, sa), view(C, n, n, ldc, sc), alpha,
+                                      beta, Uplo::Lower, Transpose::NoTrans);
         q.wait();
     }
     std::pair<double, int> verify() {
@@ -78,16 +79,10 @@ struct Her2kProblem {
             }
         return {MV::rank2k_backward_error(q, view(A, n, k, lda, sa), view(B, n, k, lda, sa), Transpose::NoTrans,
                                           view(C0, n, n, ldc, sc), view(C, n, n, ldc, sc), Uplo::Lower, MV::up(alpha),
-                                          MV::up(T(beta)), true),
+                                          MV::up(Scalar(beta)), true),
                 touched};
     }
 };
-
-std::vector<std::string> ints(const auto& xs) {
-    std::vector<std::string> out;
-    for (int v : xs) out.push_back(std::to_string(v));
-    return out;
-}
 
 class Her2kSpec final : public OpSpec {
 public:
@@ -106,9 +101,16 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
-            "src/sycl/kernel_attrs.hh",
-            "src/sycl/sscp_target.hh",
+            "include/batchlas/device/detail/kernel_attrs.hh",
+            "include/batchlas/device/detail/sscp_target.hh",
             "include/batchlas/util/group-collectives.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn_core.hh",
+            "include/batchlas/device/detail/sg_partition/backend_generic.hh",
+            "include/batchlas/device/detail/sg_partition/backend_nvptx.hh",
+            "include/batchlas/device/detail/sg_partition/backend_spirv.hh",
+            "include/batchlas/device/detail/sg_partition/backend_sscp.hh",
+            "include/batchlas/device/detail/sg_partition/sg_partition.hh",
             // family: triangular
             "src/ops/syr2k/kernels/syr2k_triangular_tiles.hh",
             "src/kernels/common/triangular_tiles.hh",
@@ -118,12 +120,33 @@ public:
             // common
             "src/ops/her2k/choice.hh",
             "src/ops/her2k/route.hh",
+            "include/batchlas/device.hh",
+            "include/batchlas/device/arith.hh",
+            "include/batchlas/device/core.hh",
+            "include/batchlas/device/exec.hh",
+            "include/batchlas/device/grid.hh",
+            "include/batchlas/device/interop.hh",
+            "include/batchlas/device/lapack_aux.hh",
+            "include/batchlas/device/level1.hh",
+            "include/batchlas/device/level2.hh",
+            "include/batchlas/device/level3.hh",
+            "include/batchlas/device/operand.hh",
+            "include/batchlas/device/reduce.hh",
+            "include/batchlas/device/scalar.hh",
+            "include/batchlas/device/tier.hh",
+            "include/batchlas/device/view.hh",
+            "include/batchlas/device/workspace.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin
         // common "src/ops/her2k/her2k.cc"
         // her2k fold calls the public gemm: its native kernels and can_run count too.
         // family: fold "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/kernels/gemm_launch.hh" "src/ops/gemm/kernels/gemm_rows.hh" "src/ops/gemm/kernels/gemm_shard.cc.in" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/choice.hh" "src/ops/gemm/gemm.cc"
+        // The include/batchlas/device/ headers each family's kernels include.
+        // family: fold "include/batchlas/device/level3/cfg.hh" "include/batchlas/device/level3/copy_async.hh"
+        // family: fold "include/batchlas/device/level3/epilogue.hh" "include/batchlas/device/level3/mma.hh"
+        // family: fold "include/batchlas/device/level3/packet.hh" "include/batchlas/device/level3/pipeline.hh"
+        // family: fold "include/batchlas/device/level3/schedule.hh" "include/batchlas/device/level3/stage.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/her2k_spec.cc"; }

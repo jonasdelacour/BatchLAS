@@ -29,7 +29,7 @@ namespace batchlas {
 /// own work by the queue itself (for the default in-order Queue, after everything already
 /// submitted). Its context and device are the ones BatchLAS allocates against, so
 /// `get_context()` on it is the right context for USM that BatchLAS should read.
-/// @param ctx the Queue; must not be moved-from
+/// @param[in] ctx the Queue; must not be moved-from
 /// @return the underlying queue. Do not destroy it, hold it past `ctx`'s lifetime, or submit to
 ///         it from another thread.
 /// @ingroup api_core
@@ -41,9 +41,9 @@ BATCHLAS_API sycl::queue& sycl_queue(const Queue& ctx);
 /// The returned Queue is a root Queue like `Queue(Device)`: it has its own SYCL queue, arena and
 /// event chain, and constructing it closes batchlas::configure(). The Queue does not own `ctx`;
 /// SYCL keeps it alive as long as the Queue exists.
-/// @param ctx      the caller's context; must contain `dev`
-/// @param dev      one of the root devices BatchLAS enumerates (`Device::get_devices(type)`)
-/// @param in_order true (default) for an in-order queue
+/// @param[in] ctx      the caller's context; must contain `dev`
+/// @param[in] dev      one of the root devices BatchLAS enumerates (`Device::get_devices(type)`)
+/// @param[in] in_order true (default) for an in-order queue
 /// @return a Queue whose `sycl_queue(q).get_context() == ctx`
 /// @throws batchlas::device_error if `dev` is not one of Device::get_devices(type) (for example a
 ///         sub-device from `create_sub_devices`) or is not part of `ctx`
@@ -54,7 +54,7 @@ BATCHLAS_API Queue queue_from_sycl(const sycl::context& ctx, const sycl::device&
 ///
 /// For handing BatchLAS's work to SYCL code: `depends_on()`, `wait_and_throw()`, a barrier on
 /// another queue.
-/// @param event the BatchLAS event
+/// @param[in] event the BatchLAS event
 /// @return the underlying event, or a default-constructed (already complete) `sycl::event` when
 ///         `event` is default-constructed or moved-from
 /// @ingroup api_core
@@ -71,7 +71,7 @@ BATCHLAS_API sycl::event sycl_event(const Event& event);
 /// @endcode
 /// In the other direction, `sycl_event(ctx.get_event())` hands another queue an event to depend
 /// on.
-/// @param event the foreign event
+/// @param[in] event the foreign event
 /// @return an Event that Queue::enqueue() accepts
 /// @pre Both queues live in the same SYCL context.
 /// @ingroup api_core

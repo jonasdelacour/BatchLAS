@@ -46,30 +46,30 @@ std::string label(const Shape& s) {
 }
 
 // A padded strided vector: n values per item at inc 1, `pad` slots apart beyond n.
-template <typename T>
+template <typename Real>
 struct Strided {
-    UnifiedVector<T> store;
+    UnifiedVector<Real> store;
     int n, batch, stride;
     Strided(int n_, int batch_, int pad) : store(std::size_t(std::max(1, n_ + pad)) * batch_), n(n_), batch(batch_), stride(n_ + pad) {}
-    VectorView<T> view() const { return VectorView<T>(store.data(), n, batch, 1, stride); }
+    VectorView<Real> view() const { return VectorView<Real>(store.data(), n, batch, 1, stride); }
     mc::Output output(std::string name) const {
-        return {std::move(name), reinterpret_cast<const std::byte*>(store.data()), sizeof(T) * std::size_t(n),
-                sizeof(T) * std::size_t(stride)};
+        return {std::move(name), reinterpret_cast<const std::byte*>(store.data()), sizeof(Real) * std::size_t(n),
+                sizeof(Real) * std::size_t(stride)};
     }
 };
 
-template <typename T, Backend B>
+template <typename Real, Backend B>
 struct Problem {
     Queue& q;
     Shape s;
-    SteqrParams<T> params;
-    Strided<T> d, e, w;
-    Matrix<T> Z;
+    SteqrParams<Real> params;
+    Strided<Real> d, e, w;
+    Matrix<Real> Z;
     UnifiedVector<int32_t> info;
 
     Problem(Queue& queue, const Shape& shape)
         : q(queue), s(shape), d(s.n, s.batch, 3), e(s.n - 1, s.batch, 2), w(s.n, s.batch, 5),
-          Z(test_support::padded<T>(s.n, s.n, s.batch)), info(std::size_t(s.batch)) {
+          Z(test_support::padded<Real>(s.n, s.n, s.batch)), info(std::size_t(s.batch)) {
         params.sort = s.sort;
     }
 
@@ -78,18 +78,19 @@ struct Problem {
         for (int b = 0; b < s.batch; ++b) {
             const int item = s.identical ? 0 : b;
             for (int i = 0; i < s.n; ++i)
-                d.store[std::size_t(b) * d.stride + i] = T(std::ldexp(1.0 + 0.1 * ((i * 7 + item * 3) % 11), -(i % 6)));
+                d.store[std::size_t(b) * d.stride + i] = Real(std::ldexp(1.0 + 0.1 * ((i * 7 + item * 3) % 11),
+                                                                         -(i % 6)));
             for (int i = 0; i + 1 < s.n; ++i)
-                e.store[std::size_t(b) * e.stride + i] = T(0.25 + 0.05 * ((i * 5 + item) % 7));
+                e.store[std::size_t(b) * e.stride + i] = Real(0.25 + 0.05 * ((i * 5 + item) % 7));
         }
-        std::fill_n(w.store.data(), w.store.size(), test_support::poison<T>());
-        std::fill_n(Z.data_ptr(), std::size_t(Z.stride()) * s.batch, test_support::poison<T>());
+        std::fill_n(w.store.data(), w.store.size(), test_support::poison<Real>());
+        std::fill_n(Z.data_ptr(), std::size_t(Z.stride()) * s.batch, test_support::poison<Real>());
         std::fill_n(info.data(), info.size(), int32_t(-7));
     }
 
     size_t buffer(Span<const std::uint8_t> m) {
-        return steqr_buffer_size<T>(q, d.view().with_batch_mask(m), e.view().with_batch_mask(m), w.view().with_batch_mask(m),
-                                    s.jobz, params);
+        return steqr_buffer_size<Real>(q, d.view().with_batch_mask(m), e.view().with_batch_mask(m), w.view().with_batch_mask(m),
+                                       s.jobz, params);
     }
 
     void run(Span<const std::uint8_t> m, Span<std::byte> ws) {
@@ -97,11 +98,11 @@ struct Problem {
         const auto Zv = Z.view().with_batch_mask(rest);
         const Span<int32_t> inf(info.data(), info.size());
         if (s.cta)
-            (void)steqr_cta<B, T>(q, d.view().with_batch_mask(m), e.view().with_batch_mask(rest), w.view().with_batch_mask(rest),
-                                  ws, s.jobz, params, Zv, inf);
+            (void)steqr_cta<B, Real>(q, d.view().with_batch_mask(m), e.view().with_batch_mask(rest), w.view().with_batch_mask(rest),
+                                     ws, s.jobz, params, Zv, inf);
         else
-            (void)steqr<B, T>(q, d.view().with_batch_mask(m), e.view().with_batch_mask(rest), w.view().with_batch_mask(rest),
-                              ws, s.jobz, params, Zv, inf);
+            (void)steqr<B, Real>(q, d.view().with_batch_mask(m), e.view().with_batch_mask(rest), w.view().with_batch_mask(rest),
+                                 ws, s.jobz, params, Zv, inf);
     }
 
     mc::Case make_case() {
@@ -127,9 +128,9 @@ struct Problem {
     }
 };
 
-template <typename T, Backend B>
+template <typename Real, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Real;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types_filtered<Cfg, false>::type;

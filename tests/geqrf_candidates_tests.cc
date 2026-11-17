@@ -49,12 +49,12 @@ namespace {
 namespace gq = batchlas::ops::geqrf;
 using C = gq::GeqrfChoice;
 using Pin = select::ScopedPin<C>;
-template <typename T>
-using MVof = MatrixView<T, MatrixFormat::Dense>;
-template <typename T>
-using RealOf = typename batchlas::base_type<T>::type;
-template <typename T>
-constexpr bool kCx = test_utils::is_complex<T>::value;
+template <typename Scalar>
+using MVof = MatrixView<Scalar, MatrixFormat::Dense>;
+template <typename Scalar>
+using RealOf = typename batchlas::base_type<Scalar>::type;
+template <typename Scalar>
+constexpr bool kCx = test_utils::is_complex<Scalar>::value;
 
 using test_support::same_bits;
 
@@ -66,28 +66,28 @@ struct Spec {
 
 // A at a padded ld and a stride that is not ld * n, inside a buffer of large finite poison: a
 // kernel that reads the pad gets a wrong answer, one that writes it is caught bit for bit.
-template <typename T>
+template <typename Scalar>
 struct Qr {
     Spec s;
     int ld = 0, stride = 0;
-    UnifiedVector<T> mem, tau;
-    std::vector<T> mem0;
-    UnifiedVector<T*> ptrs;  // the vendor geqrf is a pointer-array API
+    UnifiedVector<Scalar> mem, tau;
+    std::vector<Scalar> mem0;
+    UnifiedVector<Scalar*> ptrs;  // the vendor geqrf is a pointer-array API
 
-    MVof<T> A() { return {mem.data(), s.m, s.n, ld, stride, s.batch, ptrs.data()}; }
+    MVof<Scalar> A() { return {mem.data(), s.m, s.n, ld, stride, s.batch, ptrs.data()}; }
     std::size_t at(int it, int i, int j) const { return std::size_t(it) * stride + std::size_t(j) * ld + i; }
     int k() const { return std::min(s.m, s.n); }
 };
 
-template <typename T>
-Qr<T> make_qr(const Spec& s) {
-    Qr<T> p;
+template <typename Scalar>
+Qr<Scalar> make_qr(const Spec& s) {
+    Qr<Scalar> p;
     p.s = s;
     p.ld = s.m + 3;
     p.stride = p.ld * s.n + 7;
-    p.mem = UnifiedVector<T>(std::size_t(p.stride) * s.batch + 5, MVof<T>::make(-9.75e3, 4.5e3));
-    p.tau = UnifiedVector<T>(std::size_t(std::max(1, p.k())) * s.batch, MVof<T>::make(-12345.0, -12345.0));
-    p.ptrs = UnifiedVector<T*>(s.batch, nullptr);
+    p.mem = UnifiedVector<Scalar>(std::size_t(p.stride) * s.batch + 5, MVof<Scalar>::make(-9.75e3, 4.5e3));
+    p.tau = UnifiedVector<Scalar>(std::size_t(std::max(1, p.k())) * s.batch, MVof<Scalar>::make(-12345.0, -12345.0));
+    p.ptrs = UnifiedVector<Scalar*>(s.batch, nullptr);
     std::mt19937 gen(s.seed);
     std::uniform_real_distribution<double> u(-1.0, 1.0);
     const int reps = s.period > 0 ? std::min(s.period, s.batch) : s.batch;
@@ -96,7 +96,7 @@ Qr<T> make_qr(const Spec& s) {
             for (int i = 0; i < s.m; ++i)
                 if (it < reps) {
                     const auto re = u(gen), im = u(gen);
-                    p.mem[p.at(it, i, j)] = MVof<T>::make(re, im);
+                    p.mem[p.at(it, i, j)] = MVof<Scalar>::make(re, im);
                 } else {
                     p.mem[p.at(it, i, j)] = p.mem[p.at(it % reps, i, j)];
                 }
@@ -163,9 +163,9 @@ std::string traced_choice(F&& run, std::string* all = nullptr) {
 
 using test_support::TableGuard;
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;
@@ -190,8 +190,8 @@ protected:
         const auto lm = std::size_t(this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
         return lm > 4096 ? lm - 4096 : 0;
     }
-    int tiny_max() const { return sycl_geqrf::geqrf_tiny_max_n_for_slm<T>(budget()); }
-    bool cta_fits(int m, int n) const { return sycl_geqrf::geqrf_cta_fits<T>(m, n, budget()); }
+    int tiny_max() const { return ops::geqrf::geqrf_tiny_max_n_for_slm<T>(budget()); }
+    bool cta_fits(int m, int n) const { return ops::geqrf::geqrf_cta_fits<T>(m, n, budget()); }
     int cta_max_square() const {
         int best = 0;
         for (int n = 1; n <= 4096 && cta_fits(n, n); ++n) best = n;
@@ -204,13 +204,13 @@ protected:
         if (m < 1 || n < 1) return false;
         if (std::holds_alternative<gq::Tiny>(c)) return m == n && n <= tiny_max();
         if (std::holds_alternative<gq::Cta>(c)) return cta_fits(m, n);
-        return sycl_geqrf::geqrf_blocked_available<T>() && sycl_geqrf::geqrf_cta_max_elems_for_slm<T>(budget()) >= 1;
+        return ops::geqrf::geqrf_cta_max_elems_for_slm<T>(budget()) >= 1;
     }
     // The Vendor choice spells the class word `vendor`, which falls back to Auto where no vendor
     // can run, instead of throwing (§5.3).
     static bool vendor_word_falls_back(const C& c) { return std::holds_alternative<gq::Vendor>(c) && !kVendor; }
 
-    sycl_geqrf::GeqrfTrailingGemm<T> seam() const {
+    ops::geqrf::GeqrfTrailingGemm<T> seam() const {
         return [](Queue& c, const MV& ga, const MV& gb, const MV& gc, T a, T b, Transpose ta, Transpose tb,
                   ComputePrecision pr) { return gemm<B, T>(c, ga, gb, gc, a, b, ta, tb, pr); };
     }
@@ -258,16 +258,16 @@ protected:
         const MV A = p.A();
         try {
             std::size_t ws = 0;
-            if (std::holds_alternative<gq::Tiny>(c)) ws = sycl_geqrf::geqrf_tiny_buffer_size<T>(q, A);
-            else if (std::holds_alternative<gq::Cta>(c)) ws = sycl_geqrf::geqrf_cta_buffer_size<T>(q, A);
-            else if (std::holds_alternative<gq::Blocked>(c)) ws = sycl_geqrf::geqrf_blocked_buffer_size<T>(q, A);
+            if (std::holds_alternative<gq::Tiny>(c)) ws = ops::geqrf::geqrf_tiny_buffer_size<T>(q, A);
+            else if (std::holds_alternative<gq::Cta>(c)) ws = ops::geqrf::geqrf_cta_buffer_size<T>(q, A);
+            else if (std::holds_alternative<gq::Blocked>(c)) ws = ops::geqrf::geqrf_blocked_buffer_size<T>(q, A);
             UnifiedVector<std::byte> w(std::max<std::size_t>(1, ws));
             if (std::holds_alternative<gq::Tiny>(c)) {
-                (void)sycl_geqrf::geqrf_tiny_dispatch<T>(q, A, p.tau.to_span(), w.to_span());
+                (void)ops::geqrf::geqrf_tiny_dispatch<T>(q, A, p.tau.to_span(), w.to_span());
             } else if (std::holds_alternative<gq::Cta>(c)) {
-                (void)sycl_geqrf::geqrf_cta_dispatch<T>(q, A, p.tau.to_span(), w.to_span());
+                (void)ops::geqrf::geqrf_cta_dispatch<T>(q, A, p.tau.to_span(), w.to_span());
             } else if (std::holds_alternative<gq::Blocked>(c)) {
-                (void)sycl_geqrf::geqrf_blocked_dispatch<T>(q, A, p.tau.to_span(), w.to_span(), seam());
+                (void)ops::geqrf::geqrf_blocked_dispatch<T>(q, A, p.tau.to_span(), w.to_span(), seam());
             } else {
                 if constexpr (kVendor) {
                     UnifiedVector<std::byte> vw(std::max<std::size_t>(
@@ -799,14 +799,13 @@ TEST(GeqrfTranscribedTable, RowsHoldTheTranscribedPreference) {
 
 // can_run's device clauses on a synthetic select::Device, host-only: every GPU here has
 // sub-group size 32 and SLM for a CTA element, so the queue-driven tests cannot break them.
-template <typename T>
+template <typename Scalar>
 class GeqrfCanRunDevice : public ::testing::Test {};
 using ScalarTypes = ::testing::Types<float, double, std::complex<float>, std::complex<double>>;
 TYPED_TEST_SUITE(GeqrfCanRunDevice, ScalarTypes);
 
 TYPED_TEST(GeqrfCanRunDevice, DeviceClausesRefuseTheNativeFamilies) {
     using T = TypeParam;
-    if (!sycl_geqrf::geqrf_blocked_available<T>()) GTEST_SKIP() << "no blocked tier compiled";
     select::Device ok;
     ok.is_gpu = ok.has_sg32 = true;
     ok.slm_budget = 97280;
@@ -825,7 +824,7 @@ TYPED_TEST(GeqrfCanRunDevice, DeviceClausesRefuseTheNativeFamilies) {
 
     // Blocked needs one CTA element of SLM, not the fit: straddle the smallest such budget.
     std::int64_t lo = 0;
-    while (lo < 97280 && sycl_geqrf::geqrf_cta_max_elems_for_slm<T>(std::size_t(lo)) < 1) ++lo;
+    while (lo < 97280 && ops::geqrf::geqrf_cta_max_elems_for_slm<T>(std::size_t(lo)) < 1) ++lo;
     ASSERT_GT(lo, 0) << "a zero budget already holds a CTA element";
     ASSERT_LT(lo, 97280);
     auto starved = ok;  starved.slm_budget = lo - 1;

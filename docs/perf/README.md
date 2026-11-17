@@ -34,7 +34,7 @@ a throw.
 
 ## perf index: measurement rules
 
-- **At saturation** (batch >= 128). Below it a ratio measures overhead; a page says so beside such a number.
+- **At saturation** (batch \f$\ge 128\f$). Below it a ratio measures overhead; a page says so beside such a number.
 - **One harness on the box at a time.** A sweep on the other 4090 once read a cell 5.5x slow with no
   foreign process visible and `rel_sd` under 0.02.
 - **JIT warmed**, medians of interleaved A/B, cells over a relative-sd gate discarded; the tuner

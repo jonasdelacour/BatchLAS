@@ -16,7 +16,7 @@
 
 namespace batchlas {
 struct Queue;  // the worker's, one per process: run_cell takes it, so the spec stays SYCL-free
-}
+}  // namespace batchlas
 
 namespace batchlas::tune {
 

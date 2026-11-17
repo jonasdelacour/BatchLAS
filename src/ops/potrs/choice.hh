@@ -18,13 +18,13 @@ struct Trsm : select::NoFields<"trsm"> {};    ///< two public trsm calls, each c
 
 using PotrsChoice = std::variant<Fused, Trsm>;  ///< fieldless: the fused solve derives its own launch shape
 
-template <class T>  /// Tie-break order (§6.3): native first, the general family last. No vendor family exists.
+template <class Scalar>  /// Tie-break order (§6.3): native first, the general family last. No vendor family exists.
 constexpr auto candidates() { return select::all_of<PotrsChoice>(); }
 
 inline constexpr std::array<std::string_view, 1> last_resort{"trsm"};  ///< runs every homogeneous call
 inline constexpr select::OpSpec spec{Op::potrs, select::Lib::none, {last_resort}};  ///< the trsm children report errors
 
-inline constexpr std::array<std::string_view, 4> key_names{  ///< work ~ n^2 nrhs batch
+inline constexpr std::array<std::string_view, 4> key_names{  ///< work \f$\sim n^2 \cdot \mathit{nrhs} \cdot \mathit{batch}\f$
     "uplo:exact", "n:log:2", "nrhs:log", "batch:log"};
 
 /// The fused accumulator buckets (1, 2, 4, 8) and their midpoints; above 8 only `trsm` runs.

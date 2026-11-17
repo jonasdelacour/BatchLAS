@@ -41,6 +41,7 @@ public:
     virtual ~exception() = default;
 
     /// @brief The exception's message; the same string `what()` returns on the `std::` base.
+    /// @return null-terminated message, valid for the lifetime of the exception object
     virtual const char* message() const noexcept = 0;
 
     // Public so no access check stands between a leaf's implicit copy ctor and this virtual base.
@@ -76,8 +77,12 @@ public:
 /// @ingroup api_errors
 class BATCHLAS_API invalid_argument : public detail::exception_bridge<std::invalid_argument> {
 public:
+    /// @brief An exception carrying @p what_arg.
+    /// @param[in] what_arg  message returned by `what()` and message()
     explicit invalid_argument(const std::string& what_arg)
         : detail::exception_bridge<std::invalid_argument>(what_arg) {}
+    /// @brief An exception carrying @p what_arg.
+    /// @param[in] what_arg  null-terminated message returned by `what()` and message()
     explicit invalid_argument(const char* what_arg)
         : detail::exception_bridge<std::invalid_argument>(what_arg) {}
 };
@@ -90,8 +95,12 @@ public:
 /// @ingroup api_errors
 class BATCHLAS_API out_of_range : public detail::exception_bridge<std::out_of_range> {
 public:
+    /// @brief An exception carrying @p what_arg.
+    /// @param[in] what_arg  message returned by `what()` and message()
     explicit out_of_range(const std::string& what_arg)
         : detail::exception_bridge<std::out_of_range>(what_arg) {}
+    /// @brief An exception carrying @p what_arg.
+    /// @param[in] what_arg  null-terminated message returned by `what()` and message()
     explicit out_of_range(const char* what_arg)
         : detail::exception_bridge<std::out_of_range>(what_arg) {}
 };
@@ -103,8 +112,12 @@ public:
 /// @ingroup api_errors
 class BATCHLAS_API error : public detail::exception_bridge<std::runtime_error> {
 public:
+    /// @brief An exception carrying @p what_arg.
+    /// @param[in] what_arg  message returned by `what()` and message()
     explicit error(const std::string& what_arg)
         : detail::exception_bridge<std::runtime_error>(what_arg) {}
+    /// @brief An exception carrying @p what_arg.
+    /// @param[in] what_arg  null-terminated message returned by `what()` and message()
     explicit error(const char* what_arg)
         : detail::exception_bridge<std::runtime_error>(what_arg) {}
 };
@@ -121,7 +134,11 @@ public:
 /// @ingroup api_errors
 class BATCHLAS_API unsupported : public error {
 public:
+    /// @brief An exception carrying @p what_arg.
+    /// @param[in] what_arg  message returned by `what()` and message()
     explicit unsupported(const std::string& what_arg) : error(what_arg) {}
+    /// @brief An exception carrying @p what_arg.
+    /// @param[in] what_arg  null-terminated message returned by `what()` and message()
     explicit unsupported(const char* what_arg) : error(what_arg) {}
 };
 
@@ -137,7 +154,11 @@ public:
 /// @ingroup api_errors
 class BATCHLAS_API device_error : public error {
 public:
+    /// @brief An exception carrying @p what_arg.
+    /// @param[in] what_arg  message returned by `what()` and message()
     explicit device_error(const std::string& what_arg) : error(what_arg) {}
+    /// @brief An exception carrying @p what_arg.
+    /// @param[in] what_arg  null-terminated message returned by `what()` and message()
     explicit device_error(const char* what_arg) : error(what_arg) {}
 };
 
@@ -152,7 +173,11 @@ public:
 /// @ingroup api_errors
 class BATCHLAS_API workspace_error : public error {
 public:
+    /// @brief An exception carrying @p what_arg.
+    /// @param[in] what_arg  message returned by `what()` and message()
     explicit workspace_error(const std::string& what_arg) : error(what_arg) {}
+    /// @brief An exception carrying @p what_arg.
+    /// @param[in] what_arg  null-terminated message returned by `what()` and message()
     explicit workspace_error(const char* what_arg) : error(what_arg) {}
 };
 
@@ -169,7 +194,11 @@ public:
 /// @ingroup api_errors
 class BATCHLAS_API convergence_error : public error {
 public:
+    /// @brief An exception carrying @p what_arg.
+    /// @param[in] what_arg  message returned by `what()` and message()
     explicit convergence_error(const std::string& what_arg) : error(what_arg) {}
+    /// @brief An exception carrying @p what_arg.
+    /// @param[in] what_arg  null-terminated message returned by `what()` and message()
     explicit convergence_error(const char* what_arg) : error(what_arg) {}
 };
 
@@ -184,7 +213,11 @@ public:
 /// @ingroup api_errors
 class BATCHLAS_API internal_error : public error {
 public:
+    /// @brief An exception carrying @p what_arg.
+    /// @param[in] what_arg  message returned by `what()` and message()
     explicit internal_error(const std::string& what_arg) : error(what_arg) {}
+    /// @brief An exception carrying @p what_arg.
+    /// @param[in] what_arg  null-terminated message returned by `what()` and message()
     explicit internal_error(const char* what_arg) : error(what_arg) {}
 };
 
@@ -199,7 +232,11 @@ public:
 /// @ingroup api_errors
 class BATCHLAS_API api_misuse : public error {
 public:
+    /// @brief An exception carrying @p what_arg.
+    /// @param[in] what_arg  message returned by `what()` and message()
     explicit api_misuse(const std::string& what_arg) : error(what_arg) {}
+    /// @brief An exception carrying @p what_arg.
+    /// @param[in] what_arg  null-terminated message returned by `what()` and message()
     explicit api_misuse(const char* what_arg) : error(what_arg) {}
 };
 

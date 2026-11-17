@@ -28,28 +28,25 @@ inline void HtevDxCompareBenchSizesNetlib(Benchmark* b) {
     HtevDxCompareBenchSizes(b);
 }
 
-} // namespace
-
 // ── STEQR ────────────────────────────────────────────────────────────────────
 
-template <typename T, Backend B>
-static void BM_HTEV_STEQR(minibench::State& state) {
+template <typename Real, Backend B>
+void BM_HTEV_STEQR(minibench::State& state) {
     const size_t n     = state.range(0);
     const size_t batch = state.range(1);
 
     JobType jobz = JobType::EigenVectors;
 
-    SteqrParams<T> params;
-    params.cta_update_scheme = SteqrUpdateScheme::EXP;
+    SteqrParams<Real> params;
     params.back_transform    = false;
 
     auto q         = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    auto diags     = Vector<T>::random(static_cast<int>(n), static_cast<int>(batch));
-    auto off_diags = Vector<T>::random(static_cast<int>(n - 1), static_cast<int>(batch));
-    auto eigvals   = Vector<T>::zeros(static_cast<int>(n), static_cast<int>(batch));
-    auto eigvects  = Matrix<T>::Identity(static_cast<int>(n), static_cast<int>(batch));
+    auto diags     = Vector<Real>::random(static_cast<int>(n), static_cast<int>(batch));
+    auto off_diags = Vector<Real>::random(static_cast<int>(n - 1), static_cast<int>(batch));
+    auto eigvals   = Vector<Real>::zeros(static_cast<int>(n), static_cast<int>(batch));
+    auto eigvects  = Matrix<Real>::Identity(static_cast<int>(n), static_cast<int>(batch));
 
-    const size_t ws_size = steqr_buffer_size<T>(*q, diags, off_diags, eigvals, jobz, params);
+    const size_t ws_size = steqr_buffer_size<Real>(*q, diags, off_diags, eigvals, jobz, params);
     UnifiedVector<std::byte> ws(ws_size);
 
     state.SetKernel(q,
@@ -69,30 +66,30 @@ static void BM_HTEV_STEQR(minibench::State& state) {
 
 // ── STEDC ────────────────────────────────────────────────────────────────────
 
-template <typename T, Backend B>
-static void BM_HTEV_STEDC(minibench::State& state) {
+template <typename Real, Backend B>
+void BM_HTEV_STEDC(minibench::State& state) {
     const size_t n     = state.range(0);
     const size_t batch = state.range(1);
 
     JobType jobz = JobType::EigenVectors;
 
-    StedcParams<T> params;
+    StedcParams<Real> params;
 
     auto q         = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    auto diags     = Vector<T>::random(static_cast<int>(n), static_cast<int>(batch));
-    auto off_diags = Vector<T>::random(static_cast<int>(n - 1), static_cast<int>(batch));
-    auto eigvals   = Vector<T>::zeros(static_cast<int>(n), static_cast<int>(batch));
-    auto eigvects  = Matrix<T>::Identity(static_cast<int>(n), static_cast<int>(batch));
+    auto diags     = Vector<Real>::random(static_cast<int>(n), static_cast<int>(batch));
+    auto off_diags = Vector<Real>::random(static_cast<int>(n - 1), static_cast<int>(batch));
+    auto eigvals   = Vector<Real>::zeros(static_cast<int>(n), static_cast<int>(batch));
+    auto eigvects  = Matrix<Real>::Identity(static_cast<int>(n), static_cast<int>(batch));
 
     UnifiedVector<std::byte> ws(stedc_buffer_size(*q, n, batch, jobz, params));
 
     // stedc has a non-standard calling convention; use a capturing lambda and
     // omit the leading Queue& parameter (the adapter will call k(xs...) form).
     auto kernel = [q](auto& d_arg, auto& e_arg, auto& w_arg, auto& ws_arg,
-                      JobType jz, StedcParams<T> p, auto& z_arg) {
-        auto d = static_cast<VectorView<T>>(d_arg);
-        auto e = static_cast<VectorView<T>>(e_arg);
-        auto w = static_cast<VectorView<T>>(w_arg);
+                      JobType jz, StedcParams<Real> p, auto& z_arg) {
+        auto d = static_cast<VectorView<Real>>(d_arg);
+        auto e = static_cast<VectorView<Real>>(e_arg);
+        auto w = static_cast<VectorView<Real>>(w_arg);
         auto Z = z_arg.view();
         (void)stedc(*q, d, e, w, ws_arg.to_span(), jz, p, Z);
     };
@@ -110,21 +107,23 @@ static void BM_HTEV_STEDC(minibench::State& state) {
     state.SetMetric("Time (µs) / matrix", (1.0 / static_cast<double>(batch)) * 1e6, minibench::Reciprocal);
 }
 
+}  // namespace
+
 // ── Registration ─────────────────────────────────────────────────────────────
 
 #if BATCHLAS_HAS_CUDA_BACKEND
-BATCHLAS_BENCH_CUDA(BM_HTEV_STEQR, HtevDxCompareBenchSizes)
-BATCHLAS_BENCH_CUDA(BM_HTEV_STEDC, HtevDxCompareBenchSizes)
+BATCHLAS_BENCH_CUDA(BM_HTEV_STEQR, HtevDxCompareBenchSizes);
+BATCHLAS_BENCH_CUDA(BM_HTEV_STEDC, HtevDxCompareBenchSizes);
 #endif
 
 #if BATCHLAS_HAS_ROCM_BACKEND
-BATCHLAS_BENCH_ROCM(BM_HTEV_STEQR, HtevDxCompareBenchSizes)
-BATCHLAS_BENCH_ROCM(BM_HTEV_STEDC, HtevDxCompareBenchSizes)
+BATCHLAS_BENCH_ROCM(BM_HTEV_STEQR, HtevDxCompareBenchSizes);
+BATCHLAS_BENCH_ROCM(BM_HTEV_STEDC, HtevDxCompareBenchSizes);
 #endif
 
 #if BATCHLAS_HAS_HOST_BACKEND
-BATCHLAS_BENCH_NETLIB(BM_HTEV_STEQR, HtevDxCompareBenchSizes)
-BATCHLAS_BENCH_NETLIB(BM_HTEV_STEDC, HtevDxCompareBenchSizes)
+BATCHLAS_BENCH_NETLIB(BM_HTEV_STEQR, HtevDxCompareBenchSizes);
+BATCHLAS_BENCH_NETLIB(BM_HTEV_STEDC, HtevDxCompareBenchSizes);
 #endif
 
 MINI_BENCHMARK_MAIN();

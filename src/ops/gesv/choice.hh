@@ -17,12 +17,12 @@ struct Blocked : select::NoFields<"blocked"> {};  ///< public getrf + public get
 
 using GesvChoice = std::variant<Tiny, Blocked>;  ///< no vendor family: a `vendor` pin warns and runs Auto
 
-template <typename T>  /// Every compiled choice, once, in tie-break order (§6.3).
+template <typename Scalar>  /// Every compiled choice, once, in tie-break order (§6.3).
 constexpr auto candidates() { return select::all_of<GesvChoice>(); }
 
 inline constexpr select::OpSpec spec{Op::gesv};  ///< no vendor library; last resort (§5.5): blocked
 
-inline constexpr std::array<std::string_view, 2> key_names{"n:log:3", "nrhs:log"};  ///< work: 2n^3/3 + 2 n^2 nrhs
+inline constexpr std::array<std::string_view, 2> key_names{"n:log:3", "nrhs:log"};  ///< work: \f$2n^3/3 + 2 n^2 \cdot \mathit{nrhs}\f$
 
 /// Both sides of every transcribed threshold (16|17, 32|33, nrhs 4|5), log-spaced elsewhere (the transcriber's grid).
 inline constexpr std::array<int, 29> grid_n{1, 2, 3, 4, 6, 8, 12, 16, 17, 20, 24, 28, 32, 33, 40, 48, 64,

@@ -32,8 +32,8 @@ namespace {
 namespace mc = masked_contract;
 namespace ot = ops::trsm;
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
 struct Shape {
     std::string spelling;
@@ -53,28 +53,29 @@ std::string label(const Shape& s) {
            " batch " + std::to_string(s.batch);
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Problem {
     Queue& q;
     Shape s;
-    T alpha;
-    Matrix<T> A, Bm;
+    Scalar alpha;
+    Matrix<Scalar> A, Bm;
 
     Problem(Queue& queue, const Shape& shape)
-        : q(queue), s(shape), alpha(MV<T>::make(0.75, -0.5)), A(test_support::padded<T>(s.order, s.order, s.batch)),
-          Bm(s.side == Side::Left ? test_support::padded<T>(s.order, s.q, s.batch)
-                                  : test_support::padded<T>(s.q, s.order, s.batch)) {}
+        : q(queue), s(shape), alpha(MV<Scalar>::make(0.75, -0.5)), A(test_support::padded<Scalar>(s.order, s.order,
+                                                                                                  s.batch)),
+          Bm(s.side == Side::Left ? test_support::padded<Scalar>(s.order, s.q, s.batch)
+                                  : test_support::padded<Scalar>(s.q, s.order, s.batch)) {}
 
     // Small values over 8 and a heavy diagonal: distinct, well-conditioned items.
-    void fill(Matrix<T>& M, int salt) {
-        T* p = M.data_ptr();
+    void fill(Matrix<Scalar>& M, int salt) {
+        Scalar* p = M.data_ptr();
         const std::size_t per = std::size_t(M.stride()), ld = std::size_t(M.ld());
         for (std::size_t e = 0; e < per * std::size_t(s.batch); ++e) {
             const std::size_t item = s.identical ? 0 : e / per, off = e % per;
             double re = double(int((off * 7 + item * 3 + salt) % 23) - 11) / 8;
             const double im = double(int((off * 5 + item + salt) % 13) - 6) / 8;
             if (off % ld == off / ld) re += 6;
-            p[e] = MV<T>::make(re, im);
+            p[e] = MV<Scalar>::make(re, im);
         }
     }
     mc::Case make_case() {
@@ -87,17 +88,17 @@ struct Problem {
             fill(Bm, 5);
         };
         c.call = [this](Span<const std::uint8_t> mask, Span<std::byte>) {
-            trsm<B, T>(q, A.view().with_batch_mask(mask), Bm.view().with_batch_mask(mask), alpha, s.side, s.uplo, s.ta,
-                       s.diag);
+            trsm<B, Scalar>(q, A.view().with_batch_mask(mask), Bm.view().with_batch_mask(mask), alpha, s.side, s.uplo,
+                            s.ta, s.diag);
         };
         c.outputs = [this] { return std::vector<mc::Output>{mc::Output::matrix("B", Bm.view())}; };
         return c;
     }
 };
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;

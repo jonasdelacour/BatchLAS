@@ -30,14 +30,14 @@
 namespace batchlas::tune {
 namespace {
 
-template <typename T>
+template <typename Scalar>
 struct OrgqrProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     int m, n, batch, ld;
     std::size_t stride;
-    UnifiedVector<T> M, A0, A, tau;
-    UnifiedVector<T*> pM, pA0, pA;
+    UnifiedVector<Scalar> M, A0, A, tau;
+    UnifiedVector<Scalar*> pM, pA0, pA;
     MV Mv, A0v, Av;
 
     OrgqrProblem(Queue& q_, int m_, int n_, int batch_, int ld_pad)
@@ -48,31 +48,28 @@ struct OrgqrProblem {
           A0v(A0.data(), m, n, ld, int(stride), batch, pA0.data()), Av(A.data(), m, n, ld, int(stride), batch, pA.data()) {
         (void)Mv.fill_random(q, false, 5151);
         (void)MV::copy(q, A0v, Mv);
-        UnifiedVector<std::byte> ws(std::max<std::size_t>(1, geqrf_buffer_size<kBackend, T>(q, A0v, tau.to_span())));
-        (void)geqrf<kBackend, T>(q, A0v, tau.to_span(), ws.to_span());
+        UnifiedVector<std::byte> ws(std::max<std::size_t>(1, geqrf_buffer_size<kBackend,
+                                                          Scalar>(q, A0v, tau.to_span())));
+        (void)geqrf<kBackend, Scalar>(q, A0v, tau.to_span(), ws.to_span());
         q.wait();
     }
-    std::size_t workspace() { return orgqr_buffer_size<kBackend, T>(q, Av, tau.to_span()); }
+    std::size_t workspace() { return orgqr_buffer_size<kBackend, Scalar>(q, Av, tau.to_span()); }
     void reset() {
         (void)MV::copy(q, Av, A0v);
         q.wait();
     }
     void clear_info() {}
     void run(Span<std::byte> ws) {
-        (void)orgqr<kBackend, T>(q, Av, tau.to_span(), ws);
+        (void)orgqr<kBackend, Scalar>(q, Av, tau.to_span(), ws);
         q.wait();
     }
     std::pair<double, int> verify() {
-        const double rec = MV::qr_reconstruction(q, Mv, Av, A0v) / verify::bound<T>(verify::Check::factorization, m);
-        return {verify::nanmax(rec, MV::orthogonality(q, Av) / verify::bound<T>(verify::Check::orthogonality, m)), 0};
+        const double rec = MV::qr_reconstruction(q, Mv, Av, A0v) / verify::bound<Scalar>(verify::Check::factorization,
+                                                                                         m);
+        return {verify::nanmax(rec,
+                               MV::orthogonality(q, Av) / verify::bound<Scalar>(verify::Check::orthogonality, m)), 0};
     }
 };
-
-std::vector<std::string> ints(const auto& xs) {
-    std::vector<std::string> out;
-    for (int v : xs) out.push_back(std::to_string(v));
-    return out;
-}
 
 class OrgqrSpec final : public OpSpec {
 public:
@@ -101,13 +98,14 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
-            "src/sycl/kernel_attrs.hh",
-            "src/sycl/sscp_target.hh",
+            "include/batchlas/device/detail/kernel_attrs.hh",
+            "include/batchlas/device/detail/sscp_target.hh",
             // family: blocked
             "src/ops/orgqr/kernels/orgqr_blocked.cc",
             // common
             "src/ops/orgqr/orgqr_native.hh",
             "src/ops/orgqr/choice.hh",
+            "include/batchlas/util/group-collectives.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin
@@ -117,9 +115,23 @@ public:
         // orgqr blocked applies the public ormqr to an identity: ormqr's kernels and selection count, and
         // through ormqr blocked the public gemm and trmm too.
         // family: blocked "src/ops/ormqr/kernels/ormqr_blocked.cc" "include/batchlas/internal/ormqr_blocked.hh" "src/kernels/common/larft_wy.hh" "src/ops/ormqr/choice.hh" "src/ops/ormqr/ormqr.cc"
-        // family: blocked "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/kernels/gemm_launch.hh" "src/ops/gemm/kernels/gemm_rows.hh" "src/ops/gemm/kernels/gemm_shard.cc.in" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/kernels/accessors.hh" "src/ops/gemm/kernels/epilogue_linear.hh" "src/ops/gemm/kernels/load_policies.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_256x128.hh" "src/ops/gemm/kernels/copy_async.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh"
+        // family: blocked "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/kernels/gemm_launch.hh" "src/ops/gemm/kernels/gemm_rows.hh" "src/ops/gemm/kernels/gemm_shard.cc.in" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_256x128.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh"
         // family: blocked "src/ops/gemm/kernels/register_launchers.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/register_wide_transposed.hh" "src/ops/gemm/kernels/small_batched.hh" "src/ops/gemm/kernels/tiled_general.hh" "src/ops/gemm/choice.hh" "src/ops/gemm/gemm.cc"
         // family: blocked "src/ops/trmm/choice.hh" "src/ops/trmm/trmm.cc" "src/ops/trmm/kernels/trmm_triangular_tiles.hh" "src/kernels/common/triangular_tiles.hh" "src/kernels/common/triangular_expand.hh" "src/backends/level3_shape.hh" "src/expansion_budget.hh"
+        // The include/batchlas/device/ headers each family's kernels include.
+        // family: blocked "include/batchlas/device.hh" "include/batchlas/device/arith.hh"
+        // family: blocked "include/batchlas/device/core.hh" "include/batchlas/device/exec.hh"
+        // family: blocked "include/batchlas/device/grid.hh" "include/batchlas/device/interop.hh"
+        // family: blocked "include/batchlas/device/lapack/larft.hh" "include/batchlas/device/lapack_aux.hh"
+        // family: blocked "include/batchlas/device/level1.hh" "include/batchlas/device/level2.hh"
+        // family: blocked "include/batchlas/device/level3.hh" "include/batchlas/device/level3/cfg.hh"
+        // family: blocked "include/batchlas/device/level3/copy_async.hh" "include/batchlas/device/level3/epilogue.hh"
+        // family: blocked "include/batchlas/device/level3/mma.hh" "include/batchlas/device/level3/packet.hh"
+        // family: blocked "include/batchlas/device/level3/pipeline.hh" "include/batchlas/device/level3/schedule.hh"
+        // family: blocked "include/batchlas/device/level3/stage.hh" "include/batchlas/device/operand.hh"
+        // family: blocked "include/batchlas/device/reduce.hh" "include/batchlas/device/scalar.hh"
+        // family: blocked "include/batchlas/device/tier.hh" "include/batchlas/device/view.hh"
+        // family: blocked "include/batchlas/device/workspace.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/orgqr_spec.cc"; }

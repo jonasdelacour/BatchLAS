@@ -18,9 +18,7 @@ namespace batchlas {
 /// @addtogroup api_internal_helpers
 /// @{
 
-/**
- * @brief Kernel types for heuristic selection
- */
+/// @brief Kernel types for heuristic selection
 enum class KernelType {
     ELEMENTWISE,    ///< Element-wise operations (fill, copy, etc.)
     REDUCTION,      ///< Reduction operations (sum, max, etc.)
@@ -42,26 +40,24 @@ struct BatchedNdRangeSizes {
 
 /// @brief Result of compute_batched_matrix_decomposition().
 struct BatchedMatrixDecomposition {
-    size_t global_size;              ///< batch * work_groups_per_matrix * local_size
+    size_t global_size;              ///< \f$\mathrm{batch\_size} \cdot \mathrm{work\_groups\_per\_matrix} \cdot \mathrm{local\_size}\f$
     size_t local_size;               ///< work-group size
     size_t work_groups_per_matrix;   ///< work-groups assigned to each matrix
 };
 
-/**
- * @brief Compute a work-group size from the device type and kernel type
- *
- * Starts from a per-device-type base (GPU 256, CPU min(64, 2 x compute units),
- * accelerator 128), caps it per kernel type, then by `problem_size` (when
- * nonzero) and the device's maximum work-group size. Never returns 0.
- *
- * @param device The target device
- * @param kernel_type Type of kernel operation
- * @param problem_size Characteristic problem size (e.g., matrix dimension); 0 = no cap
- * @param batch_size Number of matrices in batch; currently unused
- * @param memory_per_problem Currently unused
- * @return Work-group size. For REDUCTION and SCAN the capped base is rounded down to a power
- *         of two before the problem-size and device caps, which can still make it a non-power.
- */
+/// @brief Compute a work-group size from the device type and kernel type
+///
+/// Starts from a per-device-type base (GPU 256, CPU \f$\min(64, 2 \cdot \mathrm{CUs})\f$ with
+/// \f$\mathrm{CUs}\f$ the compute units, accelerator 128), caps it per kernel type, then by
+/// `problem_size` (when nonzero) and the device's maximum work-group size. Never returns 0.
+///
+/// @param[in] device              The target device
+/// @param[in] kernel_type         Type of kernel operation
+/// @param[in] problem_size        Characteristic problem size (e.g., matrix dimension); 0 = no cap
+/// @param[in] batch_size          Number of matrices in batch; currently unused
+/// @param[in] memory_per_problem  Currently unused
+/// @return Work-group size. For REDUCTION and SCAN the capped base is rounded down to a power
+///         of two before the problem-size and device caps, which can still make it a non-power.
 inline size_t compute_optimal_wg_size(const Device& device, KernelType kernel_type,
                                       size_t problem_size = 0, size_t batch_size = 1, size_t memory_per_problem = 0) {
     const size_t max_wg_size = device.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE);
@@ -146,25 +142,25 @@ inline size_t compute_optimal_wg_size(const Device& device, KernelType kernel_ty
     return std::max(base_wg_size, size_t(1));
 }
 
-/**
- * @brief Compute nd_range sizes for a batched operation
- *
- * When `total_work` exceeds INT32_MAX / 2 the result grid-strides with four
- * work-groups per compute unit. Otherwise, with at least as many matrices as
- * compute units, each matrix gets ceil(problem_size / local_size) work-groups;
- * with fewer, the compute units are spread over the matrices, capped at what
- * one matrix needs. The global size is never below `total_work` rounded up.
- *
- * @param total_work Total number of work items needed
- * @param device Target device
- * @param kernel_type Type of kernel operation
- * @param batch_size Number of matrices in batch
- * @param problem_size Elements (or work items) per matrix
- * @param preferred_wg_size Optional preferred work-group size (0 = auto)
- * @param footprint_per_problem Bytes per problem; currently has no effect (its estimate is overwritten)
- * @param max_wg_size_for_kernel Currently unused
- * @return BatchedNdRangeSizes {global_size, local_size, use_grid_stride}
- */
+/// @brief Compute nd_range sizes for a batched operation
+///
+/// When `total_work` exceeds \f$\mathrm{INT32\_MAX}/2\f$ the result grid-strides with four
+/// work-groups per compute unit. Otherwise, with at least as many matrices as
+/// compute units, each matrix gets
+/// \f$\lceil \mathrm{problem\_size} / \mathrm{local\_size} \rceil\f$ work-groups;
+/// with fewer, the compute units are spread over the matrices, capped at what
+/// one matrix needs. The global size is never below `total_work` rounded up to a
+/// multiple of the local size.
+///
+/// @param[in] total_work              Total number of work items needed
+/// @param[in] device                  Target device
+/// @param[in] kernel_type             Type of kernel operation
+/// @param[in] batch_size              Number of matrices in batch
+/// @param[in] problem_size            Elements (or work items) per matrix
+/// @param[in] preferred_wg_size       Optional preferred work-group size (0 = auto)
+/// @param[in] footprint_per_problem   Bytes per problem; currently has no effect (its estimate is overwritten)
+/// @param[in] max_wg_size_for_kernel  Currently unused
+/// @return BatchedNdRangeSizes {global_size, local_size, use_grid_stride}
 inline BatchedNdRangeSizes compute_batched_nd_range_sizes(size_t total_work,
                                                                              const Device& device,
                                                                              KernelType kernel_type,
@@ -180,16 +176,14 @@ inline BatchedNdRangeSizes compute_batched_nd_range_sizes(size_t total_work,
     bool use_grid_stride = total_work > INT32_MAX_SAFE;
     auto num_cus = device.get_property(DeviceProperty::MAX_COMPUTE_UNITS);
     auto vendor = device.get_vendor();
-    auto shedulers_per_cu = 2; //Default to 2 schedulers per CU
+    auto shedulers_per_cu = 2; // Default to 2 schedulers per CU
     if ((vendor == Vendor::NVIDIA || vendor == Vendor::AMD) && device.type == DeviceType::GPU) {
         shedulers_per_cu = 4;
     } else if (vendor == Vendor::INTEL && device.type == DeviceType::GPU) {
-        shedulers_per_cu = 8; //Intel GPUs have 8 or 16 "Vector Engines" per CU / Xe Core
+        shedulers_per_cu = 8; // Intel GPUs have 8 or 16 "Vector Engines" per CU / Xe Core
     }
 
-    auto L2_cache_size = device.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE); //L2 cache size
-
-
+    auto L2_cache_size = device.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE); // L2 cache size
 
     size_t local_size;
     if (preferred_wg_size > 0) {
@@ -238,30 +232,31 @@ inline BatchedNdRangeSizes compute_batched_nd_range_sizes(size_t total_work,
             .use_grid_stride = use_grid_stride};
 }
 
-/**
- * @brief Compute batched matrix decomposition for work-group assignment
- *
- * With at least as many matrices as compute units, one work-group per matrix,
- * and the kernel grid-strides over the rest of the matrix. Otherwise
- * work_groups_per_matrix = ceil(CUs / batch_size), never more than
- * ceil(elements_per_matrix / local_size). The global size is then capped to fit
- * a signed 32-bit int, keeping at least one work-group per matrix; the kernel's
- * grid-stride picks up the slack.
- *
- * @param batch_size Number of matrices in batch
- * @param elements_per_matrix Number of elements per matrix
- * @param device Target device
- * @param kernel_type Type of kernel operation
- * @param preferred_wg_size Optional preferred work-group size (0 = auto)
- * @return BatchedMatrixDecomposition {global_size, local_size, work_groups_per_matrix}
- */
+/// @brief Compute batched matrix decomposition for work-group assignment
+///
+/// With at least as many matrices as compute units, one work-group per matrix,
+/// and the kernel grid-strides over the rest of the matrix. Otherwise
+/// \f[
+///   \mathrm{work\_groups\_per\_matrix}
+///     = \max\left(1,\; \min\left(\left\lceil \frac{\mathrm{CUs}}{\mathrm{batch\_size}} \right\rceil,\;
+///                 \left\lceil \frac{\mathrm{elements\_per\_matrix}}{\mathrm{local\_size}} \right\rceil\right)\right),
+/// \f]
+/// with \f$\mathrm{CUs}\f$ the compute units. The global size is then capped to fit
+/// a signed 32-bit int, keeping at least one work-group per matrix; the kernel's
+/// grid-stride picks up the slack.
+///
+/// @param[in] batch_size           Number of matrices in batch
+/// @param[in] elements_per_matrix  Number of elements per matrix
+/// @param[in] device               Target device
+/// @param[in] kernel_type          Type of kernel operation
+/// @param[in] preferred_wg_size    Optional preferred work-group size (0 = auto)
+/// @return BatchedMatrixDecomposition {global_size, local_size, work_groups_per_matrix}
 inline BatchedMatrixDecomposition compute_batched_matrix_decomposition(
     size_t batch_size,
     size_t elements_per_matrix,
     const Device& device,
     KernelType kernel_type,
-    size_t preferred_wg_size = 0)
-{
+    size_t preferred_wg_size = 0) {
     const size_t max_compute_units = device.get_property(DeviceProperty::MAX_COMPUTE_UNITS);
 
     size_t local_size = preferred_wg_size > 0
@@ -294,15 +289,13 @@ inline BatchedMatrixDecomposition compute_batched_matrix_decomposition(
             .work_groups_per_matrix = work_groups_per_matrix};
 }
 
-/**
- * @brief Compute optimal global and local work sizes for nd_range kernels with overflow protection
- *
- * @param total_work Total number of work items needed
- * @param device Target device
- * @param kernel_type Type of kernel operation
- * @param preferred_wg_size Optional preferred work-group size (0 = auto)
- * @return std::pair<size_t, size_t> {global_size, local_size}
- */
+/// @brief Compute optimal global and local work sizes for nd_range kernels with overflow protection
+///
+/// @param[in] total_work         Total number of work items needed
+/// @param[in] device             Target device
+/// @param[in] kernel_type        Type of kernel operation
+/// @param[in] preferred_wg_size  Optional preferred work-group size (0 = auto)
+/// @return std::pair<size_t, size_t> {global_size, local_size}
 inline std::pair<size_t, size_t> compute_nd_range_sizes(size_t total_work,
                                                         const Device& device,
                                                         KernelType kernel_type,
@@ -329,4 +322,4 @@ inline std::pair<size_t, size_t> compute_nd_range_sizes(size_t total_work,
 
 /// @}
 
-} // namespace batchlas
+}  // namespace batchlas

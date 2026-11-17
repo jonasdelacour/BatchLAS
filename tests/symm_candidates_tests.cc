@@ -49,8 +49,8 @@ namespace {
 namespace sy = batchlas::ops::symm;
 using C = sy::SymmChoice;
 using Pin = select::ScopedPin<C>;
-template <typename T>
-using MVof = MatrixView<T, MatrixFormat::Dense>;
+template <typename Real>
+using MVof = MatrixView<Real, MatrixFormat::Dense>;
 
 using test_support::same_bits;
 
@@ -74,41 +74,41 @@ struct Spec {
 // A, B and C in one buffer of a large finite poison, at padded lds and strides that are not
 // ld * cols. A's unreferenced triangle, the pads and the gaps hold the poison; symm may write
 // only C's footprint.
-template <typename T>
+template <typename Real>
 struct Prob {
     Spec s;
-    T alpha = T(1.5), beta = T(-0.75);
+    Real alpha = Real(1.5), beta = Real(-0.75);
     Region a, b, c;
-    UnifiedVector<T> mem;
-    UnifiedVector<T> mem0;
-    UnifiedVector<T*> aptr, bptr, cptr;
+    UnifiedVector<Real> mem;
+    UnifiedVector<Real> mem0;
+    UnifiedVector<Real*> aptr, bptr, cptr;
 
-    MVof<T> A() { return {mem.data() + a.off, a.rows, a.cols, a.ld, a.stride, s.batch, aptr.data()}; }
-    MVof<T> B() { return {mem.data() + b.off, b.rows, b.cols, b.ld, b.stride, s.batch, bptr.data()}; }
-    MVof<T> Cv() { return {mem.data() + c.off, c.rows, c.cols, c.ld, c.stride, s.batch, cptr.data()}; }
+    MVof<Real> A() { return {mem.data() + a.off, a.rows, a.cols, a.ld, a.stride, s.batch, aptr.data()}; }
+    MVof<Real> B() { return {mem.data() + b.off, b.rows, b.cols, b.ld, b.stride, s.batch, bptr.data()}; }
+    MVof<Real> Cv() { return {mem.data() + c.off, c.rows, c.cols, c.ld, c.stride, s.batch, cptr.data()}; }
     std::size_t at(const Region& r, int it, int i, int j) const {
         return r.off + std::size_t(it) * r.stride + std::size_t(j) * r.ld + i;
     }
     bool referenced(int i, int j) const { return s.uplo == Uplo::Lower ? i >= j : i <= j; }
 };
 
-template <typename T>
-T poison() {
-    return T(-997.0);
+template <typename Real>
+Real poison() {
+    return Real(-997.0);
 }
 
-template <typename T>
-Prob<T> make_prob(const Spec& s) {
-    Prob<T> p;
+template <typename Real>
+Prob<Real> make_prob(const Spec& s) {
+    Prob<Real> p;
     p.s = s;
     const int k = s.k();
     p.a = {0, k, k, k + 3, (k + 3) * k + 5};
     p.b = {std::size_t(p.a.stride) * s.batch + 11, s.m, s.n, s.m + 2, (s.m + 2) * s.n + 7};
     p.c = {p.b.off + std::size_t(p.b.stride) * s.batch + 13, s.m, s.n, s.m + 5, (s.m + 5) * s.n + 3};
-    p.mem = UnifiedVector<T>(p.c.off + std::size_t(p.c.stride) * s.batch + 17, poison<T>());
-    p.aptr = UnifiedVector<T*>(s.batch, nullptr);
-    p.bptr = UnifiedVector<T*>(s.batch, nullptr);
-    p.cptr = UnifiedVector<T*>(s.batch, nullptr);
+    p.mem = UnifiedVector<Real>(p.c.off + std::size_t(p.c.stride) * s.batch + 17, poison<Real>());
+    p.aptr = UnifiedVector<Real*>(s.batch, nullptr);
+    p.bptr = UnifiedVector<Real*>(s.batch, nullptr);
+    p.cptr = UnifiedVector<Real*>(s.batch, nullptr);
     std::mt19937 gen(s.seed);
     std::uniform_real_distribution<double> u(-1.0, 1.0);
     const int reps = s.period > 0 ? std::min(s.period, s.batch) : s.batch;
@@ -116,11 +116,12 @@ Prob<T> make_prob(const Spec& s) {
         const int r = it % reps;
         for (int j = 0; j < k; ++j)
             for (int i = 0; i < k; ++i)
-                if (p.referenced(i, j)) p.mem[p.at(p.a, it, i, j)] = it < reps ? T(u(gen)) : p.mem[p.at(p.a, r, i, j)];
+                if (p.referenced(i, j)) p.mem[p.at(p.a, it, i, j)] = it < reps ? Real(u(gen)) : p.mem[p.at(p.a, r, i,
+                                                                                                           j)];
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.m; ++i) {
-                p.mem[p.at(p.b, it, i, j)] = it < reps ? T(u(gen)) : p.mem[p.at(p.b, r, i, j)];
-                p.mem[p.at(p.c, it, i, j)] = it < reps ? T(u(gen)) : p.mem[p.at(p.c, r, i, j)];
+                p.mem[p.at(p.b, it, i, j)] = it < reps ? Real(u(gen)) : p.mem[p.at(p.b, r, i, j)];
+                p.mem[p.at(p.c, it, i, j)] = it < reps ? Real(u(gen)) : p.mem[p.at(p.c, r, i, j)];
             }
     }
     p.mem0 = p.mem;
@@ -190,10 +191,10 @@ using test_support::TableGuard;
 
 // The transcribed rule (ff340fc6 symm_custom_dispatch.cc + triangular_expand.hh), restated: float,
 // squareish C, and batch >= 4 or max(m, n) >= 256 took the expansion; everything else the vendor.
-template <typename T>
+template <typename Real>
 std::string old_auto(int m, int n, int batch) {
     const bool sq = 2 * std::min(m, n) >= std::max(m, n);
-    return std::is_same_v<T, float> && sq && (batch >= 4 || std::max(m, n) >= 256) ? "expand" : "vendor";
+    return std::is_same_v<Real, float> && sq && (batch >= 4 || std::max(m, n) >= 256) ? "expand" : "vendor";
 }
 
 // A heterogeneous operand has no route on any backend: expand cannot honour per-item extents (it
@@ -241,9 +242,9 @@ void expect_heterogeneous_has_no_route(Queue& ctx) {
             for (int i = 0; i < n; ++i) ASSERT_EQ(Cm(i, j, b), T(0.25)) << "a refused call wrote C";
 }
 
-template <typename T, Backend B>
+template <typename Real, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Real;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types_filtered<Cfg, false>::type;
@@ -302,7 +303,7 @@ protected:
         try {
             if (std::holds_alternative<sy::Mirror>(c)) {
                 const int chunk = int(std::min<std::int64_t>(select::device_of<B>(q).max_groups_yz, 1 << 30));
-                (void)sycl_symm::symm_mirror<T, false>(q, A, Bm, Cm, alpha, beta, side, uplo, chunk);
+                (void)ops::symm::symm_mirror<T, false>(q, A, Bm, Cm, alpha, beta, side, uplo, chunk);
             } else if (std::holds_alternative<sy::Expand>(c)) {
                 const int k = A.rows(), batch = A.batch_size(), ld = backend::detail::expanded_ld<T>(k);
                 UnifiedVector<T> scratch(std::size_t(ld) * k * std::max(batch, 1), T(0));

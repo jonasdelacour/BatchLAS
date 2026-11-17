@@ -8,17 +8,17 @@ degenerate or near-degenerate level keeps the basis it had (the Ih C60 Hückel l
 
 ## syev_align: the algorithm
 
-Per item, with \f$ m \f$ = `V.cols()`: one `gemm` forms \f$ M = V_{old}^H V \f$ (it selects its
+Per item, with \f$ m \f$ = `V.cols()`: one `gemm` forms \f$ M = V_{\mathrm{old}}^H V \f$ (it selects its
 own route; `syev_align` has no table and no vendor counterpart); one work-item per cluster runs a
 one-sided Jacobi SVD \f$ M_{cc} = U \Sigma W^H \f$ and stores \f$ R^H = U W^H \f$, completing
-columns with \f$ \sigma < p\,\varepsilon\,\sigma_{max} \f$ by Gram-Schmidt so \f$ R \f$ stays
+columns with \f$ \sigma < p\,\varepsilon\,\sigma_{\max} \f$ by Gram-Schmidt so \f$ R \f$ stays
 unitary; then \f$ V_c := V_c R \f$ from a workspace copy of `V`.
 
 The launches chain through the workspace, so they run on an in-order queue
 (`detail::on_in_order_queue`), ordered after and before the caller's out-of-order `Queue`
 (`AlignsOnAnOutOfOrderQueue`). `syev_align_validate_params` throws `invalid_argument` before any
 allocation when `V.rows() * V.cols()` exceeds `INT_MAX`, since the workspace views take `int`
-extents (`RejectsSizesPastTheIntRange`, 46341 x 46341 against 46341 x 46340).
+extents (`RejectsSizesPastTheIntRange`, \f$46341 \times 46341\f$ against \f$46341 \times 46340\f$).
 
 ## syev_align: the cluster rule and the absolute floor
 
@@ -32,10 +32,10 @@ one cluster), while the relative rule is scale invariant. `NearZeroClusterUsesTh
 pair at \f$ 2 \cdot 10^{-14} \f$ with gaps \f$ 0.9 \f$ and \f$ 1.1 \f$ times the threshold, and the
 same spectra scaled by \f$ 10^{-14} \f$; any floor at or above \f$ 1.1 \cdot 10^{-27} \f$ fails it.
 
-The rule fails only when the values passed in do not reach \f$ \|A\| \f$, such as a `syevx` subset of
-near-zero eigenvalues: the threshold can fall below their \f$ \varepsilon \|A\| \f$ rounding and a
-degenerate level splits. The caller knows \f$ \|A\| \f$; pass
-\f$ \mathrm{tol} \cdot \|A\| / \max(|\lambda_0|, |\lambda_{m-1}|) \f$.
+The rule fails only when the values passed in do not reach \f$ \lVert A \rVert \f$, such as a `syevx` subset of
+near-zero eigenvalues: the threshold can fall below their \f$ \varepsilon \lVert A \rVert \f$ rounding and a
+degenerate level splits. The caller knows \f$ \lVert A \rVert \f$; pass
+\f$ \mathrm{tol} \cdot \lVert A \rVert / \max(|\lambda_0|, |\lambda_{m-1}|) \f$.
 
 ## syev_align: open debts
 

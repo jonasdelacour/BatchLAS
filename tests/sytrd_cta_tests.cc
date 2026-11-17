@@ -107,7 +107,7 @@ void ref_sytd2_upper(std::vector<Real>& a, int n, std::vector<Real>& d, std::vec
 }
 
 template <typename Real>
-static std::vector<Real> extract_host_matrix_colmajor(const Matrix<Real, MatrixFormat::Dense>& A, int n) {
+std::vector<Real> extract_host_matrix_colmajor(const Matrix<Real, MatrixFormat::Dense>& A, int n) {
     std::vector<Real> out(static_cast<std::size_t>(n) * static_cast<std::size_t>(n));
     auto v = A.view();
     for (int j = 0; j < n; ++j) {
@@ -223,15 +223,13 @@ Matrix<Real, MatrixFormat::Dense> tridiagonal_matrix(int n, Vector<Real>& d, Vec
     return T;
 }
 
-template <typename T, Backend B>
+template <typename Real, Backend B>
 struct SytrdCtaConfig {
-    using ScalarType = T;
+    using ScalarType = Real;
     static constexpr Backend BackendVal = B;
 };
 
-} // namespace
-
-#include <tests/test_utils.hh>
+}  // namespace
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 using SytrdCtaTestTypes = ::testing::Types<SytrdCtaConfig<float, Backend::CUDA>, SytrdCtaConfig<double, Backend::CUDA>>;
@@ -362,4 +360,3 @@ TYPED_TEST(SytrdCtaTest, EmptyBatchIsANoOp) {
     for (size_t i = 0; i < sentinel.size(); ++i) ASSERT_EQ(sentinel[i], Real(7)) << "index " << i;
 }
 #endif
-

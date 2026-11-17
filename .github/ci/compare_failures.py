@@ -409,7 +409,7 @@ _FIXTURE_HEAVY_XML = ('<?xml version="1.0"?>\n<testsuites><testsuite name="S">'
                       '<failure message="boom"/></testcase></testsuite></testsuites>\n')
 _FIXTURE_BASE_XML = ('<?xml version="1.0"?>\n<testsuites><testsuite name="S">'
                      '<testcase name="D" classname="S" status="run" result="completed"/>'
-                     '</testsuite></testsuites>\n')
+                     "</testsuite></testsuites>\n")
 
 
 def _heavy_junit(base_status, heavy_status):
@@ -418,7 +418,7 @@ def _heavy_junit(base_status, heavy_status):
     return ('<?xml version="1.0"?>\n<testsuite tests="2">'
             + case % ("gemm_x", "gemm_x", base_status, fail if base_status == "fail" else "")
             + case % ("gemm_x_heavy", "gemm_x_heavy", heavy_status, fail if heavy_status == "fail" else "")
-            + '</testsuite>\n')
+            + "</testsuite>\n")
 
 
 def self_test():
@@ -486,7 +486,7 @@ def self_test():
         with open(crash, "w") as fh:
             fh.write('<?xml version="1.0"?>\n<testsuite tests="1"><testcase name="alpha" '
                      'classname="alpha" status="fail"><failure message="Subprocess aborted"/>'
-                     '</testcase></testsuite>\n')
+                     "</testcase></testsuite>\n")
         host = os.path.join(tmp, "host.txt")
         with open(host, "w") as fh:
             fh.write("alpha\n")

@@ -37,13 +37,6 @@ inline void SyevBenchSizesNetlib(Benchmark* b) {
     }
 }
 
-// arg4: 0 = NoEigenVectors, 1 = EigenVectors. Same convention as syev_cta_benchmark and
-// syev_blocked_benchmark. state.range() returns 0 for an absent argument, so a caller passing
-// only four args gets eigenvalues-only; every registered size passes jobz explicitly.
-inline JobType parse_jobz(int v) {
-    return (v == 0) ? JobType::NoEigenVectors : JobType::EigenVectors;
-}
-
 // arg5: 0 = Lower (default, and what every registered size uses), 1 = Upper. Upper exists so
 // the mirror path in syev_blocked / syev_two_stage can be measured against the vendor at all;
 // before it, no benchmark could express an Upper solve.
@@ -51,11 +44,9 @@ inline Uplo parse_uplo(int v) {
     return (v == 0) ? Uplo::Lower : Uplo::Upper;
 }
 
-} // namespace
-
 // Symmetric eigenvalue decomposition benchmark
-template <typename T, Backend B>
-static void BM_SYEV(minibench::State& state) {
+template <typename Scalar, Backend B>
+void BM_SYEV(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const int sytrd_block_size = static_cast<int>(state.range(2));
@@ -81,8 +72,8 @@ static void BM_SYEV(minibench::State& state) {
     batchlas::detail::reload_settings();
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    auto A = Matrix<T>::Random(n, n, true, batch);
-    UnifiedVector<typename base_type<T>::type> W(n * batch);
+    auto A = Matrix<Scalar>::Random(n, n, true, batch);
+    UnifiedVector<typename base_type<Scalar>::type> W(n * batch);
 
     size_t ws_size = syev_buffer_size(*q, A, W.to_span(),
                                       jobz, uplo);
@@ -102,6 +93,7 @@ static void BM_SYEV(minibench::State& state) {
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 
+}  // namespace
 
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_SYEV, SyevBenchSizes);
 

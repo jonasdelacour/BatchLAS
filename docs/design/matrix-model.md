@@ -18,7 +18,7 @@ is no row-major `Matrix`. Row-major data is converted at the edge (`gemm` by ope
 
 Element \f$(i, j)\f$ of item \f$b\f$ is at \f$\mathtt{data}[\,b \cdot \mathtt{stride} + j \cdot \mathtt{ld} + i\,]\f$.
 `rows`, `cols`, `ld`, `stride` and `batch_size` are `int`, but every accessor (including `batch_item`)
-evaluates the batch term in `int64_t`. A 512 x 512 `float` item has `stride == 262144`, so the product
+evaluates the batch term in `int64_t`. A \f$512 \times 512\f$ `float` item has `stride == 262144`, so the product
 wraps in `int` at \f$b = 8192\f$. The in-item offset cannot overflow for an allocatable matrix.
 
 > **Note:** debug asserts must compare in `int64_t`. An `int` index has already wrapped, and a negative
@@ -87,7 +87,7 @@ passed by value, with no ownership or backend handle.
 
 - Dense `operator()(i, j, b)` computes the address above. Its checks are debug asserts only.
 - CSR `get(i, j, b)` searches row \f$i\f$ linearly and returns zero for an absent entry.
-- `batch_item(b)` returns a single-item view, or 0 x 0 for an out-of-range `b`.
+- `batch_item(b)` returns a single-item view, or \f$0 \times 0\f$ for an out-of-range `b`.
 - Slicing asserts (debug builds) that the slice is not empty. The host `MatrixView`/`Matrix` slices
   throw `batchlas::invalid_argument` for an empty slice and `batchlas::out_of_range` past a dimension.
 

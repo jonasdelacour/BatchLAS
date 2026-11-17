@@ -41,14 +41,14 @@ std::optional<int> rows_of(const std::string& form, int n, int aspect) {
     return int(m);
 }
 
-template <typename T>
+template <typename Scalar>
 struct GeqrfProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     int m, n, k, batch, ld;
     std::size_t stride;
-    UnifiedVector<T> A0, A, tau;
-    UnifiedVector<T*> pA0, pA;
+    UnifiedVector<Scalar> A0, A, tau;
+    UnifiedVector<Scalar*> pA0, pA;
     MV A0v, Av;
 
     GeqrfProblem(Queue& q_, int m_, int n_, int batch_, int ld_pad)
@@ -60,7 +60,7 @@ struct GeqrfProblem {
         (void)A0v.fill_random(q, false, 4242);
         q.wait();
     }
-    std::size_t workspace() { return geqrf_buffer_size<kBackend, T>(q, Av, tau.to_span()); }
+    std::size_t workspace() { return geqrf_buffer_size<kBackend, Scalar>(q, Av, tau.to_span()); }
     void reset() {
         (void)MV::copy(q, Av, A0v);
         q.wait();
@@ -69,24 +69,19 @@ struct GeqrfProblem {
         for (std::size_t i = 0; i < tau.size(); ++i) tau[i] = MV::make(7.0, -3.0);
     }
     void run(Span<std::byte> ws) {
-        (void)geqrf<kBackend, T>(q, Av, tau.to_span(), ws);
+        (void)geqrf<kBackend, Scalar>(q, Av, tau.to_span(), ws);
         q.wait();
     }
     std::pair<double, int> verify() {
         using PV = MatrixView<typename MV::promoted_type, MatrixFormat::Dense>;
-        const VectorView<T> tv(tau.data(), k, batch, 1, k);
-        const double res = MV::qr_residual(q, A0v, Av, tv) / verify::bound<T>(verify::Check::factorization, m);
+        const VectorView<Scalar> tv(tau.data(), k, batch, 1, k);
+        const double res = MV::qr_residual(q, A0v, Av, tv) / verify::bound<Scalar>(verify::Check::factorization, m);
         auto Q = MV::form_q(q, Av, tv, Av.default_items(), k);
-        const double orth = PV::orthogonality(q, Q, Q.all_items()) / verify::bound<T>(verify::Check::orthogonality, m);
+        const double orth = PV::orthogonality(q, Q, Q.all_items()) / verify::bound<Scalar>(verify::Check::orthogonality,
+                                                                                           m);
         return {verify::nanmax(res, orth), 0};
     }
 };
-
-std::vector<std::string> ints(const auto& xs) {
-    std::vector<std::string> out;
-    for (int v : xs) out.push_back(std::to_string(v));
-    return out;
-}
 
 class GeqrfSpec final : public OpSpec {
 public:
@@ -105,7 +100,7 @@ public:
     }
     std::vector<CellKey> grid(const std::string& dtype,
                               const std::map<std::string, std::vector<std::string>>& overrides) const override {
-        static_cast<void>(dtype);
+        (void)dtype;
         const auto ax = axes();
         for (const auto& [name, values] : overrides)
             if (std::none_of(ax.begin(), ax.end(), [&](const auto& a) { return a.first == name; }))
@@ -143,16 +138,16 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
-            "src/sycl/kernel_attrs.hh",
-            "src/sycl/sscp_target.hh",
+            "include/batchlas/device/detail/kernel_attrs.hh",
+            "include/batchlas/device/detail/sscp_target.hh",
             "include/batchlas/util/group-collectives.hh",
-            "src/kernels/common/sg_partition/backend_amdgcn.hh",
-            "src/kernels/common/sg_partition/backend_amdgcn_core.hh",
-            "src/kernels/common/sg_partition/backend_generic.hh",
-            "src/kernels/common/sg_partition/backend_nvptx.hh",
-            "src/kernels/common/sg_partition/backend_spirv.hh",
-            "src/kernels/common/sg_partition/backend_sscp.hh",
-            "src/kernels/common/sg_partition/sg_partition.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn_core.hh",
+            "include/batchlas/device/detail/sg_partition/backend_generic.hh",
+            "include/batchlas/device/detail/sg_partition/backend_nvptx.hh",
+            "include/batchlas/device/detail/sg_partition/backend_spirv.hh",
+            "include/batchlas/device/detail/sg_partition/backend_sscp.hh",
+            "include/batchlas/device/detail/sg_partition/sg_partition.hh",
             // family: tiny
             "src/ops/geqrf/kernels/geqrf_tiny.cc",
             "src/ops/geqrf/kernels/geqrf_tiny_device.hh",
@@ -163,10 +158,37 @@ public:
             "src/kernels/common/larft_wy.hh",
             // common
             "src/ops/geqrf/geqrf_native.hh",
-            "src/ops/geqrf/geqrf_cta_device.hh",
             "src/ops/geqrf/geqrf_panel_reg_device.hh",
             "src/ops/geqrf/can_run.hh",
             "src/ops/geqrf/choice.hh",
+            "include/batchlas/device.hh",
+            "include/batchlas/device/arith.hh",
+            "include/batchlas/device/core.hh",
+            "include/batchlas/device/exec.hh",
+            "include/batchlas/device/grid.hh",
+            "include/batchlas/device/interop.hh",
+            "include/batchlas/device/lapack/geqrf.hh",
+            "include/batchlas/device/lapack/larfb.hh",
+            "include/batchlas/device/lapack/larft.hh",
+            "include/batchlas/device/lapack_aux.hh",
+            "include/batchlas/device/level1.hh",
+            "include/batchlas/device/level2.hh",
+            "include/batchlas/device/level3.hh",
+            "include/batchlas/device/level3/cfg.hh",
+            "include/batchlas/device/level3/copy_async.hh",
+            "include/batchlas/device/level3/epilogue.hh",
+            "include/batchlas/device/level3/group.hh",
+            "include/batchlas/device/level3/mma.hh",
+            "include/batchlas/device/level3/packet.hh",
+            "include/batchlas/device/level3/pipeline.hh",
+            "include/batchlas/device/level3/schedule.hh",
+            "include/batchlas/device/level3/stage.hh",
+            "include/batchlas/device/operand.hh",
+            "include/batchlas/device/reduce.hh",
+            "include/batchlas/device/scalar.hh",
+            "include/batchlas/device/tier.hh",
+            "include/batchlas/device/view.hh",
+            "include/batchlas/device/workspace.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin
@@ -175,8 +197,10 @@ public:
         // blocked's batch chunk comes from tuning_params.hh (blocked_chunk_items).
         // family: blocked "include/batchlas/tuning_params.hh"
         // geqrf blocked's trailing updates call the public gemm: its kernels and selection count too.
-        // family: blocked "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/kernels/gemm_launch.hh" "src/ops/gemm/kernels/gemm_rows.hh" "src/ops/gemm/kernels/gemm_shard.cc.in" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/kernels/accessors.hh" "src/ops/gemm/kernels/epilogue_linear.hh" "src/ops/gemm/kernels/load_policies.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_256x128.hh" "src/ops/gemm/kernels/copy_async.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh"
+        // family: blocked "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/kernels/gemm_launch.hh" "src/ops/gemm/kernels/gemm_rows.hh" "src/ops/gemm/kernels/gemm_shard.cc.in" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_256x128.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh"
         // family: blocked "src/ops/gemm/kernels/register_launchers.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/register_wide_transposed.hh" "src/ops/gemm/kernels/small_batched.hh" "src/ops/gemm/kernels/tiled_general.hh" "src/ops/gemm/choice.hh" "src/ops/gemm/gemm.cc"
+        // The include/batchlas/device/ headers each family's kernels include.
+        // family: tiny "include/batchlas/device/sg_partition.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/geqrf_spec.cc"; }

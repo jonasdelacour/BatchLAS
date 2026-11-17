@@ -21,7 +21,7 @@ struct Vendor : select::NoFields<"vendor"> {};  ///< backend::symm_vendor (cubla
 
 using SymmChoice = std::variant<Mirror, Expand, Vendor>;  ///< fieldless: the tiles and the gemm derived; native: GPU
 
-template <typename T>  /// Every compiled choice, in tie-break order (§6.3): the scratch-free mirror, expand, vendor.
+template <typename Scalar>  /// Every compiled choice, in tie-break order (§6.3): the scratch-free mirror, expand, vendor.
 constexpr auto candidates() { return select::all_of<SymmChoice>(); }
 
 inline constexpr std::array<std::string_view, 3> last_resort{"mirror", "expand", "vendor"};  ///< nothing in the row runs
@@ -30,7 +30,7 @@ inline constexpr select::OpSpec spec{Op::symm, select::Lib::level3, {last_resort
 /// Keys: form exact (the transcribed squareish test as an axis); m, n: C's extents; batch. Side is no key (never read).
 inline constexpr std::array<std::string_view, 4> key_names{"form:exact", "m:log", "n:log", "batch:log"};
 
-/// sq if 2 min >= max, else tall (a > 2b) or wide: the transcribed squareish ratio as an exact key.
+/// sq if \f$2 \min \ge \max\f$, else tall (\f$a > 2b\f$) or wide: the transcribed squareish ratio as an exact key.
 inline std::string_view form_of(std::int64_t a, std::int64_t b) {
     return 2 * std::min(a, b) >= std::max(a, b) ? "sq" : (a > 2 * b ? "tall" : "wide");
 }

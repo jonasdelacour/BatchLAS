@@ -37,6 +37,12 @@ std::vector<std::string> split_fields(std::string_view s, char sep);  // empty f
 std::vector<std::string> parse_csv_line(std::string_view line);       // "..." quoting, empties kept
 std::string csv_field(std::string_view s);                           // quoted when it needs it
 
+inline std::vector<std::string> ints(const auto& xs) {
+    std::vector<std::string> out;
+    for (int v : xs) out.push_back(std::to_string(v));
+    return out;
+}
+
 double median(std::vector<double> v);  // even count: mean of the middle two; NaN when empty
 
 // Arm indices for timed rep `rep`: the base order (reversed for pass 2) rotated left by rep.

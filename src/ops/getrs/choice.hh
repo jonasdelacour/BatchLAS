@@ -18,12 +18,12 @@ struct Vendor : select::NoFields<"vendor"> {};    ///< backend::getrs_vendor; al
 
 using GetrsChoice = std::variant<Cta, Blocked, Vendor>;  ///< natives: GPU, sub-group 32, conforming, not NETLIB
 
-template <typename T>  /// Every compiled choice, once, in tie-break order (§6.3).
+template <typename Scalar>  /// Every compiled choice, once, in tie-break order (§6.3).
 constexpr auto candidates() { return select::all_of<GetrsChoice>(); }
 
 inline constexpr select::OpSpec spec{Op::getrs, select::Lib::factorization};  ///< last resort (§5.5): blocked, vendor
 
-inline constexpr std::array<std::string_view, 3> key_names{"n:log:2", "nrhs:log", "batch:log"};  ///< ~ n^2 nrhs batch
+inline constexpr std::array<std::string_view, 3> key_names{"n:log:2", "nrhs:log", "batch:log"};  ///< \f$\sim n^2 \cdot \mathit{nrhs} \cdot \mathit{batch}\f$
 
 /// A log grid plus both sides of every transcribed threshold (n 31/32; nrhs 2/3, 4/5, 63/64, 127/128;
 /// batch 127/128); the transcriber (tuned/README.md) spells the same grid.

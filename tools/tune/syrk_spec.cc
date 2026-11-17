@@ -32,20 +32,20 @@ namespace {
 
 namespace K = ops::syrk;
 
-template <typename T>
+template <typename Scalar>
 struct SyrkProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     Queue& q;
     Transpose trans;
     int n, k, batch, ar, ac, lda, ldc;
     std::size_t sa, sc;
-    T alpha, beta;
-    UnifiedVector<T> A, C0, C;
+    Scalar alpha, beta;
+    UnifiedVector<Scalar> A, C0, C;
 
     SyrkProblem(Queue& q_, Transpose t, int n_, int k_, int batch_, int pad)
         : q(q_), trans(t), n(n_), k(k_), batch(batch_), ar(t == Transpose::NoTrans ? n_ : k_),
           ac(t == Transpose::NoTrans ? k_ : n_), lda(ar + pad), ldc(n_ + pad), sa(std::size_t(lda) * std::size_t(ac)),
-          sc(std::size_t(ldc) * std::size_t(n_)), alpha(T(1.25)), beta(T(0.75)), A(sa * std::size_t(batch_)),
+          sc(std::size_t(ldc) * std::size_t(n_)), alpha(Scalar(1.25)), beta(Scalar(0.75)), A(sa * std::size_t(batch_)),
           C0(sc * std::size_t(batch_)), C(sc * std::size_t(batch_)) {
         (void)view(A, ar, ac, lda, sa).fill_random(q, false, 7373);
         (void)view(C0, n, n, ldc, sc).fill_random(q, false, 7374);
@@ -53,9 +53,10 @@ struct SyrkProblem {
         for (int b = 0; b < batch; ++b)
             for (int c = 0; c < n; ++c)
                 for (int r = 0; r < ldc; ++r)
-                    if (r < c || r >= n) C0[std::size_t(b) * sc + std::size_t(c) * std::size_t(ldc) + std::size_t(r)] = T(1e6);
+                    if (r < c || r >= n) C0[std::size_t(b) * sc + std::size_t(c) * std::size_t(ldc) + std::size_t(r)] = Scalar(1e6);
     }
-    MV view(UnifiedVector<T>& v, int r, int c, int ld, std::size_t s) { return MV(v.data(), r, c, ld, int(s), batch); }
+    MV view(UnifiedVector<Scalar>& v, int r, int c, int ld,
+            std::size_t s) { return MV(v.data(), r, c, ld, int(s), batch); }
     void reset() {  // beta != 0 accumulates into C
         (void)MV::copy(q, view(C, n, n, ldc, sc), view(C0, n, n, ldc, sc));
         q.wait();
@@ -68,7 +69,8 @@ struct SyrkProblem {
     }
     void clear_info() {}
     void run(Span<std::byte>) {
-        (void)syrk<kBackend, T>(q, view(A, ar, ac, lda, sa), view(C, n, n, ldc, sc), alpha, beta, Uplo::Lower, trans);
+        (void)syrk<kBackend, Scalar>(q, view(A, ar, ac, lda, sa), view(C, n, n, ldc, sc), alpha, beta, Uplo::Lower,
+                                     trans);
         q.wait();
     }
     std::pair<double, int> verify() {
@@ -98,17 +100,12 @@ public:
         return with_real_dtype("syrk", dtype, []<typename T>() { return spellings(K::candidates<T>()); });
     }
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
-        auto ints = [](const auto& xs) {
-            std::vector<std::string> out;
-            for (int v : xs) out.push_back(std::to_string(v));
-            return out;
-        };
         return {{"form", {"sq", "tall", "wide"}}, {"trans", {K::grid_trans.begin(), K::grid_trans.end()}},
                 {"n", ints(K::grid_n)}, {"k", ints(K::grid_k)}, {"batch", ints(batches())}};
     }
     std::vector<CellKey> grid(const std::string& dtype,
                               const std::map<std::string, std::vector<std::string>>& overrides) const override {
-        static_cast<void>(dtype);
+        (void)dtype;
         std::vector<CellKey> cells;
         auto add = [&](std::string_view t, int n, int k, int b) {
             cells.push_back({{"form", std::string(K::form_of(n, k))}, {"trans", std::string(t)}, {"n", std::to_string(n)},
@@ -132,9 +129,16 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
-            "src/sycl/kernel_attrs.hh",
-            "src/sycl/sscp_target.hh",
+            "include/batchlas/device/detail/kernel_attrs.hh",
+            "include/batchlas/device/detail/sscp_target.hh",
             "include/batchlas/util/group-collectives.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn_core.hh",
+            "include/batchlas/device/detail/sg_partition/backend_generic.hh",
+            "include/batchlas/device/detail/sg_partition/backend_nvptx.hh",
+            "include/batchlas/device/detail/sg_partition/backend_spirv.hh",
+            "include/batchlas/device/detail/sg_partition/backend_sscp.hh",
+            "include/batchlas/device/detail/sg_partition/sg_partition.hh",
             // family: gram
             "src/ops/syrk/kernels/syrk_gram_tiles.hh",
             // family: triangular
@@ -142,6 +146,22 @@ public:
             // common
             "src/kernels/common/triangular_tiles.hh",
             "src/ops/syrk/choice.hh",
+            "include/batchlas/device.hh",
+            "include/batchlas/device/arith.hh",
+            "include/batchlas/device/core.hh",
+            "include/batchlas/device/exec.hh",
+            "include/batchlas/device/grid.hh",
+            "include/batchlas/device/interop.hh",
+            "include/batchlas/device/lapack_aux.hh",
+            "include/batchlas/device/level1.hh",
+            "include/batchlas/device/level2.hh",
+            "include/batchlas/device/level3.hh",
+            "include/batchlas/device/operand.hh",
+            "include/batchlas/device/reduce.hh",
+            "include/batchlas/device/scalar.hh",
+            "include/batchlas/device/tier.hh",
+            "include/batchlas/device/view.hh",
+            "include/batchlas/device/workspace.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin

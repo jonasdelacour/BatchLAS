@@ -12,16 +12,16 @@
 
 namespace batchlas::ops::syev {
 
-struct Cta : select::NoFields<"cta"> {};               ///< syev_cta: sytrd + steqr_cta, n <= 32
-struct CtaFused : select::NoFields<"cta_fused"> {};    ///< syev_cta_fused: one kernel, n <= 32
-struct Jacobi : select::NoFields<"jacobi"> {};         ///< syev_jacobi_cta, n <= 32
+struct Cta : select::NoFields<"cta"> {};               ///< syev_cta: sytrd + steqr_cta, \f$n \le 32\f$
+struct CtaFused : select::NoFields<"cta_fused"> {};    ///< syev_cta_fused: one kernel, \f$n \le 32\f$
+struct Jacobi : select::NoFields<"jacobi"> {};         ///< syev_jacobi_cta, \f$n \le 32\f$
 struct Blocked : select::NoFields<"blocked"> {};       ///< syev_blocked: sytrd_blocked + stedc, any n
 struct TwoStage : select::NoFields<"two_stage"> {};    ///< syev_two_stage: sy2sb + sb2st + stedc, any n
 struct Vendor : select::NoFields<"vendor"> {};         ///< backend::syev_vendor; needs the solver library
 
 using SyevChoice = std::variant<Cta, CtaFused, Jacobi, Blocked, TwoStage, Vendor>;  ///< GPU natives: square, no NETLIB
 
-template <typename T>  /// Every compiled choice, once, in tie-break order (§6.3): native first, vendor last.
+template <typename Scalar>  /// Every compiled choice, once, in tie-break order (§6.3): native first, vendor last.
 constexpr auto candidates() { return select::all_of<SyevChoice>(); }
 
 inline constexpr select::OpSpec spec{Op::syev, select::Lib::solver};  ///< last resort (§5.5): blocked, vendor (CPU)

@@ -39,10 +39,10 @@ deep results. Parameters: `params()` in `tools/tune/tier.hh`.
 
 | Parameter | preview | coarse | deep |
 | --- | --- | --- | --- |
-| Starting lattice | stride 2 of each `choice.hh` axis (batch: the CU-aligned ladder), ends kept; gemm's demand-driven grid: key hash % 12 | stride 2, ends kept, then flip-frontier rounds; stride-1 ops (gemm, geqrf, getri, orgqr, spmm): full lattice | as coarse |
+| Starting lattice | stride 2 of each `choice.hh` axis (batch: the CU-aligned ladder), ends kept; gemm's demand-driven grid: key \f$\mathrm{hash} \bmod 12\f$ | stride 2, ends kept, then flip-frontier rounds; stride-1 ops (gemm, geqrf, getri, orgqr, spmm): full lattice | as coarse |
 | Rounds after round 0 | none: an unmeasured cell takes the nearest measured row (`select::choose`) | flip frontier and bisection | as coarse |
-| Bisection (stride-1 ops) | none | geometric to hi/lo < 1.1 | as coarse |
-| Refinement cap (x round-0 cells; stride-1 ops only) | none | 1.0 | 2.0 |
+| Bisection (stride-1 ops) | none | geometric to \f$\mathrm{hi}/\mathrm{lo} < 1.1\f$ | as coarse |
+| Refinement cap (\f$\times\f$ round-0 cells; stride-1 ops only) | none | 1.0 | 2.0 |
 | Race reps floor per candidate | 3 | 4 | 6 |
 | Elimination confidence | 0.80 | 0.90 | 0.98, plus a reversed confirmation round |
 | Fresh-process audit sample | 2% | 2% | 1% |
@@ -52,8 +52,8 @@ deep results. Parameters: `params()` in `tools/tune/tier.hh`.
   --tier preview --dtype float,cfloat --max-dim 2048` plans 0.88 h on an M5 Max (2026-10-29; 7.94 h
   with the frontier and bisection rounds it used to run). Its index-bisection, margin and cap
   values in `params()` drive only `tune_replay`.
-- The tie margin is 3% in every tier. Lattices nest (preview ⊂ coarse ⊂ deep); a grid that is not a
-  lattice is subsampled by a stable hash of the cell key (preview: hash % 12, inside the % 2 an
+- The tie margin is 3% in every tier. Lattices nest (preview \f$\subset\f$ coarse \f$\subset\f$ deep); a grid that is not a
+  lattice is subsampled by a stable hash of the cell key (preview: \f$\mathrm{hash} \bmod 12\f$, inside the \f$\bmod 2\f$ an
   older preview used, so its records stay round-0 cells).
 
 Per cell: **probe** each candidate's pin (`*_buffer_size` under `select::ScopedPin`, or one untimed
@@ -66,7 +66,7 @@ Across cells: round 0 of every op and dtype completes before refinement, so an i
 leaves usable tables. `log` axes bisect geometrically, `exact` axes (uplo, side, trans) never,
 `batch` refills only its own values; nothing is interpolated (`select::choose` takes the nearest
 row). The `--plan` estimate takes the recorded phases (`ph_*`) of the nearest ledger cell of the
-same protocol, tier and mode, else a model (`--cell-overhead-s` plus per-arm reps × median, plus
+same protocol, tier and mode, else a model (`--cell-overhead-s` plus per-arm reps \f$\times\f$ median, plus
 0.05 s verify). `--budget <h>` stops refinement; round 0 always completes.
 
 ## Engine: the ledger and table generation
@@ -97,7 +97,7 @@ record of its cell whatever its tier, and the planner re-measures it; `--plan` h
 | 1. Untimed run per arm | keeps JIT and module loads out of the cut | |
 | 2. Gross cut | after two timed rounds, an arm whose lower median paired ratio to the leader exceeds 4 leaves | `kGrossLoserRatio` = 4.0 |
 | 3. Warm until stable | untimed rounds until two consecutive totals agree within 2%, 2 to 0.2 s per arm | `kWarmTol`, `kWarmMinRounds`, `kWarmCapPerArmS` |
-| 4. Rep cap | ceil(50 ms / slowest survivor's median), clamped to [reps floor, 16] | `kRepBudgetS` = 0.05, `kRepCap` = 16 |
+| 4. Rep cap | \f$\lceil 50\,\mathrm{ms} / \text{slowest survivor's median} \rceil\f$, clamped to \f$[\text{reps floor}, 16]\f$ | `kRepBudgetS` = 0.05, `kRepCap` = 16 |
 | 5. Verify | the tie set only | "Engine: tie-set verification" |
 
 - NVML is sampled after each timed run; a cell clock-capped in more than 25% of samples is raced
@@ -113,7 +113,7 @@ A cell verifies only the arms that can rank first plus the arms its bucket has n
 
 - **Tie set:** the unverified arms within 3% of the fastest survivor's median. A failure leaves the
   set and the next arms that can rank first are verified.
-- **Once per bucket** = (op, dtype, exact keys, floor(log10 per-item bytes)). Unverified arms stay in
+- **Once per bucket** = (op, dtype, exact keys, \f$\lfloor \log_{10}(\text{per-item bytes}) \rfloor\f$). Unverified arms stay in
   the row with ledger flag `v<i> = 0`: a pin that falls through needs them.
 - **A failure** condemns the kernel in its bucket: later cells record it `bad` untimed, and every
   current record of the bucket ranking it unverified is appended again with it `bad`
@@ -144,7 +144,7 @@ no mismatch ([potrf: the 48 KB launch hole](../perf/potrf.md#potrf-the-48-kb-lau
 ## Engine: measured per-child overhead
 
 A fresh `batchlas_tune_impl --cell` child costs 0.49 s before any kernel (process, SYCL and CUDA
-init, JIT-cache load; threadripper02, sm_120, potrf float n=16 batch=8192, median of 20,
+init, JIT-cache load; threadripper02, sm_120, potrf float \f$n = 16\f$, batch 8192, median of 20,
 2026-10-07), 37-60% of a raced preview cell. Hence one persistent worker per GPU;
 `--cell-overhead-s` defaults to 0.49 (`kChildOverheadS`, `schedule.hh`).
 
@@ -165,7 +165,7 @@ Expert overrides (`--reps`, `--warm`, `--passes`, `--remeasure`, `--refine-ratio
 2. **Margin.** A tier's margin (preview's 10%, replay only) applies only to brackets whose ends are
    both round-0 cells.
 3. **Batch** is never bisected; it refills its own axis values ("Engine: the CU-aligned batch ladder").
-4. **Cap.** Without a frontier, refinement cells per op and dtype ≤ `refine_cap_factor` × round-0
+4. **Cap.** Without a frontier, refinement cells per op and dtype \f$\le\f$ `refine_cap_factor` \f$\times\f$ round-0
    cells, counting the ledger's current records, so a stopped run resumes within the same total.
    Flips refine before margin hedges. A frontier run has no cap.
 5. **Estimate.** The ledger's refined / round-0 ratio at the tier, else half the cap factor; a
@@ -175,8 +175,8 @@ Expert overrides (`--reps`, `--warm`, `--passes`, `--remeasure`, `--refine-ratio
 
 `tune_replay --raw <sweep> --tier <t>` (`tools/tune/replay.cc`) replays a stride-1 tier's racing and
 bisection against the exhaustive trsm sweeps (4452 float, 4098 double cells), no GPU. Score: table
-misrank (nearest row's pick > 3% slower than the exhaustive best), as excess over the pass-1/pass-2
-noise floor (~1.5%). Bounds: deep 0.2%, coarse 1%, preview 5%; all six tier × dtype lines pass
+misrank (nearest row's pick \f$>\f$ 3% slower than the exhaustive best), as excess over the pass-1/pass-2
+noise floor (~1.5%). Bounds: deep 0.2%, coarse 1%, preview 5%; all six tier \f$\times\f$ dtype lines pass
 (worst: preview double 4.25%). Same-sample table misrank, float / double:
 
 | Alternative | Result | Verdict |
@@ -192,14 +192,14 @@ noise floor (~1.5%). Bounds: deep 0.2%, coarse 1%, preview 5%; all six tier × d
 ## Engine: flip frontier and the slowdown replay
 
 **Rule** (`flip_frontier`, `tools/tune/grid.cc`). After a stride-2 start, an unmeasured cell is
-measured when its k = 6 nearest measured cells (own exact-key group, `select::choose`'s distance via
+measured when its \f$k = 6\f$ nearest measured cells (own exact-key group, `select::choose`'s distance via
 `NearestIndex`) hold a decisive flip: one neighbour's winner is more than 5% slower than the best at
 another, or cannot run there. Rounds repeat until none is left.
 
 **Slowdown replay** (`tune_replay --slowdown`, `slowdown_replay` in `replay_core.cc`). Universe:
 every timed row of a shipped table (`--table`), current ledger record (`--ledger`) or raw sweep cell
-(`--raw`). Score per cell: t(pick) / t(fastest arm), the pick being the nearest measured row's first
-entry that runs there. Gate: no failures, geomean ≤ 0.05%, p99.9 ≤ 1.10. Truth is the shipped
+(`--raw`). Score per cell: \f$t(\text{pick}) / t(\text{fastest arm})\f$, the pick being the nearest measured row's first
+entry that runs there. Gate: no failures, geomean \f$\le\f$ 0.05%, p99.9 \f$\le\f$ 1.10. Truth is the shipped
 medians; race noise and tie order are not modelled.
 
 Gate run, 2026-10-16, threadripper02: the 19 `tuned/*.sm_120.txt` tables with their ledgers
@@ -227,7 +227,7 @@ Coarse and deep runs plan rounds by the flip frontier (`TieredRun::build` and `r
 - **Round 0** (`frontier_start`, shared with the replay): grid cells on `tier_lattice(axes, 2)`;
   an exact-key group with none takes every second value of its own, ends kept. Partly stale grid
   cells join round 0.
-- **Frontier rounds** pick grid cells whose k nearest measured cells (this run's and the ledger's
+- **Frontier rounds** pick grid cells whose \f$k\f$ nearest measured cells (this run's and the ledger's
   current records at the same or a higher tier) hold a decisive flip. **Bisection** (3% tie, index
   mode) adds off-grid midpoints only. Stop when neither adds a cell; `--budget` stops rounds after
   round 0.
@@ -255,7 +255,7 @@ probes the prior on the device and measures only where the device disagrees. Cod
 
 | Part | Rule |
 | --- | --- |
-| Prior | `--prior <device>`, else `prior_table`: among the other non-cpu devices' tables, the newest `date=` among those ≥ 90% timed; else the larger timed share, then newest, then name. A cell's pick is the prior's nearest row's first current candidate |
+| Prior | `--prior <device>`, else `prior_table`: among the other non-cpu devices' tables, the newest `date=` among those \f$\ge\f$ 90% timed; else the larger timed share, then newest, then name. A cell's pick is the prior's nearest row's first current candidate |
 | Probe (round 0) | `frontier_start(grid, axes, 4)` (`--probe-stride`), every arm at coarse quality. A probe disagrees when the device's winner is more than 5% faster than the prior's pick, or the pick cannot run |
 | Refinement | open cells whose prior pick is decisively beaten at one of their 6 nearest measured cells that disagrees; bisection only next to a disagreeing cell |
 | Arms off the probes | the prior's top 2, any family the prior never names, the winners of the 6 nearest measured cells; the rest `skipped`, reason `unraced:calibrate` (never stale). `--only-named` is refused |
@@ -290,7 +290,7 @@ table exists to test that.
 ## Engine: the CU-aligned batch ladder
 
 **Rule.** A tiered run can replace an op's `choice.hh` batch axis with `batch_ladder(cus, classes,
-extras)` (`grid.cc`): max(1, round(c × CUs)) per class c, plus the spec's `ladder_extra_batches()`.
+extras)` (`grid.cc`): \f$\max(1, \operatorname{round}(c \times \mathrm{CUs}))\f$ per class \f$c\f$, plus the spec's `ladder_extra_batches()`.
 Default classes 0.25, 2, 16, 128 (`default_batch_classes`): latency, about one wave, saturated. sm_120
 (188 SMs): 47, 376, 3008, 24064; RTX 4090 (128): 32, 256, 2048, 16384. The key stays `batch:log`;
 the run's `grid` field records the ladder. Batch is still never bisected.
@@ -313,7 +313,7 @@ the run's `grid` field records the ladder. Batch is still never bisected.
 | syrk, symm | extras 1, 2, 4, 8 | vendor-loop/native crossovers at batch 1-8 |
 | syr2k | extras 1, 2, 3 | the vendor loop wins batch 1 only |
 | trmm | extra 1 | below 128 the ledger holds batch 1 only |
-| the rest | none | batch < 128 is out of scope (agent guide §10) |
+| the rest | none | batch \f$< 128\f$ is out of scope (agent guide §10) |
 
 `TuneSpecLadder.RealSpecHooksGiveTheDocumentedLadders` (`tune_race_gpu_tests`) pins this table.
 
@@ -325,15 +325,15 @@ moves); `TuneSpecLadder.Level3OldAxisGridsReachPastTheGridYCap` pins it. At the 
 65536 admits only 64 KiB per item, so the large shapes need `--cap-gib 32`.
 
 **Evidence** (sm_120, 2026-10-21). Empty-ledger `all --tier deep --plan`, four dtypes: round-0 cells
-27061 → 24120, 20.1 → 19.9 GPU-h. Held-out replay on the committed ledgers (a lower bound): the
-ladder costs 0.2-0.9 points of geomean at batch ≥ 128. A getri and potrf float coarse A/B on GPU 2:
-getri no difference, potrf 0.3-0.4 points worse. Class sets, geomean on 8 ops at batch ≥ 32:
+\f$27061 \to 24120\f$, \f$20.1 \to 19.9\f$ GPU-h. Held-out replay on the committed ledgers (a lower bound): the
+ladder costs 0.2-0.9 points of geomean at batch \f$\ge 128\f$. A getri and potrf float coarse A/B on GPU 2:
+getri no difference, potrf 0.3-0.4 points worse. Class sets, geomean on 8 ops at batch \f$\ge 32\f$:
 
 | Classes | Geomean range | Round-0 cells / GPU-h | Verdict |
 | --- | --- | ---: | --- |
 | **0.25, 2, 16, 128** | 0.13-1.50% | 24120 / 19.9 | default |
 | 0.25, 2, 8, 32, 128 | 0-1.02% | 28789 / 25.8 | rejected: more cells than the `choice.hh` axis (27061 / 20.1) |
-| 0.25, 1, 8, 64 | 0.26-2.75% | 27375 / 21.9 | rejected: no top class near 32768, small-n CTA cells lose up to 3.7x |
+| 0.25, 1, 8, 64 | 0.26-2.75% | 27375 / 21.9 | rejected: no top class near 32768, small-\f$n\f$ CTA cells lose up to 3.7x |
 | 0.25, 4, 64 | 0.42-2.35% | 17835 / 14.7 | cheap option, `--batch-ladder 0.25,4,64` |
 
 **Re-tune** (sm_120; not run, no shipped table has ladder rows yet):
@@ -449,7 +449,7 @@ another user's jobs. Ledgers: `benchmarks/results/tuning/ledger/*.sm_120.jsonl`.
 
 - geqrf, ormqr, getri, posv, gesv, orgqr, syev, gesvd and complex getrs got little refinement
   before the stop, so their crossovers sit on lattice spacing (open).
-- Remaining stall outliers reproduce (mostly the gesvd `jacobi` cliff at m = 33), so they are real.
+- Remaining stall outliers reproduce (mostly the gesvd `jacobi` cliff at \f$m = 33\f$), so they are real.
 
 | Found by the run | Fix |
 | --- | --- |
@@ -464,7 +464,7 @@ another user's jobs. Ledgers: `benchmarks/results/tuning/ledger/*.sm_120.jsonl`.
 ## Open: the constants tuner (sub-project 2) {#coverage-interface-for-sub-project-2}
 
 Not implemented: a second spec kind whose candidates are values of one `tuning_params.hh` knob,
-cells its n-buckets and dtypes, measured through the `BATCHLAS_TUNE_*` overrides, with a ledger that
+cells its \f$n\f$-buckets and dtypes, measured through the `BATCHLAS_TUNE_*` overrides, with a ledger that
 yields the header (a knob with two consumers is tuned on the one the maintainer names). Then retire
 `evaluation/tuning/` (today's float-only source of `tuning_params.hh`); its `sensitivity.py` axis
 pruning becomes the knob's starting lattice.
@@ -477,7 +477,7 @@ pruning becomes the knob's starting lattice.
 
 | View | Content |
 | --- | --- |
-| Status matrix | op × dtype × device; staleness per kernel family, stale keys per dtype, `behind` when the header does not name the newest run |
+| Status matrix | op \f$\times\f$ dtype \f$\times\f$ device; staleness per kernel family, stale keys per dtype, `behind` when the header does not name the newest run |
 | Launch and progress | any tier, listed cells (`--remeasure-keys`); estimate first, cells stream over SSE; runs in `benchviz_runs/_tuning/<run>/`; the tuner's own guard replaces `gpu_guard.sh` |
 | Decision map | small multiples over the planned lattice; an unmeasured cell shows the next table's pick, faded by distance to its serving row (without it gemm float TT on sm_89 reads as a clean rule on 10 measured cells) |
 | Ranked diff | cells whose pick changes between the shipped table and the next one, ranked by milliseconds saved; overlapping intervals are marked noise |

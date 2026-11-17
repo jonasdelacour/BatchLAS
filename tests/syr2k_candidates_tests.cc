@@ -47,8 +47,8 @@ namespace {
 namespace s2 = batchlas::ops::syr2k;
 using C = s2::Syr2kChoice;
 using Pin = select::ScopedPin<C>;
-template <typename T>
-using MVof = MatrixView<T, MatrixFormat::Dense>;
+template <typename Real>
+using MVof = MatrixView<Real, MatrixFormat::Dense>;
 
 using test_support::same_bits;
 
@@ -79,16 +79,16 @@ std::string name(const C& c, const Spec& s) { return select::to_string(c) + " " 
 // A, B and C in one buffer of poison. A and B are op-shaped (n x k, or k x n under T/C); C's
 // unreferenced triangle, every ld pad and every gap hold distinct large finite values that a
 // correct syr2k neither writes nor lets into the referenced triangle.
-template <typename T>
+template <typename Real>
 struct Prob {
     Spec s;
-    T alpha = T(1.25), beta = T(-0.5);
+    Real alpha = Real(1.25), beta = Real(-0.5);
     Region a, b, c;
-    UnifiedVector<T> mem;
-    UnifiedVector<T> mem0;
-    MVof<T> A() { return {mem.data() + a.off, a.rows, a.cols, a.ld, a.stride, s.batch}; }
-    MVof<T> B() { return {mem.data() + b.off, b.rows, b.cols, b.ld, b.stride, s.batch}; }
-    MVof<T> Cv() { return {mem.data() + c.off, s.n, s.n, c.ld, c.stride, s.batch}; }
+    UnifiedVector<Real> mem;
+    UnifiedVector<Real> mem0;
+    MVof<Real> A() { return {mem.data() + a.off, a.rows, a.cols, a.ld, a.stride, s.batch}; }
+    MVof<Real> B() { return {mem.data() + b.off, b.rows, b.cols, b.ld, b.stride, s.batch}; }
+    MVof<Real> Cv() { return {mem.data() + c.off, s.n, s.n, c.ld, c.stride, s.batch}; }
     std::size_t idx(const Region& r, int it, int i, int j) const {
         return r.off + std::size_t(it) * r.stride + std::size_t(j) * r.ld + i;
     }
@@ -97,9 +97,9 @@ struct Prob {
 
 std::size_t round4(std::size_t v) { return (v + 3) / 4 * 4; }
 
-template <typename T>
-Prob<T> make_prob(const Spec& s) {
-    Prob<T> p;
+template <typename Real>
+Prob<Real> make_prob(const Spec& s) {
+    Prob<Real> p;
     p.s = s;
     const bool nt = s.trans == Transpose::NoTrans;
     const int ar = nt ? s.n : s.k, ac = nt ? s.k : s.n;
@@ -110,10 +110,10 @@ Prob<T> make_prob(const Spec& s) {
     p.c = {round4(p.b.off + std::size_t(p.b.stride) * s.batch + (s.natural ? 0 : 3)), s.n, s.n, s.n + 2 * pad,
            (s.n + 2 * pad) * s.n + gap};
     const std::size_t total = p.c.off + std::size_t(p.c.stride) * s.batch + 11;
-    p.mem = UnifiedVector<T>(total, T(0));
-    for (std::size_t e = 0; e < total; ++e) p.mem[e] = -T(1000) - T(e % 4093);
+    p.mem = UnifiedVector<Real>(total, Real(0));
+    for (std::size_t e = 0; e < total; ++e) p.mem[e] = -Real(1000) - Real(e % 4093);
     std::mt19937 gen(s.seed);
-    std::uniform_real_distribution<T> u(T(-1), T(1));
+    std::uniform_real_distribution<Real> u(Real(-1), Real(1));
     const int reps = s.period > 0 ? std::min(s.period, s.batch) : s.batch;
     for (int it = 0; it < s.batch; ++it) {
         const int r = it % reps;
@@ -224,9 +224,9 @@ void expect_heterogeneous_has_no_route(Queue& ctx) {
             for (int i = 0; i < n; ++i) ASSERT_EQ(Cm(i, j, b), T(1)) << "a refused call wrote C";
 }
 
-template <typename T, Backend B>
+template <typename Real, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Real;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types_filtered<Cfg, false>::type;

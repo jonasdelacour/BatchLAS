@@ -15,7 +15,8 @@
 # are hidden and --gpu is refused, since GPU load has crashed it), mac (Apple M5 Max, Metal).
 # start: worktree ~/BatchLAS/.claude/worktrees/dispatch-NAME on branch dispatch/NAME from
 # origin/main, a seeded build tree, then an interactive `claude --remote-control dispatch-NAME` in
-# a detached screen session dispatch-NAME (pid in .dispatch/pid) with the host rules prepended to
+# a detached screen session dispatch-NAME (pid in .dispatch/pid; `bash -i`, so ~/.bashrc's toolchain
+# PATH/LD_LIBRARY_PATH apply: screen and login shells drop them) with the host rules prepended to
 # BRIEF. It shows up as dispatch-NAME in claude.ai/code and the Claude app (Remote Control), where
 # you can follow and steer it. `-p` sessions cannot use Remote Control. The session pushes
 # dispatch/NAME, writes .dispatch/report.md and then stays idle until `stop`.
@@ -139,7 +140,7 @@ claude=\$(command -v claude || echo \$HOME/.local/bin/claude)
 echo \$? > .dispatch/exit
 EOF
         command -v screen >/dev/null || { echo 'no screen on this host'; exit 1; }
-        screen -dmS dispatch-$name bash $wt/.dispatch/run.sh" ||
+        screen -dmS dispatch-$name bash -i $wt/.dispatch/run.sh" ||
         die "launch failed on $host"
     echo "started $name on $host: $wt (branch dispatch/$name)"
     echo "Remote Control: session 'dispatch-$name' in claude.ai/code; terminal: dispatch.sh attach $host $name"
@@ -219,5 +220,5 @@ case "$sub" in
         d="$(repo_of "$1")/.claude/worktrees/dispatch-$2"
         on "$1" "[ -f $d/.dispatch/pid ] && kill -0 \$(cat $d/.dispatch/pid) 2>/dev/null && { echo 'still running; stop it first'; exit 1; }
             cd $(repo_of "$1") && git worktree remove --force $d && git branch -D dispatch/$2" ;;
-    *) sed -n '3,21p' "$0"; exit 2 ;;
+    *) sed -n '3,22p' "$0"; exit 2 ;;
 esac

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /// @file
@@ -26,7 +27,7 @@ struct Vendor : select::NoFields<"vendor"> {};      ///< backend::sygst_vendor: 
 
 using SygstChoice = std::variant<Blocked, TwoSided, Vendor>;  ///< the children select their own kernels
 
-template <class T>  /// Tie-break order (§6.3): native first, vendor last.
+template <class Scalar>  /// Tie-break order (§6.3): native first, vendor last.
 constexpr auto candidates() {
     return std::array<SygstChoice, 6>{Blocked{32}, Blocked{64}, Blocked{128}, Blocked{256}, TwoSided{}, Vendor{}};
 }
@@ -37,7 +38,7 @@ inline constexpr std::array<std::string_view, 3> kLastResort{"vendor", "blocked"
 inline constexpr select::OpSpec spec{Op::sygst, select::Lib::solver, select::Rules{kLastResort}};
 
 inline constexpr std::array<std::string_view, 4> key_names{"itype:exact", "uplo:exact", "n:log:3",
-                                                            "batch:log"};  ///< itype 1 trsm, 2, 3 trmm; ~n^3 batch
+                                                            "batch:log"};  ///< itype 1 trsm, 2, 3 trmm; \f$\sim n^3 \cdot \mathit{batch}\f$
 
 inline constexpr std::array<int, 15> grid_n{1, 2, 4, 8, 16, 32, 33, 64, 128, 240, 256, 480, 512, 1024, 1200};
 inline constexpr std::array<int, 5> grid_batch{128, 512, 2048, 8192, 32768};

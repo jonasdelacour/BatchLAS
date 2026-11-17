@@ -19,14 +19,14 @@ protected:
         const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
         const int max_wg = static_cast<int>(
             this->ctx->device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
-        return sycl_potrf::potrf_lpanel_max_n_for_slm<T>(budget, max_wg,
+        return ops::potrf::potrf_lpanel_max_n_for_slm<T>(budget, max_wg,
                                                          resident::kMinBlocksPerSm, nb_hint);
     }
 
     struct LpGeom { int nb; int L; int G; };
 
     LpGeom geom(int n, int batch, int nb_hint = 0) const {
-        const unsigned g = sycl_potrf::potrf_lpanel_debug_launch<T>(
+        const unsigned g = ops::potrf::potrf_lpanel_debug_launch<T>(
             *this->ctx, n, batch, resident::kMinBlocksPerSm, nb_hint);
         return LpGeom{static_cast<int>(g >> 16),
                       static_cast<int>((g >> 4) & 0xfffu),
@@ -37,9 +37,9 @@ protected:
                                     Uplo uplo = Uplo::Lower, int nb_hint = 0,
                                     bool pass_info_span = true) {
         const int batch = static_cast<int>(V.batch_size());
-        UnifiedVector<std::byte> ws(sycl_potrf::potrf_lpanel_buffer_size<T>(*this->ctx, V));
+        UnifiedVector<std::byte> ws(ops::potrf::potrf_lpanel_buffer_size<T>(*this->ctx, V));
         UnifiedVector<int32_t> info(static_cast<size_t>(batch), int32_t(-7));
-        (void)sycl_potrf::potrf_lpanel_dispatch<T>(
+        (void)ops::potrf::potrf_lpanel_dispatch<T>(
             *this->ctx, V, uplo, ws.to_span(),
             pass_info_span ? info.to_span() : Span<int32_t>{},
             resident::kMinBlocksPerSm, nb_hint);
@@ -107,7 +107,7 @@ TYPED_TEST(PotrfLpanelTest, ResidualAcrossPanelBoundaries) {
 // IT DOES NOT GUARD B6, and nothing here does. Deleting B6 was planted and measured GREEN at
 // batch 1024 in this case and at 4096/16384 through factor_bench, all four types, n to 512:
 // the 8 dependent global loads of the next panel's prefetch apparently cover the window on
-// this card. B6 is held by the DATA-FLOW argument in potrf_lpanel_device.hh alone -- the
+// this card. B6 is held by the DATA-FLOW argument in potrf.hh BlockedLeft alone -- the
 // panel-end store writes global columns the NEXT panel's left-looking staging reads, from
 // other work-items, and only B6 orders them. Unfalsifiable on this hardware is not optional:
 // do not delete it because no test goes red.
@@ -334,7 +334,7 @@ TYPED_TEST(PotrfLpanelTest, PackedBatchIsIndependentAndTheTailSlotsAreInert) {
     }
 
     // 4G + 3 leaves the LAST work-group partly dead, which is the case the `store` flag
-    // in potrf_lpanel_body exists for.
+    // in potrf_blocked_run<alg::LeftLooking> exists for.
     const int batch = 4 * G + 3;
     ASSERT_NE(batch % G, 0) << "batch is a multiple of G: no dead slots, nothing proved";
 
@@ -422,7 +422,7 @@ TYPED_TEST(PotrfLpanelTest, FacadeReachesTheLpanelKernel) {
     }
 
     const std::size_t bytes = potrf_buffer_size<B, T>(*this->ctx, A.view(), Uplo::Lower);
-    ASSERT_GE(bytes, sycl_potrf::potrf_lpanel_buffer_size<T>(*this->ctx, A.view()))
+    ASSERT_GE(bytes, ops::potrf::potrf_lpanel_buffer_size<T>(*this->ctx, A.view()))
         << "potrf_buffer_size does not cover the LPanel tier the pin chose";
     UnifiedVector<std::byte> ws(bytes);
     UnifiedVector<int32_t> info(batch, int32_t(-7));
@@ -479,8 +479,8 @@ TYPED_TEST(PotrfLpanelTest, NbSixteenIsInstantiatedForFloatOnly) {
         A.fill(T{});
         for (int i = 0; i < n; ++i) A(i, i, 0) = MV<T>::make(R(2), R(0));
         UnifiedVector<std::byte> ws(
-            sycl_potrf::potrf_lpanel_buffer_size<T>(*this->ctx, A.view()));
-        EXPECT_THROW((void)sycl_potrf::potrf_lpanel_dispatch<T>(
+            ops::potrf::potrf_lpanel_buffer_size<T>(*this->ctx, A.view()));
+        EXPECT_THROW((void)ops::potrf::potrf_lpanel_dispatch<T>(
                          *this->ctx, A.view(), Uplo::Lower, ws.to_span(), probe.to_span(),
                          resident::kMinBlocksPerSm, /*nb_hint=*/16),
                      std::exception);
@@ -499,7 +499,7 @@ TYPED_TEST(PotrfLpanelTest, CeilingIsCappedByBothMemoryAndWorkGroupSize) {
     EXPECT_LE(cap, (max_wg / 32) * 32);
 
     // A budget so large that only the work-group cap can bind.
-    EXPECT_EQ((sycl_potrf::potrf_lpanel_max_n_for_slm<T>(std::size_t(1) << 40, max_wg)),
+    EXPECT_EQ((ops::potrf::potrf_lpanel_max_n_for_slm<T>(std::size_t(1) << 40, max_wg)),
               (max_wg / 32) * 32);
 
     // ... and a work-group cap so large that only memory can bind; that answer must be
@@ -507,8 +507,8 @@ TYPED_TEST(PotrfLpanelTest, CeilingIsCappedByBothMemoryAndWorkGroupSize) {
     const std::size_t local_mem =
         this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE);
     const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
-    EXPECT_GT((sycl_potrf::potrf_lpanel_max_n_for_slm<T>(budget, 1 << 20)),
-              (sycl_potrf::potrf_cta_max_n_for_slm<T>(budget)))
+    EXPECT_GT((ops::potrf::potrf_lpanel_max_n_for_slm<T>(budget, 1 << 20)),
+              (ops::potrf::potrf_cta_max_n_for_slm<T>(budget)))
         << "the LPanel tier holds one n x NB panel and the CTA tier the whole matrix; a "
            "ceiling that is not larger means the footprint formula is wrong";
 
@@ -521,8 +521,8 @@ TYPED_TEST(PotrfLpanelTest, CeilingIsCappedByBothMemoryAndWorkGroupSize) {
     else if constexpr (std::is_same_v<T, double>)                { adv = 368; res = 1024; }
     else if constexpr (std::is_same_v<T, std::complex<float>>)   { adv = 368; res = 1024; }
     else                                                         { adv = 180; res = 750; }
-    EXPECT_EQ((sycl_potrf::potrf_lpanel_max_n_for_slm<T>(kRef, 1024)), adv);
-    EXPECT_EQ((sycl_potrf::potrf_lpanel_max_n_for_slm<T>(kRef, 1024, 1)), res);
+    EXPECT_EQ((ops::potrf::potrf_lpanel_max_n_for_slm<T>(kRef, 1024)), adv);
+    EXPECT_EQ((ops::potrf::potrf_lpanel_max_n_for_slm<T>(kRef, 1024, 1)), res);
 
     // L is a whole number of sub-groups and never below n.
     for (int n : {33, 64, 65, std::min(192, cap)}) {
@@ -532,5 +532,62 @@ TYPED_TEST(PotrfLpanelTest, CeilingIsCappedByBothMemoryAndWorkGroupSize) {
         EXPECT_GE(g.L, n) << "n=" << n << ": fewer lanes than rows is a silent race";
         EXPECT_EQ(g.L % 32, 0) << "n=" << n;
         EXPECT_GE(g.G, 1);
+    }
+}
+
+// Column 0 is a(i,0) * (1 / sqrt(a00)) to within kMaxEps eps of a long double reference, for
+// every row below the diagonal. The residual sweep accepts the bare rsqrt.approx NVPTX folded
+// `1 / sqrt(d)` into for float; this bound does not. One SPD matrix (strictly diagonally
+// dominant) is copied to every item with a00 stepped across [2n, 8n), so the 1024 pivots sample
+// two binades of rsqrt input with no RNG draw per item.
+TYPED_TEST(PotrfLpanelTest, FirstColumnReciprocalIsAccurate) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+    // Measured worst (eps), RTX 4090: float and cfloat 1.053 with rsqrt + Newton (origin/main's
+    // bare rsqrt.approx fold: 1.306), double and cdouble 1.148.
+    constexpr double kMaxEps = std::is_same_v<R, float> ? 1.1 : 1.2;
+
+    const auto rel_err = [](R got, long double want) {
+        constexpr long double eps = std::numeric_limits<R>::epsilon();
+        return want == 0.0L ? 0.0 : static_cast<double>(std::fabs((got - want) / want) / eps);
+    };
+    const int n = 32;
+    const int batch = 1024;
+    std::vector<T> base(static_cast<size_t>(n) * n, T{});
+    std::mt19937 rng(4242u);
+    std::uniform_real_distribution<double> u(-1.0, 1.0);
+    for (int j = 0; j < n; ++j) {
+        base[j + static_cast<size_t>(j) * n] = MV<T>::make(R(2 * n), R(0));
+        for (int i = j + 1; i < n; ++i) {
+            const T v = MV<T>::make(R(u(rng)), R(u(rng)) * R(0.5));
+            base[i + static_cast<size_t>(j) * n] = v;
+            base[j + static_cast<size_t>(i) * n] = MV<T>::conj(v);
+        }
+    }
+    for (int nb : {8, 16}) {
+        if (this->lp_ceiling(nb) < n) continue;  // NB = 16 is instantiated for float only
+        Matrix<T, MatrixFormat::Dense> A(n, n, batch);
+        std::vector<R> a00(batch);
+        for (int b = 0; b < batch; ++b) {
+            a00[b] = R(2 * n) * (R(1) + R(3) * R(b) / R(batch)) + R(0.6180339887) * R(b % 7);
+            base[0] = MV<T>::make(a00[b], R(0));
+            this->load_triangle(A, b, n, base, Uplo::Lower, MV<T>::make(R(-999), R(777)));
+        }
+        ASSERT_EQ(this->geom(n, batch, nb).nb, nb);
+        const auto info = this->run_lpanel(A.view(), Uplo::Lower, nb);
+        double worst = 0.0;
+        for (int b = 0; b < batch; ++b) {
+            ASSERT_EQ(info[b], 0) << "nb=" << nb << " b=" << b;
+            const long double r = 1.0L / std::sqrt(static_cast<long double>(a00[b]));
+            for (int i = 1; i < n; ++i) {
+                const T a = base[i];
+                const T got = A(i, 0, b);
+                worst = std::max(worst, rel_err(std::real(got), std::real(a) * r));
+                worst = std::max(worst, rel_err(std::imag(got), std::imag(a) * r));
+            }
+        }
+        ::testing::Test::RecordProperty("worst_eps_nb" + std::to_string(nb), std::to_string(worst));
+        EXPECT_LE(worst, kMaxEps) << "nb=" << nb << ": column 0 is not a(i,0) / sqrt(a00) to "
+                                  << kMaxEps << " eps";
     }
 }

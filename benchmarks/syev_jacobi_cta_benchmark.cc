@@ -30,24 +30,18 @@ inline void SyevJacobiCtaBenchSizes(Benchmark* b) {
     }
 }
 
-inline JobType parse_jobz(int v) {
-    return (v == 0) ? JobType::NoEigenVectors : JobType::EigenVectors;
-}
-
-} // namespace
-
-template <typename T, Backend B>
-static void BM_SYEV_JACOBI_CTA(minibench::State& state) {
+template <typename Scalar, Backend B>
+void BM_SYEV_JACOBI_CTA(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const JobType jobz = parse_jobz(static_cast<int>(state.range(2)));
     const size_t wg_mult = state.range(3) > 0 ? state.range(3) : 1;
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    auto A = Matrix<T>::Random(n, n, /*hermitian=*/true, batch);
-    UnifiedVector<typename base_type<T>::type> W(n * batch);
+    auto A = Matrix<Scalar>::Random(n, n, /*hermitian=*/true, batch);
+    UnifiedVector<typename base_type<Scalar>::type> W(n * batch);
 
-    JacobiParams<T> params;
+    JacobiParams<Scalar> params;
     params.cta_wg_size_multiplier = wg_mult;
 
     UnifiedVector<std::byte> workspace(0);
@@ -69,18 +63,18 @@ static void BM_SYEV_JACOBI_CTA(minibench::State& state) {
 }
 
 // Same grid, tridiagonalization-based path, for a direct comparison.
-template <typename T, Backend B>
-static void BM_SYEV_CTA_TRIDIAG_REF(minibench::State& state) {
+template <typename Scalar, Backend B>
+void BM_SYEV_CTA_TRIDIAG_REF(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const JobType jobz = parse_jobz(static_cast<int>(state.range(2)));
     const size_t wg_mult = state.range(3) > 0 ? state.range(3) : 1;
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
-    auto A = Matrix<T>::Random(n, n, /*hermitian=*/true, batch);
-    UnifiedVector<typename base_type<T>::type> W(n * batch);
+    auto A = Matrix<Scalar>::Random(n, n, /*hermitian=*/true, batch);
+    UnifiedVector<typename base_type<Scalar>::type> W(n * batch);
 
-    SteqrParams<T> params;
+    SteqrParams<Scalar> params;
     params.cta_wg_size_multiplier = wg_mult;
 
     const size_t ws_size = syev_cta_buffer_size(*q, A, jobz, params);
@@ -102,6 +96,8 @@ static void BM_SYEV_CTA_TRIDIAG_REF(minibench::State& state) {
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * flops), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 BATCHLAS_BENCH_CUDA_ALL_TYPES(BM_SYEV_JACOBI_CTA, SyevJacobiCtaBenchSizes);

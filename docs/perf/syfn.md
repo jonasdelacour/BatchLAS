@@ -13,13 +13,13 @@ Two entries (`include/batchlas/blas/functions/syfn.hh`):
 | Entry | Does | Writes |
 |---|---|---|
 | `syfn(ctx, A, F, fn, uplo, ws, info)` | `syev` on a copy of the `uplo` triangle of `A`, then `syfn_from_eigen` | `F`, in full; `A` untouched; `F` may be `A` |
-| `syfn_from_eigen(ctx, V, W, F, fn, ws, info)` | \f$ F = V \operatorname{diag}(f(W)) V^H \f$ from given pairs, `V` n x m with m <= n | `F`, in full; its storage span must not overlap `V`'s (checked) |
+| `syfn_from_eigen(ctx, V, W, F, fn, ws, info)` | \f$ F = V \operatorname{diag}(f(W)) V^H \f$ from given pairs, `V` \f$n \times m\f$ with \f$m \le n\f$ | `F`, in full; its storage span must not overlap `V`'s (checked) |
 
 - **The function** is a value, `SyfnFunction<Real>{kind, weights}`: `inv_sqrt()`, `sqrt()`, `inverse()`,
   `exp()`, or `with_weights(span)` with `m * batch` real weights packed like the eigenvalues. There is
   no device function pointer: the kind is an enum switched inside one element-wise kernel, and any
   other function (Fermi occupations included) is computed by the caller as weights. With
-  `syfn(A)` weight j pairs with the j-th smallest eigenvalue. The weights must be device-accessible;
+  `syfn(A)` weight \f$j\f$ pairs with the \f$j\f$-th smallest eigenvalue. The weights must be device-accessible;
   both entries check them (the deducing spelling's own pointer check cannot see inside the struct).
 - **Two product forms.** For `InvSqrt`, `Sqrt` and `Exp`, \f$ f \ge 0 \f$, so the columns are scaled
   by \f$ \sqrt{f(w_j)} \f$ and one public `herk` (real: `syrk`) forms \f$ Y Y^H \f$: half the flops of a gemm.
@@ -39,7 +39,7 @@ Two entries (`include/batchlas/blas/functions/syfn.hh`):
   `RoutingSettings::ops` and has no `BATCHLAS_SYFN_ROUTE` or table. Vendor-free it runs wherever
   `syev`, `herk`/`syrk` and `gemm` have native routes (a GPU queue).
 - **Workspace** via `BumpAllocator::measuring()`: `syfn_from_eigen` takes \f$ n m + m \f$ scalars per
-  item, `syfn` \f$ 2 n^2 + 2 n \f$ (the copy of `A`, the eigenvalues and the core with m = n) plus
+  item, `syfn` \f$ 2 n^2 + 2 n \f$ (the copy of `A`, the eigenvalues and the core with \f$m = n\f$) plus
   `syev`'s own workspace. Sizing it asks `syev` for its size, so `syfn_buffer_size` itself throws
   `NoRouteError` where `syev` has no route. All launches run on
   `detail::on_in_order_queue`, so an out-of-order `Queue` is safe.
@@ -57,7 +57,7 @@ before 80/80), each with a narrow red set:
 | Break | Red set |
 |---|---|
 | `InvSqrt` scale \f$ w^{-1/2} \f$ | Loewdin, `FromEigenMatchesHostReference`, `OutOfDomainEigenvaluesSetInfo`, `SaturatingBatchIsBitIdentical` |
-| column scale reads `V` at ld = n | `FromEigenMatchesHostReference` only (the only padded `V`) |
+| column scale reads `V` at \f$\mathrm{ld} = n\f$ | `FromEigenMatchesHostReference` only (the only padded `V`) |
 | gemm form uses `Trans`, not `ConjTrans` | `SqrtAndInverseOfIndefinite`, `FromEigenMatchesHostReference`, `WeightsPairWithAscendingEigenvalues`; complex only |
 | `hermitize(Upper)` | every herk-form test (6) |
 | `info` a flag, not a count; `Sqrt` domain `w <= 0` | `OutOfDomainEigenvaluesSetInfo` only |
@@ -75,4 +75,4 @@ the drain before a sub-op's exception propagates (removing it stays green: a rac
 ## syfn timing to do {#syfn-timing-to-do}
 
 Untimed. To measure at saturation: `syev` against the product (`herk` vs `gemm` form) for gfn2's shapes
-(n = 480, batch 1819; n = 1200, batch 76).
+(\f$n = 480\f$, batch 1819; \f$n = 1200\f$, batch 76).

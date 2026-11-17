@@ -96,7 +96,7 @@ original obstacle: `gemm<Backend::CUDA, float>` lived in `cublas.cc`).
 - **An op moves together with its `*_buffer_size` query**, or the two choose differently (the
   `ormqr` sizing defect: a query returned 2560 bytes, the call needed 276480).
 - **A native driver calls the public op**, passed in as a lambda, never a native kernel directly:
-  calling `sycl_gemm::gemm_custom` bypassed gemm's selection and pinned it on shapes it loses.
+  calling `ops::gemm::gemm_custom` bypassed gemm's selection and pinned it on shapes it loses.
 
 `scripts/facade_symbol_check.sh` verifies this by symbol: a forwarder left behind still compiles.
 
@@ -118,19 +118,19 @@ overloads (`include/batchlas/blas/options.hh`).
 | `geqrf` | negative extents | squareness and `m >= n` (tall panels are the point; the vendor serves wide views); `tau` length |
 | `orgqr` | negative extents | `n <= m` (handed to a vendor); `tau` length |
 | `getrf` | negative extents | squareness; pivot length |
-| `getrs` | negative extents | A square, `A.rows() == B.rows()`, batch, pivot length (a non-conforming pair goes to the vendor) |
-| `getri` | negative extents of A | squareness of A and C, order and batch agreement, pivot length |
+| `getrs` | negative extents | \f$A\f$ square, `A.rows() == B.rows()`, batch, pivot length (a non-conforming pair goes to the vendor) |
+| `getri` | negative extents of \f$A\f$ | squareness of \f$A\f$ and \f$C\f$, order and batch agreement, pivot length |
 
 The arena spellings check the lengths. `getri` has two arities because `getri_buffer_size` and
-`ops::getri::key_of` take A alone, and the query must validate the view its choice is computed from.
+`ops::getri::key_of` take \f$A\f$ alone, and the query must validate the view its choice is computed from.
 `gesv` and `posv` (no vendor family) also check squareness, `B.rows() == A.rows()`, equal batch and
 (`posv`) `uplo`, since a bad pair would otherwise report "nothing runnable".
 
 ## Per-item info spans for potrf, getrf and getri
 
 `info` on `potrf`, `getrf` and `getri` (and through them `posv` and `gesv`) is one `int32` per batch
-item, 0 on success; above 0 it names the failing leading minor (`potrf`), the column where U is
-exactly singular (`getrf`) or the zero diagonal of U (`getri`). An empty span means "not requested";
+item, 0 on success; above 0 it names the failing leading minor (`potrf`), the column where \f$U\f$ is
+exactly singular (`getrf`) or the zero diagonal of \f$U\f$ (`getri`). An empty span means "not requested";
 a short non-empty span is treated the same on the positional path and rejected by
 `require_info_span` on the option overloads. The workspace size is the same either way. `info` is a
 separate inline overload, not a defaulted parameter, because the `sig::` aliases behind
@@ -183,6 +183,8 @@ is present is not a kernel that runs.
 | `scripts/facade_symbol_check.sh` | public entry points are not defined in a vendor component | matches Itanium mangling; `nm -C` fails on concept-constrained templates |
 | `scripts/rocm_syntax_check.sh` | `-fsyntax-only` the three ROCm vendor TUs | only `sycl::get_native<ext_oneapi_hip>` errors are expected on a CUDA-only DPC++; anything else is real |
 | `scripts/register_probe.sh` | register and spill residency of the device link | gate on `0 bytes spill` and `resident::sm89_fits(regs, wg)` (\f$\lceil \mathrm{warps}/4\rceil \cdot 32 \cdot \mathrm{roundup}_8(\mathrm{regs}) \le 16384\f$), max over `<name>` and `<name>_with_offset`; a non-zero stack frame is normal |
+| `scripts/sass_parity.sh` | SASS parity of kernel pairs across two builds (or two kernels of one), for in-kernel LA migrations; verdicts pass, FAIL (exit 1) and A/B (exit 2: blocks/SM moved, a runtime A/B decides); `--snapshot-check` compares a build with `tests/sass_snapshots/` (ctest `sass_parity_tests`) | `--mode strict` reproduces sass_lab Table 3 on `LatrdLowerPanelKernelLegacy` vs `LatrdLowerPanelKernel` and fails it; a kernel paired with itself passes; `--self-test` breaks each rule once. The launch WG is read from PTX `.reqntid`/`.maxntid` or `scripts/sass_parity_wg.txt`, never from the name; dynamic SLM from `scripts/sass_parity_smem.txt` |
+| `scripts/check_kernel_entry_calls.py` | kernel bodies in files that include a public device LA header directly (and every file under `include/batchlas/device/`) call no local lambda or view `operator()` directly (the DPC++ SemaSYCL kernel-body quirk); a `BATCHLAS_DEVICE_BODY` callee or kernel body is the sanctioned invoker; ctest `kernel_entry_calls_tests` | flags the base `PotriCtaKernel` (`s`, `g_at`); its self-test plants four breaks, five sanctioned calls and a transitive-include file |
 | `BATCHLAS_SELECT_TRACE=1` | print each decision, its table and the runner-up | one line per call, indented under its parent op |
 
 ## The vendor-free build {#vendor-free-status}

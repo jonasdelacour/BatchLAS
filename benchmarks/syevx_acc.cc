@@ -118,12 +118,12 @@ void run_syevx(miniacc::State& state) {
     }
 }
 
-} // namespace
-
 template <typename Real, Backend B>
-static void ACC_SYEVX(miniacc::State& state) {
+void ACC_SYEVX(miniacc::State& state) {
     run_syevx<Real, B>(state);
 }
+
+}  // namespace
 
 template <typename Benchmark>
 void EigensolverSizesNetlib(Benchmark* b) {
@@ -132,4 +132,4 @@ void EigensolverSizesNetlib(Benchmark* b) {
 
 BATCHLAS_REGISTER_ACCURACY(ACC_SYEVX, EigensolverSizes)
 
-MINI_ACC_MAIN()
+MINI_ACC_MAIN();

@@ -3,19 +3,19 @@
 > **Status:** current · checked 2026-10-29
 
 Design rules and open debts for the native batched factorizations (potrf, getrf, geqrf, gesv, posv,
-orgqr) at n = 4..512. Baseline grids: @ref perf_small_n_baseline; per-op evidence: @ref perf_potrf,
+orgqr) at \f$n = 4, \dots, 512\f$. Baseline grids: @ref perf_small_n_baseline; per-op evidence: @ref perf_potrf,
 @ref perf_lu, @ref perf_qr.
 
 ## Small-n: design rules
 
 The baseline kernels held the whole matrix in local memory, one work-group per matrix: above ~48 KB
-that allows 1-2 resident work-groups per SM, and below n ~ 32 it wastes most of a warp. The rules:
+that allows 1-2 resident work-groups per SM, and below \f$n \approx 32\f$ it wastes most of a warp. The rules:
 
-- **R1** Registers are the store; local memory is the mailbox (O(N) or O(N x NB) per matrix). Target
-  >= 4 resident work-groups per SM (`kMinBlocksPerSm`, `src/util/resident_capacity.hh`).
-- **R2** Compile-time column ladder N in {8, 16, 32}; rows stay runtime. N = 24 is impossible:
-  `SubGroupPartition<P>` needs P to divide 32.
-- **R3** For n <= 32 the sub-group is the synchronisation unit: no work-group barrier.
+- **R1** Registers are the store; local memory is the mailbox (\f$O(N)\f$ or \f$O(N \cdot \mathrm{NB})\f$ per matrix). Target
+  \f$\ge 4\f$ resident work-groups per SM (`kMinBlocksPerSm`, `src/util/resident_capacity.hh`).
+- **R2** Compile-time column ladder \f$N \in \{8, 16, 32\}\f$; rows stay runtime. \f$N = 24\f$ is impossible:
+  `SubGroupPartition<P>` needs \f$P\f$ to divide 32.
+- **R3** For \f$n \le 32\f$ the sub-group is the synchronisation unit: no work-group barrier.
 - **R4** No `reduce_over_group` over a work-group (the 48 KB launch hole; 1.5-4.7x slower in FP64).
 - **R5** Lazy swap: `rowid` relabelling, pivot row through a 32-element scratch, permutation at store.
 
@@ -26,7 +26,7 @@ that allows 1-2 resident work-groups per SM, and below n ~ 32 it wastes most of 
   `tiny`, `cta`, `blocked` (`src/ops/<op>/choice.hh`).
 - **D2** `linalg::solve_spd` calls `posv`; `linalg::solve` calls `gesv` only for `Transpose::NoTrans`
   (`gesv` has no transpose), else `getrf` then `getrs` (`include/batchlas/blas/linalg-ops.hh`).
-- **D3** cdouble tops out at N = 16 in the tiny tier ([why](../perf/lu.md#d3-why-cdouble-stops-at-n16)).
+- **D3** cdouble tops out at \f$N = 16\f$ in the tiny tier ([why](../perf/lu.md#d3-why-cdouble-stops-at-n16)).
 
 ## Small-n: open items
 
@@ -36,13 +36,13 @@ that allows 1-2 resident work-groups per SM, and below n ~ 32 it wastes most of 
 - P0 baseline: 6 of 20 planned CSVs exist (`benchmarks/results/factor_baseline_*`,
   `benchmarks/factor_bench.cc`).
 - gesv: the sm_89 table is transcribed, not deep-measured; the fused-versus-two-launch kill test
-  (>= 1.15x at n = 32, nrhs = 1) and the end-to-end `linalg::solve` A/B are not run.
+  (\f$\ge 1.15\times\f$ at \f$n = 32\f$, \f$\mathit{nrhs} = 1\f$) and the end-to-end `linalg::solve` A/B are not run.
 - geqrf (P5): `GeqrfPanelRegKernel` is built for double only (`cols = 16`; the other types add
   39.6-60.5 s of ptxas each). The fused reflector apply, `orgqr_fused` and `ormqr_fused` are not built;
-  kill clause: the fused apply slower than WY-with-fused-leaf at every n >= 64. Below nb (32 except
+  kill clause: the fused apply slower than WY-with-fused-leaf at every \f$n \ge 64\f$. Below nb (32 except
   double's 16) the blocked loop never reaches `larft`, and larft plus `pack_v` are 6.5-22% at
   saturating batch, so size any larft work against that.
-- getrf (P4): the recursive nb = 128 panel is not built; decide or record a kill.
+- getrf (P4): the recursive \f$\mathit{nb} = 128\f$ panel is not built; decide or record a kill.
 
 ## Small-n: rejected alternatives
 
@@ -50,8 +50,8 @@ that allows 1-2 resident work-groups per SM, and below n ~ 32 it wastes most of 
 |---|---|---|
 | potrf NB=16 in the SLM-resident kernel | 156-206 registers, 2x slower | dead |
 | Packed sub-group getrf with the matrix in SLM | no win | dead |
-| Launch-count fusion alone | <= 3% | dead |
-| geqrf nb = 128 | no win | dead |
+| Launch-count fusion alone | \f$\le 3\%\f$ | dead |
+| geqrf \f$\mathit{nb} = 128\f$ | no win | dead |
 
 ## Comment-density gate and its waivers {#small-n-comment-density-burn-down}
 

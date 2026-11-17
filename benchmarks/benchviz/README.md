@@ -63,7 +63,7 @@ extend it. `--gpu 0,1` splits cells across cards (both arms of a cell on one car
 | gesv, posv | `factor_bench` | sub-ops pinned vendor | sub-ops pinned native |
 | ormqr, syev, gemm, gemv, trsm, spmm | `<op>_benchmark` | `BATCHLAS_<OP>_ROUTE=vendor` | `=native` |
 | trmm, syrk, syr2k (float) | `<op>_benchmark` | `=vendor` | `=triangular` |
-| gesvd (n <= 32) | `gesvd_vendor_benchmark` | `gesvdjBatched` | `gesvd_cta` |
+| gesvd (\f$n \le 32\f$) | `gesvd_vendor_benchmark` | `gesvdjBatched` | `gesvd_cta` |
 | stedc, steqr, sytrd, sytrd_cta, sy2sb, sb2st | own harnesses | none | direct call |
 
 - The BatchLAS arm is pinned `native`, never `auto` (an `auto` arm can time the vendor twice).
@@ -84,7 +84,7 @@ extend it. `--gpu 0,1` splits cells across cards (both arms of a cell on one car
 | `--preset` | `smoke` (every 3rd order, batch x16 from 256), `saturation` (saturated batch only), `quick` (default; x4 from 64), `full` (x2 from 32) |
 | `--orders` | `16,32,64`, `4:512` (doubling), `8:128:8` (step 8); default each op's ladder |
 | `--batch-mode` | `ladder`, `list`, `saturated` (largest batch fitting `--mem-gib`) |
-| `--batch-min --batch-max --batch-step` | ladder batch-min x step^k up to min(batch-max, memory cap) |
+| `--batch-min --batch-max --batch-step` | ladder \f$\text{batch-min} \cdot \text{step}^k\f$ up to \f$\min(\text{batch-max}, \text{memory cap})\f$ |
 | `--batches` | explicit list (implies `list`) |
 | `--reps`, `--mem-gib` | timed reps per arm-cell; per-arm device-memory budget |
 | `--rect` / `--no-rect` | rectangular shape planes (`Plane` in `ops.py`), one saturated batch per shape |

@@ -51,12 +51,12 @@ namespace {
 namespace gs = batchlas::ops::getrs;
 using C = gs::GetrsChoice;
 using Pin = select::ScopedPin<C>;
-template <typename T>
-using MVof = MatrixView<T, MatrixFormat::Dense>;
-template <typename T>
-using RealOf = typename batchlas::base_type<T>::type;
-template <typename T>
-constexpr bool kCx = test_utils::is_complex<T>::value;
+template <typename Scalar>
+using MVof = MatrixView<Scalar, MatrixFormat::Dense>;
+template <typename Scalar>
+using RealOf = typename batchlas::base_type<Scalar>::type;
+template <typename Scalar>
+constexpr bool kCx = test_utils::is_complex<Scalar>::value;
 using cd = std::complex<double>;
 
 
@@ -79,41 +79,41 @@ std::string name(const C& c, const Spec& s) { return select::to_string(c) + " " 
 // interchange list as packed 1-based int32 in the first half of the int64 span. Everything a
 // solve may not touch -- ld pads, stride gaps, the second half of the pivot span -- holds a
 // large finite poison the kernels would accept (in-range pivot 1, finite matrix entries).
-template <typename T>
+template <typename Scalar>
 struct Sys {
     Spec s;
     int lda = 0, sa = 0, ldb = 0, sb = 0;
-    UnifiedVector<T> a, b;
-    std::vector<T> b0;
+    UnifiedVector<Scalar> a, b;
+    std::vector<Scalar> b0;
     UnifiedVector<std::int64_t> piv;
-    UnifiedVector<T*> aptr, bptr;        // the vendor's batched pointer arrays
+    UnifiedVector<Scalar*> aptr, bptr;        // the vendor's batched pointer arrays
     std::vector<std::vector<int>> ipiv;  // per representative item, 0-based
 
-    MVof<T> A() { return {a.data(), s.n, s.n, lda, sa, s.batch, aptr.data()}; }
-    MVof<T> B() { return {b.data(), s.n, s.nrhs, ldb, sb, s.batch, bptr.data()}; }
-    T& f(int it, int i, int j) { return a[std::size_t(it) * sa + std::size_t(j) * lda + i]; }
-    T& x(int it, int i, int j) { return b[std::size_t(it) * sb + std::size_t(j) * ldb + i]; }
+    MVof<Scalar> A() { return {a.data(), s.n, s.n, lda, sa, s.batch, aptr.data()}; }
+    MVof<Scalar> B() { return {b.data(), s.n, s.nrhs, ldb, sb, s.batch, bptr.data()}; }
+    Scalar& f(int it, int i, int j) { return a[std::size_t(it) * sa + std::size_t(j) * lda + i]; }
+    Scalar& x(int it, int i, int j) { return b[std::size_t(it) * sb + std::size_t(j) * ldb + i]; }
     int* p32() { return reinterpret_cast<int*>(piv.data()); }
 };
 
-template <typename T>
-T poison() {
-    return MVof<T>::make(RealOf<T>(-999), RealOf<T>(777));
+template <typename Scalar>
+Scalar poison() {
+    return MVof<Scalar>::make(RealOf<Scalar>(-999), RealOf<Scalar>(777));
 }
 
-template <typename T>
-Sys<T> make_sys(const Spec& s) {
-    using R = RealOf<T>;
-    Sys<T> p;
+template <typename Scalar>
+Sys<Scalar> make_sys(const Spec& s) {
+    using R = RealOf<Scalar>;
+    Sys<Scalar> p;
     p.s = s;
     p.lda = std::max(1, s.n + 3);
     p.sa = p.lda * std::max(1, s.n) + 5;
     p.ldb = std::max(1, s.n + 2);
     p.sb = p.ldb * std::max(1, s.nrhs) + 7;
-    p.a = UnifiedVector<T>(std::size_t(p.sa) * std::max(1, s.batch), poison<T>());
-    p.b = UnifiedVector<T>(std::size_t(p.sb) * std::max(1, s.batch), poison<T>());
-    p.aptr = UnifiedVector<T*>(std::max(1, s.batch), nullptr);
-    p.bptr = UnifiedVector<T*>(std::max(1, s.batch), nullptr);
+    p.a = UnifiedVector<Scalar>(std::size_t(p.sa) * std::max(1, s.batch), poison<Scalar>());
+    p.b = UnifiedVector<Scalar>(std::size_t(p.sb) * std::max(1, s.batch), poison<Scalar>());
+    p.aptr = UnifiedVector<Scalar*>(std::max(1, s.batch), nullptr);
+    p.bptr = UnifiedVector<Scalar*>(std::max(1, s.batch), nullptr);
     p.piv = UnifiedVector<std::int64_t>(std::size_t(std::max(1, s.n)) * std::max(1, s.batch), 0);
     int* pv = p.p32();
     for (std::size_t k = 0; k < 2 * p.piv.size(); ++k) pv[k] = 1;  // second half: accepted poison
@@ -128,13 +128,13 @@ Sys<T> make_sys(const Spec& s) {
             for (int i = 0; i < s.n; ++i) {
                 const R sg = gen() & 1 ? R(1) : R(-1);
                 const auto x = d(gen), y = d(gen);
-                if (i == j) p.f(it, i, j) = MVof<T>::make(R(2.5) + R(0.5) * x, R(0.3) * y);
-                else p.f(it, i, j) = MVof<T>::make(sg * x / R(s.n), y / R(s.n));
+                if (i == j) p.f(it, i, j) = MVof<Scalar>::make(R(2.5) + R(0.5) * x, R(0.3) * y);
+                else p.f(it, i, j) = MVof<Scalar>::make(sg * x / R(s.n), y / R(s.n));
             }
         for (int j = 0; j < s.nrhs; ++j)
             for (int i = 0; i < s.n; ++i) {
                 const auto re = u(gen), im = u(gen);
-                p.x(it, i, j) = MVof<T>::make(re, im);
+                p.x(it, i, j) = MVof<Scalar>::make(re, im);
             }
     }
     for (int it = 0; it < s.batch; ++it) {
@@ -151,13 +151,13 @@ Sys<T> make_sys(const Spec& s) {
 }
 
 // ||op(P^-1 L U) X - B0||_F / (||M||_F ||X||_F), worst over @p items, M formed from the factors.
-template <typename T>
-double residual(Queue& ctx, Sys<T>& p, std::span<const int> items) {
+template <typename Scalar>
+double residual(Queue& ctx, Sys<Scalar>& p, std::span<const int> items) {
     const int n = p.s.n, nr = p.s.nrhs;
     const VectorView<std::int32_t> piv(p.p32(), n, p.s.batch, 1, n);
-    return MVof<T>::lu_solve_residual(ctx, MVof<T>(p.a.data(), n, n, p.lda, p.sa, p.s.batch), piv, p.s.trans,
-                                      MVof<T>(p.b.data(), n, nr, p.ldb, p.sb, p.s.batch),
-                                      MVof<T>(p.b0.data(), n, nr, p.ldb, p.sb, p.s.batch), items);
+    return MVof<Scalar>::lu_solve_residual(ctx, MVof<Scalar>(p.a.data(), n, n, p.lda, p.sa, p.s.batch), piv, p.s.trans,
+                                           MVof<Scalar>(p.b.data(), n, nr, p.ldb, p.sb, p.s.batch),
+                                           MVof<Scalar>(p.b0.data(), n, nr, p.ldb, p.sb, p.s.batch), items);
 }
 
 // Residuals of the checked items, everything outside B's footprint and A bit for bit, and for a
@@ -213,9 +213,9 @@ std::string old_auto(const std::string& dtype, long n, long nrhs, long batch, bo
 
 using test_support::TableGuard;
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;
@@ -240,14 +240,14 @@ protected:
         const std::size_t lm = this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE);
         return lm > 4096 ? lm - 4096 : 0;
     }
-    std::size_t cap() const { return sycl_getrs::getrs_fused_max_rhs_elems<T>(budget()); }
+    std::size_t cap() const { return ops::getrs::getrs_fused_max_rhs_elems<T>(budget()); }
 
     // ---- the limit oracle: the drivers' own constants, not getrs.cc's can_run ----
     bool expect_runs(const C& c, int n, int nrhs) const {
         if (n < 1 || nrhs < 1) return false;
         if (std::holds_alternative<gs::Cta>(c))
-            return nrhs <= sycl_getrs::kGetrsFusedMaxRhs && std::size_t(n) * std::size_t(nrhs) <= cap();
-        if (std::holds_alternative<gs::Blocked>(c)) return sycl_getrs::getrs_blocked_available<T>();
+            return nrhs <= ops::getrs::kGetrsFusedMaxRhs && std::size_t(n) * std::size_t(nrhs) <= cap();
+        if (std::holds_alternative<gs::Blocked>(c)) return true;
         return kVendor;
     }
     bool cta_fits(int n, int nrhs) const { return expect_runs(C{gs::Cta{}}, n, nrhs); }
@@ -298,9 +298,9 @@ protected:
         UnifiedVector<std::byte> ws(4096);
         try {
             if (std::holds_alternative<gs::Cta>(c)) {
-                (void)sycl_getrs::getrs_fused_dispatch<T>(q, A, Bm, p.s.trans, p.piv.to_span(), ws.to_span());
+                (void)ops::getrs::getrs_fused_dispatch<T>(q, A, Bm, p.s.trans, p.piv.to_span(), ws.to_span());
             } else if (std::holds_alternative<gs::Blocked>(c)) {
-                (void)sycl_getrs::getrs_blocked_dispatch<T>(
+                (void)ops::getrs::getrs_blocked_dispatch<T>(
                     q, A, Bm, p.s.trans, p.piv.to_span(), ws.to_span(),
                     [](Queue& c2, const MV& ta, const MV& tb, T al, Side sd, Uplo ul, Transpose tr, Diag dg) {
                         return trsm<B, T>(c2, ta, tb, al, sd, ul, tr, dg);
@@ -380,7 +380,7 @@ TYPED_TEST(GetrsCandidates, PinnedCandidatesStraddleTheirLimits) {
 // and refused one order past it; Blocked serves the refused shape.
 TYPED_TEST(GetrsCandidates, CtaLaunchesAtItsResidentCapacity) {
     using T = typename TestFixture::T;
-    const int nrhs = int(sycl_getrs::kGetrsFusedMaxRhs);
+    const int nrhs = int(ops::getrs::kGetrsFusedMaxRhs);
     const int fit = int(this->cap() / std::size_t(nrhs));
     ASSERT_GT(fit, 32) << "the fused tier has no useful capacity on this device";
     Spec s{fit, nrhs, 2, Transpose::ConjTrans};
@@ -488,9 +488,9 @@ TYPED_TEST(GetrsCandidates, WorkspaceIsExactlyWhatTheChoiceNeeds) {
             auto Bm = p.B();
             const std::size_t need = getrs_buffer_size<B, T>(*this->ctx, A, Bm, s.trans);
             if (std::holds_alternative<gs::Cta>(c))
-                EXPECT_EQ(need, sycl_getrs::getrs_fused_buffer_size<T>(*this->ctx, A, Bm, s.trans));
+                EXPECT_EQ(need, ops::getrs::getrs_fused_buffer_size<T>(*this->ctx, A, Bm, s.trans));
             if (std::holds_alternative<gs::Blocked>(c))
-                EXPECT_EQ(need, sycl_getrs::getrs_blocked_buffer_size<T>(*this->ctx, A, Bm, s.trans));
+                EXPECT_EQ(need, ops::getrs::getrs_blocked_buffer_size<T>(*this->ctx, A, Bm, s.trans));
             constexpr std::size_t kTail = 4096;
             UnifiedVector<std::byte> arena(need + kTail, std::byte{0xA5});
             (void)getrs<B, T>(*this->ctx, A, Bm, s.trans, p.piv.to_span(), Span<std::byte>(arena.data(), need));
@@ -521,7 +521,7 @@ TYPED_TEST(GetrsCandidates, CanRunFalsePinsThrow) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     struct Case { C c; int an, ac, bn, bc, ab, bb; const char* what; };
-    const int w = int(sycl_getrs::kGetrsFusedMaxRhs);
+    const int w = int(ops::getrs::kGetrsFusedMaxRhs);
     const Case cases[] = {{gs::Cta{}, 0, 0, 0, 2, 1, 1, "order 0"},        {gs::Blocked{}, 0, 0, 0, 2, 1, 1, "order 0"},
                           {gs::Cta{}, 8, 8, 8, 0, 1, 1, "nrhs 0"},         {gs::Blocked{}, 8, 8, 8, 0, 1, 1, "nrhs 0"},
                           {gs::Cta{}, 8, 8, 8, w + 1, 1, 1, "nrhs past the width"},
@@ -633,7 +633,7 @@ TYPED_TEST(GetrsCandidates, ClassWordsAndSpellings) {
 TYPED_TEST(GetrsCandidates, ScopedPinBeatsTheEnvironment) {
     using T = typename TestFixture::T;
     const ScopedEnvVar env("BATCHLAS_GETRS_ROUTE", "cta");
-    const Spec wide{40, int(sycl_getrs::kGetrsFusedMaxRhs) + 1, 2};
+    const Spec wide{40, int(ops::getrs::kGetrsFusedMaxRhs) + 1, 2};
     {
         auto p = make_sys<T>(wide);
         EXPECT_THROW(this->run(p), std::invalid_argument) << "the environment pin was not read";
@@ -801,7 +801,7 @@ TYPED_TEST(GetrsCandidatesCpu, CpuQueueRunsNoNativeFamily) {
 // equal the transcribed preference at straddles of each threshold. sm_120 is deep-measured since 2026-10-09.
 TEST(GetrsTranscribedTable, RowsHoldTheTranscribedPreferenceOnBothSidesOfEveryThreshold) {
     test_utils::TranscribedRowsHeld held;
-    const int w = int(sycl_getrs::kGetrsFusedMaxRhs);
+    const int w = int(ops::getrs::kGetrsFusedMaxRhs);
     for (const char* dev : {"sm_89"})
         for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
             const auto tables = select::tables_in_borrow_order("getrs", dt, select::device_from_key(dev));

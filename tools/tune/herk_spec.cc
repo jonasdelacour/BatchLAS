@@ -26,16 +26,16 @@ namespace {
 
 namespace H = ops::herk;
 
-template <typename T>
+template <typename Scalar>
 struct HerkProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
-    using R = float_t<T>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+    using R = float_t<Scalar>;
     Queue& q;
     Transpose trans;
     int n, k, batch, ar, ac, lda, ldc;
     std::size_t sa, sc;
     R alpha, beta;
-    UnifiedVector<T> A, C0, C;
+    UnifiedVector<Scalar> A, C0, C;
 
     HerkProblem(Queue& q_, Transpose t, int n_, int k_, int batch_, int pad)
         : q(q_), trans(t), n(n_), k(k_), batch(batch_), ar(t == Transpose::NoTrans ? n_ : k_),
@@ -47,12 +47,13 @@ struct HerkProblem {
         q.wait();
         for (int b = 0; b < batch; ++b)
             for (int c = 0; c < n; ++c) {
-                T* col = C0.data() + std::size_t(b) * sc + std::size_t(c) * std::size_t(ldc);
-                col[c] = T(col[c].real(), R(0));
-                for (int r = 0; r < c; ++r) col[r] = T(1e6, -1e6);
+                Scalar* col = C0.data() + std::size_t(b) * sc + std::size_t(c) * std::size_t(ldc);
+                col[c] = Scalar(col[c].real(), R(0));
+                for (int r = 0; r < c; ++r) col[r] = Scalar(1e6, -1e6);
             }
     }
-    MV view(UnifiedVector<T>& v, int r, int c, int ld, std::size_t s) { return MV(v.data(), r, c, ld, int(s), batch); }
+    MV view(UnifiedVector<Scalar>& v, int r, int c, int ld,
+            std::size_t s) { return MV(v.data(), r, c, ld, int(s), batch); }
     void reset() {  // beta != 0 accumulates into C
         (void)MV::copy(q, view(C, n, n, ldc, sc), view(C0, n, n, ldc, sc));
         q.wait();
@@ -64,7 +65,8 @@ struct HerkProblem {
     }
     void clear_info() {}
     void run(Span<std::byte>) {
-        (void)herk<kBackend, T>(q, view(A, ar, ac, lda, sa), view(C, n, n, ldc, sc), alpha, beta, Uplo::Lower, trans);
+        (void)herk<kBackend, Scalar>(q, view(A, ar, ac, lda, sa), view(C, n, n, ldc, sc), alpha, beta, Uplo::Lower,
+                                     trans);
         q.wait();
     }
     std::pair<double, int> verify() {
@@ -78,16 +80,10 @@ struct HerkProblem {
         const Transpose other = trans == Transpose::NoTrans ? Transpose::ConjTrans : Transpose::NoTrans;
         const MV a = view(A, ar, ac, lda, sa);
         return {MV::gemm_backward_error(q, a, trans, a, other, view(C0, n, n, ldc, sc), view(C, n, n, ldc, sc),
-                                        MV::up(T(alpha)), MV::up(T(beta)), a.default_items(), Uplo::Lower),
+                                        MV::up(Scalar(alpha)), MV::up(Scalar(beta)), a.default_items(), Uplo::Lower),
                 touched};
     }
 };
-
-std::vector<std::string> ints(const auto& xs) {
-    std::vector<std::string> out;
-    for (int v : xs) out.push_back(std::to_string(v));
-    return out;
-}
 
 class HerkSpec final : public OpSpec {
 public:
@@ -107,9 +103,16 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
-            "src/sycl/kernel_attrs.hh",
-            "src/sycl/sscp_target.hh",
+            "include/batchlas/device/detail/kernel_attrs.hh",
+            "include/batchlas/device/detail/sscp_target.hh",
             "include/batchlas/util/group-collectives.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn_core.hh",
+            "include/batchlas/device/detail/sg_partition/backend_generic.hh",
+            "include/batchlas/device/detail/sg_partition/backend_nvptx.hh",
+            "include/batchlas/device/detail/sg_partition/backend_spirv.hh",
+            "include/batchlas/device/detail/sg_partition/backend_sscp.hh",
+            "include/batchlas/device/detail/sg_partition/sg_partition.hh",
             // family: gram
             "src/ops/syrk/kernels/syrk_gram_tiles.hh",
             // family: triangular
@@ -120,12 +123,33 @@ public:
             // common
             "src/kernels/common/triangular_tiles.hh",
             "src/ops/herk/choice.hh",
+            "include/batchlas/device.hh",
+            "include/batchlas/device/arith.hh",
+            "include/batchlas/device/core.hh",
+            "include/batchlas/device/exec.hh",
+            "include/batchlas/device/grid.hh",
+            "include/batchlas/device/interop.hh",
+            "include/batchlas/device/lapack_aux.hh",
+            "include/batchlas/device/level1.hh",
+            "include/batchlas/device/level2.hh",
+            "include/batchlas/device/level3.hh",
+            "include/batchlas/device/operand.hh",
+            "include/batchlas/device/reduce.hh",
+            "include/batchlas/device/scalar.hh",
+            "include/batchlas/device/tier.hh",
+            "include/batchlas/device/view.hh",
+            "include/batchlas/device/workspace.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin
         // common "src/ops/herk/herk.cc"
         // herk fold calls the public gemm: its native kernels and can_run count too.
         // family: fold "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/kernels/gemm_launch.hh" "src/ops/gemm/kernels/gemm_rows.hh" "src/ops/gemm/kernels/gemm_shard.cc.in" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/choice.hh" "src/ops/gemm/gemm.cc"
+        // The include/batchlas/device/ headers each family's kernels include.
+        // family: fold "include/batchlas/device/level3/cfg.hh" "include/batchlas/device/level3/copy_async.hh"
+        // family: fold "include/batchlas/device/level3/epilogue.hh" "include/batchlas/device/level3/mma.hh"
+        // family: fold "include/batchlas/device/level3/packet.hh" "include/batchlas/device/level3/pipeline.hh"
+        // family: fold "include/batchlas/device/level3/schedule.hh" "include/batchlas/device/level3/stage.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/herk_spec.cc"; }

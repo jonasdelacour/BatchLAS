@@ -25,7 +25,7 @@ JIT-compiled at first launch); a third configuration is acpp with its Metal back
 - Device-link options (`BATCHLAS_SYCL_LINK_JOBS`, FTZ, `native_cpu`) are DPC++ only. On acpp
   `BATCHLAS_CPU_TARGET` takes only `auto` or `none` (@ref design_cpu_target_detection).
 - `backend_config.h` carries `BATCHLAS_SYCL_IMPL_DPCPP` / `_ACPP`. acpp runtime names appear only in
-  `src/sycl/impl.hh` and `src/sycl/sscp_target.hh`.
+  `src/sycl/impl.hh` and `include/batchlas/device/detail/sscp_target.hh`.
 - A consumer must use the same implementation (`BatchLASConfig.cmake` records `BatchLAS_SYCL_IMPL`);
   an acpp install ships `include/batchlas/acpp/annexg_complex.hh` and `-include`s it through
   `BatchLAS_SYCL_COMPILE_OPTIONS`.
@@ -46,16 +46,16 @@ on DPC++ each helper is the plain DPC++ call.
 | `kernel_max_wg_size<K>` | `min(max_work_group_size, 256)`: the device limit aborts a register-heavy kernel |
 | `parallel_for(handler, nd_range, ...)` | a no-op custom operation for an empty range |
 | `on_async_errors`, `throw_async_errors`, `throw_launch_errors`, `wait_and_throw` | the error sink ([asynchronous errors](#sycl-impl-asynchronous-errors)) |
-| `check_group_count`, `check_global_range` | CUDA grid-limit check; on Metal the 2^32 - 1 global-range check |
+| `check_group_count`, `check_global_range` | CUDA grid-limit check; on Metal the \f$2^{32} - 1\f$ global-range check |
 
-Kernel-level differences live in `src/sycl/sscp_target.hh`, `src/sycl/kernel_attrs.hh`,
+Kernel-level differences live in `include/batchlas/device/detail/sscp_target.hh`, `include/batchlas/device/detail/kernel_attrs.hh`,
 `src/sycl/local_mem.hh` and `include/batchlas/util/group-collectives.hh`; DPC++-only intrinsics and
 PTX `asm` are `#if`-guarded in `sg_partition/` and `src/ops/gemm/kernels/`. Every vendor call runs as
 `impl::run_native<impl::Native::Cuda>(*ctx, [=](auto s){ handle.setStream(s); ... })`.
 
 ### Device: target dispatch at JIT time {#sycl-impl-device-target-dispatch}
 
-- `sycl_impl::on_ptx()`, `on_metal()`, `target_arch()` (`src/sycl/sscp_target.hh`): `constexpr` from
+- `sycl_impl::on_ptx()`, `on_metal()`, `target_arch()` (`include/batchlas/device/detail/sscp_target.hh`): `constexpr` from
   `__SYCL_DEVICE_ONLY__`/`__NVPTX__`/`__SYCL_CUDA_ARCH__` on DPC++; on acpp generic, which compiles
   one IR for every target and defines neither macro, JIT-reflection queries inside
   `__acpp_if_target_sscp`, and the JIT deletes the dead branch.
@@ -64,7 +64,7 @@ PTX `asm` are `#if`-guarded in `sg_partition/` and `src/ops/gemm/kernels/`. Ever
 - `sg_partition`'s `SscpBackend` (`backend_sscp.hh`) reuses `NvptxBackend` on PTX; its `__nvvm_*`
   names are asm labels on the LLVM intrinsics, so they keep `convergent`. Other targets take
   `GenericBackend`.
-- `src/sycl/kernel_attrs.hh`: on acpp `BATCHLAS_REQD_SG_SIZE` and `BATCHLAS_LAUNCH_BOUNDS` are empty
+- `include/batchlas/device/detail/kernel_attrs.hh`: on acpp `BATCHLAS_REQD_SG_SIZE` and `BATCHLAS_LAUNCH_BOUNDS` are empty
   and `BATCHLAS_UNROLL_FULL` is `clang loop unroll(full)` (SSCP unrolls a bare `#pragma unroll` only
   partially). `Device::supports_sub_group_size(n)` is true only for the device's single sub-group
   size, so `can_run`s that need sg 32 refuse other devices.
@@ -79,14 +79,13 @@ acpp's ahead-of-time CUDA flow: a host pass plus an NVPTX device pass by acpp's 
   `CUDAToolkit_ROOT` from acpp's `default-cuda-path`, and fails when FindCUDAToolkit's toolkit is not
   the one acpp compiles against (stale cache in an old tree).
 - **No GPU at configure:** an explicit `cuda:sm_XX` builds the CUDA backend from `librt-backend-cuda`.
-- **No `SYCL_EXTERNAL`:** the secular-equation root solvers (`stedc_secular_roots.hh`) are `inline`
-  where it is undefined. Device code may not name a `__host__`-only function.
+- **No `SYCL_EXTERNAL`:** device code may not name a `__host__`-only function.
 - **Target dispatch:** `on_ptx()` is true and `target_arch()` is `__CUDA_ARCH__ / 10` in the device
   pass; `redux` keys on `BATCHLAS_NVPTX_ARCH`.
 - **Work-group reduce.** `portable::reduce_over_group` takes `detail::wg_reduce_floating` in the CUDA
   and HIP device passes too (`kExactWgReducePass`) only because acpp's multipass reduce, exact in
   probes, reads as racy (static scratch returned after the last barrier,
-  `generic/hiplike/group_functions.hpp:36-71`); `DeviceBlasTest.PortableWorkGroupDoubleSumIsExact`
+  `generic/hiplike/group_functions.hpp:36-71`); `GroupCollectivesTest.PortableWorkGroupDoubleSumIsExact`
   guards the replacement.
 - **Contraction:** `BATCHLAS_FP_CONTRACT` (default `on`) over the driver's `fast`
   ([build guide](../guide/build.md#guide_build_fp_contract)).
@@ -107,11 +106,12 @@ acpp's ahead-of-time CUDA flow: a host pass plus an NVPTX device pass by acpp's 
   `local_mem_size`; `DeviceProperty::LOCAL_MEM_SIZE` and `select::Device::slm_budget` go through it.
 - **Every `can_run` that can exceed 48 KiB reads the budget**, so DPC++ routes do not move. Above
   48 KiB: gemm `reg:m=128:n=64:k=32` (49,920 B, `RegCfg::slm_bytes()`), herk `gram` (65,536 B,
-  `gram_slm_bytes`), gesvd `jacobi` C = 64 (71,752 B, `gesvd_jacobi_max_dim`), `syev_cta_fused` with
+  `gram_slm_bytes`), gesvd `jacobi` \f$C = 64\f$ (71,752 B, `gesvd_jacobi_max_dim`), `syev_cta_fused` with
   an explicit multiplier (54,272 B).
 - **The CTA multiplier clamp counts whole steps** (`resident::cta_fit_wg_multiplier`): one step is
-  lcm(P, 32) lanes, and the kernels throw `unsupported` when one step does not fit. A clamp by
-  problem count over-admitted by up to 32/P and aborted on DPC++ ("Excessive allocation of local memory").
+  \f$\mathrm{lcm}(P, 32)\f$ lanes, and the kernels throw `unsupported` when one step does not fit. A clamp by
+  problem count over-admitted by up to \f$32/P\f$ and aborted on DPC++
+  ("Excessive allocation of local memory").
 - Tests whose premise is the 99 KiB opt-in skip on `test_utils::kSlmCappedAt48KiB`.
 - **Opt-in variant.** `-DBATCHLAS_ACPP_SLM_OPTIN=ON` (acpp + CUDA only) builds
   `libbatchlas_acpp_slm_optin.so` (`src/sycl/acpp_slm_optin.cc`), which interposes `cuLaunchKernel`,
@@ -161,13 +161,13 @@ using-declaration of the `sycl::` function (md5-identical objects); under acpp i
 
 | acpp 25.10 defect (SSCP) | Effect | Replacement |
 | --- | --- | --- |
-| Work-group `reduce_over_group` of float/double rounds to ~16/~42 mantissa bits (the broadcast bit-casts through the float scratch, `sscp/builtins/detail/reduction.hpp:101-103`) | norm, geqrf/orgqr, symv, sytrd, steqr, syevx, bdsdc wrong | sub-group reduce, then a typed local scratch (`detail::wg_reduce_floating`) |
+| Work-group `reduce_over_group` of float/double rounds to \f$\approx 16\f$ (float) / \f$\approx 42\f$ (double) mantissa bits (the broadcast bit-casts through the float scratch, `sscp/builtins/detail/reduction.hpp:101-103`) | norm, geqrf/orgqr, symv, sytrd, steqr, syevx, bdsdc wrong | sub-group reduce, then a typed local scratch (`detail::wg_reduce_floating`) |
 | `joint_reduce(maximum)` pads with `numeric_limits<T>::min()` | wrong max of an all-negative range | start from `sycl::known_identity_v` |
-| In-place `joint_exclusive_scan` overwrites unread input across chunks; one element drops `init` | stedc lost eigenvalues for merges > 129 | chunked scan carrying the running total |
+| In-place `joint_exclusive_scan` overwrites unread input across chunks; one element drops `init` | stedc lost eigenvalues for merges \f$> 129\f$ | chunked scan carrying the running total |
 | Host `joint_reduce` without `init` on `const T*` does not compile | — | overload keeping SYCL's item-to-element mapping |
 
 Every floating `reduce_over_group`/`joint_reduce`/`joint_exclusive_scan` in `src/` goes through
-`portable::`. Guards: `DeviceBlasTest.PortableGroupReductionsAreExact`,
+`portable::`. Guards: `GroupCollectivesTest.PortableGroupReductionsAreExact`,
 `StedcDeflationScan.PortableJointExclusiveScanInPlaceAcrossChunks`.
 
 ## Compile-level differences: portable spellings {#sycl-impl-compile-differences}
@@ -259,7 +259,7 @@ On top of @ref dev_agent_guide §10:
 | --- | --- | --- |
 | `-fcx-limited-range` instead of Annex G definitions (A1) | fixes the link, changes NaN/Inf results | rejected |
 | Opt in above 48 KiB by default (A2) | pinned cells 0.99-1.20 vs 1.22-2.66 without | kept as `BATCHLAS_ACPP_SLM_OPTIN`, not default |
-| Drop vendor libraries from the acpp build | `run_native` vendor cells 1.00 at >= 1 ms | rejected |
+| Drop vendor libraries from the acpp build | `run_native` vendor cells 1.00 at \f$\ge 1\f$ ms | rejected |
 | Per-implementation tuning tables | Auto takes the same route in all 90 cells ([perf](../perf/sycl-implementations.md#sycl-impl-ab-per-implementation-tables)) | not added; revisit with a newer acpp LLVM |
 
 ## AdaptiveCpp Metal {#sycl-impl-metal}
@@ -314,15 +314,15 @@ Measured on the M5 Max with patch 0003.
 | Limit | Value | Where BatchLAS models it |
 | --- | --- | --- |
 | Threadgroup memory reported | 32,768 B | the `apple_gpu_*` row in `cmake/BatchLASDetectSYCL.cmake` (a hypothesis) |
-| Hidden per-lane scratch | AdaptiveCpp adds `8 * wg` bytes to every launch | `impl::local_mem_scratch_per_item` = 8; `local_mem_bytes(d)` assumes the largest wg (24,576 B at 1024) |
+| Hidden per-lane scratch | AdaptiveCpp adds \f$8 \cdot \mathrm{wg}\f$ bytes to every launch | `impl::local_mem_scratch_per_item` = 8; `local_mem_bytes(d)` assumes the largest wg (24,576 B at 1024) |
 | Selector budget | 20,480 B at max wg (less the 4 KiB reserve) | `select::Device::slm_per_item`, `slm_budget_for(wg)`; gemm `reg` reads the per-width figure |
 | Threads per threadgroup | 1024 for every pipeline (the compiler spills) | the getrs_fused register cap is skipped on Metal |
-| Grid | no 65,535 cap; a dimension of 2^32 work-items or more runs with wrong ids, no error | `impl::check_global_range` throws above 2^32 - 1; `select::Device::max_groups_yz` = 2^32 - 1 in the gemm, syrk, syr2k, trmm, symm `can_run` |
+| Grid | no 65,535 cap; a dimension of \f$2^{32}\f$ work-items or more runs with wrong ids, no error | `impl::check_global_range` throws above \f$2^{32} - 1\f$; `select::Device::max_groups_yz` = \f$2^{32} - 1\f$ in the gemm, syrk, syr2k, trmm, symm `can_run` |
 | Co-residency | not promised; atomics relaxed only | the latrd grid-barrier path is off on Metal ([sytrd](../perf/sytrd.md#sytrd-the-latrd-grid-kernel-and-its-co-residency-cap)) |
 | Sub-groups per work-group (safe) | 1 | the unrecognised-GPU default (a hypothesis) |
 
 Guards: `resident_capacity_tests` launches at and one granule past the budget, 65,537 groups per
-dimension and 2^32 - 1024 work-items. `select::describe` hard-codes 8 and 2^32 - 1 (it cannot include
+dimension and \f$2^{32} - 1024\f$ work-items. `select::describe` hard-codes 8 and \f$2^{32} - 1\f$ (it cannot include
 `src/sycl/`); these tests hold the copies equal.
 
 ### Metal: coarse-grained events and error delivery {#sycl-impl-metal-coarse-events}
@@ -345,7 +345,7 @@ dimension and 2^32 - 1024 work-items. `select::describe` hard-codes 8 and 2^32 -
 | No generic address space (a run-time local/global pointer choice is rejected) | one body per storage combination under `on_metal()` | `sytrd_sb2st_cta.cc`, `tridiag_solver.cc` |
 | No floating-point atomics on threadgroup memory | One/Inf norms give each sum to one work-item | `src/util/norm.cc` |
 | No static local memory | `wg_reduce_floating` uses AdaptiveCpp's reduce on Metal | `group-collectives.hh` |
-| No vector types in the emitter | `Vec4`, `tiny_r4` are structs, `Raw16` an `unsigned __int128` under `BATCHLAS_DEVICE_NO_VECTOR_TYPES` | `vec4.hh`, `tiny_device.hh`, `register_64x64_k16_wide.hh` |
+| No vector types in the emitter | `Vec4`, `tiny_r4` are structs, `Raw16` an `unsigned __int128` under `BATCHLAS_DEVICE_NO_VECTOR_TYPES` | `include/batchlas/device/level3/packet.hh`, `tiny_device.hh`, `register_64x64_k16_wide.hh` |
 | Float subnormals flush to zero; `info::device` claims denorms | tests needing a subnormal probe the device | `TrsmNativeSgLeft.NonFiniteReciprocalFallsBackToDivision` |
 | `logb(0)`, `logb(inf)` are finite | Annex G division special values may be wrong; untested | `annexg::div` |
 | arm64 hosts reject the `"l"` asm constraint | PTX L2-prefetch asm only on x86 hosts | `register_128x128.hh` |
@@ -363,7 +363,7 @@ enumerator); `group-collectives.hh` keeps a private copy because an installed he
   enables the `cmake/compat/float-h` shim when the macOS 27 SDK leaves `FLT_MAX` undefined.
 - Native suites have `Backend::SYCL` arms (float, complex<float>); double runs as NETLIB on the host.
   `tests/known-failures-acpp-metal.txt` (libc++ `std::__1::` spellings) holds hemm/herk/her2k
-  complex<float> (vendor-only, `NoRouteError`), Upper `posv` n = 33 complex<float>
+  complex<float> (vendor-only, `NoRouteError`), Upper `posv` \f$n = 33\f$ complex<float>
   ([Defect 19](known-defects.md#defect-19-upper-potrf-beyond-the-cta-ceiling-has-no-vendor-free-route))
   and lanczos ([Defect 3](known-defects.md#defect-3-lanczos-issues-a-two-column-multiply-and-consumes-one-column)).
 
@@ -372,7 +372,7 @@ enumerator); `group-collectives.hh` keeps a private copy because an installed he
 | Item | Configuration | What would settle it |
 | --- | --- | --- |
 | Upstream opt-in above 48 KiB (A2) not requested | Linux acpp | an AdaptiveCpp issue or patch |
-| Three cells (geqrf, potrf `blocked`, syev; float n >= 512) gain over 10% per item at twice the batch | Linux acpp | re-measure at a larger batch |
+| Three cells (geqrf, potrf `blocked`, syev; float \f$n \ge 512\f$) gain over 10% per item at twice the batch | Linux acpp | re-measure at a larger batch |
 | Vendor-free acpp tree not measured | Linux acpp | a `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` A/B |
 | cp.async gemm pipeline absent (A12), cost unknown | Linux acpp | A/B of the affected tiles |
 | `getrf_panel_reg<cdouble, 32>` stack array, cause not investigated | Linux acpp | PTX/IR inspection |

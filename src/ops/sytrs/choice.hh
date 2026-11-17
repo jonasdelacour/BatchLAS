@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /// @file
@@ -18,14 +19,14 @@ struct Vendor : select::NoFields<"vendor"> {};    ///< backend::sytrs_vendor: LA
 
 using SytrsChoice = std::variant<Cta, Blocked, Wg, Vendor>;  ///< natives: GPU, sub-group 32, homogeneous, not NETLIB
 
-template <class T>  /// Every compiled choice, once, in tie-break order (§6.3).
+template <class Scalar>  /// Every compiled choice, once, in tie-break order (§6.3).
 constexpr auto candidates() { return select::all_of<SytrsChoice>(); }
 
 inline constexpr std::array<std::string_view, 2> kLastResort{"blocked", "vendor"};
 
 inline constexpr select::OpSpec spec{Op::sytrs, select::Lib::solver, select::Rules{kLastResort}};
 
-inline constexpr std::array<std::string_view, 3> key_names{"n:log:2", "nrhs:log", "batch:log"};  ///< ~ n^2 nrhs batch
+inline constexpr std::array<std::string_view, 3> key_names{"n:log:2", "nrhs:log", "batch:log"};  ///< \f$\sim n^2 \cdot \mathit{nrhs} \cdot \mathit{batch}\f$
 
 /// Log-spaced, plus both sides of cta's register-tile steps (32|33, 64|65) and its ceiling (128|129).
 inline constexpr std::array<int, 17> grid_n{1, 2, 4, 8, 16, 24, 32, 33, 48, 64, 65, 96, 128, 129, 256, 512, 1024};

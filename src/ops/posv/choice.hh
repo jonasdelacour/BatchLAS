@@ -19,12 +19,12 @@ struct Blocked : select::NoFields<"blocked"> {};  ///< public potrf + two public
 
 using PosvChoice = std::variant<Tiny, Cta, Blocked>;  ///< fieldless: buckets, nb and wg are derived in the driver
 
-template <typename T>  /// Tie-break order (§6.3). No vendor family: a `vendor` pin warns and runs Auto.
+template <typename Scalar>  /// Tie-break order (§6.3). No vendor family: a `vendor` pin warns and runs Auto.
 constexpr auto candidates() { return select::all_of<PosvChoice>(); }
 
 inline constexpr select::OpSpec spec{Op::posv, select::Lib::none};  ///< no library; blocked's children report errors
 
-inline constexpr std::array<std::string_view, 4> key_names{  ///< work: n^3/3 + 2 n^2 nrhs
+inline constexpr std::array<std::string_view, 4> key_names{  ///< work: \f$n^3/3 + 2 n^2 \cdot \mathit{nrhs}\f$
     "uplo:exact", "n:log:3", "nrhs:log", "batch:log"};
 
 /// potrf's grid_n within [1, 1024]; the transcriber (tuned/README.md) spells the same grid.

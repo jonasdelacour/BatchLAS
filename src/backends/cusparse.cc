@@ -21,333 +21,333 @@
 // here: docs/perf/spmm.md
 namespace batchlas {
 
-    namespace backend {
+namespace backend {
 
-        namespace {
-            // On a REAL scalar ConjTrans *is* Trans, and cuSPARSE silently returns
-            // wrong results for CUDA_R_32F/CUDA_R_64F under the conjugating enum.
-            // Applies to the dense operand too, not just the sparse one.
-            // evidence: docs/perf/spmm.md#three-vendor-defects-found-here-and-fixed
-            template <typename T>
-            constexpr cusparseOperation_t cusparse_op(Transpose trans) {
-                constexpr bool is_complex_scalar =
-                    std::is_same_v<T, std::complex<float>> ||
-                    std::is_same_v<T, std::complex<double>>;
-                if constexpr (!is_complex_scalar) {
-                    if (trans == Transpose::ConjTrans) {
-                        return static_cast<cusparseOperation_t>(CUSPARSE_OPERATION_TRANSPOSE);
-                    }
-                }
-                return enum_convert<BackendLibrary::CUSPARSE>(trans);
+    namespace {
+    // On a REAL scalar ConjTrans *is* Trans, and cuSPARSE silently returns
+    // wrong results for CUDA_R_32F/CUDA_R_64F under the conjugating enum.
+    // Applies to the dense operand too, not just the sparse one.
+    // evidence: docs/perf/spmm.md#three-vendor-defects-found-here-and-fixed
+    template <typename Scalar>
+    constexpr cusparseOperation_t cusparse_op(Transpose trans) {
+        constexpr bool is_complex_scalar =
+            std::is_same_v<Scalar, std::complex<float>> ||
+            std::is_same_v<Scalar, std::complex<double>>;
+        if constexpr (!is_complex_scalar) {
+            if (trans == Transpose::ConjTrans) {
+                return static_cast<cusparseOperation_t>(CUSPARSE_OPERATION_TRANSPOSE);
             }
+        }
+        return enum_convert<BackendLibrary::CUSPARSE>(trans);
+    }
 
-            // cuSPARSE takes ONE nnz for the whole strided batch, but A.nnz() is the
-            // per-item CAPACITY (the batch maximum): trusting it makes a short item's
-            // descriptor cover padding the conversion never wrote, giving wrong last
-            // rows or CUDA_ERROR_ILLEGAL_ADDRESS. So nnz comes from the items' own row
-            // offsets, and a non-uniform batch is issued one cusparseSpMM per item.
-            // evidence: docs/perf/spmm.md#three-vendor-defects-found-here-and-fixed
-            struct SpmmCsrBatchPlan {
-                std::vector<int> item_nnz;      // what each item actually stores
-                bool uniform = true;            // ... and they are all equal
-                bool matches_capacity = true;   // ... and equal to A.nnz()
-            };
+    // cuSPARSE takes ONE nnz for the whole strided batch, but A.nnz() is the
+    // per-item CAPACITY (the batch maximum): trusting it makes a short item's
+    // descriptor cover padding the conversion never wrote, giving wrong last
+    // rows or CUDA_ERROR_ILLEGAL_ADDRESS. So nnz comes from the items' own row
+    // offsets, and a non-uniform batch is issued one cusparseSpMM per item.
+    // evidence: docs/perf/spmm.md#three-vendor-defects-found-here-and-fixed
+    struct SpmmCsrBatchPlan {
+        std::vector<int> item_nnz;      // what each item actually stores
+        bool uniform = true;            // ... and they are all equal
+        bool matches_capacity = true;   // ... and equal to A.nnz()
+    };
 
-            // Reads the row offsets ON THE HOST: whatever kernel filled them must have
-            // completed, the same precondition MatrixView::nnz(b) documents. Device-only
-            // memory is not host-reachable, so it is staged first.
-            template <typename T>
-            SpmmCsrBatchPlan spmm_csr_batch_plan(Queue& ctx,
-                                                 const MatrixView<T, MatrixFormat::CSR>& A) {
-                SpmmCsrBatchPlan plan;
-                const int m = A.rows();
+    // Reads the row offsets ON THE HOST: whatever kernel filled them must have
+    // completed, the same precondition MatrixView::nnz(b) documents. Device-only
+    // memory is not host-reachable, so it is staged first.
+    template <typename Scalar>
+    SpmmCsrBatchPlan spmm_csr_batch_plan(Queue& ctx,
+                                         const MatrixView<Scalar, MatrixFormat::CSR>& A) {
+        SpmmCsrBatchPlan plan;
+        const int m = A.rows();
+        const int bs = A.batch_size();
+        const int os = A.offset_stride();
+        // Degenerate shape: leaving matches_capacity true hands it to the
+        // single batched call, which is the pre-existing behaviour.
+        if (bs <= 0 || m < 0 || os < m + 1) return plan;
+        const int* ro = A.row_offsets().data();
+        if (ro == nullptr) return plan;
+
+        std::vector<int> staged;
+        const int* host_ro = ro;
+        if (sycl::get_pointer_type(ro, ctx->get_context()) ==
+            sycl::usm::alloc::device) {
+            // Only up to the LAST item's row m, not os*bs. A view built
+            // over a tightly sized offsets buffer holds
+            // os*(bs-1) + m + 1 ints -- nothing may read past index m of
+            // an item -- so copying os*bs over-reads the final pad, which
+            // on a page-boundary allocation is an illegal device access
+            // inside what is only a sizing query.
+            const std::size_t need =
+                static_cast<std::size_t>(os) * static_cast<std::size_t>(bs - 1) +
+                static_cast<std::size_t>(m) + 1;
+            staged.resize(need);
+            ctx->memcpy(staged.data(), ro, need * sizeof(int)).wait();
+            host_ro = staged.data();
+        }
+
+        plan.item_nnz.resize(static_cast<std::size_t>(bs));
+        for (int b = 0; b < bs; ++b) {
+            const std::size_t base = static_cast<std::size_t>(b) *
+                                     static_cast<std::size_t>(os);
+            plan.item_nnz[static_cast<std::size_t>(b)] =
+                host_ro[base + static_cast<std::size_t>(m)] - host_ro[base];
+        }
+        plan.uniform = std::all_of(
+            plan.item_nnz.begin(), plan.item_nnz.end(),
+            [&](int v) { return v == plan.item_nnz.front(); });
+        plan.matches_capacity = plan.uniform && plan.item_nnz.front() == A.nnz();
+        return plan;
+    }
+
+    // Owns its descriptors: BackendMatrixHandle's destructor is `= default`
+    // and never calls cusparseDestroySpMat, so borrowing the view's cached
+    // descriptor per batch item would leak one descriptor per item per call.
+    template <typename Scalar>
+    struct LocalCsrDescr {
+        cusparseSpMatDescr_t d = nullptr;
+        LocalCsrDescr(const MatrixView<Scalar, MatrixFormat::CSR>& A,
+                      int first, int count, int nnz) {
+            const std::int64_t o =
+                static_cast<std::int64_t>(first) * A.offset_stride();
+            const std::int64_t v =
+                static_cast<std::int64_t>(first) * A.matrix_stride();
+            cusparseCreateCsr(&d, A.rows(), A.cols(), nnz,
+                              A.row_offsets().data() + o,
+                              A.col_indices().data() + v,
+                              A.data_ptr() + v,
+                              CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+                              CUSPARSE_INDEX_BASE_ZERO,
+                              BackendScalar<Scalar, BackendLibrary::CUSPARSE>::type);
+            if (count > 1) {
+                cusparseCsrSetStridedBatch(d, count, A.offset_stride(),
+                                           A.matrix_stride());
+            }
+        }
+        ~LocalCsrDescr() { if (d) cusparseDestroySpMat(d); }
+        LocalCsrDescr(const LocalCsrDescr&) = delete;
+        LocalCsrDescr& operator=(const LocalCsrDescr&) = delete;
+        operator cusparseSpMatDescr_t() const { return d; }
+    };
+
+    template <typename Scalar>
+    struct LocalDnDescr {
+        cusparseDnMatDescr_t d = nullptr;
+        LocalDnDescr(const MatrixView<Scalar, MatrixFormat::Dense>& M,
+                     int first, int count) {
+            const std::int64_t s = static_cast<std::int64_t>(first) * M.stride();
+            cusparseCreateDnMat(&d, M.rows(), M.cols(), M.ld(),
+                                M.data_ptr() + s,
+                                BackendScalar<Scalar, BackendLibrary::CUSPARSE>::type,
+                                CUSPARSE_ORDER_COL);
+            if (count > 1) {
+                cusparseDnMatSetStridedBatch(d, count, M.stride());
+            }
+        }
+        ~LocalDnDescr() { if (d) cusparseDestroyDnMat(d); }
+        LocalDnDescr(const LocalDnDescr&) = delete;
+        LocalDnDescr& operator=(const LocalDnDescr&) = delete;
+        operator cusparseDnMatDescr_t() const { return d; }
+    };
+
+    // Every sizing path funnels through here, so a size and the call it
+    // sizes cannot describe different descriptors.
+    template <Backend B, typename Scalar>
+    size_t spmm_query_buffer(LinalgHandle<B>& handle,
+                             cusparseSpMatDescr_t a,
+                             cusparseDnMatDescr_t b,
+                             cusparseDnMatDescr_t c,
+                             Scalar alpha, Scalar beta,
+                             Transpose transA, Transpose transB) {
+        size_t size = 0;
+        check_status(cusparseSpMM_bufferSize(
+            handle,
+            cusparse_op<Scalar>(transA),
+            cusparse_op<Scalar>(transB),
+            &alpha, a, b, &beta, c,
+            BackendScalar<Scalar, BackendLibrary::CUSPARSE>::type,
+            CUSPARSE_SPMM_ALG_DEFAULT,
+            &size));
+        return size;
+    }
+
+    // For the per-item path this is the MAXIMUM over items: one buffer is
+    // allocated once and reused by every item.
+    template <Backend B, typename Scalar, MatrixFormat MFormat>
+    size_t spmm_planned_buffer_size(LinalgHandle<B>& handle,
+                                    const MatrixView<Scalar, MFormat>& A,
+                                    const MatrixView<Scalar, MatrixFormat::Dense>& B_mat,
+                                    const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                                    Scalar alpha, Scalar beta,
+                                    Transpose transA, Transpose transB,
+                                    const SpmmCsrBatchPlan& plan) {
+        if constexpr (MFormat == MatrixFormat::CSR) {
+            if (!plan.matches_capacity) {
                 const int bs = A.batch_size();
-                const int os = A.offset_stride();
-                // Degenerate shape: leaving matches_capacity true hands it to the
-                // single batched call, which is the pre-existing behaviour.
-                if (bs <= 0 || m < 0 || os < m + 1) return plan;
-                const int* ro = A.row_offsets().data();
-                if (ro == nullptr) return plan;
-
-                std::vector<int> staged;
-                const int* host_ro = ro;
-                if (sycl::get_pointer_type(ro, ctx->get_context()) ==
-                    sycl::usm::alloc::device) {
-                    // Only up to the LAST item's row m, not os*bs. A view built
-                    // over a tightly sized offsets buffer holds
-                    // os*(bs-1) + m + 1 ints -- nothing may read past index m of
-                    // an item -- so copying os*bs over-reads the final pad, which
-                    // on a page-boundary allocation is an illegal device access
-                    // inside what is only a sizing query.
-                    const std::size_t need =
-                        static_cast<std::size_t>(os) * static_cast<std::size_t>(bs - 1) +
-                        static_cast<std::size_t>(m) + 1;
-                    staged.resize(need);
-                    ctx->memcpy(staged.data(), ro, need * sizeof(int)).wait();
-                    host_ro = staged.data();
+                if (plan.uniform) {
+                    LocalCsrDescr<Scalar> a(A, 0, bs, plan.item_nnz.front());
+                    LocalDnDescr<Scalar> b(B_mat, 0, bs);
+                    LocalDnDescr<Scalar> c(C, 0, bs);
+                    return spmm_query_buffer<B, Scalar>(handle, a, b, c, alpha, beta,
+                                                        transA, transB);
                 }
-
-                plan.item_nnz.resize(static_cast<std::size_t>(bs));
-                for (int b = 0; b < bs; ++b) {
-                    const std::size_t base = static_cast<std::size_t>(b) *
-                                             static_cast<std::size_t>(os);
-                    plan.item_nnz[static_cast<std::size_t>(b)] =
-                        host_ro[base + static_cast<std::size_t>(m)] - host_ro[base];
+                size_t need = 0;
+                for (int i = 0; i < bs; ++i) {
+                    LocalCsrDescr<Scalar> a(A, i, 1,
+                                            plan.item_nnz[static_cast<std::size_t>(i)]);
+                    LocalDnDescr<Scalar> b(B_mat, i, 1);
+                    LocalDnDescr<Scalar> c(C, i, 1);
+                    need = std::max(need,
+                                    spmm_query_buffer<B, Scalar>(handle, a, b, c, alpha,
+                                                                 beta, transA, transB));
                 }
-                plan.uniform = std::all_of(
-                    plan.item_nnz.begin(), plan.item_nnz.end(),
-                    [&](int v) { return v == plan.item_nnz.front(); });
-                plan.matches_capacity = plan.uniform && plan.item_nnz.front() == A.nnz();
-                return plan;
+                return need;
             }
-
-            // Owns its descriptors: BackendMatrixHandle's destructor is `= default`
-            // and never calls cusparseDestroySpMat, so borrowing the view's cached
-            // descriptor per batch item would leak one descriptor per item per call.
-            template <typename T>
-            struct LocalCsrDescr {
-                cusparseSpMatDescr_t d = nullptr;
-                LocalCsrDescr(const MatrixView<T, MatrixFormat::CSR>& A,
-                              int first, int count, int nnz) {
-                    const std::int64_t o =
-                        static_cast<std::int64_t>(first) * A.offset_stride();
-                    const std::int64_t v =
-                        static_cast<std::int64_t>(first) * A.matrix_stride();
-                    cusparseCreateCsr(&d, A.rows(), A.cols(), nnz,
-                                      A.row_offsets().data() + o,
-                                      A.col_indices().data() + v,
-                                      A.data_ptr() + v,
-                                      CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
-                                      CUSPARSE_INDEX_BASE_ZERO,
-                                      BackendScalar<T, BackendLibrary::CUSPARSE>::type);
-                    if (count > 1) {
-                        cusparseCsrSetStridedBatch(d, count, A.offset_stride(),
-                                                   A.matrix_stride());
-                    }
-                }
-                ~LocalCsrDescr() { if (d) cusparseDestroySpMat(d); }
-                LocalCsrDescr(const LocalCsrDescr&) = delete;
-                LocalCsrDescr& operator=(const LocalCsrDescr&) = delete;
-                operator cusparseSpMatDescr_t() const { return d; }
-            };
-
-            template <typename T>
-            struct LocalDnDescr {
-                cusparseDnMatDescr_t d = nullptr;
-                LocalDnDescr(const MatrixView<T, MatrixFormat::Dense>& M,
-                             int first, int count) {
-                    const std::int64_t s = static_cast<std::int64_t>(first) * M.stride();
-                    cusparseCreateDnMat(&d, M.rows(), M.cols(), M.ld(),
-                                        M.data_ptr() + s,
-                                        BackendScalar<T, BackendLibrary::CUSPARSE>::type,
-                                        CUSPARSE_ORDER_COL);
-                    if (count > 1) {
-                        cusparseDnMatSetStridedBatch(d, count, M.stride());
-                    }
-                }
-                ~LocalDnDescr() { if (d) cusparseDestroyDnMat(d); }
-                LocalDnDescr(const LocalDnDescr&) = delete;
-                LocalDnDescr& operator=(const LocalDnDescr&) = delete;
-                operator cusparseDnMatDescr_t() const { return d; }
-            };
-
-            // Every sizing path funnels through here, so a size and the call it
-            // sizes cannot describe different descriptors.
-            template <Backend B, typename T>
-            size_t spmm_query_buffer(LinalgHandle<B>& handle,
-                                     cusparseSpMatDescr_t a,
-                                     cusparseDnMatDescr_t b,
-                                     cusparseDnMatDescr_t c,
-                                     T alpha, T beta,
-                                     Transpose transA, Transpose transB) {
-                size_t size = 0;
-                check_status(cusparseSpMM_bufferSize(
-                    handle,
-                    cusparse_op<T>(transA),
-                    cusparse_op<T>(transB),
-                    &alpha, a, b, &beta, c,
-                    BackendScalar<T, BackendLibrary::CUSPARSE>::type,
-                    CUSPARSE_SPMM_ALG_DEFAULT,
-                    &size));
-                return size;
-            }
-
-            // For the per-item path this is the MAXIMUM over items: one buffer is
-            // allocated once and reused by every item.
-            template <Backend B, typename T, MatrixFormat MFormat>
-            size_t spmm_planned_buffer_size(LinalgHandle<B>& handle,
-                                            const MatrixView<T, MFormat>& A,
-                                            const MatrixView<T, MatrixFormat::Dense>& B_mat,
-                                            const MatrixView<T, MatrixFormat::Dense>& C,
-                                            T alpha, T beta,
-                                            Transpose transA, Transpose transB,
-                                            const SpmmCsrBatchPlan& plan) {
-                if constexpr (MFormat == MatrixFormat::CSR) {
-                    if (!plan.matches_capacity) {
-                        const int bs = A.batch_size();
-                        if (plan.uniform) {
-                            LocalCsrDescr<T> a(A, 0, bs, plan.item_nnz.front());
-                            LocalDnDescr<T> b(B_mat, 0, bs);
-                            LocalDnDescr<T> c(C, 0, bs);
-                            return spmm_query_buffer<B, T>(handle, a, b, c, alpha, beta,
-                                                           transA, transB);
-                        }
-                        size_t need = 0;
-                        for (int i = 0; i < bs; ++i) {
-                            LocalCsrDescr<T> a(A, i, 1,
-                                               plan.item_nnz[static_cast<std::size_t>(i)]);
-                            LocalDnDescr<T> b(B_mat, i, 1);
-                            LocalDnDescr<T> c(C, i, 1);
-                            need = std::max(need,
-                                            spmm_query_buffer<B, T>(handle, a, b, c, alpha,
-                                                                    beta, transA, transB));
-                        }
-                        return need;
-                    }
-                }
-                (void)plan;
-                return spmm_query_buffer<B, T>(handle, *A, *B_mat, *C, alpha, beta,
-                                               transA, transB);
-            }
-        }  // namespace
-
-        template <Backend B, typename T, MatrixFormat MFormat>
-        size_t spmm_vendor_buffer_size(Queue& ctx,
-                                       const MatrixView<T, MFormat>& A,
-                                       const MatrixView<T, MatrixFormat::Dense>& B_mat,
-                                       const MatrixView<T, MatrixFormat::Dense>& C,
-                                       T alpha,
-                                       T beta,
-                                       Transpose transA,
-                                       Transpose transB);
-
-    template <Backend B, typename T, MatrixFormat MFormat>
-    Event spmm_vendor(Queue& ctx,
-               const MatrixView<T, MFormat>& A,
-               const MatrixView<T, MatrixFormat::Dense>& B_mat,
-               const MatrixView<T, MatrixFormat::Dense>& C,
-               T alpha,
-               T beta,
-               Transpose transA,
-               Transpose transB,
-               Span<std::byte> workspace) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::spmm, "spmm_vendor", B, A, B_mat, C);
-        static LinalgHandle<B> handle;
-
-        SpmmCsrBatchPlan plan;
-        if constexpr (MFormat == MatrixFormat::CSR) {
-            plan = spmm_csr_batch_plan(ctx, A);
         }
-
-        BumpAllocator pool(workspace);
-        handle.setStream(ctx);  // for the in-function size query below
-        // spmm_vendor_buffer_size below must build an identical plan from the same
-        // views, or the caller's workspace can be too small for the shape that fires.
-        auto buffer_size = BumpAllocator::allocation_size<std::byte>(
-            ctx, spmm_planned_buffer_size<B, T, MFormat>(
-                     handle, A, B_mat, C, alpha, beta, transA, transB, plan));
-        auto buffer = pool.allocate<std::byte>(ctx, buffer_size);
-        // Create the cached descriptors on the caller's views: the lambda's copies share them.
-        if (MFormat != MatrixFormat::CSR || plan.matches_capacity) {
-            A.init();
-            B_mat.init();
-            C.init();
-        }
-
-        impl::run_native<impl::Native::Cuda>(*ctx, [=, plan = std::move(plan)](auto stream) mutable {
-            handle.setStream(stream);
-            alignas(16) auto alpha_h = alpha;  // cuBLASLt vector-loads it; closures are 8-aligned
-            alignas(16) auto beta_h = beta;
-            if constexpr (MFormat == MatrixFormat::CSR) {
-                if (!plan.matches_capacity) {
-                    const int bs = A.batch_size();
-                    if (plan.uniform) {
-                        LocalCsrDescr<T> a(A, 0, bs, plan.item_nnz.front());
-                        LocalDnDescr<T> b(B_mat, 0, bs);
-                        LocalDnDescr<T> c(C, 0, bs);
-                        check_status(cusparseSpMM(handle, cusparse_op<T>(transA), cusparse_op<T>(transB),
-                                     &alpha_h, a, b, &beta_h, c,
-                                     BackendScalar<T, BackendLibrary::CUSPARSE>::type,
-                                     CUSPARSE_SPMM_ALG_DEFAULT, buffer.data()));
-                    } else {
-                        // Inexpressible as one strided descriptor: a call per item.
-                        for (int i = 0; i < bs; ++i) {
-                            LocalCsrDescr<T> a(A, i, 1,
-                                               plan.item_nnz[static_cast<std::size_t>(i)]);
-                            LocalDnDescr<T> b(B_mat, i, 1);
-                            LocalDnDescr<T> c(C, i, 1);
-                            check_status(cusparseSpMM(handle, cusparse_op<T>(transA),
-                                         cusparse_op<T>(transB),
-                                         &alpha_h, a, b, &beta_h, c,
-                                         BackendScalar<T, BackendLibrary::CUSPARSE>::type,
-                                         CUSPARSE_SPMM_ALG_DEFAULT, buffer.data()));
-                        }
-                    }
-                    return;
-                }
-            }
-
-            check_status(cusparseSpMM(
-                handle,
-                cusparse_op<T>(transA),
-                cusparse_op<T>(transB),
-                &alpha_h,
-                *A,
-                *B_mat,
-                &beta_h,
-                *C,
-                BackendScalar<T,BackendLibrary::CUSPARSE>::type,
-                CUSPARSE_SPMM_ALG_DEFAULT,
-                buffer.data()
-            ));
-        });
-        return ctx.create_event_after_external_work();
+        (void)plan;
+        return spmm_query_buffer<B, Scalar>(handle, *A, *B_mat, *C, alpha, beta,
+                                            transA, transB);
     }
+    }  // namespace
 
-    template <Backend B, typename T, MatrixFormat MFormat>
+    template <Backend B, typename Scalar, MatrixFormat MFormat>
     size_t spmm_vendor_buffer_size(Queue& ctx,
-                          const MatrixView<T, MFormat>& A,
-                          const MatrixView<T, MatrixFormat::Dense>& B_mat,
-                          const MatrixView<T, MatrixFormat::Dense>& C,
-                          T alpha,
-                          T beta,
-                          Transpose transA,
-                          Transpose transB) {
-        static LinalgHandle<B> handle;
-        handle.setStream(ctx);
+                                   const MatrixView<Scalar, MFormat>& A,
+                                   const MatrixView<Scalar, MatrixFormat::Dense>& B_mat,
+                                   const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                                   Scalar alpha,
+                                   Scalar beta,
+                                   Transpose transA,
+                                   Transpose transB);
 
-        SpmmCsrBatchPlan plan;
-        if constexpr (MFormat == MatrixFormat::CSR) {
-            plan = spmm_csr_batch_plan(ctx, A);
-        }
-        const size_t size = spmm_planned_buffer_size<B, T, MFormat>(
-            handle, A, B_mat, C, alpha, beta, transA, transB, plan);
-        return BumpAllocator::allocation_size<std::byte>(ctx, size);
+template <Backend B, typename Scalar, MatrixFormat MFormat>
+Event spmm_vendor(Queue& ctx,
+           const MatrixView<Scalar, MFormat>& A,
+           const MatrixView<Scalar, MatrixFormat::Dense>& B_mat,
+           const MatrixView<Scalar, MatrixFormat::Dense>& C,
+           Scalar alpha,
+           Scalar beta,
+           Transpose transA,
+           Transpose transB,
+           Span<std::byte> workspace) {
+    ::batchlas::detail::refuse_batch_mask<Scalar>(Op::spmm, "spmm_vendor", B, A, B_mat, C);
+    static LinalgHandle<B> handle;
+
+    SpmmCsrBatchPlan plan;
+    if constexpr (MFormat == MatrixFormat::CSR) {
+        plan = spmm_csr_batch_plan(ctx, A);
     }
 
-    } // namespace backend
+    BumpAllocator pool(workspace);
+    handle.setStream(ctx);  // for the in-function size query below
+    // spmm_vendor_buffer_size below must build an identical plan from the same
+    // views, or the caller's workspace can be too small for the shape that fires.
+    auto buffer_size = BumpAllocator::allocation_size<std::byte>(
+        ctx, spmm_planned_buffer_size<B, Scalar, MFormat>(
+                 handle, A, B_mat, C, alpha, beta, transA, transB, plan));
+    auto buffer = pool.allocate<std::byte>(ctx, buffer_size);
+    // Create the cached descriptors on the caller's views: the lambda's copies share them.
+    if (MFormat != MatrixFormat::CSR || plan.matches_capacity) {
+        A.init();
+        B_mat.init();
+        C.init();
+    }
 
-    // Explicit instantiations: ONLY the `backend::`-qualified vendor entry
-    // points. The public spmm / spmm_buffer_size definitions and their
-    // instantiations live in src/ops/spmm/spmm.cc, so naming them
-    // here would be a duplicate symbol.
-    //
-    // Signatures come from the `sig` namespace beside the public declaration
-    // (include/batchlas/blas/functions/spmm.hh), so changing one is a single
-    // header edit rather than one edit per backend TU. Spelled with the raw
-    // BATCHLAS_INSTANTIATE rather than BATCHLAS_INSTANTIATE_FORMAT_OP: that
-    // macro names an *unqualified* op and there is no `backend::` + format form
-    // of it. CSR is the only sparse format cuSPARSE is wired up for here.
-    #define CUSPARSE_OPS(B, fp)                                                                       \
-        BATCHLAS_INSTANTIATE(sig::spmm_vendor<BATCHLAS_UNPAREN fp BATCHLAS_COMMA MatrixFormat::CSR>,   \
-                             backend::spmm_vendor, B, BATCHLAS_UNPAREN fp, MatrixFormat::CSR)         \
-        BATCHLAS_INSTANTIATE(sig::spmm_vendor_buffer_size<BATCHLAS_UNPAREN fp                          \
-                                                          BATCHLAS_COMMA MatrixFormat::CSR>,          \
-                             backend::spmm_vendor_buffer_size, B, BATCHLAS_UNPAREN fp,                \
-                             MatrixFormat::CSR)
+    impl::run_native<impl::Native::Cuda>(*ctx, [=, plan = std::move(plan)](auto stream) mutable {
+        handle.setStream(stream);
+        alignas(16) auto alpha_h = alpha;  // cuBLASLt vector-loads it; closures are 8-aligned
+        alignas(16) auto beta_h = beta;
+        if constexpr (MFormat == MatrixFormat::CSR) {
+            if (!plan.matches_capacity) {
+                const int bs = A.batch_size();
+                if (plan.uniform) {
+                    LocalCsrDescr<Scalar> a(A, 0, bs, plan.item_nnz.front());
+                    LocalDnDescr<Scalar> b(B_mat, 0, bs);
+                    LocalDnDescr<Scalar> c(C, 0, bs);
+                    check_status(cusparseSpMM(handle, cusparse_op<Scalar>(transA), cusparse_op<Scalar>(transB),
+                                 &alpha_h, a, b, &beta_h, c,
+                                 BackendScalar<Scalar, BackendLibrary::CUSPARSE>::type,
+                                 CUSPARSE_SPMM_ALG_DEFAULT, buffer.data()));
+                } else {
+                    // Inexpressible as one strided descriptor: a call per item.
+                    for (int i = 0; i < bs; ++i) {
+                        LocalCsrDescr<Scalar> a(A, i, 1,
+                                                plan.item_nnz[static_cast<std::size_t>(i)]);
+                        LocalDnDescr<Scalar> b(B_mat, i, 1);
+                        LocalDnDescr<Scalar> c(C, i, 1);
+                        check_status(cusparseSpMM(handle, cusparse_op<Scalar>(transA),
+                                     cusparse_op<Scalar>(transB),
+                                     &alpha_h, a, b, &beta_h, c,
+                                     BackendScalar<Scalar, BackendLibrary::CUSPARSE>::type,
+                                     CUSPARSE_SPMM_ALG_DEFAULT, buffer.data()));
+                    }
+                }
+                return;
+            }
+        }
 
-    // Instantiate for the floating-point types of interest
-    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(CUSPARSE_OPS, Backend::CUDA)
-
-    #undef CUSPARSE_OPS
+        check_status(cusparseSpMM(
+            handle,
+            cusparse_op<Scalar>(transA),
+            cusparse_op<Scalar>(transB),
+            &alpha_h,
+            *A,
+            *B_mat,
+            &beta_h,
+            *C,
+            BackendScalar<Scalar, BackendLibrary::CUSPARSE>::type,
+            CUSPARSE_SPMM_ALG_DEFAULT,
+            buffer.data()
+        ));
+    });
+    return ctx.create_event_after_external_work();
 }
+
+template <Backend B, typename Scalar, MatrixFormat MFormat>
+size_t spmm_vendor_buffer_size(Queue& ctx,
+                      const MatrixView<Scalar, MFormat>& A,
+                      const MatrixView<Scalar, MatrixFormat::Dense>& B_mat,
+                      const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                      Scalar alpha,
+                      Scalar beta,
+                      Transpose transA,
+                      Transpose transB) {
+    static LinalgHandle<B> handle;
+    handle.setStream(ctx);
+
+    SpmmCsrBatchPlan plan;
+    if constexpr (MFormat == MatrixFormat::CSR) {
+        plan = spmm_csr_batch_plan(ctx, A);
+    }
+    const size_t size = spmm_planned_buffer_size<B, Scalar, MFormat>(
+        handle, A, B_mat, C, alpha, beta, transA, transB, plan);
+    return BumpAllocator::allocation_size<std::byte>(ctx, size);
+}
+
+}  // namespace backend
+
+// Explicit instantiations: ONLY the `backend::`-qualified vendor entry
+// points. The public spmm / spmm_buffer_size definitions and their
+// instantiations live in src/ops/spmm/spmm.cc, so naming them
+// here would be a duplicate symbol.
+//
+// Signatures come from the `sig` namespace beside the public declaration
+// (include/batchlas/blas/functions/spmm.hh), so changing one is a single
+// header edit rather than one edit per backend TU. Spelled with the raw
+// BATCHLAS_INSTANTIATE rather than BATCHLAS_INSTANTIATE_FORMAT_OP: that
+// macro names an *unqualified* op and there is no `backend::` + format form
+// of it. CSR is the only sparse format cuSPARSE is wired up for here.
+#define CUSPARSE_OPS(B, fp)                                                                       \
+    BATCHLAS_INSTANTIATE(sig::spmm_vendor<BATCHLAS_UNPAREN fp BATCHLAS_COMMA MatrixFormat::CSR>,   \
+                         backend::spmm_vendor, B, BATCHLAS_UNPAREN fp, MatrixFormat::CSR)         \
+    BATCHLAS_INSTANTIATE(sig::spmm_vendor_buffer_size<BATCHLAS_UNPAREN fp                          \
+                                                      BATCHLAS_COMMA MatrixFormat::CSR>,          \
+                         backend::spmm_vendor_buffer_size, B, BATCHLAS_UNPAREN fp,                \
+                         MatrixFormat::CSR)
+
+// Instantiate for the floating-point types of interest
+BATCHLAS_FOR_EACH_SCALAR_TYPE_1(CUSPARSE_OPS, Backend::CUDA)
+
+#undef CUSPARSE_OPS
+}  // namespace batchlas

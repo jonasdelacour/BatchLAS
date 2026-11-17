@@ -16,43 +16,42 @@ namespace batchlas {
 // Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
 // src/util/template-instantiations.hh. Keep in sync with the declarations below.
 namespace sig {
-template <typename T>
+template <typename Scalar>
 using trsm = Event(Queue&,
-                   const MatrixView<T, MatrixFormat::Dense>&,
-                   const MatrixView<T, MatrixFormat::Dense>&,
-                   T, Side, Uplo, Transpose, Diag);
+                   const MatrixView<Scalar, MatrixFormat::Dense>&,
+                   const MatrixView<Scalar, MatrixFormat::Dense>&,
+                   Scalar, Side, Uplo, Transpose, Diag);
 
 // NOT an alias for sig::trsm: the vendor signature puts alpha last.
-template <typename T>
+template <typename Scalar>
 using trsm_vendor = Event(Queue&,
-                          const MatrixView<T,MatrixFormat::Dense>&,
-                          const MatrixView<T,MatrixFormat::Dense>&,
+                          const MatrixView<Scalar, MatrixFormat::Dense>&,
+                          const MatrixView<Scalar, MatrixFormat::Dense>&,
                           Side,
                           Uplo,
                           Transpose,
                           Diag,
-                          T);
+                          Scalar);
 }  // namespace sig
-
 
 /// @brief Host-side argument check that trsm runs on every backend before kernel selection.
 ///
-/// With m = `B.rows()` and n = `B.cols()`, requires m, n >= 0; valid enum values
-/// for `side`, `uplo`, `transA` and `diag`; `A` square of order m (Left) or n
-/// (Right) with `A.ld()` >= max(1, order); `B.ld()` >= max(1, m); and `A` and `B`
+/// With \f$m\f$ = `B.rows()` and \f$n\f$ = `B.cols()`, requires \f$m, n \ge 0\f$; valid enum values
+/// for `side`, `uplo`, `transA` and `diag`; `A` square of order \f$m\f$ (Left) or \f$n\f$
+/// (Right) with `A.ld()` \f$\ge \max(1, \text{order})\f$; `B.ld()` \f$\ge \max(1, m)\f$; and `A` and `B`
 /// with the same batch size. Reads only the views' shape metadata, never their data.
-/// @param A       triangular operand
-/// @param B       right-hand sides
-/// @param side    Side::Left or Side::Right
-/// @param uplo    Uplo::Lower or Uplo::Upper
-/// @param transA  NoTrans, Trans or ConjTrans
-/// @param diag    Diag::NonUnit or Diag::Unit
+/// @param[in] A       triangular operand
+/// @param[in] B       right-hand sides
+/// @param[in] side    Side::Left or Side::Right
+/// @param[in] uplo    Uplo::Lower or Uplo::Upper
+/// @param[in] transA  NoTrans, Trans or ConjTrans
+/// @param[in] diag    Diag::NonUnit or Diag::Unit
 /// @throws batchlas::invalid_argument naming the first violated requirement
 /// @ingroup api_blas3_lowlevel
-template <typename T>
+template <typename Scalar>
 inline void trsm_validate_params(
-                        const MatrixView<T, MatrixFormat::Dense>& A,
-                        const MatrixView<T, MatrixFormat::Dense>& B,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& B,
                         Side side,
                         Uplo uplo,
                         Transpose transA,
@@ -121,37 +120,38 @@ inline void trsm_validate_params(
 ///     X \, \mathrm{op}(A) = \alpha B \quad (\texttt{Side::Right}) \f]
 /// and overwrites `B` with \f$X\f$. `A` is triangular (`uplo`), unit or
 /// non-unit diagonal (`diag`), and \f$\mathrm{op}(A)\f$ is one of
-/// \f$A, A^T, A^H\f$. `B` is m x n; `A` is m x m (Left) or n x n (Right).
+/// \f$A, A^T, A^H\f$. `B` is \f$m \times n\f$; `A` is \f$m \times m\f$ (Left) or \f$n \times n\f$ (Right).
 /// No singularity check is made: a zero on a non-unit diagonal gives Inf/NaN.
 ///
-/// Also callable as `trsm(ctx, A, B, TrsmOptions<T>{...})`, with owning
+/// Also callable as `trsm(ctx, A, B, TrsmOptions<Scalar>{...})`, with owning
 /// `Matrix` arguments, and without `Back` (taken from `ctx.backend()`).
 ///
 /// @tparam Back  backend the call is compiled for; must match `ctx`'s device
-/// @tparam T     scalar type: `float`, `double`, `std::complex<float>` or `std::complex<double>`
-/// @param ctx     queue the work is enqueued on
-/// @param A       batch of triangular matrices; only the `uplo` triangle is read
-/// @param B       batch of m x n right-hand sides; overwritten with the solution
-/// @param alpha   scale of the right-hand side
-/// @param side    whether op(A) is applied from the left or the right
-/// @param uplo    which triangle of `A` holds the data
-/// @param transA  op() applied to `A`
-/// @param diag    whether `A` has an implicit unit diagonal
+/// @tparam Scalar     scalar type: `float`, `double`, `std::complex<float>` or `std::complex<double>`
+/// @param[in]     ctx     queue the work is enqueued on
+/// @param[in]     A       batch of triangular matrices, \f$m \times m\f$ (Left) or \f$n \times n\f$ (Right);
+///                        only the `uplo` triangle is read
+/// @param[in,out] B       batch of \f$m \times n\f$ right-hand sides \f$B\f$; overwritten with the solution \f$X\f$
+/// @param[in]     alpha   scale \f$\alpha\f$ of the right-hand side
+/// @param[in]     side    whether \f$\mathrm{op}(A)\f$ is applied from the left or the right
+/// @param[in]     uplo    which triangle of `A` holds the data
+/// @param[in]     transA  \f$\mathrm{op}()\f$ applied to `A`
+/// @param[in]     diag    whether `A` has an implicit unit diagonal
 /// @return event of the last enqueued kernel; `B` holds \f$X\f$ once it completes
 /// @throws batchlas::invalid_argument from trsm_validate_params (bad shape, `ld`,
 ///         enum value, or `A` and `B` batch sizes that differ), before anything
 ///         is enqueued
 /// @throws batchlas::NoRouteError in a build without the vendor BLAS for `Back`
 ///         when no native kernel can run the shape
-/// @note On `Backend::NETLIB`, `alpha == 0` still reads `B`, so a NaN in `B`
+/// @note On `Backend::NETLIB`, \f$\alpha = 0\f$ still reads `B`, so a NaN in `B`
 ///       survives (known defect 5, @ref md_docs_2design_2known-defects).
 /// @see trmm, TrsmOptions, @ref perf_trsm, @ref md_docs_2cpp-api
 /// @ingroup api_blas3
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 BATCHLAS_API Event trsm(Queue& ctx,
-                        const MatrixView<T, MatrixFormat::Dense>& A,
-                        const MatrixView<T, MatrixFormat::Dense>& B,
-                        T alpha,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                        Scalar alpha,
                         Side side,
                         Uplo uplo,
                         Transpose transA,
@@ -162,14 +162,13 @@ BATCHLAS_API Event trsm(Queue& ctx,
 /// @brief Deleted: the old argument order with `alpha` last. Pass `alpha` right
 /// after `B`.
 /// @ingroup api_blas3
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 Event trsm(Queue&,
-           const MatrixView<T, MatrixFormat::Dense>&,
-           const MatrixView<T, MatrixFormat::Dense>&,
-           Side, Uplo, Transpose, Diag, T) = delete;
+           const MatrixView<Scalar, MatrixFormat::Dense>&,
+           const MatrixView<Scalar, MatrixFormat::Dense>&,
+           Side, Uplo, Transpose, Diag, Scalar) = delete;
 
 }  // namespace batchlas
-
 
 namespace batchlas::backend {
 
@@ -181,16 +180,26 @@ namespace batchlas::backend {
 /// Not an entry point: batchlas::trsm calls it after validation, when kernel
 /// selection picks the Vendor family. Same semantics as batchlas::trsm, but
 /// `alpha` is the last argument.
+/// @param[in]     ctx     queue the work is enqueued on
+/// @param[in]     A       batch of triangular matrices, \f$m \times m\f$ (Left) or \f$n \times n\f$ (Right);
+///                        only the `uplo` triangle is read
+/// @param[in,out] B       batch of \f$m \times n\f$ right-hand sides \f$B\f$; overwritten with the solution \f$X\f$
+/// @param[in]     side    whether \f$\mathrm{op}(A)\f$ is applied from the left or the right
+/// @param[in]     uplo    which triangle of `A` holds the data
+/// @param[in]     transA  \f$\mathrm{op}()\f$ applied to `A`
+/// @param[in]     diag    whether `A` has an implicit unit diagonal
+/// @param[in]     alpha   scale \f$\alpha\f$ of the right-hand side
+/// @return event of the enqueued work; `B` holds \f$X\f$ once it completes
 /// @ingroup api_dispatch
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 BATCHLAS_API Event trsm_vendor(Queue& ctx,
-                               const MatrixView<T,MatrixFormat::Dense>& A,
-                               const MatrixView<T,MatrixFormat::Dense>& B,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& B,
                                Side side,
                                Uplo uplo,
                                Transpose transA,
                                Diag diag,
-                               T alpha);
+                               Scalar alpha);
 
 }  // namespace batchlas::backend
 
@@ -198,7 +207,6 @@ namespace batchlas {
 
 // Owning-argument (`f(ctx, Matrix, ...)`) and backend-deducing (`f(ctx, ...)`)
 // overloads; see blas/queue-dispatch.hh.
-
 
 BATCHLAS_DISPATCH_ON_QUEUE(trsm)
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /// @file
@@ -24,10 +25,10 @@ namespace batchlas {
 // Signature alias for explicit instantiation; see BATCHLAS_INSTANTIATE in
 // src/util/template-instantiations.hh. Keep in sync with the declaration below.
 namespace sig {
-template <typename T>
+template <typename Scalar>
 using potrs = Event(Queue&,
-                    const MatrixView<T, MatrixFormat::Dense>&,
-                    const MatrixView<T, MatrixFormat::Dense>&,
+                    const MatrixView<Scalar, MatrixFormat::Dense>&,
+                    const MatrixView<Scalar, MatrixFormat::Dense>&,
                     Uplo);
 }  // namespace sig
 
@@ -35,11 +36,15 @@ using potrs = Event(Queue&,
 ///
 /// Checks non-negative extents, a square A, `B.rows() == A.rows()`, equal batch sizes and a
 /// valid @p uplo.
+/// @tparam Scalar  scalar type of the operands
+/// @param[in] A     batch of \f$n \times n\f$ Cholesky factors, as passed to potrs()
+/// @param[in] B     batch of \f$n \times \mathit{nrhs}\f$ right-hand sides, as passed to potrs()
+/// @param[in] uplo  triangle of A that holds the factor; must be `Uplo::Lower` or `Uplo::Upper`
 /// @throws batchlas::invalid_argument if any check fails
 /// @ingroup api_factorizations_lowlevel
-template <typename T>
-inline void potrs_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
-                                  const MatrixView<T, MatrixFormat::Dense>& B,
+template <typename Scalar>
+inline void potrs_validate_params(const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                  const MatrixView<Scalar, MatrixFormat::Dense>& B,
                                   Uplo uplo) {
     if (A.rows() < 0 || A.cols() < 0 || B.rows() < 0 || B.cols() < 0) {
         throw batchlas::invalid_argument(
@@ -69,29 +74,29 @@ inline void potrs_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 /// @brief Batched solve of \f$ A X = B \f$ from the Cholesky factor of a Hermitian positive-definite A.
 ///
 /// @p A holds the factor written by potrf() or posv() in the @p uplo triangle
-/// (\f$ A = L L^H \f$ for Lower, \f$ U^H U \f$ for Upper); the other triangle is not read. On
-/// return B holds X and A is unchanged. A factor is reusable across calls, so a caller with many
+/// (\f$ A = L L^H \f$ for Lower, \f$ A = U^H U \f$ for Upper); the other triangle is not read. On
+/// return B holds \f$X\f$ and A is unchanged. A factor is reusable across calls, so a caller with many
 /// right-hand-side sets factors once and calls this per set. The `fused` choice is bit-identical to
 /// the solve half of posv() on its `cta` choice, `trsm` to posv's `blocked`; the tuned table picks
 /// between them (pin with `BATCHLAS_POTRS_ROUTE=fused|trsm`). No workspace and no per-item status:
-/// an item whose factor came from a failed potrf() has a meaningless X, and the other items are
+/// an item whose factor came from a failed potrf() has a meaningless \f$X\f$, and the other items are
 /// unaffected.
 ///
 /// Asynchronous: B is readable after the returned event is waited on.
 /// @tparam Back  backend; the backend-deducing overload takes it from `ctx.backend()`
-/// @tparam T     scalar type (float, double, std::complex<float>, std::complex<double>)
-/// @param ctx   queue the kernels are enqueued on
-/// @param A     batch of n x n Cholesky factors, read-only
-/// @param B     batch of n x nrhs right-hand sides; overwritten with X
-/// @param uplo  triangle of A that holds the factor
+/// @tparam Scalar     scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param[in]     ctx   queue the kernels are enqueued on
+/// @param[in]     A     batch of \f$n \times n\f$ Cholesky factors from potrf() or posv(); not modified
+/// @param[in,out] B     batch of \f$n \times \mathit{nrhs}\f$ right-hand sides; overwritten with the solution \f$X\f$
+/// @param[in]     uplo  triangle of A that holds the factor
 /// @return event of the last enqueued kernel
 /// @throws batchlas::invalid_argument if potrs_validate_params() rejects the call
-/// @throws batchlas::internal_error for n, nrhs or batch below 1 (batch 0 is a no-op) and for a heterogeneous batch
+/// @throws batchlas::internal_error for \f$n < 1\f$ or \f$\mathit{nrhs} < 1\f$ in a non-empty batch (a batch of 0 is a no-op) and for a heterogeneous batch
 /// @ingroup api_factorizations
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 BATCHLAS_API Event potrs(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A,
-                         const MatrixView<T, MatrixFormat::Dense>& B,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& B,
                          Uplo uplo);
 
 BATCHLAS_DISPATCH_ON_QUEUE(potrs)

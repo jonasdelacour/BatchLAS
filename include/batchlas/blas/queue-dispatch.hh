@@ -55,8 +55,8 @@ template <typename A> struct container_elem { using type = void; };
 // A one-parameter class template over the scalar (StedcParams<T>, GemmOptions<T>) names the
 // op's type as well: stedc_buffer_size(ctx, n, batch, job, StedcParams<double>) has no container.
 template <template <typename> class P, typename T> struct container_elem<P<T>> { using type = T; };
-template <typename T> struct container_elem<std::complex<T>> { using type = void; };
-template <typename T, MatrixFormat F> struct container_elem<Matrix<T, F>> { using type = T; };
+template <typename Real> struct container_elem<std::complex<Real>> { using type = void; };
+template <typename Scalar, MatrixFormat F> struct container_elem<Matrix<Scalar, F>> { using type = Scalar; };
 template <typename T, MatrixFormat F> struct container_elem<MatrixView<T, F>> { using type = T; };
 template <typename T> struct container_elem<Vector<T>> { using type = T; };
 template <typename T> struct container_elem<VectorView<T>> { using type = T; };
@@ -73,6 +73,11 @@ template <typename... A>
 inline constexpr bool needs_fp64_v =
     (is_fp64_scalar_v<typename container_elem<std::remove_cvref_t<A>>::type> || ...);
 
+/// Throws the error for double or `complex<double>` data on a queue that has no
+/// Backend::SYCL kernels for those types.
+/// @param[in] ctx  queue whose device is named in the message
+/// @param[in] op   name of the op, used in the error message (may be null)
+/// @throws batchlas::unsupported always
 [[noreturn]] inline void throw_no_device_fp64(const Queue& ctx, const char* op) {
     const std::string what = std::string("BatchLAS: ") + (op ? op : "this call") +
                              " was called with double or complex<double> data on a queue whose device (" +
@@ -90,19 +95,30 @@ inline constexpr bool needs_fp64_v =
         "NETLIB, or convert the data to float or complex<float>.");
 }
 
-/// Throws throw_no_device_fp64 for a double or complex<double> @p T on a GPU without fp64. For
+/// Throws throw_no_device_fp64 for a double or complex<double> @p Scalar on a GPU without fp64. For
 /// kernels that are not Backend-templated (or NETLIB ones that launch on the queue's device),
 /// whose double instantiations exist and would otherwise fail in the device JIT.
-template <typename T>
+/// @tparam Scalar      element type of the call's data
+/// @param[in] ctx queue whose device is checked
+/// @param[in] op  name of the op, used in the error message (may be null)
+/// @throws batchlas::unsupported if the check fails
+template <typename Scalar>
 inline void require_device_fp64(const Queue& ctx, const char* op) {
-    if constexpr (is_fp64_scalar_v<T> && !BATCHLAS_HAS_DEVICE_FP64) {
+    if constexpr (is_fp64_scalar_v<Scalar> && !BATCHLAS_HAS_DEVICE_FP64) {
         if (ctx.device().type == DeviceType::GPU && !ctx.device().supports_fp64())
             throw_no_device_fp64(ctx, op);
     }
 }
 
-// with_backend with the fp64 gate: the SYCL branch is discarded (never instantiated) when
-// NeedsFp64 and the build has no device fp64, so no <SYCL, double> symbol is referenced.
+/// with_backend with the fp64 gate: the SYCL branch is discarded (never instantiated) when
+/// NeedsFp64 and the build has no device fp64, so no `<SYCL, double>` symbol is referenced.
+/// @tparam NeedsFp64  whether the call's data is double or `complex<double>`
+/// @tparam F          callable taking `std::integral_constant<Backend, B>`
+/// @param[in] ctx     queue whose backend is dispatched on
+/// @param[in] op      name of the op, used in the error message (may be null)
+/// @param[in] f       callable; every branch must return the same type
+/// @return            whatever @p f returns
+/// @throws batchlas::unsupported as with_backend_for()
 template <bool NeedsFp64, typename F>
 inline auto with_backend_gated(Queue& ctx, const char* op, F&& f) {
     static_assert(BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND ||
@@ -150,9 +166,9 @@ inline auto with_backend_gated(Queue& ctx, const char* op, F&& f) {
 /// @endcode
 /// This is a `switch` over existing instantiations, not a virtual call.
 /// @tparam F     callable taking `std::integral_constant<Backend, B>`
-/// @param ctx    queue whose backend is dispatched on
-/// @param f      callable; every branch must return the same type
-/// @return       whatever @p f returns
+/// @param[in] ctx  queue whose backend is dispatched on
+/// @param[in] f    callable; every branch must return the same type
+/// @return         whatever @p f returns
 /// @throws batchlas::unsupported if `ctx.backend()` has no implementation in this
 ///         build (always the case for Backend::MAGMA)
 /// @note In a build without device fp64 (`BATCHLAS_HAS_DEVICE_FP64` 0), Backend::SYCL
@@ -165,12 +181,19 @@ inline auto with_backend(Queue& ctx, F&& f) {
     return detail::with_backend_gated<false>(ctx, nullptr, std::forward<F>(f));
 }
 
-/// @brief with_backend() for a call on element type @p T: throws batchlas::unsupported
-/// before dispatch when @p T is double or complex<double> and the queue's backend is
+/// @brief with_backend() for a call on element type @p Scalar: throws batchlas::unsupported
+/// before dispatch when @p Scalar is double or complex<double> and the queue's backend is
 /// Backend::SYCL in a build without device fp64.
-template <typename T, typename F>
+/// @tparam Scalar       element type of the call's data
+/// @tparam F       callable taking `std::integral_constant<Backend, B>`
+/// @param[in] ctx  queue whose backend is dispatched on
+/// @param[in] op   name of the op, used in the error message
+/// @param[in] f    callable; every branch must return the same type
+/// @return         whatever @p f returns
+/// @throws batchlas::unsupported as with_backend(), or for the fp64 case above
+template <typename Scalar, typename F>
 inline auto with_backend_for(Queue& ctx, const char* op, F&& f) {
-    return detail::with_backend_gated<detail::is_fp64_scalar_v<T>>(ctx, op, std::forward<F>(f));
+    return detail::with_backend_gated<detail::is_fp64_scalar_v<Scalar>>(ctx, op, std::forward<F>(f));
 }
 
 /// @}
@@ -209,7 +232,9 @@ concept HasVectorExtent = requires(const A& a) {
     { a.batch_size() } -> std::convertible_to<long long>;
 };
 
-// True when no kernel can dereference the argument, whatever its pointer.
+/// True when no kernel can dereference the argument, whatever its pointer.
+/// @param[in] arg  matrix, vector or other argument of an entry point
+/// @return true for a matrix or vector with a zero extent; false otherwise
 template <typename A>
 inline bool addresses_no_elements(const A& arg) {
     using U = std::remove_cvref_t<A>;
@@ -222,6 +247,12 @@ inline bool addresses_no_elements(const A& arg) {
     }
 }
 
+/// Checks that one argument's memory is reachable from the queue's device; arguments
+/// without a pointer, and empty ones, pass.
+/// @param[in] ctx   queue whose device must reach the memory
+/// @param[in] arg   argument of an entry point
+/// @param[in] what  label for the argument in the error message
+/// @throws batchlas::invalid_argument if the memory is not reachable from the device
 template <typename A>
 inline void require_arg_accessible(const Queue& ctx, const A& arg, const std::string& what) {
     if constexpr (HasDataPtr<std::remove_cvref_t<A>>) {
@@ -237,7 +268,12 @@ inline void require_arg_accessible(const Queue& ctx, const A& arg, const std::st
     // Anything else (option structs, scalars, enums) carries no pointer.
 }
 
-// Positional labelling: the dispatch macro forwards an unnamed pack.
+/// require_arg_accessible() on every argument, labelled by position because the
+/// dispatch macro forwards an unnamed pack. A no-op when pointer checks are disabled.
+/// @param[in] ctx   queue whose device must reach the memory
+/// @param[in] fn    entry point name, used in the error message
+/// @param[in] args  the entry point's arguments after `ctx`
+/// @throws batchlas::invalid_argument as require_arg_accessible()
 template <typename... Args>
 inline void require_pack_accessible(const Queue& ctx, const char* fn, const Args&... args) {
     if (!pointer_checks_enabled()) return;

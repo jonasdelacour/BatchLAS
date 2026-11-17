@@ -38,7 +38,7 @@ Modes (none given: the tuner stops and asks):
 | flag | default | meaning |
 |---|---|---|
 | `<op>` | required (not for `--list`, `--status`, `--import-raw`) | one op, a comma list, `all`, or `core` (gemm, trsm, syrk, herk, potrf, getrf, geqrf, syev). Tiered runs order ops by dependency (`op_order()`, `schedule.cc`) and skip, with a note, a dtype a spec refuses |
-| `--tier` | none | `preview` (round 0 only: no frontier or bisection rounds; a demand-driven grid at key hash % 12), `coarse`, `deep`, `calibrate`; `custom` only with `--remeasure-keys` (exactly the named cells, every candidate, no lattice or refinement) |
+| `--tier` | none | `preview` (round 0 only: no frontier or bisection rounds; a demand-driven grid at \f$\mathrm{hash}(\mathrm{key}) \bmod 12\f$), `coarse`, `deep`, `calibrate`; `custom` only with `--remeasure-keys` (exactly the named cells, every candidate, no lattice or refinement) |
 | `--prior DEVICE` | newest fully timed `tuned/<op>.*.txt` | calibrate only: the borrowed table |
 | `--probe-stride N` | 4 | calibrate only: probe every N-th value of each log axis |
 | `--plan` | off | print cells, skips with reasons and the estimate (summed over GPUs), then exit. No GPU |
@@ -63,7 +63,7 @@ Modes (none given: the tuner stops and asks):
 | `--cus N` | the GPU's compute units | ladder unit; `--plan` without it reads the GPU name (RTX PRO 6000 Blackwell 188, RTX 4090 128) or refuses |
 | `--raw DIR` | `<repo>/benchmarks/results/tuning` | custom: schema-1 raw JSONL (Git LFS) |
 | `--reps`, `--warm`, `--passes`, `--remeasure` | 16, 1.5 s, 2, 0.10 | custom: reps, warm-up per candidate, passes; re-measure when pass medians differ by more |
-| `--refine-ratio`, `--no-refine`, `--no-jit`, `--ld-pad` | 1.1, -, -, 0 | custom: bisection stops at hi/lo < ratio; no refinement; no JIT pass; ld = n + pad |
+| `--refine-ratio`, `--no-refine`, `--no-jit`, `--ld-pad` | 1.1, -, -, 0 | custom: bisection stops at \f$\mathrm{hi}/\mathrm{lo} < \mathrm{ratio}\f$; no refinement; no JIT pass; \f$\mathrm{ld} = n + \mathrm{pad}\f$ |
 | `--no-guard`, `--guard-wait`, `--util-ceiling` | on, 300 s, 5 % | idle guard ("Guard") |
 | `--guard-backend` | `auto` | `auto` (NVML, else nvidia-smi with a warning), `nvml`, `nvidia-smi` |
 | `--lock-dir` | `/tmp` | per-GPU flock files `batchlas_tune_gpu<N>.lock` |
@@ -113,7 +113,7 @@ One JSON object per line on `--progress-fd`; every event also carries `t` (Unix 
 
 Specified in [flat kernel selection](../../docs/design/flat-kernel-selection.md) §6.2-§6.3. One
 `--cell` child per (cell, pass), as the SLM carve-out is sticky per CUfunction; it verifies items 0,
-batch/2 and batch-1. A failed child is retried once, then each candidate runs alone (failures:
+\f$\mathrm{batch}/2\f$ and \f$\mathrm{batch}-1\f$. A failed child is retried once, then each candidate runs alone (failures:
 `error`, `crashed alone: ...`). Ties (3%, `candidates<T>()` order): `rank()` in `tune_core.cc`.
 
 ## Multi-GPU
@@ -164,7 +164,7 @@ Host-only (`build/tools/tune/tune_replay`), one JSON line per result. Definition
   default: all); `--k` (6) and `--slower` (0.05) set the frontier rule. Output per (scheme, source)
   and per (scheme, `overall/<kind>`): `lattice`, `kept`, `arm_runs`, `geomean`, `p99`, `p999`,
   `slow10`, `misrank`, `worst`, `worst_key`, `measured_*`, `failures`, `failure_list`, `gate`
-  (no failures, geomean <= 0.05% and p99.9 <= 1.10).
+  (no failures, geomean \f$\le\f$ 0.05% and p99.9 \f$\le\f$ 1.10).
 - `--batch-ladder CUS` (`--batch-classes c,c`, `--batch-extra b,b`) adds `ladder` and
   `ladder+frontier+bisect` and prints `kept_batches`; `--drop-nonmonotone F` and `--min-batch B`
   filter cells first.
@@ -180,7 +180,7 @@ The old choice is pinned verbatim, so it must be a current spelling.
 
 - Cells where both agree are `same` and untimed. Otherwise each pass times `auto` against the pinned
   old spelling, interleaved, pass 2 reversed.
-- Verdicts: `FAIL` when new/old > `--gate-limit` in both passes; `BAD_ROW` when an arm failed;
+- Verdicts: `FAIL` when \f$\mathrm{new}/\mathrm{old} >\f$ `--gate-limit` in both passes; `BAD_ROW` when an arm failed;
   `ERROR` when a probe failed; `cap` over `--cap-gib`; otherwise `pass`. Written to `--gate-csv`.
 - Exit status: 1 on any `FAIL`; 3 on any `ERROR` or `BAD_ROW`, or when no cell was gated; else 0.
 - With `--raw`, `gate.<op>.<device>.jsonl` holds `gate` records (`pass`, `arm`, `status`, `reason`,
@@ -200,5 +200,5 @@ driver checks against the compiled one ([kernel hashes](../../docs/design/tuning
   symm side L, uplo L; syrk uplo L; syr2k uplo L, trans N. `trans=T` is ConjTrans for complex.
 - symm, syrk, syr2k are real-only (`--list` prints `-`); hemm, herk, her2k complex-only.
 - syev and gesvd check values against host LAPACKE (absent: those arms are `bad`). gesvd has no
-  batch key (a power of two in [128, 16384], m n batch <= 2^24) and refuses the values-only
+  batch key (a power of two in \f$[128, 16384]\f$, \f$m \cdot n \cdot \mathrm{batch} \le 2^{24}\f$) and refuses the values-only
   non-square vendor call (known defect 15). spmm tunes GPU tables only.

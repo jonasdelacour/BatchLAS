@@ -13,7 +13,7 @@
 #include <src/queue.hh>
 #include <src/util/batch_mask.hh>
 #include <src/util/kernel-trace.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
@@ -25,35 +25,35 @@
 
 namespace batchlas::backend::detail {
 
-template <typename T, bool TransOperand, bool AlignedFastPath, bool Conjugate>
+template <typename Scalar, bool TransOperand, bool AlignedFastPath, bool Conjugate>
 class SyrkTriangularTilesKernel;
 
 // Does this problem satisfy everything the unpredicated path assumes? A tile
 // that is not a whole 128x128 of C, or a k the 8-deep staging cannot fill
 // exactly, has to take the predicated path, as does any operand whose base or
 // leading dimension breaks the 4-element alignment the packet forms need.
-template <typename T>
-bool syrk_triangular_fast_path(const MatrixView<T, MatrixFormat::Dense>& A,
-                               const MatrixView<T, MatrixFormat::Dense>& C,
+template <typename Scalar>
+bool syrk_triangular_fast_path(const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& C,
                                int n,
                                int k) {
     if ((n % kTriangularTile) != 0 || (k % kTriangularTileK) != 0) {
         return false;
     }
-    auto aligned = [](const T* p, int ld, int stride) {
-        return p != nullptr && (reinterpret_cast<std::uintptr_t>(p) % (4 * sizeof(T))) == 0 &&
+    auto aligned = [](const Scalar* p, int ld, int stride) {
+        return p != nullptr && (reinterpret_cast<std::uintptr_t>(p) % (4 * sizeof(Scalar))) == 0 &&
             (ld % 4) == 0 && (stride % 4) == 0;
     };
     return aligned(A.data_ptr(), A.ld(), A.stride()) &&
         aligned(C.data_ptr(), C.ld(), C.stride());
 }
 
-template <typename T, bool TransOperand, bool AlignedFastPath, bool Conjugate>
+template <typename Scalar, bool TransOperand, bool AlignedFastPath, bool Conjugate>
 Event launch_syrk_triangular_tiles(Queue& ctx,
-                                   const MatrixView<T, MatrixFormat::Dense>& A,
-                                   const MatrixView<T, MatrixFormat::Dense>& C,
-                                   T alpha,
-                                   T beta,
+                                   const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                   const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                                   Scalar alpha,
+                                   Scalar beta,
                                    Uplo uplo) {
     BATCHLAS_KERNEL_TRACE_SCOPE("syrk_cuda_custom.triangular_tiles");
 
@@ -81,11 +81,11 @@ Event launch_syrk_triangular_tiles(Queue& ctx,
 
     impl::check_group_count(*ctx, sycl::nd_range<3>(global, local));
     ctx->submit([&](sycl::handler& h) {
-        sycl::local_accessor<T, 1> tile_a(sycl::range<1>(TileK * AStride), h);
-        sycl::local_accessor<T, 1> tile_b(sycl::range<1>(TileK * BStride), h);
+        sycl::local_accessor<Scalar, 1> tile_a(sycl::range<1>(TileK * AStride), h);
+        sycl::local_accessor<Scalar, 1> tile_b(sycl::range<1>(TileK * BStride), h);
 
-        const T* a_ptr = A.data_ptr();
-        T* c_ptr = C.data_ptr();
+        const Scalar* a_ptr = A.data_ptr();
+        Scalar* c_ptr = C.data_ptr();
         const int lda = A.ld();
         const int ldc = C.ld();
         const int stride_a = A.stride();
@@ -95,7 +95,7 @@ Event launch_syrk_triangular_tiles(Queue& ctx,
         // The batch mask (null unmasked); one item per work-group, so its return is uniform (I1).
         const std::uint8_t* mask = batchlas::detail::mask_ptr(batchlas::detail::call_mask("syrk", A, C));
 
-        batchlas::impl::parallel_for<SyrkTriangularTilesKernel<T, TransOperand, AlignedFastPath, Conjugate>>(h,
+        batchlas::impl::parallel_for<SyrkTriangularTilesKernel<Scalar, TransOperand, AlignedFastPath, Conjugate>>(h,
             sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
                 const int bid = static_cast<int>(item.get_group(0));
                 if (bid >= batch || (mask != nullptr && mask[bid] == 0)) {
@@ -115,24 +115,24 @@ Event launch_syrk_triangular_tiles(Queue& ctx,
                 const int m0 = (lower ? bi : bj) * TileM;
                 const int n0 = (lower ? bj : bi) * TileN;
 
-                const T* Ab = a_ptr + static_cast<std::ptrdiff_t>(bid) * stride_a;
-                T* Cb = c_ptr + static_cast<std::ptrdiff_t>(bid) * stride_c;
+                const Scalar* Ab = a_ptr + static_cast<std::ptrdiff_t>(bid) * stride_a;
+                Scalar* Cb = c_ptr + static_cast<std::ptrdiff_t>(bid) * stride_c;
 
-                T* sa = tile_a.template get_multi_ptr<sycl::access::decorated::no>().get();
-                T* sb = tile_b.template get_multi_ptr<sycl::access::decorated::no>().get();
+                Scalar* sa = tile_a.template get_multi_ptr<sycl::access::decorated::no>().get();
+                Scalar* sb = tile_b.template get_multi_ptr<sycl::access::decorated::no>().get();
 
-                T accum[ThreadTile][ThreadTile];
+                Scalar accum[ThreadTile][ThreadTile];
 BATCHLAS_UNROLL_FULL
                 for (int i = 0; i < ThreadTile; ++i) {
 BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < ThreadTile; ++j) {
-                        accum[i][j] = T(0);
+                        accum[i][j] = Scalar(0);
                     }
                 }
 
                 // Staging coordinates. NoTrans walks the output row index,
-                // which is the contiguous direction of a column-major n x k A;
-                // Trans walks k, which is the contiguous direction of a k x n A
+                // which is the contiguous direction of a column-major \f$n \times k\f$ A;
+                // Trans walks k, which is the contiguous direction of a \f$k \times n\f$ A
                 // and has to be transposed on the way into shared.
                 const int s_row = TransOperand ? tid / 2 : (tid % 32) * 4;
                 const int s_l = TransOperand ? (tid % 2) * 4 : tid / 32;
@@ -140,10 +140,10 @@ BATCHLAS_UNROLL_FULL
                 for (int k0 = 0; k0 < k; k0 += TileK) {
                     if constexpr (AlignedFastPath) {
                         if constexpr (TransOperand) {
-                            const TileVec4<T> va =
+                            const TileVec4<Scalar> va =
                                 tile_load4(Ab + (k0 + s_l) +
                                            static_cast<std::ptrdiff_t>(m0 + s_row) * lda);
-                            const TileVec4<T> vb =
+                            const TileVec4<Scalar> vb =
                                 tile_load4(Ab + (k0 + s_l) +
                                            static_cast<std::ptrdiff_t>(n0 + s_row) * lda);
 BATCHLAS_UNROLL_FULL
@@ -172,11 +172,11 @@ BATCHLAS_UNROLL_FULL
                                 sa[(s_l + i) * AStride + s_row] =
                                     (gk < k && gm < n)
                                     ? Ab[gk + static_cast<std::ptrdiff_t>(gm) * lda]
-                                    : T(0);
+                                    : Scalar(0);
                                 sb[(s_l + i) * BStride + s_row] =
                                     (gk < k && gn < n)
                                     ? Ab[gk + static_cast<std::ptrdiff_t>(gn) * lda]
-                                    : T(0);
+                                    : Scalar(0);
                             }
                         } else {
                             const int gk = k0 + s_l;
@@ -187,11 +187,11 @@ BATCHLAS_UNROLL_FULL
                                 sa[s_l * AStride + s_row + i] =
                                     (gm < n && gk < k)
                                     ? Ab[gm + static_cast<std::ptrdiff_t>(gk) * lda]
-                                    : T(0);
+                                    : Scalar(0);
                                 sb[s_l * BStride + s_row + i] =
                                     (gn < n && gk < k)
                                     ? Ab[gn + static_cast<std::ptrdiff_t>(gk) * lda]
-                                    : T(0);
+                                    : Scalar(0);
                             }
                         }
                     }
@@ -199,21 +199,21 @@ BATCHLAS_UNROLL_FULL
 
 BATCHLAS_UNROLL_FULL
                     for (int kk = 0; kk < TileK; ++kk) {
-                        const TileVec4<T> a0 = tile_load4(&sa[kk * AStride + ty * Band]);
-                        const TileVec4<T> a1 = tile_load4(&sa[kk * AStride + 64 + ty * Band]);
-                        const TileVec4<T> b0 = tile_load4(&sb[kk * BStride + tx * Band]);
-                        const TileVec4<T> b1 = tile_load4(&sb[kk * BStride + 64 + tx * Band]);
-                        // herk: A A^H conjugates the column factor, A^H A the row factor.
+                        const TileVec4<Scalar> a0 = tile_load4(&sa[kk * AStride + ty * Band]);
+                        const TileVec4<Scalar> a1 = tile_load4(&sa[kk * AStride + 64 + ty * Band]);
+                        const TileVec4<Scalar> b0 = tile_load4(&sb[kk * BStride + tx * Band]);
+                        const TileVec4<Scalar> b1 = tile_load4(&sb[kk * BStride + 64 + tx * Band]);
+                        // herk: \f$A A^{H}\f$ conjugates the column factor, \f$A^{H} A\f$ the row factor.
                         constexpr bool kConjA = Conjugate && TransOperand;
                         constexpr bool kConjB = Conjugate && !TransOperand;
-                        const T af[ThreadTile] = {conj_if<kConjA>(a0.v[0]), conj_if<kConjA>(a0.v[1]),
-                                                  conj_if<kConjA>(a0.v[2]), conj_if<kConjA>(a0.v[3]),
-                                                  conj_if<kConjA>(a1.v[0]), conj_if<kConjA>(a1.v[1]),
-                                                  conj_if<kConjA>(a1.v[2]), conj_if<kConjA>(a1.v[3])};
-                        const T bf[ThreadTile] = {conj_if<kConjB>(b0.v[0]), conj_if<kConjB>(b0.v[1]),
-                                                  conj_if<kConjB>(b0.v[2]), conj_if<kConjB>(b0.v[3]),
-                                                  conj_if<kConjB>(b1.v[0]), conj_if<kConjB>(b1.v[1]),
-                                                  conj_if<kConjB>(b1.v[2]), conj_if<kConjB>(b1.v[3])};
+                        const Scalar af[ThreadTile] = {conj_if<kConjA>(a0.v[0]), conj_if<kConjA>(a0.v[1]),
+                                                       conj_if<kConjA>(a0.v[2]), conj_if<kConjA>(a0.v[3]),
+                                                       conj_if<kConjA>(a1.v[0]), conj_if<kConjA>(a1.v[1]),
+                                                       conj_if<kConjA>(a1.v[2]), conj_if<kConjA>(a1.v[3])};
+                        const Scalar bf[ThreadTile] = {conj_if<kConjB>(b0.v[0]), conj_if<kConjB>(b0.v[1]),
+                                                       conj_if<kConjB>(b0.v[2]), conj_if<kConjB>(b0.v[3]),
+                                                       conj_if<kConjB>(b1.v[0]), conj_if<kConjB>(b1.v[1]),
+                                                       conj_if<kConjB>(b1.v[2]), conj_if<kConjB>(b1.v[3])};
 BATCHLAS_UNROLL_FULL
                         for (int i = 0; i < ThreadTile; ++i) {
 BATCHLAS_UNROLL_FULL
@@ -229,17 +229,17 @@ BATCHLAS_UNROLL_FULL
                 // the requested triangle, so a whole 4-row band is one 128-bit
                 // access; on the diagonal the mask makes the band partial and
                 // the stores go one at a time.
-                auto store_element = [&](int row, int col, T value) {
+                auto store_element = [&](int row, int col, Scalar value) {
                     if (row >= n || col >= n) {
                         return;
                     }
                     if (on_diagonal && (lower ? row < col : row > col)) {
                         return;
                     }
-                    T* p = &Cb[row + static_cast<std::ptrdiff_t>(col) * ldc];
-                    T out = beta == T(0) ? alpha * value : alpha * value + beta * *p;
+                    Scalar* p = &Cb[row + static_cast<std::ptrdiff_t>(col) * ldc];
+                    Scalar out = beta == Scalar(0) ? alpha * value : alpha * value + beta * *p;
                     if constexpr (Conjugate) {
-                        if (row == col) out = T(out.real(), typename T::value_type(0));  // Hermitian diagonal
+                        if (row == col) out = Scalar(out.real(), typename Scalar::value_type(0));  // Hermitian diagonal
                     }
                     *p = out;
                 };
@@ -252,15 +252,15 @@ BATCHLAS_UNROLL_FULL
                         const int gn = n0 + (j < Band ? tx * Band + j : 64 + tx * Band + j - Band);
                         if constexpr (AlignedFastPath) {
                             if (!on_diagonal) {
-                                T* p = &Cb[gm + static_cast<std::ptrdiff_t>(gn) * ldc];
-                                TileVec4<T> out;
-                                if (beta == T(0)) {
+                                Scalar* p = &Cb[gm + static_cast<std::ptrdiff_t>(gn) * ldc];
+                                TileVec4<Scalar> out;
+                                if (beta == Scalar(0)) {
 BATCHLAS_UNROLL_FULL
                                     for (int i = 0; i < 4; ++i) {
                                         out.v[i] = alpha * accum[band * Band + i][j];
                                     }
                                 } else {
-                                    const TileVec4<T> prior = tile_load4(const_cast<const T*>(p));
+                                    const TileVec4<Scalar> prior = tile_load4(const_cast<const Scalar*>(p));
 BATCHLAS_UNROLL_FULL
                                     for (int i = 0; i < 4; ++i) {
                                         out.v[i] = alpha * accum[band * Band + i][j] +
@@ -283,14 +283,14 @@ BATCHLAS_UNROLL_FULL
     return ctx.get_event();
 }
 
-// Conjugate: herk's A A^H (NoTrans) or A^H A (ConjTrans), with a real diagonal; alpha and beta
+// Conjugate: herk's \f$A A^{H}\f$ (NoTrans) or \f$A^{H} A\f$ (ConjTrans), with a real diagonal; \f$\alpha\f$ and \f$\beta\f$
 // then carry herk's real scalars.
-template <typename T, bool Conjugate = false>
+template <typename Scalar, bool Conjugate = false>
 Event syrk_triangular_tiles(Queue& ctx,
-                            const MatrixView<T, MatrixFormat::Dense>& A,
-                            const MatrixView<T, MatrixFormat::Dense>& C,
-                            T alpha,
-                            T beta,
+                            const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                            const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                            Scalar alpha,
+                            Scalar beta,
                             Uplo uplo,
                             Transpose transA) {
     const int n = static_cast<int>(C.rows());
@@ -299,11 +299,11 @@ Event syrk_triangular_tiles(Queue& ctx,
     const bool fast = syrk_triangular_fast_path(A, C, n, k);
 
     if (transA == Transpose::NoTrans) {
-        return fast ? launch_syrk_triangular_tiles<T, false, true, Conjugate>(ctx, A, C, alpha, beta, uplo)
-                    : launch_syrk_triangular_tiles<T, false, false, Conjugate>(ctx, A, C, alpha, beta, uplo);
+        return fast ? launch_syrk_triangular_tiles<Scalar, false, true, Conjugate>(ctx, A, C, alpha, beta, uplo)
+                    : launch_syrk_triangular_tiles<Scalar, false, false, Conjugate>(ctx, A, C, alpha, beta, uplo);
     }
-    return fast ? launch_syrk_triangular_tiles<T, true, true, Conjugate>(ctx, A, C, alpha, beta, uplo)
-                : launch_syrk_triangular_tiles<T, true, false, Conjugate>(ctx, A, C, alpha, beta, uplo);
+    return fast ? launch_syrk_triangular_tiles<Scalar, true, true, Conjugate>(ctx, A, C, alpha, beta, uplo)
+                : launch_syrk_triangular_tiles<Scalar, true, false, Conjugate>(ctx, A, C, alpha, beta, uplo);
 }
 
-} // namespace batchlas::backend::detail
+}  // namespace batchlas::backend::detail

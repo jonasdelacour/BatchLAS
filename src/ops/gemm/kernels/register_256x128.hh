@@ -4,24 +4,27 @@
 // Float 256x128 and 128x256 tiles, k = 8 slabs, 4 copy_async stages, one 256-lane group per SM: the
 // shape of cuBLAS's cutlass_80_simt_sgemm_{256x128,128x256}_8x4 on sm_120. A thread holds TM x TN
 // accumulators (16x8 or 8x16) as 4-row/4-column bands, read by LDS.128 from padded [k][m] / [k][n]
-// slabs. Every copy is one zero-filled 4-byte element (any ld, any base): a packet operand (A, B^T)
-// takes consecutive m (n) per lane, a k-contiguous one (B, A^T) k fastest, 8 lanes per 32-byte row
+// slabs. Every copy is one zero-filled 4-byte element (any ld, any base): a packet operand (A, \f$B^{T}\f$)
+// takes consecutive m (n) per lane, a k-contiguous one (B, \f$A^{T}\f$) k fastest, 8 lanes per 32-byte row
 // segment; the stride pad of 4 keeps those transposed writes conflict-free.
 // evidence: docs/perf/gemm.md#gemm-wp-w-a-256x128-float-tile-with-four-copy-async-stages
 
-#include <src/ops/gemm/kernels/copy_async.hh>
-#include <src/ops/gemm/kernels/epilogue_linear.hh>
-#include <src/ops/gemm/kernels/register_128x128.hh>
-#include <src/ops/gemm/kernels/vec4.hh>
+#include <src/ops/gemm/kernels/register_128x128.hh>  // level3/{copy_async,epilogue,packet}.hh
 
 #include <src/ops/gemm/gemm_kernels.hh>
 
 #include <src/linalg-impl.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <sycl/sycl.hpp>
 
-namespace batchlas::sycl_gemm {
+namespace batchlas::ops::gemm {
+
+using batchlas::device::l3::copy_async_commit;
+using batchlas::device::l3::copy_async_wait;
+using batchlas::device::l3::copy_async_zfill;
+using batchlas::device::l3::LinearEpilogue;
+using batchlas::device::l3::Vec4;
 
 template <int TM, int TN, Transpose OpA, Transpose OpB, bool Vec16>
 class GemmRegisterK8S4LargeKernel;
@@ -91,7 +94,7 @@ struct GemmK8S4LargeBody {
         if (bid >= batch || item_off(mask, bid)) return;
         const int tid = static_cast<int>(item.get_local_id(2));
         const int lane = tid & 31, warp = tid >> 5;
-        // The 128x128 kernel's lane swizzle and 2 x 4 warp grid, bands 32 rows / 16 columns apart.
+        // The 128x128 kernel's lane swizzle and \f$2 \times 4\f$ warp grid, bands 32 rows / 16 columns apart.
         const int ml = (lane & 1) | (((lane >> 2) & 3) << 1);
         const int nl = ((lane >> 1) & 1) | (((lane >> 4) & 1) << 1);
         const int mb = (warp & 1) * (TileM / 2) + ml * 4;
@@ -191,7 +194,7 @@ BATCHLAS_UNROLL_FULL
         // Staged epilogue: pass p stages each thread's column p of every n band (slot = column / 4),
         // then each warp stores Slots / 8 whole columns, rows lane + 32 i (one 128-byte piece per
         // warp store at any ldc). Pass p + 1's priors load while pass p stores, so one prior latency
-        // is exposed, not four; none at beta = 0, where the store is alpha * acc alone (keeps -0.0).
+        // is exposed, not four; none at \f$\beta = 0\f$, where the store is \f$\alpha \cdot \mathrm{acc}\f$ alone (keeps -0.0).
         // evidence: docs/perf/gemm.md#gemm-wp-w-a-256x128-float-tile-with-four-copy-async-stages
         constexpr int CW = Slots / 8, RW = TileM / 32;
         float* sc = sa;
@@ -304,4 +307,4 @@ Event launch_register_k8_s4_large(Queue& ctx, const MatrixView<float, MatrixForm
     return launch_register_k8_s4_large_leg<TM, TN, OpA, OpB, false>(ctx, A, B, C, alpha, beta, kernel_trace_name);
 }
 
-}  // namespace batchlas::sycl_gemm
+}  // namespace batchlas::ops::gemm

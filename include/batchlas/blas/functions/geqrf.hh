@@ -20,33 +20,35 @@ namespace batchlas {
 // Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
 // src/util/template-instantiations.hh. Keep in sync with the declarations below.
 namespace sig {
-template <typename T>
+template <typename Scalar>
 using geqrf = Event(Queue&,
-                    const MatrixView<T, MatrixFormat::Dense>&,
-                    Span<T>, Span<std::byte>);
+                    const MatrixView<Scalar, MatrixFormat::Dense>&,
+                    Span<Scalar>, Span<std::byte>);
 
-template <typename T>
+template <typename Scalar>
 using geqrf_buffer_size = size_t(Queue&,
-                                 const MatrixView<T, MatrixFormat::Dense>&,
-                                 Span<T>);
+                                 const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                 Span<Scalar>);
 
 // Vendor signatures are spelled out, not aliased: a vendor parameter list can differ.
-template <typename T>
+template <typename Scalar>
 using geqrf_vendor = Event(Queue&,
-                           const MatrixView<T,MatrixFormat::Dense>&,
-                           Span<T>,
+                           const MatrixView<Scalar, MatrixFormat::Dense>&,
+                           Span<Scalar>,
                            Span<std::byte>);
 
-template <typename T>
+template <typename Scalar>
 using geqrf_vendor_buffer_size = size_t(Queue&,
-                                        const MatrixView<T,MatrixFormat::Dense>&,
-                                        Span<T>);
+                                        const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                        Span<Scalar>);
 }  // namespace sig
 
 /// @brief Validates the arguments of the positional geqrf() entry point.
 ///
 /// Checks only non-negative extents. Rectangular A of either orientation is
 /// valid; the length of @p tau is checked by the option overloads.
+/// @tparam Scalar  scalar type of the matrix
+/// @param[in] A  batch of \f$m \times n\f$ matrices whose extents are checked; not modified
 /// @throws batchlas::invalid_argument on negative extents
 /// @ingroup api_qr_lowlevel
 // Runs in src/ops/geqrf/geqrf.cc before the selection key reads A.rows()/A.cols().
@@ -54,8 +56,8 @@ using geqrf_vendor_buffer_size = size_t(Queue&,
 // m >= n check (the native cta and blocked kernels and the vendors serve m < n) and no
 // tau-length check.
 // evidence: docs/design/vendor-independence.md#positional-validators-reject-only-what-no-route-can-serve
-template <typename T>
-inline void geqrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
+template <typename Scalar>
+inline void geqrf_validate_params(const MatrixView<Scalar, MatrixFormat::Dense>& A) {
     if (A.rows() < 0 || A.cols() < 0) {
         throw batchlas::invalid_argument(
             "geqrf: Matrix dimensions cannot be negative (rows=" +
@@ -63,66 +65,87 @@ inline void geqrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
     }
 }
 
-
 /// @brief Batched Householder QR factorization \f$ A = Q R \f$.
 ///
-/// For every m x n batch item, as LAPACK `?geqrf`: on return the upper
-/// triangle (upper trapezoid if m < n) of A holds R, and the part below the
+/// For every \f$m \times n\f$ batch item, as LAPACK `?geqrf`: on return the upper
+/// triangle (upper trapezoid if \f$m < n\f$) of A holds \f$R\f$, and the part below the
 /// diagonal holds the Householder vectors \f$ v_i \f$ with an implied unit
 /// leading entry. With \f$ k = \min(m, n) \f$,
 /// \f$ Q = H_1 H_2 \cdots H_k \f$, \f$ H_i = I - \tau_i v_i v_i^H \f$.
-/// Pass A and @p tau unchanged to orgqr() to form Q or to ormqr() to apply it.
+/// Pass A and @p tau unchanged to orgqr() to form \f$Q\f$ or to ormqr() to apply it.
 ///
 /// Asynchronous: A and @p tau are readable after the returned event is waited on.
 /// @tparam B  backend; the backend-deducing overload takes it from `ctx.backend()`
-/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
-/// @param ctx         queue the kernels are enqueued on
-/// @param A           batch of m x n matrices; overwritten with R and the reflectors
-/// @param tau         reflector scalars, `k * batch` elements; item b's
-///                    \f$ \tau_i \f$ is `tau[b * k + i]`
-/// @param workspace  device-accessible scratch of at least geqrf_buffer_size() bytes
+/// @tparam Scalar  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param[in]     ctx        queue the kernels are enqueued on
+/// @param[in,out] A          batch of \f$m \times n\f$ matrices; overwritten with \f$R\f$ and the
+///                           reflectors \f$v_i\f$
+/// @param[out]    tau        reflector scalars, `k * batch` elements; item \f$b\f$'s
+///                           \f$\tau_i\f$ is `tau[b * k + i]`
+/// @param[out]    workspace  device-accessible scratch of at least geqrf_buffer_size() bytes;
+///                           contents undefined on return
 /// @return event of the last enqueued kernel
 /// @pre `tau.size() >= min(m, n) * A.batch_size()` (checked by the option overloads only)
 /// @throws batchlas::invalid_argument on negative extents
-/// @throws batchlas::NoRouteError if no native kernel can run the shape (the
-///         native kernels need m >= n) and the vendor library was not built in
+/// @throws batchlas::NoRouteError if no native kernel can run the call (the native
+///         kernels need a GPU queue with 32-wide sub-groups, a homogeneous batch and
+///         \f$m, n \ge 1\f$) and the vendor library was not built in
 /// @ingroup api_qr
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event geqrf(Queue& ctx,
-                         const MatrixView<T,MatrixFormat::Dense>& A,
-                         Span<T> tau,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         Span<Scalar> tau,
                          Span<std::byte> workspace);
 
 /// @brief Workspace, in bytes, that geqrf() needs for this shape on this queue.
+/// @tparam B  backend; the backend-deducing overload takes it from `ctx.backend()`
+/// @tparam Scalar  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param[in] ctx  queue the factorization will run on
+/// @param[in] A    batch of \f$m \times n\f$ matrices to be factorized; only its shape is read
+/// @param[in] tau  the reflector-scalar span that will be passed to geqrf(); not written
+/// @return the minimum `workspace` size in bytes for geqrf() with these arguments
 /// @ingroup api_qr_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t geqrf_buffer_size(Queue& ctx,
-                                      const MatrixView<T,MatrixFormat::Dense>& A,
-                                      Span<T> tau);
+                                      const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                      Span<Scalar> tau);
 
 }  // namespace batchlas
-
 
 namespace batchlas::backend {
 
 /// @brief Vendor arm of geqrf(); called by geqrf() when it selects the `vendor`
 ///        kernel family, not by users.
+/// @tparam B  backend whose vendor library runs the call
+/// @tparam Scalar  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param[in]     ctx        queue the vendor calls are enqueued on
+/// @param[in,out] A          batch of \f$m \times n\f$ matrices; overwritten with \f$R\f$ and the
+///                           reflectors \f$v_i\f$
+/// @param[out]    tau        reflector scalars, \f$\min(m, n) \cdot \mathrm{batch}\f$ elements
+/// @param[out]    workspace  scratch of at least geqrf_vendor_buffer_size() bytes; contents
+///                           undefined on return
+/// @return event of the last enqueued vendor call
 /// @ingroup api_dispatch
 // DECLARATION ONLY: the public geqrf is defined in src/ops/geqrf/geqrf.cc.
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event geqrf_vendor(Queue& ctx,
-                                const MatrixView<T,MatrixFormat::Dense>& A,
-                                Span<T> tau,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                Span<Scalar> tau,
                                 Span<std::byte> workspace);
 
-
 /// @brief Workspace query of the vendor arm of geqrf().
+/// @tparam B  backend whose vendor library runs the call
+/// @tparam Scalar  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param[in] ctx  queue the vendor arm will run on
+/// @param[in] A    batch of \f$m \times n\f$ matrices to be factorized; only its shape is read
+/// @param[in] tau  the reflector-scalar span that will be passed to geqrf_vendor(); not written
+/// @return the minimum `workspace` size in bytes for geqrf_vendor()
 /// @ingroup api_dispatch
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t geqrf_vendor_buffer_size(Queue& ctx,
-                                             const MatrixView<T,MatrixFormat::Dense>& A,
-                                             Span<T> tau);
+                                             const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                             Span<Scalar> tau);
 
 }  // namespace batchlas::backend
 

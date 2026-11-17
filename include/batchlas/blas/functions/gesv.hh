@@ -25,29 +25,31 @@ namespace batchlas {
 // Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
 // src/util/template-instantiations.hh. Keep in sync with the declarations below.
 namespace sig {
-template <typename T>
+template <typename Scalar>
 using gesv = Event(Queue&,
-                   const MatrixView<T, MatrixFormat::Dense>&,
-                   const MatrixView<T, MatrixFormat::Dense>&,
+                   const MatrixView<Scalar, MatrixFormat::Dense>&,
+                   const MatrixView<Scalar, MatrixFormat::Dense>&,
                    Span<int64_t>, Span<std::byte>, Span<int32_t>);
 
-template <typename T>
+template <typename Scalar>
 using gesv_buffer_size = size_t(Queue&,
-                                const MatrixView<T, MatrixFormat::Dense>&,
-                                const MatrixView<T, MatrixFormat::Dense>&);
+                                const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                const MatrixView<Scalar, MatrixFormat::Dense>&);
 }  // namespace sig
 
 /// @brief Validates the arguments of gesv() and gesv_buffer_size().
 ///
 /// Checks non-negative extents, a square A, `B.rows() == A.rows()` and equal
 /// batch sizes.
+/// @param[in] A  batch of \f$n \times n\f$ matrices
+/// @param[in] B  batch of \f$n \times \mathrm{nrhs}\f$ right-hand sides
 /// @throws batchlas::invalid_argument if any check fails
 /// @ingroup api_factorizations_lowlevel
 // Stricter than getrs_validate_params on purpose: getrs routes a non-conforming
 // pair to the vendor, but gesv has none, so it would report the wrong cause.
-template <typename T>
-inline void gesv_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
-                                 const MatrixView<T, MatrixFormat::Dense>& B) {
+template <typename Scalar>
+inline void gesv_validate_params(const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& B) {
     if (A.rows() < 0 || A.cols() < 0 || B.rows() < 0 || B.cols() < 0) {
         throw batchlas::invalid_argument(
             "gesv: Matrix dimensions cannot be negative (A: rows=" +
@@ -84,24 +86,25 @@ inline void gesv_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 /// Asynchronous: A, B, @p pivots and @p info are readable after the returned
 /// event is waited on.
 /// @tparam Back  backend; the backend-deducing overload takes it from `ctx.backend()`
-/// @tparam T     scalar type (float, double, std::complex<float>, std::complex<double>)
-/// @param ctx         queue the kernels are enqueued on
-/// @param A           batch of n x n matrices; overwritten with L and U
-/// @param B           batch of n x nrhs right-hand sides; overwritten with X
-/// @param pivots      pivot output, `n * batch` entries in getrf()'s format
-/// @param workspace  device-accessible scratch of at least gesv_buffer_size() bytes
-/// @param info        per-item status as for getrf(): 0 on success, i > 0 if
-///                    U(i,i) is exactly zero (that item's X is meaningless).
-///                    Empty span = not requested.
+/// @tparam Scalar     scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param[in] ctx         queue the kernels are enqueued on
+/// @param[in,out] A       batch of \f$n \times n\f$ matrices; overwritten with L and U
+/// @param[in,out] B       batch of \f$n \times \mathrm{nrhs}\f$ right-hand sides; overwritten with X
+/// @param[out] pivots     pivot output, `n * batch` entries in getrf()'s format
+/// @param[out] workspace  device-accessible scratch of at least gesv_buffer_size() bytes;
+///                        contents undefined on return
+/// @param[out] info       per-item status as for getrf(), one `int32_t` per item: 0 on success,
+///                        \f$i > 0\f$ if \f$U_{ii}\f$ is exactly zero (that item's X is
+///                        meaningless). Empty span = not requested.
 /// @return event of the last enqueued kernel
 /// @throws batchlas::invalid_argument if gesv_validate_params() rejects the call
 /// @throws batchlas::workspace_error if the composed getrf + getrs route is
 ///         chosen and @p workspace is shorter than its getrf leg needs
 /// @ingroup api_factorizations
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 BATCHLAS_API Event gesv(Queue& ctx,
-                        const MatrixView<T, MatrixFormat::Dense>& A,
-                        const MatrixView<T, MatrixFormat::Dense>& B,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& B,
                         Span<int64_t> pivots,
                         Span<std::byte> workspace,
                         Span<int32_t> info);
@@ -109,25 +112,39 @@ BATCHLAS_API Event gesv(Queue& ctx,
 /// @brief Workspace, in bytes, that gesv() needs for these operands on this queue.
 ///
 /// Takes the same operands as the call, so both resolve the same route.
+/// @tparam Back  backend; the backend-deducing overload takes it from `ctx.backend()`
+/// @tparam Scalar     scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param[in] ctx  queue the call will run on
+/// @param[in] A    batch of \f$n \times n\f$ matrices, as passed to gesv()
+/// @param[in] B    batch of \f$n \times \mathrm{nrhs}\f$ right-hand sides, as passed to gesv()
+/// @return the workspace size in bytes
 /// @throws batchlas::invalid_argument if gesv_validate_params() rejects the operands
 /// @ingroup api_factorizations_lowlevel
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 BATCHLAS_API size_t gesv_buffer_size(Queue& ctx,
-                                     const MatrixView<T, MatrixFormat::Dense>& A,
-                                     const MatrixView<T, MatrixFormat::Dense>& B);
+                                     const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                     const MatrixView<Scalar, MatrixFormat::Dense>& B);
 
 /// @brief gesv() without per-item status (`info` not requested).
+/// @tparam Back  backend
+/// @tparam Scalar     scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param[in] ctx         queue the kernels are enqueued on
+/// @param[in,out] A       batch of \f$n \times n\f$ matrices; overwritten with L and U
+/// @param[in,out] B       batch of \f$n \times \mathrm{nrhs}\f$ right-hand sides; overwritten with X
+/// @param[out] pivots     pivot output, `n * batch` entries in getrf()'s format
+/// @param[out] workspace  device-accessible scratch of at least gesv_buffer_size() bytes;
+///                        contents undefined on return
+/// @return event of the last enqueued kernel
 /// @ingroup api_factorizations
 // Not a defaulted `info`: the sig:: aliases are function types (see potrf.hh).
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 inline Event gesv(Queue& ctx,
-                  const MatrixView<T, MatrixFormat::Dense>& A,
-                  const MatrixView<T, MatrixFormat::Dense>& B,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& B,
                   Span<int64_t> pivots,
                   Span<std::byte> workspace) {
-    return gesv<Back, T>(ctx, A, B, pivots, workspace, Span<int32_t>{});
+    return gesv<Back, Scalar>(ctx, A, B, pivots, workspace, Span<int32_t>{});
 }
-
 
 BATCHLAS_DISPATCH_ON_QUEUE(gesv)
 BATCHLAS_DISPATCH_ON_QUEUE(gesv_buffer_size)

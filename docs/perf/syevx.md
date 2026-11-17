@@ -99,10 +99,10 @@ and 5 have a dot product of 8.6e-4).
 
 ## syevx Tier 2: DirectSubset
 
-`sytrd_sy2sb` → band-to-tridiagonal → `stebz` → `stein` → back-transforms on the `k` columns (Q2 via
-`unmqr_hb2st`, then Q1 via `ormqr`). Real types, dense only. Verified at `BATCHLAS_SYEV_TWO_STAGE_KD` in
+`sytrd_sy2sb` → band-to-tridiagonal → `stebz` → `stein` → back-transforms on the `k` columns (\f$Q_2\f$ via
+`unmqr_hb2st`, then \f$Q_1\f$ via `ormqr`). Real types, dense only. Verified at `BATCHLAS_SYEV_TWO_STAGE_KD` in
 {1, 2, 8, 32, 64}. **Trap:** `apply_phase_rows` must take its column count from `cols()`; `rows()` writes
-out of bounds on the n x k block and corrupts neighbouring batch items.
+out of bounds on the \f$n \times k\f$ block and corrupts neighbouring batch items.
 
 ## syevx Tier 3: Filtered
 
@@ -125,7 +125,7 @@ The loop drains to the host only at the convergence check (every `BATCHLAS_SYEVX
 or for unstaged instrumentation, not every iteration (about 30 drains per solve before). Overshooting by
 up to `check_every - 1` iterations costs less than the drains.
 
-Also shipped: a single-pass residual kernel (R and its column norms in one pass), the
+Also shipped: a single-pass residual kernel (\f$R\f$ and its column norms in one pass), the
 backward-stable criterion \f$\|r\| / (\|Ax\| + |\lambda|\,\|x\|)\f$ (the old \f$\|r\|/(\|x\|\,|\lambda|)\f$ never
 converged for \f$\lambda \to 0\f$), and `iluk_apply` reading R's strided slice with no repack.
 
@@ -156,7 +156,7 @@ six cases, and masking saves no flops. The batch-wide staircase is not built; it
 ## LOBPCG: column-reversal kernels removed
 
 X stays in `syev`'s ascending order instead of being reversed for `find_largest` each iteration; column
-j pairs with `lambda[eig_offset + j]`, `eig_offset = num_eigvals - block_vectors` when `find_largest`,
+\f$j\f$ pairs with `lambda[eig_offset + j]`, `eig_offset = num_eigvals - block_vectors` when `find_largest`,
 and the `X_best` snapshot supplies largest-first order. One cold launch remains for `iterations == 0`.
 `SyevxLobpcgVectorsTest` checks per-pair residuals against `A`; `NoEigenVectors` tests cannot catch a
 column-to-eigenvalue mismatch.
@@ -187,17 +187,17 @@ and is not built.
 ## LOBPCG: the accuracy pin on the projected syev
 
 The tuned `syev` tables rank by time only, and on sm_120 they put `vendor` or `jacobi` first for small
-eigenvector cells. On threadripper02 (RTX PRO 6000), float, n = 16, cuSOLVER's eigenvalues are about
+eigenvector cells. On threadripper02 (RTX PRO 6000), float, \f$n = 16\f$, cuSOLVER's eigenvalues are about
 1.9e-5 off against 2.7e-6 for CTA, and with the projected solves off CTA
 `ILUKTests.SyevxInstrumentationAndPreconditioner` (`iluk_k3`, `d0.06_b0.5`) stalls at 5.2e-6 against a
 4.2e-6 target (2026-10-09).
 
 `projected_syev_pin` (`syevx_lobpcg.cc`) pins every projected solve (XtAX, StAS, restart) to `cta_fused`
-when CTA can take the shape (n <= 32, 32-wide sub-groups); the buffer-size query uses the same pin. Above
+when CTA can take the shape (\f$n \le 32\f$, 32-wide sub-groups); the buffer-size query uses the same pin. Above
 32 the table decides; an explicit `BATCHLAS_SYEV_ROUTE` or outer `select::ScopedPin` still wins, so
 `Pinned/SyevxProjectedSyevRouteTest.*` exercises each family.
 `SyevxProjectedSyevPin.CtaFusedAtOrBelow32EvenWhenTheTableRanksTheVendorFirst` guards the pin. The speed
-side (CTA 2.21x slower than cuSOLVER at n = 30) is on [the syev page](syev.md#syev-the-lobpcg-projected-solve-knob).
+side (CTA 2.21x slower than cuSOLVER at \f$n = 30\f$) is on [the syev page](syev.md#syev-the-lobpcg-projected-solve-knob).
 `BATCHLAS_SYEVX_PROJECTED_VENDOR` changes workspace size; do not change it between query and call.
 
 ## syevx: open measurement debts

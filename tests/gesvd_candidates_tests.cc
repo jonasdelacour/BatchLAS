@@ -47,14 +47,13 @@ namespace {
 namespace gs = batchlas::ops::gesvd;
 using C = gs::GesvdChoice;
 using Pin = select::ScopedPin<C>;
-template <typename T>
-using MVof = MatrixView<T, MatrixFormat::Dense>;
-template <typename T>
-using RealOf = typename batchlas::base_type<T>::type;
-template <typename T>
-constexpr bool kCx = test_utils::is_complex<T>::value;
+template <typename Scalar>
+using MVof = MatrixView<Scalar, MatrixFormat::Dense>;
+template <typename Scalar>
+using RealOf = typename batchlas::base_type<Scalar>::type;
+template <typename Scalar>
+constexpr bool kCx = test_utils::is_complex<Scalar>::value;
 using cd = std::complex<double>;
-
 
 // herm: 'N' general, 'L'/'U' the referenced triangle of a Hermitian A.
 struct Spec {
@@ -78,39 +77,39 @@ std::string name(const C& c, const Spec& s) { return select::to_string(c) + " " 
 // A = H(u) diag(sigma) H(v) (general) or H(u) diag(lambda) H(u) (Hermitian), H(x) = I - 2 x x^H:
 // the singular values are known in closed form. A lives at ld = m + 3 with a gap between items;
 // a Hermitian A stores a large finite poison in its unreferenced triangle.
-template <typename T>
+template <typename Scalar>
 struct Svd {
     Spec s;
     int k = 0, ld = 0;
     std::int64_t stride = 0;
-    UnifiedVector<T> a;
-    std::vector<T> a0;
+    UnifiedVector<Scalar> a;
+    std::vector<Scalar> a0;
     std::vector<std::vector<cd>> full;  // the matrix each item represents, column-major
     std::vector<std::vector<double>> sigma;  // expected, descending
-    Matrix<T, MatrixFormat::Dense> U, Vh;
-    UnifiedVector<RealOf<T>> sv;
+    Matrix<Scalar, MatrixFormat::Dense> U, Vh;
+    UnifiedVector<RealOf<Scalar>> sv;
     UnifiedVector<int32_t> info;
 
     Svd(const Spec& sp)
         : s(sp), k(std::min(sp.m, sp.n)), ld(sp.m + sp.ldpad), stride(std::int64_t(sp.m + sp.ldpad) * sp.n + sp.gap),
-          a(std::size_t(stride) * sp.batch + 1, MVof<T>::make(-321.0, 123.0)),
+          a(std::size_t(stride) * sp.batch + 1, MVof<Scalar>::make(-321.0, 123.0)),
           U(sp.ju == SvdVectors::None ? 1 : sp.m, sp.ju == SvdVectors::All ? sp.m : (sp.ju == SvdVectors::Thin ? k : 1),
             sp.batch),
           Vh(sp.jv == SvdVectors::All ? sp.n : (sp.jv == SvdVectors::Thin ? k : 1), sp.jv == SvdVectors::None ? 1 : sp.n,
              sp.batch),
           sv(std::size_t(k) * sp.batch), info(sp.batch, -7) {}
-    MVof<T> A() { return {a.data(), s.m, s.n, ld, static_cast<int>(stride), s.batch}; }
+    MVof<Scalar> A() { return {a.data(), s.m, s.n, ld, static_cast<int>(stride), s.batch}; }
     std::size_t ai(int b, int i, int j) const { return std::size_t(b) * stride + std::size_t(j) * ld + i; }
 };
 
-template <typename T>
+template <typename Scalar>
 std::vector<cd> unit_vector(std::mt19937& gen, int n) {
     std::uniform_real_distribution<double> d(-1, 1);
     std::vector<cd> u(n);
     double nrm = 0;
     for (auto& x : u) {
         const double re = d(gen);
-        x = cd(re, kCx<T> ? d(gen) : 0.0);
+        x = cd(re, kCx<Scalar> ? d(gen) : 0.0);
         nrm += std::norm(x);
     }
     for (auto& x : u) x /= std::sqrt(nrm);
@@ -118,9 +117,9 @@ std::vector<cd> unit_vector(std::mt19937& gen, int n) {
 }
 cd householder(const std::vector<cd>& u, int i, int j) { return (i == j ? 1.0 : 0.0) - 2.0 * u[i] * std::conj(u[j]); }
 
-template <typename T>
-Svd<T> make_svd(const Spec& s) {
-    Svd<T> p(s);
+template <typename Scalar>
+Svd<Scalar> make_svd(const Spec& s) {
+    Svd<Scalar> p(s);
     const int reps = s.period > 0 ? std::min(s.period, s.batch) : s.batch;
     std::mt19937 gen(s.seed);
     for (int b = 0; b < s.batch; ++b) {
@@ -134,7 +133,7 @@ Svd<T> make_svd(const Spec& s) {
         std::vector<cd> f(std::size_t(s.m) * s.n, 0.0);
         std::vector<double> sig;
         if (s.herm != 'N') {
-            const auto u = unit_vector<T>(gen, s.m);
+            const auto u = unit_vector<Scalar>(gen, s.m);
             std::vector<double> lam(s.m);
             for (int i = 0; i < s.m; ++i) lam[i] = (i % 2 ? -1.0 : 1.0) * (1.0 + double(i) / s.m);
             for (int j = 0; j < s.n; ++j)
@@ -142,7 +141,7 @@ Svd<T> make_svd(const Spec& s) {
                     for (int l = 0; l < s.m; ++l) f[j * s.m + i] += householder(u, i, l) * lam[l] * householder(u, l, j);
             for (double l : lam) sig.push_back(std::abs(l));
         } else {
-            const auto u = unit_vector<T>(gen, s.m), v = unit_vector<T>(gen, s.n);
+            const auto u = unit_vector<Scalar>(gen, s.m), v = unit_vector<Scalar>(gen, s.n);
             for (int l = 0; l < p.k; ++l) sig.push_back(1.0 + double(l) / std::max(1, p.k));
             for (int j = 0; j < s.n; ++j)
                 for (int i = 0; i < s.m; ++i)
@@ -152,7 +151,7 @@ Svd<T> make_svd(const Spec& s) {
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.m; ++i) {
                 const bool unreferenced = s.poison && ((s.herm == 'L' && i < j) || (s.herm == 'U' && i > j));
-                p.a[p.ai(b, i, j)] = unreferenced ? MVof<T>::make(4.0e3, -2.0e3) : MVof<T>::make(f[j * s.m + i].real(), f[j * s.m + i].imag());
+                p.a[p.ai(b, i, j)] = unreferenced ? MVof<Scalar>::make(4.0e3, -2.0e3) : MVof<Scalar>::make(f[j * s.m + i].real(), f[j * s.m + i].imag());
             }
         p.full.push_back(std::move(f));
         p.sigma.push_back(std::move(sig));
@@ -216,9 +215,9 @@ struct TableGuard {
     ~TableGuard() { select::testing::use_embedded_tables(); }
 };
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;
@@ -259,9 +258,9 @@ protected:
     static bool expect_runs(const C& c, const Spec& s) {
         const int md = std::max(s.m, s.n);
         if (std::holds_alternative<gs::Jacobi>(c))
-            return s.herm == 'N' && md <= sycl_gesvd::gesvd_jacobi_max_dim<T>(vectors(s), g_slm_budget);
+            return s.herm == 'N' && md <= ops::gesvd::gesvd_jacobi_max_dim<T>(vectors(s), g_slm_budget);
         if (std::holds_alternative<gs::Cta>(c))
-            return md <= sycl_gesvd::kGesvdCtaMaxDim && !canonical_thin(s) && (s.herm == 'N' ? kReal : s.m == s.n);
+            return md <= ops::gesvd::kGesvdCtaMaxDim && !canonical_thin(s) && (s.herm == 'N' ? kReal : s.m == s.n);
         if (std::holds_alternative<gs::Blocked>(c)) return s.herm == 'N' || s.m == s.n;
         return kVendor && (B != Backend::CUDA || vendor_accepts(s)) && B != Backend::ROCM;
     }
@@ -754,7 +753,7 @@ TYPED_TEST(GesvdCandidates, AutoReadsTheShippedTable) {
     // The wide-band rule is a preference, not a capability: jacobi still takes a real 64 x 64 pin.
     const Spec big_s{64, 64, 2, 'N', SvdVectors::None, SvdVectors::None};
     auto big = make_svd<T>(big_s);
-    const bool fits = 64 <= sycl_gesvd::gesvd_jacobi_max_dim<T>(TestFixture::vectors(big_s), g_slm_budget);
+    const bool fits = 64 <= ops::gesvd::gesvd_jacobi_max_dim<T>(TestFixture::vectors(big_s), g_slm_budget);
     EXPECT_EQ(this->pin_accepted(C{gs::Jacobi{}}, big), fits);
     if (!test_utils::kSlmCappedAt48KiB) EXPECT_TRUE(fits);
 }

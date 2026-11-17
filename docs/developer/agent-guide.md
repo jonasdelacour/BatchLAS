@@ -6,7 +6,7 @@ Working rules for agents and contributors: toolchain, build, testing, routing, m
 kernel facts, repository conventions and agent workflow. Requirements, presets and every CMake
 option are in @ref guide_build; this page holds the rules and traps.
 
-**TL;DR.** Exercised: self-built CUDA DPC++ (`/opt/dpcpp-cuda`), CUDA 13.2, RTX 4090 (sm_89),
+**TL;DR.** Exercised: self-built CUDA DPC++ (`/opt/dpcpp-cuda`), CUDA 13.3, RTX 4090 (sm_89),
 Ubuntu 26.04. NVIDIA needs a CUDA-capable DPC++ (§2b): stock oneAPI `icpx` builds a CPU-only
 library without complaint. `sycl-ls` must list `[cuda:gpu]`; `-- Using SYCL targets:
 spir64_x86_64` at configure means CPU-only. `-DBATCHLAS_ENABLE_CUDA=ON` aborts without a CUDA
@@ -33,7 +33,7 @@ install only `intel-oneapi-compiler-dpcpp-cpp`; `source /opt/intel/oneapi/setvar
 ### 2b. CUDA-capable DPC++: NVIDIA GPUs
 
 The Codeplay **oneAPI for NVIDIA GPUs** plugin on top of §2a, or `intel/llvm` built with `--cuda`
-(`/opt/dpcpp-cuda` on the 4090 box; every number in the repository), plus a CUDA Toolkit (13.2).
+(`/opt/dpcpp-cuda` on the 4090 box; every number in the repository), plus a CUDA Toolkit (13.3, `/usr/local/cuda`; 13.2 before 2026-11).
 Configure with `-DCMAKE_CXX_COMPILER=/opt/dpcpp-cuda/bin/clang++`; a consumer of an installed
 BatchLAS uses the same compiler for its whole project (`docs/cpp-api.md`).
 
@@ -58,7 +58,7 @@ cmake --build build -j8 && sudo cmake --install build && sudo ldconfig
 
 ## 5. CMake Configuration Hints
 
-LAPACKE and CBLAS are optional (`find_netlib_libs`, `cmake/BatchLASDependencies.cmake`; without
+LAPACKE and CBLAS are optional (`batchlas_find_netlib_libs`, `cmake/BatchLASDependencies.cmake`; without
 them NETLIB is off). Elsewhere on disk: `-DLAPACKE_LIBRARY=<path> -DCBLAS_LIBRARY=<path>`.
 
 ## 6. Quick Smoke Test
@@ -171,6 +171,14 @@ Findings and before/after tables: @ref design_build_performance.
   lacks the NETLIB/CPU instantiations, so it is never the gate. Vendor-free builds only at the gate.
 - `BATCHLAS_SYCL_LINK_JOBS` (`auto` = cores, 4..32): a link costs the sum of its batch maxima; a
   one-module `.so` gains nothing. Profile per module by replaying the driver's `-###` stages.
+- **x86 AOT flake**: the Intel CPU runtime's `sycl-kernel-reduce-cross-barrier-values` pass, run
+  by opencl-aot in every `spir64_x86_64` link, corrupts the heap at random on barrier kernels
+  (`malloc(): unsorted double linked list corrupted`, SIGSEGV, SIGALRM, a 40-min spin) at any
+  `BATCHLAS_SYCL_LINK_JOBS`, with either runtime (2026.22 often, 2025.20 once seen). Links run with
+  `CL_CONFIG_LLVM_OPTIONS=-opt-disable=<that pass>` (RULE_LAUNCH_LINK) when a configure probe shows
+  the runtime takes it: 2026.22 does, 2025.20 rejects the option and stays exposed. With 2026.22 a
+  `device_lapack_sygst_tests` module failed 4/12 runs and single `device_lapack_chol_tests` kernels
+  3/500; with the pass off, 0/12 and 0/1000. Per-kernel splitting does not help; ASLR off hides it.
 - `cmake --build --target A B C` can exit 0 and skip links: `scripts/b` checks (exit 70); by hand
   `test -x build/tests/<name>`.
 - Time a rebuild by appending a line, not `touch` (a ccache hit times only the link).
@@ -188,6 +196,8 @@ Findings and before/after tables: @ref design_build_performance.
   -> `-LE 'slow|heavy'` -> `-LE slow` -> full only before pushing or after touching shared code
   (`Queue`, `Matrix`/`MatrixView`, mempool, `sg_partition`, `include/batchlas/util`).
   `scripts/affected_tests.py` maps a diff to binaries (callers included; over-selects by design).
+  The in-kernel API's tests have no `device` label: select them with `-R '^device_'`
+  (`device_core_*`, `device_lapack_*` and the `device_example_*` programs of `examples/device/`).
 - **Case tiers.** A binary in `BATCHLAS_HEAVY_TESTS` is two entries: `X` (quick cases) and
   `X_heavy` (label `heavy`: saturating-batch race guards, table sweeps). Run `X_heavy` before
   claiming `X` green. `-LE slow` includes heavy entries; `-LE 'slow|heavy'` does not. A binary
@@ -219,15 +229,17 @@ dozen times. Every new or rewritten test needs:
 1. A deliberate break of the code under test, once per axis, giving a *narrow, named* red set.
 2. The break runs where the code is reachable: pin the route (`BATCHLAS_<OP>_ROUTE=<spelling>`,
    `select::ScopedPin`) or use the vendor-free build, or a table may send the shape to the vendor.
-3. Non-natural values for every accessor read (`ld`, batch `stride`, `inc`, rows!=cols), complex
-   data with nonzero imaginary part, ConjTrans, beta!=0: derived values pass the natural case.
+3. Non-natural values for every accessor read (`ld`, batch `stride`, `inc`,
+   \f$\text{rows} \ne \text{cols}\f$), complex data with nonzero imaginary part, ConjTrans,
+   \f$\beta \ne 0\f$: derived values pass the natural case.
 4. Poison the code will accept (an in-range index with a large finite value, not NaN), surviving
    upstream code (cuSOLVER Upper `potrf` overwrites the lower triangle).
 5. For any shared-local-memory kernel, a saturating batch (>=1024, one matrix repeated, each result
    bit-identical to item 0). Small tests run at wg=32, which hides cross-sub-group SLM races.
 6. Thresholds straddled in both directions.
 7. No self-referential reference (one through the same tables or routes agrees by construction).
-8. Graded input (condition ~1e±6) for eigen/tridiagonal accuracy; GOE matrices hide relative bugs.
+8. Graded input (condition \f$\sim 10^{\pm 6}\f$) for eigen/tridiagonal accuracy; GOE matrices hide
+   relative bugs.
 9. For a capacity guard, a *launch* at the advertised ceiling, not an arithmetic re-derivation.
 10. Verify a revert of an untracked file with `md5sum` against a pristine copy (`git diff` is silent).
 11. Verify with `batchlas::verify` (`EXPECT_VERIFY(T, Check::kind, n, value)`,
@@ -240,7 +252,7 @@ audit); the harness took the rest. Keep every guard above and spend nothing besi
    0.5-1.4 s of startup, so reading state through children is quadratic. If one is unavoidable:
    one per TEST, as its first statement.
 2. Generate a deterministic input once per test (cache by type, n, batch, seed); copy and
-   re-poison it per axis value. A graded fill at n >= 1024 costs 12-46 s.
+   re-poison it per axis value. A graded fill at \f$n \ge 1024\f$ costs 12-46 s.
 3. Prefer a device-side check against `usm_bulk::Pristine` (reps on the host, buffer written by
    device copies) to host loops over `malloc_shared`. Bulk copies are no free win on the 4090
    box: a `q.memcpy` out of shared pages the host wrote and no kernel touched migrates them to the
@@ -316,6 +328,10 @@ ledgers and staleness: @ref design_tuning_data.
 - The workspace arena belongs to the `Queue`: never a per-call `Queue`. Leak long-lived SYCL
   objects held in statics (destruction after the runtime hangs).
 - Pivots are packed 1-based int32 everywhere; `cusolverDnXgetrs` wants int64.
+- In-kernel `batchlas::device` ops follow the conventions C1-C11 of @ref design_device_la (netlib
+  name and argument order, ws then opts then live, `int info`, one `buffer_size<R, Tier, T>`);
+  write a call from its launch frame and the four checked programs in `examples/device/`, and read
+  an exact signature on the generated @ref design_device_la_api page, never from memory.
 - `linalg::qr` is absent on purpose; located-but-unfixed defects: `docs/design/known-defects.md`.
 
 ## 10. Measurement Rules (benchmarks lie silently here)
@@ -340,15 +356,16 @@ ledgers and staleness: @ref design_tuning_data.
 - Admit rows on cross-pass reproduction, not rel_sd alone; bracket every window edge with a
   measured non-winner.
 - "vs vendor": check which route ran, what the vendor is (cuBLAS complex trsm and batched orgqr are
-  per-item loops or our substitutes; `syevjBatched` beats `XsyevBatched` at n<=32); re-measure it.
+  per-item loops or our substitutes; `syevjBatched` beats `XsyevBatched` at \f$n \le 32\f$);
+  re-measure it.
 - Rebuild every bench binary after a table or `can_run` change (harnesses resolve the printed route
   in their own TU). Check an argument is used: time scales with it.
 - Sanity anchors (RTX 4090): FP32 SGEMM ~47-54 TFLOP/s (~80 means TF32), FP64 ~1.44 TFLOP/s, DRAM
   ~950 GB/s achievable; cuBLAS gemv is at the DRAM roof. A cost non-monotonic in n is a routing bug.
 - nsys sees cuBLAS kernels, `BATCHLAS_KERNEL_TRACE` does not. Also: `BATCHLAS_KERNEL_TRACE_PATH`,
   `BATCHLAS_GESVD_PROFILE=1`, `BATCHLAS_TUNE_*` (A/B a constant without a rebuild), `BATCHLAS_BENCH_*`.
-- Confirm a GEMM at beta=1 with a strided `ld` (panel updates carry the parent's `ld`). Pin one
-  kernel with `BATCHLAS_GEMM_ROUTE=<spelling>` (`reg:m=128:n=128:k=8:u=1`, `wide:m=64:n=64:k=16`,
+- Confirm a GEMM at \f$\beta = 1\f$ with a strided `ld` (panel updates carry the parent's `ld`).
+  Pin one kernel with `BATCHLAS_GEMM_ROUTE=<spelling>` (`reg:m=128:n=128:k=8:u=1`, `wide:m=64:n=64:k=16`,
   `splitk:m=16:n=16:k=16:s=4`, `small`, `tiled`, `direct`); compare kernels with
   `tools/tune/batchlas_tune` (`gemm_spec.cc`).
 - benchviz (`python3 benchmarks/benchviz`) measures *its checkout's* `build/`: run `benchviz info`
@@ -374,13 +391,15 @@ ledgers and staleness: @ref design_tuning_data.
   (1.1-1.9x on tiny kernels; too tight is 2.3x slower, and it moves routing windows).
 - Coalescing: one work-item per *output* element (NoTrans gemv coalesced, Trans reduces). laswp is
   an index gather in SLM (7.9x fewer sectors).
-- GEMM: 128x128x8 tiles, 8x8 thread tile, aligned shared strides, B staged [k][n] give cuBLAS
-  parity for float NN; the epilogue varies m fastest. Internal demand is panel updates (large m,n;
-  k 8-136; ~60% transposed), so a `min_dim` gate never fires.
+- GEMM: \f$128 \times 128 \times 8\f$ tiles, \f$8 \times 8\f$ thread tile, aligned shared strides,
+  B staged [k][n] give cuBLAS parity for float NN; the epilogue varies \f$m\f$ fastest. Internal
+  demand is panel updates (large \f$m, n\f$; \f$8 \le k \le 136\f$; ~60% transposed), so a
+  `min_dim` gate never fires.
 - `chunked_partition` masks cost ~4-5 instructions per collective; judge `sg_partition` changes by
-  real-kernel A/B (steqr/syev_cta, n=5..16, batch 16384), never microbenchmarks.
-- CTA kernels are capped at n <= 32 (the sub-group width). `STEDC_RECURSION_THRESHOLD = 32` is
-  that invariant, not a tuning constant (a 33+ leaf falls to `steqr_wg`, 14x cliff).
+  real-kernel A/B (steqr/syev_cta, \f$5 \le n \le 16\f$, batch 16384), never microbenchmarks.
+- CTA kernels are capped at \f$n \le 32\f$ (the sub-group width).
+  `STEDC_RECURSION_THRESHOLD = 32` is that invariant, not a tuning constant (a leaf with \f$n \ge 33\f$ falls to `steqr_wg`, 14x
+  cliff).
 - Byte-counting traffic models miss serial recurrences: check the critical path first.
 - Open: the latrd panel symv is L1-over-fetch-bound (12-16x); a single-read symv is the open 2.7x.
 
@@ -393,10 +412,10 @@ ledgers and staleness: @ref design_tuning_data.
 | `-fno-sycl-rdc`, explicit `-fsycl-device-code-split` | measured, no gain (@ref design_build_performance) | dead |
 | Cutting one edge of a header cycle | the umbrella header cuts both edges | dead |
 | Plain `CMAKE_CXX_COMPILER_LAUNCHER=ccache` | 3/196 cross-tree hits (wrapper: 187/196) | use the wrapper |
-| CTA eigensolver above n=32 | 85-211x slower | dead |
+| CTA eigensolver above \f$n = 32\f$ | 85-211x slower | dead |
 | Block Jacobi as a speed path | 2-11x slower | accuracy-only opt-in |
-| Cooperative TRSM diagonal solve; faster native gemv; maskless steqr at P<32 | no gain | dead |
-| Packed sub-group getrf with runtime n in SLM | no gain | dead (register-resident not refuted) |
+| Cooperative TRSM diagonal solve; faster native gemv; maskless steqr at \f$P < 32\f$ | no gain | dead |
+| Packed sub-group getrf with runtime \f$n\f$ in SLM | no gain | dead (register-resident not refuted) |
 | Givens chase | Householder chase 5.6x cheaper | dead |
 | GEMM kernel fix for strided `ld`; double-buffering or packing B | no gain; the fix was routing | dead |
 | Grid-stride / persistent loops | equal under-filled, 15% slower saturated | only for the 65535 cap |

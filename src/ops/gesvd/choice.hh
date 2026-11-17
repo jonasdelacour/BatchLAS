@@ -12,14 +12,14 @@
 
 namespace batchlas::ops::gesvd {
 
-struct Jacobi : select::NoFields<"jacobi"> {};    ///< gesvdj_cta: one-sided Jacobi, max(m, n) <= 64, not Hermitian
-struct Cta : select::NoFields<"cta"> {};          ///< gesvd_cta: normal equations + syev_cta, max(m, n) <= 32, not thin
+struct Jacobi : select::NoFields<"jacobi"> {};    ///< gesvdj_cta: one-sided Jacobi, \f$\max(m, n) \le 64\f$, not Hermitian
+struct Cta : select::NoFields<"cta"> {};          ///< gesvd_cta: normal equations + syev_cta, \f$\max(m, n) \le 32\f$, not thin
 struct Blocked : select::NoFields<"blocked"> {};  ///< gesvd_blocked: bidiagonalisation + bdsdc, or syev_blocked (Lower)
 struct Vendor : select::NoFields<"vendor"> {};    ///< backend::gesvd_vendor; needs the solver library
 
 using GesvdChoice = std::variant<Jacobi, Cta, Blocked, Vendor>;  ///< natives need a GPU; cta, blocked: complex only if Hermitian
 
-template <typename T>  /// Every compiled choice, in tie-break order (§6.3): native first, vendor last.
+template <typename Scalar>  /// Every compiled choice, in tie-break order (§6.3): native first, vendor last.
 constexpr auto candidates() { return select::all_of<GesvdChoice>(); }
 
 inline constexpr select::OpSpec spec{Op::gesvd, select::Lib::solver};  ///< last resort (§5.5): blocked, vendor

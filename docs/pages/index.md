@@ -35,10 +35,10 @@ Float, RTX 4090, CUDA backend, large batch.
 
 | Op | BatchLAS | cuSOLVER | Speed-up | Conditions |
 | --- | --- | --- | --- | --- |
-| syev with eigenvectors, n = 320, batch 819 | 67.8 µs/matrix | 203.0 µs/matrix | 3.0× | [measurement](../perf/syev.md#syev-the-blocked-over-cusolver-headline-measurement) |
-| syev with eigenvectors, n = 448, batch 585 | (ratio only) | (ratio only) | 2.1× | same |
-| gesvd vs `cusolverDnXgesvdjBatched`, n = 8, batch 16384 | 0.0064 µs/matrix | 0.339 µs/matrix | 53× | [comparison](../perf/gesvd.md#gesvd-readme-headline-jacobi-vs-gesvdjbatched-per-matrix) |
-| gesvd vs `cusolverDnXgesvdjBatched`, n = 32 | 0.468 µs/matrix | 0.768 µs/matrix | 1.6× | same |
+| syev with eigenvectors, \f$n = 320\f$, batch 819 | 67.8 µs/matrix | 203.0 µs/matrix | 3.0× | [measurement](../perf/syev.md#syev-the-blocked-over-cusolver-headline-measurement) |
+| syev with eigenvectors, \f$n = 448\f$, batch 585 | (ratio only) | (ratio only) | 2.1× | same |
+| gesvd vs `cusolverDnXgesvdjBatched`, \f$n = 8\f$, batch 16384 | 0.0064 µs/matrix | 0.339 µs/matrix | 53× | [comparison](../perf/gesvd.md#gesvd-readme-headline-jacobi-vs-gesvdjbatched-per-matrix) |
+| gesvd vs `cusolverDnXgesvdjBatched`, \f$n = 32\f$ | 0.468 µs/matrix | 0.768 µs/matrix | 1.6× | same |
 
 Where the vendor library is faster for a shape, it runs instead (@ref selection_tables).
 

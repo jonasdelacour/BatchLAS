@@ -36,12 +36,11 @@ bespoke parser gets an `EnvValue` holding the raw string, whose `get()` is `null
 | `BATCHLAS_GETRF_LASWP` | `inloop`, `defer_walk`, `defer_gather` (`defer_gather`) | Presence latched, value re-read. |
 | `BATCHLAS_GETRF_RIGHT_LASWP`, `BATCHLAS_GETRS_LASWP` | `walk`, `gather` (measured crossover; unset) | getrs re-read. |
 | `BATCHLAS_ILUK_DEVICE` | first character `0`/`1` (batch >= 32) | `true`, `on`, `yes` fall through to the default. |
-| `BATCHLAS_LATRD_IMPL` | `legacy`, `device`, `grid` (unset) | Re-read. |
-| `BATCHLAS_ORMQR_IMPL`, `BATCHLAS_SYTRD_IMPL` / `BATCHLAS_ORTHO_GRAM` | `device` / `gemm` (unset) | Only that value has an effect. |
+| `BATCHLAS_LATRD_IMPL` | `legacy`, `grid` (unset) | Re-read. |
+| `BATCHLAS_ORTHO_GRAM` | `gemm` (unset) | Only that value has an effect. |
 | `BATCHLAS_ORMQR_WY` | `gemm`, `trmm`, `measured` (measured gate) | |
 | `BATCHLAS_SB2ST_BACK_WAVE` | on | [Fails open](#environment-sb2st-back-wave-fails-open). |
 | `BATCHLAS_SB2ST_SUBGROUP` | `auto`, `on`, `off` (`auto`) | `on` throws when kd > 32 or no sub-group of 32. |
-| `BATCHLAS_SYEV_TWO_STAGE_CHASE` | `givens` (unset) | Read by the solve and the sizing query. |
 | `BATCHLAS_SYEVX_ALGORITHM` | method name (`SyevxParams::method`) | Overrides the argument; unrecognised parses to `Auto`. |
 | `BATCHLAS_SYEVX_PRECONDITIONER` | name (unset) | Loses to an explicit request and to a configured ILU(k). |
 | `BATCHLAS_SYEVX_FILTER_DEGREE_AUTO` | `atoi` nonzero (off) | [evidence](../perf/syevx.md#syevx-automatic-chebyshev-filter-degree) |
@@ -53,7 +52,7 @@ bespoke parser gets an `EnvValue` holding the raw string, whose `get()` is `null
 
 ## Geometry variables
 
-Group `geometry`. A default that depends on n, type, argument or device stays at the
+Group `geometry`. A default that depends on \f$n\f$, type, argument or device stays at the
 [call site](#environment-geometry-defaults-stay-at-the-call-site).
 
 | Variable | Values (default) | Note |
@@ -61,12 +60,11 @@ Group `geometry`. A default that depends on n, type, argument or device stays at
 | `BATCHLAS_LATRD_GRID_GROUPS` | positive int (0 = auto) | Clamped by the residency cap. |
 | `BATCHLAS_LATRD_GRID_MIN_N` | positive int (768) | [evidence](../perf/syev.md#syev-latrd-grid-gate-confirmed-in-eigenvector-mode) |
 | `BATCHLAS_LATRD_GRID_WG` | `32`, `64`, `128`, `256` (computed) | Other values ignored silently. |
-| `BATCHLAS_LATRD_LOWER_PANEL_WG_HINT` | `64`, `128`, `256` (unset) | Device path only. |
 | `BATCHLAS_SB2ST_BACK_SUBS`, `BATCHLAS_SB2ST_BACK_TILE_W` | positive int (call site) | Force together; instantiated: tile {1, 2, 4, 8}, subs {4, 8, 16}. |
 | `BATCHLAS_SB2ST_BACK_TILE` | int (call site) | `0` selects the streaming kernel. |
 | `BATCHLAS_POTRF_NB`, `BATCHLAS_POTRF_W` | int (type default) | nb 128/96/96/64, w 128/32/32/16 for s/d/c/z. |
-| `BATCHLAS_SYEV_TWO_STAGE_KD`, `BATCHLAS_SYEV_TWO_STAGE_SB2ST_BLOCK` | positive int (32) | KD clamped to [1, n-1]. |
-| `BATCHLAS_SY2SB_ORMQR_NB` | int or `off` (unset) | `off`/`0` disable; positive forced, clamped to kd; bad, negative or > 1024 is unset. |
+| `BATCHLAS_SYEV_TWO_STAGE_KD` | positive int (32) | \f$k_d\f$ clamped to \f$[1, n-1]\f$. |
+| `BATCHLAS_SY2SB_ORMQR_NB` | int or `off` (unset) | `off`/`0` disable; positive forced, clamped to \f$k_d\f$; bad, negative or \f$> 1024\f$ is unset. |
 | `BATCHLAS_SYTRD_BLOCK_SIZE` | int (bucketed by n and type) | |
 | `BATCHLAS_TRMM_TILE_M` | int (function of m) | Bucketed to 16, 32, 64, 128. |
 | `BATCHLAS_GEMM_WIDE_STAGES` | `2`, `3` (unset) | `complex<float>` wide tiles: `2` register prefetch, `3` cp.async (sm_80+, default sm_120+). |
@@ -76,7 +74,7 @@ Group `geometry`. A default that depends on n, type, argument or device stays at
 | `BATCHLAS_SYEVX_CHECK_EVERY` | int (4) | Each check drains the pipeline. |
 | `BATCHLAS_SYEVX_EXTRA_DIRECTIONS` | int (`max(2, k/4)`) | `0` = no guard block; negative is unset. |
 | `BATCHLAS_SYEVX_FILTER_DEGREE`, `_INIT_POWER`, `_LOCK_FACTOR` | int > 0 (auto); int (4); float > 0 (0.1) | `INIT_POWER=0` = no power iterations. |
-| `BATCHLAS_TUNE_*` (13: `ORMQR_BLOCK_SIZE`, `GEBRD_BLOCK_SIZE`, `SB2ST_BACK_TILE`, `SB2ST_BACK_SUBS`, `SY2SB_ORMQR_NB`, `SYTRD_BLOCK_SIZE`, `LATRD_WG_HINT`, `STEDC_RECURSION_THRESHOLD`, `STEDC_MERGE_VARIANT`, `STEDC_THREADS_PER_ROOT`, `STEDC_WG_MULTIPLIER`, `L2_CHUNK_PERCENT`, `L2_CHUNK_ITEMS`) | int (tuned) | `tuning_env_override`, @ref perf_tuning. `L2_CHUNK_ITEMS` forces the blocked drivers' batch chunk. |
+| `BATCHLAS_TUNE_*` (14: `ORMQR_BLOCK_SIZE`, `GEBRD_BLOCK_SIZE`, `SB2ST_BACK_TILE`, `SB2ST_BACK_SUBS`, `SY2SB_ORMQR_NB`, `SYTRD_BLOCK_SIZE`, `LATRD_WG_HINT`, `LATRD_SLM_FLOOR`, `STEDC_RECURSION_THRESHOLD`, `STEDC_MERGE_VARIANT`, `STEDC_THREADS_PER_ROOT`, `STEDC_WG_MULTIPLIER`, `L2_CHUNK_PERCENT`, `L2_CHUNK_ITEMS`) | int (tuned) | `tuning_env_override`, @ref perf_tuning. `L2_CHUNK_ITEMS` forces the blocked drivers' batch chunk. |
 
 ## Diagnostic variables
 
@@ -125,23 +123,22 @@ read: `BATCHLAS_<OP>_VARIANT`, `BATCHLAS_<OP>_PROVIDER`, `BATCHLAS_GEMM_SYCL_KER
 - `BATCHLAS_SYEVX_ALGORITHM` overrides `SyevxParams::method`; an environment algorithm degrades
   where an explicit request throws.
 - `BATCHLAS_SYEVX_PRECONDITIONER` overrides a `SyevxParams` field.
-- `BATCHLAS_GESVD_BIDIAG=normal` squares the condition number (relative error 8.5e-1 against 5.0e-1
-  at kappa 1e6, [gesvd Tier 3](../perf/gesvd.md#gesvd-tier-3-bdsdc-as-the-bidiagonal-solver)); a
+- `BATCHLAS_GESVD_BIDIAG=normal` squares the condition number (relative error \f$8.5 \times 10^{-1}\f$ against \f$5.0 \times 10^{-1}\f$
+  at \f$\kappa = 10^{6}\f$, [gesvd Tier 3](../perf/gesvd.md#gesvd-tier-3-bdsdc-as-the-bidiagonal-solver)); a
   thin-tall U overrides it.
 
 ## Geometry defaults stay at the call site {#environment-geometry-defaults-stay-at-the-call-site}
 
-A knob whose default depends on n, type, argument or device stores a sentinel (0 or unset) and the
+A knob whose default depends on \f$n\f$, type, argument or device stores a sentinel (0 or unset) and the
 call site applies the default, so a tuned curve is not pinned at one point; constant defaults live in
 the struct. Where 0 is meaningful the field bypasses `env_positive_int_or` (which maps 0 to unset):
 `SB2ST_BACK_TILE` is raw because 0 selects the streaming kernel.
 
 ## Two variables for one quantity {#environment-two-variables-for-one-quantity}
 
-The outer variable wins over its `BATCHLAS_TUNE_*` twin: `SYTRD_BLOCK_SIZE`,
-`LATRD_LOWER_PANEL_WG_HINT`, `SY2SB_ORMQR_NB` and the two sb2st back-transform knobs. The latrd pair
-stays separate because the outer knob applies only on the device path; the sb2st pair must be forced
-together, since forcing one gives an unmeasured geometry.
+The outer variable wins over its `BATCHLAS_TUNE_*` twin: `SYTRD_BLOCK_SIZE`, `SY2SB_ORMQR_NB` and
+the two sb2st back-transform knobs. The sb2st pair must be forced together, since forcing one gives
+an unmeasured geometry.
 
 ## sb2st back wave fails open {#environment-sb2st-back-wave-fails-open}
 
@@ -155,7 +152,7 @@ Each fix changes behaviour and belongs in its own commit:
 
 - `BATCHLAS_SYEVX_SOFT_LOCK` is inverted: `=off` and an empty value enable it.
 - `BATCHLAS_GESVD_BLOCKED_GEBRD_MIN` uses bare `atoi`: garbage gives 0, which widens the blocked
-  gebrd path to every n (`env_int_or` would give 1).
+  gebrd path to every \f$n\f$ (`env_int_or` would give 1).
 - `BATCHLAS_SKIP_POINTER_CHECKS` disables the checks for any non-empty value not starting with `0`.
 - `BATCHLAS_TUNE_STEDC_MERGE_VARIANT` is cast to `StedcMergeVariant` unchecked: variant 0 is
   unreachable from the environment, and one variant deadlocks on some hardware.

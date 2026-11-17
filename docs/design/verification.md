@@ -27,7 +27,7 @@ LAPACKE references. In a test the entry point is `EXPECT_VERIFY` (`tests/test_ut
 
 | Where | Contents |
 | --- | --- |
-| `MatrixView` statics | `product`; residuals `potrf_residual`, `getrf_residual` (1-based int32 pivots), `qr_residual`, `qr_reconstruction`, `similarity_residual`, `svd_residual` (leading min(m, n) triplets, n = max(m, n)), `solve_residual` (8 seeded probe columns above \f$2^{28}\f$ multiply-adds per item), `lu_solve_residual`, `trsm_residual`, `eigen_residual`, `generalized_eigen_residual` (itype 1-3); componentwise `gemm_/gemv_/spmm_/rank2k_backward_error`, `gemm_max_denominator`; `orthogonality`, `form_q`; `values_error`, `pivots_valid`, `pivot_ratio`; scalar helpers `up`, `make`, `conj`, `cabs1`, `finite` |
+| `MatrixView` statics | `product`; residuals `potrf_residual`, `getrf_residual` (1-based int32 pivots), `qr_residual`, `qr_reconstruction`, `similarity_residual`, `svd_residual` (leading \f$\min(m, n)\f$ triplets, \f$n = \max(m, n)\f$), `solve_residual` (8 seeded probe columns above \f$2^{28}\f$ multiply-adds per item), `lu_solve_residual`, `trsm_residual`, `eigen_residual`, `generalized_eigen_residual` (itype 1-3); componentwise `gemm_/gemv_/spmm_/rank2k_backward_error`, `gemm_max_denominator`; `orthogonality`, `form_q`; `values_error`, `pivots_valid`, `pivot_ratio`; scalar helpers `up`, `make`, `conj`, `cabs1`, `finite` |
 | `include/batchlas/verify/tolerance.hh` | `enum class Check`, `bound<T>`, `pass<T>` (recorded), `within<T>` (not recorded), `Slack`, `pivot_ratio_bound<T>()`, `eps<T>()`, `nanmax` |
 | `include/batchlas/verify/reference.hh` | LAPACKE eigenvalues and singular values (double data only), `?getrf` pivots in the data's precision, `?geqrf` tau, `?sterf`. Without LAPACKE each returns `false` and the caller skips; with it `false` fails. A double reference other than `?sterf` throws `batchlas::unsupported` when the host dgemm probe (`src/backends/host_blas_health.hh`) fails |
 
@@ -47,64 +47,64 @@ Policy: [AdaptiveCpp Metal](sycl-implementations.md#sycl-impl-metal-fp64-policy)
 
 ## Verification: tolerance kinds
 
-`bound<T>(kind, n) = c · f(n) · eps(T)`, `eps` the unit roundoff of T's real type:
+`bound<T>(kind, n)` \f$= c \cdot f(n) \cdot \varepsilon(T)\f$, where \f$\varepsilon\f$ (`eps`) is the unit roundoff of T's real type:
 
-| `Check` | Quantity | f(n) | c |
+| `Check` | Quantity | \f$f(n)\f$ | \f$c\f$ |
 | --- | --- | --- | --- |
-| `factorization` | `‖A − LLᴴ‖`, `‖PA − LU‖`, `‖A − QR‖`, `‖A − UΣVᴴ‖`, over `‖A‖_F` | n (svd: max(m, n)) | 16 |
-| `solve` | `‖AX − B‖_F / (‖A‖_F ‖X‖_F)`; trsm's normwise residual | n | 16 |
-| `blas` | componentwise backward error (gemm, gemv, spmm, rank-k, trmm, the tuner's trsm) | k + 2 | 8 |
-| `orthogonality` | `‖QᴴQ − I‖_F`, Householder or direct orthogonalization (geqrf, orgqr, `form_q`, `ortho`) | rows of Q | 32 |
-| `orthogonality_rotations` | `‖QᴴQ − I‖_F`, iterative eigen/singular vectors (Jacobi, steqr/stedc syev, syevx, stein, bdsqr, bdsdc, gesvd) | columns checked | 256 |
-| `eigen_residual` | `‖AV − VΛ‖_F / ‖A‖_F` | n | 32 |
-| `values` | `max |λ − λ_ref| / ‖A‖_2` | n | 32 |
+| `factorization` | \f$\lVert A - LL^{H}\rVert\f$, \f$\lVert PA - LU\rVert\f$, \f$\lVert A - QR\rVert\f$, \f$\lVert A - U\Sigma V^{H}\rVert\f$, over \f$\lVert A\rVert_F\f$ | \f$n\f$ (svd: \f$\max(m, n)\f$) | 16 |
+| `solve` | \f$\lVert AX - B\rVert_F / (\lVert A\rVert_F \lVert X\rVert_F)\f$; trsm's normwise residual | \f$n\f$ | 16 |
+| `blas` | componentwise backward error (gemm, gemv, spmm, rank-k, trmm, the tuner's trsm) | \f$k + 2\f$ | 8 |
+| `orthogonality` | \f$\lVert Q^{H}Q - I\rVert_F\f$, Householder or direct orthogonalization (geqrf, orgqr, `form_q`, `ortho`) | rows of \f$Q\f$ | 32 |
+| `orthogonality_rotations` | \f$\lVert Q^{H}Q - I\rVert_F\f$, iterative eigen/singular vectors (Jacobi, steqr/stedc syev, syevx, stein, bdsqr, bdsdc, gesvd) | columns checked | 256 |
+| `eigen_residual` | \f$\lVert AV - V\Lambda\rVert_F / \lVert A\rVert_F\f$ | \f$n\f$ | 32 |
+| `values` | \f$\max \lvert \lambda - \lambda_{\mathrm{ref}} \rvert / \lVert A\rVert_2\f$ | \f$n\f$ | 32 |
 
 - **Two orthogonality kinds:** Householder products are orthogonal to a few ulps per column; vectors
-  from many rotation sweeps lose orthogonality with the sweep count. One c is 8x too loose for QR or
+  from many rotation sweeps lose orthogonality with the sweep count. One \f$c\f$ is 8x too loose for QR or
   red for Jacobi. Counting rows for `orthogonality_rotations` would loosen thin sets up to 32x.
-- **`blas` grows as k + 2:** the α/β scalings and complex multiply add roundings a k = 1 cell hits.
+- **`blas` grows as \f$k + 2\f$:** the \f$\alpha\f$/\f$\beta\f$ scalings and complex multiply add roundings a \f$k = 1\f$ cell hits.
 - **Slack:** `Slack{factor, reason}` scales a site's bound either way; the factor must be finite and
   positive and the reason non-empty (`batchlas::invalid_argument`). Every factor above 1 needs the
   maintainer's decision. `BATCHLAS_VERIFY_RECORD=<path>`
   ([read raw](environment.md#environment-verify-record-is-read-raw)) makes every `pass` append
   `kind dtype n value bound factor reason` (raw value, unslacked bound).
-- **Pivot ratio:** `max cabs1(L(i,k)U(k,k)) / cabs1(U(k,k))` is at most 1 under partial pivoting, so
-  `pivot_ratio_bound<T>() = 1 + 64 eps(T)`, covering L's rounding in T.
+- **Pivot ratio:** \f$\max_i \operatorname{cabs1}(L_{ik}U_{kk}) / \operatorname{cabs1}(U_{kk})\f$, where \f$\operatorname{cabs1}(z) = \lvert \operatorname{Re} z\rvert + \lvert \operatorname{Im} z\rvert\f$, is at most 1 under partial pivoting, so
+  `pivot_ratio_bound<T>()` \f$= 1 + 64\,\varepsilon(T)\f$, covering \f$L\f$'s rounding in T.
 
 ## Verification: calibration
 
-Each c is the smallest power of two at least 4x the largest `value / (f(n)·eps)` ("need") over the
-tests' passing factor-1 rows; slacked rows cannot inflate a kind. A c more than 4x from the
+Each \f$c\f$ is the smallest power of two at least 4x the largest \f$\mathrm{value} / (f(n)\,\varepsilon)\f$ ("need") over the
+tests' passing factor-1 rows; slacked rows cannot inflate a kind. A \f$c\f$ more than 4x from the
 specified one is reported, not adopted. Recorded 2026-10-09 with `BATCHLAS_VERIFY_RECORD` over the
 LU, QR/Cholesky, eigen/SVD and BLAS test binaries on threadripper02 (RTX PRO 6000, sm_120), about
 239k rows:
 
-| Kind | Need, float/cfloat | Need, double/cdouble | c |
+| Kind | Need, float/cfloat | Need, double/cdouble | \f$c\f$ |
 | --- | --- | --- | --- |
-| `factorization` | 3.15 (cfloat, n = 1) | 3.75 (cdouble, n = 1) | 16 |
-| `solve` | 2.69 (cfloat, n = 1) | 3.04 (cdouble, n = 1) | 16 |
-| `blas` | 1.11 (float, k = 2) | 1.28 (double, k = 2) | 8 |
-| `orthogonality` | 4.65 (cfloat, n = 1) | 6.00 (cdouble, n = 1) | 32 |
-| `orthogonality_rotations` | 59.4 (float, n = 32, `BdsdcTest.Graded`) | 23.3 (double, n = 64) | 256 |
-| `eigen_residual` | 5.09 (float, n = 31) | 4.14 (cdouble, n = 32) | 32 |
-| `values` | 3.87 (float, n = 12) | 4.66 (cdouble, n = 32) | 32 |
+| `factorization` | 3.15 (cfloat, \f$n = 1\f$) | 3.75 (cdouble, \f$n = 1\f$) | 16 |
+| `solve` | 2.69 (cfloat, \f$n = 1\f$) | 3.04 (cdouble, \f$n = 1\f$) | 16 |
+| `blas` | 1.11 (float, \f$k = 2\f$) | 1.28 (double, \f$k = 2\f$) | 8 |
+| `orthogonality` | 4.65 (cfloat, \f$n = 1\f$) | 6.00 (cdouble, \f$n = 1\f$) | 32 |
+| `orthogonality_rotations` | 59.4 (float, \f$n = 32\f$, `BdsdcTest.Graded`) | 23.3 (double, \f$n = 64\f$) | 256 |
+| `eigen_residual` | 5.09 (float, \f$n = 31\f$) | 4.14 (cdouble, \f$n = 32\f$) | 32 |
+| `values` | 3.87 (float, \f$n = 12\f$) | 4.66 (cdouble, \f$n = 32\f$) | 32 |
 
-A same-day re-check under the per-kind n convention (213,235 rows, 22 binaries) kept every need at or
-below c/4. With a single orthogonality kind at c = 16, 26 Jacobi, `gesvdj_cta`, bdsdc and complex
+A same-day re-check under the per-kind \f$n\f$ convention (213,235 rows, 22 binaries) kept every need at or
+below \f$c/4\f$. With a single orthogonality kind at \f$c = 16\f$, 26 Jacobi, `gesvdj_cta`, bdsdc and complex
 gesvd cases were red (needs 16.3-59.4), hence `orthogonality_rotations`.
 
 **Factors above 1** (`git grep 'Slack'` in `tests/` lists every site; the rest are tightenings,
-factor < 1, keeping a file's older stricter bound):
+\f$\mathrm{factor} < 1\f$, keeping a file's older stricter bound):
 
 | Site | Kind | Factor | Reason |
 | --- | --- | --- | --- |
-| `tests/bdsdc_tests.cc` graded orthogonality | `orthogonality_rotations` | 8 float, 0.5 double | graded κ ~ 1e6 D&C at n = 64: the repair's Gram-Schmidt; need 1246 float, 71.5 double |
+| `tests/bdsdc_tests.cc` graded orthogonality | `orthogonality_rotations` | 8 float, 0.5 double | graded \f$\kappa \sim 10^6\f$ D&C at \f$n = 64\f$: the repair's Gram-Schmidt; need 1246 float, 71.5 double |
 | `tests/bdsdc_tests.cc` graded `svd_residual`, float | `factorization` | 2 | same input; need 24 |
-| `tests/syfn_tests.cc` `inv_sqrt` (2 sites) | `factorization` | 100 | forward error of \f$A^{-1/2}\f$ scales with cond(A) = 100 |
+| `tests/syfn_tests.cc` `inv_sqrt` (2 sites) | `factorization` | 100 | forward error of \f$A^{-1/2}\f$ scales with \f$\operatorname{cond}(A) = 100\f$ |
 
 The real `cta` gesvd pins (`gesvd_cta_slack`, 0.25 float / 0.5 double) and `BATCHLAS_GESVD_BIDIAG=normal`
-(0.5 float, one site measured) are below 1 on `orthogonality_rotations` but square κ. In the tuner,
-`svd_residual` keeps c = 16 (native arms need at most 5.68); cuSOLVER's 2x2 Hermitian double cells
+(0.5 float, one site measured) are below 1 on `orthogonality_rotations` but square \f$\kappa\f$. In the tuner,
+`svd_residual` keeps \f$c = 16\f$ (native arms need at most 5.68); cuSOLVER's \f$2 \times 2\f$ Hermitian double cells
 (need 25.3) and `cta` square vector cells (\f$\varepsilon\kappa^2\f$,
 [defect A](../perf/gesvd.md#gesvd-defect-a-the-normal-equations-square-kappa)) are recorded `bad`.
 

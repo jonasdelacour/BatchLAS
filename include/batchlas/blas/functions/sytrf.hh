@@ -1,7 +1,8 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /// @file
-/// @brief Batched symmetric indefinite factorization (sytrf, Bunch-Kaufman LDL^T) and solve (sytrs).
+/// @brief Batched symmetric indefinite factorization (sytrf, Bunch-Kaufman \f$L D L^T\f$) and solve (sytrs).
 /// @ingroup api_factorizations
 
 // sytrf and sytrs are routed ops (src/ops/sytrf/, src/ops/sytrs/; BATCHLAS_SYTRF_ROUTE,
@@ -23,67 +24,72 @@ namespace batchlas {
 // Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
 // src/util/template-instantiations.hh. Keep in sync with the declarations below.
 namespace sig {
-template <typename T>
-using sytrf = Event(Queue&, const MatrixView<T, MatrixFormat::Dense>&, Uplo, Span<int64_t>, Span<std::byte>,
+template <typename Scalar>
+using sytrf = Event(Queue&, const MatrixView<Scalar, MatrixFormat::Dense>&, Uplo, Span<int64_t>, Span<std::byte>,
                     Span<int32_t>);
 
-template <typename T>
-using sytrf_buffer_size = size_t(Queue&, const MatrixView<T, MatrixFormat::Dense>&, Uplo);
+template <typename Scalar>
+using sytrf_buffer_size = size_t(Queue&, const MatrixView<Scalar, MatrixFormat::Dense>&, Uplo);
 
-template <typename T>
-using sytrs = Event(Queue&, const MatrixView<T, MatrixFormat::Dense>&, const MatrixView<T, MatrixFormat::Dense>&,
-                    Uplo, Span<int64_t>, Span<std::byte>);
+template <typename Scalar>
+using sytrs = Event(Queue&, const MatrixView<Scalar, MatrixFormat::Dense>&, const MatrixView<Scalar,
+                    MatrixFormat::Dense>&, Uplo, Span<int64_t>, Span<std::byte>);
 
-template <typename T>
-using sytrs_buffer_size = size_t(Queue&, const MatrixView<T, MatrixFormat::Dense>&,
-                                 const MatrixView<T, MatrixFormat::Dense>&, Uplo);
+template <typename Scalar>
+using sytrs_buffer_size = size_t(Queue&, const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>&, Uplo);
 
-template <typename T>
-using sytrf_vendor = sytrf<T>;
+template <typename Scalar>
+using sytrf_vendor = sytrf<Scalar>;
 
-template <typename T>
-using sytrf_vendor_buffer_size = sytrf_buffer_size<T>;
+template <typename Scalar>
+using sytrf_vendor_buffer_size = sytrf_buffer_size<Scalar>;
 
-template <typename T>
-using sytrs_vendor = Event(Queue&, const MatrixView<T, MatrixFormat::Dense>&, const MatrixView<T, MatrixFormat::Dense>&,
-                           Uplo, Span<int64_t>, const int32_t*);
+template <typename Scalar>
+using sytrs_vendor = Event(Queue&, const MatrixView<Scalar, MatrixFormat::Dense>&, const MatrixView<Scalar,
+                           MatrixFormat::Dense>&, Uplo, Span<int64_t>, const int32_t*);
 }  // namespace sig
 
 /// @brief Validates the arguments of sytrf() and sytrf_buffer_size().
 ///
 /// Checks non-negative extents, a square A and a valid @p uplo.
+/// @param[in] A     batch of matrices to be factored
+/// @param[in] uplo  triangle of A the factorization would use
 /// @throws batchlas::invalid_argument if any check fails
 /// @ingroup api_factorizations_lowlevel
-template <typename T>
-inline void sytrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
+template <typename Scalar>
+inline void sytrf_validate_params(const MatrixView<Scalar, MatrixFormat::Dense>& A, Uplo uplo) {
     if (A.rows() < 0 || A.cols() < 0) {
-        throw batchlas::invalid_argument("SYTRF: Matrix dimensions cannot be negative (A: rows=" +
+        throw batchlas::invalid_argument("sytrf: Matrix dimensions cannot be negative (A: rows=" +
                                          std::to_string(A.rows()) + ", cols=" + std::to_string(A.cols()) + ")");
     }
     if (A.rows() != A.cols()) {
-        throw batchlas::invalid_argument("SYTRF: A must be square, got " + std::to_string(A.rows()) + "x" +
+        throw batchlas::invalid_argument("sytrf: A must be square, got " + std::to_string(A.rows()) + "x" +
                                          std::to_string(A.cols()));
     }
     if (uplo != Uplo::Lower && uplo != Uplo::Upper) {
-        throw batchlas::invalid_argument("SYTRF: Invalid uplo parameter: " + std::to_string(static_cast<int>(uplo)));
+        throw batchlas::invalid_argument("sytrf: Invalid uplo parameter: " + std::to_string(static_cast<int>(uplo)));
     }
 }
 
 /// @brief Validates the arguments of sytrs(), sytrs_buffer_size(), sysv() and sysv_buffer_size().
 ///
 /// sytrf_validate_params() on A, plus `B.rows() == A.rows()`, `B.cols() >= 0` and equal batch sizes.
+/// @param[in] A     batch of \f$n \times n\f$ factors (or matrices to be factored)
+/// @param[in] B     batch of \f$n \times n_{\mathrm{rhs}}\f$ right-hand sides
+/// @param[in] uplo  triangle of A that holds (or would hold) the factor
 /// @throws batchlas::invalid_argument if any check fails
 /// @ingroup api_factorizations_lowlevel
-template <typename T>
-inline void sytrs_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
-                                  const MatrixView<T, MatrixFormat::Dense>& B, Uplo uplo) {
-    sytrf_validate_params<T>(A, uplo);
+template <typename Scalar>
+inline void sytrs_validate_params(const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                  const MatrixView<Scalar, MatrixFormat::Dense>& B, Uplo uplo) {
+    sytrf_validate_params<Scalar>(A, uplo);
     if (B.rows() != A.rows() || B.cols() < 0) {
-        throw batchlas::invalid_argument("SYTRS: B must be n x nrhs with n = " + std::to_string(A.rows()) + ", got " +
+        throw batchlas::invalid_argument("sytrs: B must be n x nrhs with n = " + std::to_string(A.rows()) + ", got " +
                                          std::to_string(B.rows()) + "x" + std::to_string(B.cols()));
     }
     if (A.batch_size() != B.batch_size()) {
-        throw batchlas::invalid_argument("SYTRS: A and B must share a batch size, got " +
+        throw batchlas::invalid_argument("sytrs: A and B must share a batch size, got " +
                                          std::to_string(A.batch_size()) + " and " + std::to_string(B.batch_size()));
     }
 }
@@ -93,76 +99,103 @@ inline void sytrs_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 ///
 /// A is symmetric, not Hermitian: a complex A is factored without conjugation (LAPACK csytrf). Only
 /// the @p uplo triangle is read and written; the other triangle is left untouched. On return that
-/// triangle holds D (diagonal plus, for a 2 x 2 block, the one off-diagonal entry inside the
-/// triangle) and the multipliers of L (or U), and @p pivots holds LAPACK's ipiv, 1-based:
-/// - `ipiv[k] > 0`: D(k,k) is a 1 x 1 block and rows/columns k and `ipiv[k] - 1` were interchanged;
-/// - Lower, `ipiv[k] = ipiv[k+1] = -p < 0`: D(k:k+1, k:k+1) is a 2 x 2 block and rows/columns k+1 and
-///   p - 1 were interchanged;
-/// - Upper, `ipiv[k-1] = ipiv[k] = -p < 0`: D(k-1:k, k-1:k) is a 2 x 2 block and rows/columns k-1 and
-///   p - 1 were interchanged.
+/// triangle holds \f$D\f$ (diagonal plus, for a \f$2 \times 2\f$ block, the one off-diagonal entry
+/// inside the triangle) and the multipliers of \f$L\f$ (or \f$U\f$), and @p pivots holds LAPACK's
+/// ipiv, 1-based:
+/// - `ipiv[k] > 0`: \f$D_{k,k}\f$ is a \f$1 \times 1\f$ block and rows/columns \f$k\f$ and
+///   `ipiv[k] - 1` were interchanged;
+/// - Lower, `ipiv[k] = ipiv[k+1] = -p < 0`: \f$D_{k:k+1,\,k:k+1}\f$ is a \f$2 \times 2\f$ block and
+///   rows/columns \f$k+1\f$ and \f$p-1\f$ were interchanged;
+/// - Upper, `ipiv[k-1] = ipiv[k] = -p < 0`: \f$D_{k-1:k,\,k-1:k}\f$ is a \f$2 \times 2\f$ block and
+///   rows/columns \f$k-1\f$ and \f$p-1\f$ were interchanged.
 ///
-/// Pivots are int32, packed into the first half of the int64 span as getrf()'s are: item b's
+/// Pivots are int32, packed into the first half of the int64 span as getrf()'s are: item \f$b\f$'s
 /// entries are `pivots.as_span<int>()[b * n + k]`.
 ///
 /// Asynchronous: A, @p pivots and @p info are readable after the returned event is waited on.
 /// @tparam Back  backend; the backend-deducing overload takes it from `ctx.backend()`
-/// @tparam T     scalar type (float, double, std::complex<float>, std::complex<double>)
-/// @param ctx         queue the kernels are enqueued on
-/// @param A           batch of n x n symmetric matrices; the @p uplo triangle is overwritten with D and L (or U)
-/// @param uplo        triangle of A that is read and receives the factor
-/// @param pivots      pivot output, at least `n * batch` int64 entries (int32 packed, see above)
-/// @param work_space  device-accessible scratch of at least sytrf_buffer_size() bytes
-/// @param info        per-item status: 0 on success, i > 0 if D(i,i) (1-based) is exactly zero; the
-///                    factorization completes, but that item's D is singular. Empty span = not requested.
+/// @tparam Scalar     scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param[in]     ctx         queue the kernels are enqueued on
+/// @param[in,out] A           batch of \f$n \times n\f$ symmetric matrices; the @p uplo triangle is
+///                            overwritten with \f$D\f$ and \f$L\f$ (or \f$U\f$)
+/// @param[in]     uplo        triangle of A that is read and receives the factor
+/// @param[out]    pivots      pivot output, at least `n * batch` int64 entries (int32 packed, see above)
+/// @param[out]    work_space  device-accessible scratch of at least sytrf_buffer_size() bytes; contents
+///                            undefined on return
+/// @param[out]    info        per-item status: 0 on success, \f$i > 0\f$ if \f$D_{i,i}\f$ (1-based) is
+///                            exactly zero; the factorization completes, but that item's \f$D\f$ is
+///                            singular. Empty span = not requested.
 /// @return event of the last enqueued kernel
 /// @throws batchlas::invalid_argument if sytrf_validate_params() rejects the call
 /// @throws batchlas::NoRouteError if no native kernel can run the shape and the vendor library was not built in
 /// @ingroup api_factorizations
-template <Backend Back, typename T>
-BATCHLAS_API Event sytrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, Span<int64_t> pivots,
+template <Backend Back, typename Scalar>
+BATCHLAS_API Event sytrf(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, Uplo uplo, Span<int64_t> pivots,
                          Span<std::byte> work_space, Span<int32_t> info);
 
 /// @brief Workspace, in bytes, that sytrf() needs for these operands on this queue.
+/// @param[in] ctx   queue sytrf() will run on
+/// @param[in] A     batch of \f$n \times n\f$ matrices sytrf() will factor; its entries are not read; its dimensions,
+///                  batch size and batch mask are used
+/// @param[in] uplo  triangle sytrf() will be called with
+/// @return the minimum size of sytrf()'s `work_space`, in bytes
 /// @ingroup api_factorizations_lowlevel
-template <Backend Back, typename T>
-BATCHLAS_API size_t sytrf_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo);
+template <Backend Back, typename Scalar>
+BATCHLAS_API size_t sytrf_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, Uplo uplo);
 
 /// @brief sytrf() without per-item status (`info` not requested).
+/// @param[in]     ctx         queue the kernels are enqueued on
+/// @param[in,out] A           batch of \f$n \times n\f$ symmetric matrices; the @p uplo triangle is
+///                            overwritten with \f$D\f$ and \f$L\f$ (or \f$U\f$)
+/// @param[in]     uplo        triangle of A that is read and receives the factor
+/// @param[out]    pivots      pivot output, at least `n * batch` int64 entries (int32 packed)
+/// @param[out]    work_space  device-accessible scratch of at least sytrf_buffer_size() bytes; contents
+///                            undefined on return
+/// @return event of the last enqueued kernel
 /// @ingroup api_factorizations
-template <Backend Back, typename T>
-inline Event sytrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, Span<int64_t> pivots,
+template <Backend Back, typename Scalar>
+inline Event sytrf(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, Uplo uplo, Span<int64_t> pivots,
                    Span<std::byte> work_space) {
-    return sytrf<Back, T>(ctx, A, uplo, pivots, work_space, Span<int32_t>{});
+    return sytrf<Back, Scalar>(ctx, A, uplo, pivots, work_space, Span<int32_t>{});
 }
 
 /// @brief Batched solve of \f$ A X = B \f$ with the factors from sytrf(), LAPACK ?sytrs semantics.
 ///
 /// A, @p uplo and @p pivots must be exactly what sytrf() produced on the same backend. B is
-/// overwritten with X. No singularity check is made: an item whose sytrf() `info` was positive
+/// overwritten with \f$X\f$. No singularity check is made: an item whose sytrf() `info` was positive
 /// produces infinities or NaNs.
 ///
 /// Asynchronous: B is readable after the returned event is waited on.
-/// @param ctx         queue the kernels are enqueued on
-/// @param A           batch of n x n factors from sytrf(); not modified
-/// @param B           batch of n x nrhs right-hand sides; overwritten with X
-/// @param uplo        the triangle sytrf() was called with
-/// @param pivots      pivots from sytrf(), `n * batch` entries
-/// @param work_space  device-accessible scratch of at least sytrs_buffer_size() bytes (the `blocked`
-///                    route's converted factor and gathered B, per chunk of items; zero for the others)
+/// @param[in]     ctx         queue the kernels are enqueued on
+/// @param[in]     A           batch of \f$n \times n\f$ factors from sytrf(); not modified
+/// @param[in,out] B           batch of \f$n \times n_{\mathrm{rhs}}\f$ right-hand sides; overwritten with
+///                            \f$X\f$
+/// @param[in]     uplo        the triangle sytrf() was called with
+/// @param[in]     pivots      pivots from sytrf(), `n * batch` entries
+/// @param[out]    work_space  device-accessible scratch of at least sytrs_buffer_size() bytes (the
+///                            `blocked` route's converted factor and gathered B, per chunk of items; zero
+///                            for the others); contents undefined on return
 /// @return event of the last enqueued kernel
 /// @throws batchlas::invalid_argument if sytrs_validate_params() rejects the call
 /// @throws batchlas::NoRouteError if no kernel can run the call (NETLIB without LAPACKE)
 /// @ingroup api_factorizations
-template <Backend Back, typename T>
-BATCHLAS_API Event sytrs(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                         const MatrixView<T, MatrixFormat::Dense>& B, Uplo uplo, Span<int64_t> pivots,
+template <Backend Back, typename Scalar>
+BATCHLAS_API Event sytrs(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& B, Uplo uplo, Span<int64_t> pivots,
                          Span<std::byte> work_space);
 
 /// @brief Workspace, in bytes, that sytrs() needs for these operands on this queue.
+/// @param[in] ctx   queue sytrs() will run on
+/// @param[in] A     batch of \f$n \times n\f$ factors sytrs() will read; its entries are not read; its
+///                  dimensions, batch size and batch mask are used
+/// @param[in] B     batch of \f$n \times n_{\mathrm{rhs}}\f$ right-hand sides sytrs() will solve; its
+///                  entries are not read; its dimensions, batch size and batch mask are used
+/// @param[in] uplo  triangle sytrf() was called with
+/// @return the minimum size of sytrs()'s `work_space`, in bytes
 /// @ingroup api_factorizations_lowlevel
-template <Backend Back, typename T>
-BATCHLAS_API size_t sytrs_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                                      const MatrixView<T, MatrixFormat::Dense>& B, Uplo uplo);
+template <Backend Back, typename Scalar>
+BATCHLAS_API size_t sytrs_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                      const MatrixView<Scalar, MatrixFormat::Dense>& B, Uplo uplo);
 
 }  // namespace batchlas
 
@@ -170,22 +203,45 @@ namespace batchlas::backend {
 
 /// @brief Vendor arm of sytrf() (cuSOLVER ?sytrf per item, LAPACKE ?sytrf); called by sytrf() when it
 ///        selects the `vendor` kernel family, not by users.
+/// @param[in]     ctx         queue the vendor calls are enqueued on
+/// @param[in,out] A           batch of \f$n \times n\f$ symmetric matrices; the @p uplo triangle is
+///                            overwritten with \f$D\f$ and \f$L\f$ (or \f$U\f$)
+/// @param[in]     uplo        triangle of A that is read and receives the factor
+/// @param[out]    pivots      pivot output, at least `n * batch` int64 entries (int32 packed)
+/// @param[out]    work_space  scratch of at least sytrf_vendor_buffer_size() bytes; contents undefined
+///                            on return
+/// @param[out]    info        per-item status as sytrf()'s; written only when it holds at least one
+///                            entry per item
+/// @return event of the last enqueued operation
 /// @ingroup api_dispatch
-template <Backend Back, typename T>
-BATCHLAS_API Event sytrf_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo,
+template <Backend Back, typename Scalar>
+BATCHLAS_API Event sytrf_vendor(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, Uplo uplo,
                                 Span<int64_t> pivots, Span<std::byte> work_space, Span<int32_t> info);
 
 /// @brief Workspace query of the vendor arm of sytrf().
+/// @param[in] ctx   queue sytrf_vendor() will run on
+/// @param[in] A     batch of \f$n \times n\f$ matrices sytrf_vendor() will factor; its entries are not
+///                  read; its dimensions and batch size are used
+/// @param[in] uplo  triangle sytrf_vendor() will be called with
+/// @return the minimum size of sytrf_vendor()'s `work_space`, in bytes
 /// @ingroup api_dispatch
-template <Backend Back, typename T>
-BATCHLAS_API size_t sytrf_vendor_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo);
+template <Backend Back, typename Scalar>
+BATCHLAS_API size_t sytrf_vendor_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, Uplo uplo);
 
 /// @brief The NETLIB backend's sytrs() (LAPACKE ?sytrs per item); not called by users. An item whose
 ///        @p skip_info entry is nonzero keeps its B (sysv() after a singular factor); null skips none.
+/// @param[in]     ctx        queue the host task is enqueued on
+/// @param[in]     A          batch of \f$n \times n\f$ factors from sytrf(); not modified
+/// @param[in,out] B          batch of \f$n \times n_{\mathrm{rhs}}\f$ right-hand sides; overwritten with
+///                           \f$X\f$ except in skipped items
+/// @param[in]     uplo       the triangle sytrf() was called with
+/// @param[in]     pivots     pivots from sytrf(), `n * batch` entries
+/// @param[in]     skip_info  per-item flags readable by the host task, one per item, or `nullptr`
+/// @return event of the host task
 /// @ingroup api_dispatch
-template <Backend Back, typename T>
-BATCHLAS_API Event sytrs_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                                const MatrixView<T, MatrixFormat::Dense>& B, Uplo uplo, Span<int64_t> pivots,
+template <Backend Back, typename Scalar>
+BATCHLAS_API Event sytrs_vendor(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& B, Uplo uplo, Span<int64_t> pivots,
                                 const int32_t* skip_info);
 
 }  // namespace batchlas::backend

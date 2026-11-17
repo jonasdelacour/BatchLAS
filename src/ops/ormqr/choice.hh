@@ -17,7 +17,7 @@ struct Vendor : select::NoFields<"vendor"> {};    ///< backend::ormqr_vendor; no
 
 using OrmqrChoice = std::variant<Blocked, Vendor>;  ///< fieldless: WY width and gemm/trmm spelling are derived
 
-template <typename T>  /// Every compiled choice, in tie-break order (§6.3).
+template <typename Scalar>  /// Every compiled choice, in tie-break order (§6.3).
 constexpr auto candidates() { return select::all_of<OrmqrChoice>(); }
 
 inline constexpr select::OpSpec spec{Op::ormqr, select::Lib::factorization};  ///< last resort (§5.5): blocked, vendor
@@ -25,7 +25,7 @@ inline constexpr select::OpSpec spec{Op::ormqr, select::Lib::factorization};  //
 inline constexpr std::array<std::string_view, 6> key_names{  ///< m: Q's order, k: reflectors, q: C's other extent
     "side:exact", "trans:exact", "m:log", "k:log", "q:log", "batch:log"};  // T and C stay apart; work ~ m k q batch
 
-/// The transcription grid; the transcriber (tuned/README.md) spells the same one (k <= m).
+/// The transcription grid; the transcriber (tuned/README.md) spells the same one (\f$k \le m\f$).
 inline constexpr std::array<int, 4> grid_m{1, 8, 64, 512};
 inline constexpr std::array<int, 3> grid_q{1, 32, 1024};
 inline constexpr std::array<int, 3> grid_batch{128, 2048, 32768};

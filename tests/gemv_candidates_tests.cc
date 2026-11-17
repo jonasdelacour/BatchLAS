@@ -56,13 +56,13 @@ namespace gv = batchlas::ops::gemv;
 namespace ub = test_utils::usm_bulk;
 using C = gv::GemvChoice;
 using Pin = select::ScopedPin<C>;
-template <typename T>
-using MVof = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MVof = MatrixView<Scalar, MatrixFormat::Dense>;
 
-template <typename T>
-using RealOf = typename batchlas::base_type<T>::type;
-template <typename T>
-constexpr bool kCx = test_utils::is_complex<T>::value;
+template <typename Scalar>
+using RealOf = typename batchlas::base_type<Scalar>::type;
+template <typename Scalar>
+constexpr bool kCx = test_utils::is_complex<Scalar>::value;
 
 using test_support::same_bits;
 
@@ -80,25 +80,25 @@ struct Spec {
 
 // A, x and y in one buffer of a large finite poison, at a padded ld, inc 2 (x) and 3 (y) and
 // batch strides that are none of the natural values. Everything gemv may not write holds poison.
-template <typename T>
+template <typename Scalar>
 struct Problem {
     Spec s;
-    T alpha{}, beta{};
+    Scalar alpha{}, beta{};
     std::size_t a_off = 0, x_off = 0, y_off = 0;
     int lda = 0, sa = 0, incx = 2, sx = 0, incy = 3, sy = 0;
-    UnifiedVector<T> mem;
-    ub::Pristine<T> pristine;  // mem's initial contents: the representatives, poison elsewhere
+    UnifiedVector<Scalar> mem;
+    ub::Pristine<Scalar> pristine;  // mem's initial contents: the representatives, poison elsewhere
 
-    MVof<T> A() { return {mem.data() + a_off, s.m, s.n, lda, sa, s.batch}; }
-    VectorView<T> X() { return {mem.data() + x_off, s.red(), s.batch, Inc{incx}, Stride{sx}}; }
-    VectorView<T> Y() { return {mem.data() + y_off, s.out(), s.batch, Inc{incy}, Stride{sy}}; }
+    MVof<Scalar> A() { return {mem.data() + a_off, s.m, s.n, lda, sa, s.batch}; }
+    VectorView<Scalar> X() { return {mem.data() + x_off, s.red(), s.batch, Inc{incx}, Stride{sx}}; }
+    VectorView<Scalar> Y() { return {mem.data() + y_off, s.out(), s.batch, Inc{incy}, Stride{sy}}; }
     std::size_t ai(int it, int i, int j) const { return a_off + std::size_t(it) * sa + std::size_t(j) * lda + i; }
     std::size_t xi(int it, int i) const { return x_off + std::size_t(it) * sx + std::size_t(i) * incx; }
     std::size_t yi(int it, int i) const { return y_off + std::size_t(it) * sy + std::size_t(i) * incy; }
     // The first element of the host copy `got` of mem not bit-identical to its initial contents,
     // y's footprint in every item skipped when skip_y.
-    std::optional<std::size_t> first_change(const T* got, bool skip_y) const {
-        using H = typename ub::Pristine<T>::Hole;
+    std::optional<std::size_t> first_change(const Scalar* got, bool skip_y) const {
+        using H = typename ub::Pristine<Scalar>::Hole;
         std::optional<H> hole;
         if (skip_y) hole = H{y_off, std::size_t(incy), 1, std::size_t(s.out())};
         return pristine.first_change(got, mem.size(), hole);
@@ -106,25 +106,25 @@ struct Problem {
     // mem back to its initial contents.
     void restore() { pristine.write(mem.data()); }
     // Representative items as first written, on the host (reps items from `off`, stride `stride`).
-    T* initial(std::size_t off) const {
+    Scalar* initial(std::size_t off) const {
         for (auto g = pristine.segs.rbegin(); g != pristine.segs.rend(); ++g)
-            if (g->off <= off) return const_cast<T*>(g->rep.data()) + (off - g->off);
+            if (g->off <= off) return const_cast<Scalar*>(g->rep.data()) + (off - g->off);
         return nullptr;
     }
 };
 
-template <typename T>
-T poison() {
-    return MatrixView<T, MatrixFormat::Dense>::make(RealOf<T>(-999), RealOf<T>(777));
+template <typename Scalar>
+Scalar poison() {
+    return MatrixView<Scalar, MatrixFormat::Dense>::make(RealOf<Scalar>(-999), RealOf<Scalar>(777));
 }
 
-template <typename T>
-Problem<T> make_problem(const Spec& s) {
-    using R = RealOf<T>;
-    Problem<T> p;
+template <typename Scalar>
+Problem<Scalar> make_problem(const Spec& s) {
+    using R = RealOf<Scalar>;
+    Problem<Scalar> p;
     p.s = s;
-    p.alpha = MatrixView<T, MatrixFormat::Dense>::make(R(1.5), R(-0.5));
-    p.beta = s.beta_zero ? T(0) : MatrixView<T, MatrixFormat::Dense>::make(R(-0.75), R(0.25));
+    p.alpha = MatrixView<Scalar, MatrixFormat::Dense>::make(R(1.5), R(-0.5));
+    p.beta = s.beta_zero ? Scalar(0) : MatrixView<Scalar, MatrixFormat::Dense>::make(R(-0.75), R(0.25));
     p.lda = s.m + 3;
     p.sa = p.lda * std::max(s.n, 1) + 5;
     p.sx = p.incx * std::max(s.red(), 1) + 7;
@@ -133,8 +133,8 @@ Problem<T> make_problem(const Spec& s) {
     p.y_off = p.x_off + std::size_t(p.sx) * s.batch + 17;
     const std::size_t total = p.y_off + std::size_t(p.sy) * s.batch + 19;
     const int reps = s.period > 0 ? std::min(s.period, s.batch) : s.batch;
-    p.pristine = ub::Pristine<T>(total, std::size_t(s.batch), std::size_t(reps), poison<T>(),
-                                 {{p.a_off, std::size_t(p.sa)}, {p.x_off, std::size_t(p.sx)}, {p.y_off, std::size_t(p.sy)}});
+    p.pristine = ub::Pristine<Scalar>(total, std::size_t(s.batch), std::size_t(reps), poison<Scalar>(),
+                                      {{p.a_off, std::size_t(p.sa)}, {p.x_off, std::size_t(p.sx)}, {p.y_off, std::size_t(p.sy)}});
     std::mt19937 gen(s.seed);
     std::uniform_real_distribution<R> u(R(-1), R(1));
     // Only the representatives draw; write() copies them over the rest of the batch.
@@ -142,7 +142,7 @@ Problem<T> make_problem(const Spec& s) {
         // Named locals: the two draws of a complex entry in a fixed order on every compiler.
         auto draw = [&] {
             const auto re = u(gen), im = u(gen);
-            return MatrixView<T, MatrixFormat::Dense>::make(re, im);
+            return MatrixView<Scalar, MatrixFormat::Dense>::make(re, im);
         };
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.m; ++i) p.pristine.at(p.ai(it, i, j)) = draw();
@@ -151,7 +151,7 @@ Problem<T> make_problem(const Spec& s) {
         if (!s.beta_zero)
             for (int i = 0; i < s.out(); ++i) p.pristine.at(p.yi(it, i)) = draw();
     }
-    p.mem = UnifiedVector<T>(total);
+    p.mem = UnifiedVector<Scalar>(total);
     p.pristine.write(p.mem.data());
     return p;
 }
@@ -214,9 +214,9 @@ std::string traced_choice(F&& run, std::string* all = nullptr) {
 using test_support::TableGuard;
 
 // The device's own gemv table replaced by `rows` under gemv's key line; other tables kept.
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 void install_gemv_table(Queue& q, const std::string& rows) {
-    const std::string dtype(select::dtype_name<T>());
+    const std::string dtype(select::dtype_name<Scalar>());
     const std::string dev = select::device_of<B>(q).key;
     std::vector<std::pair<std::string, std::string>> files;
     for (const auto& t : select::embedded_tables())
@@ -228,9 +228,9 @@ void install_gemv_table(Queue& q, const std::string& rows) {
     select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;
@@ -301,9 +301,9 @@ protected:
         Queue& q = *this->ctx;
         try {
             if (std::holds_alternative<gv::Cta>(c)) {
-                (void)sycl_gemv::gemv_native_cta<T>(q, p.A(), p.X(), p.Y(), p.alpha, p.beta, p.s.trans);
+                (void)ops::gemv::gemv_native_cta<T>(q, p.A(), p.X(), p.Y(), p.alpha, p.beta, p.s.trans);
             } else if (std::holds_alternative<gv::Direct>(c)) {
-                (void)sycl_gemv::gemv_native_direct<T>(q, p.A(), p.X(), p.Y(), p.alpha, p.beta, p.s.trans);
+                (void)ops::gemv::gemv_native_direct<T>(q, p.A(), p.X(), p.Y(), p.alpha, p.beta, p.s.trans);
             } else {
                 if constexpr (kVendor) {
                     (void)backend::gemv_vendor<B, T>(q, p.A(), p.X(), p.Y(), p.alpha, p.beta, p.s.trans);
@@ -325,11 +325,11 @@ TYPED_TEST_SUITE(GemvCandidates, Types);
 
 // Body-5 reduction gate per type (gemv_native.cc), and a batch whose out*batch clears gate 3's
 // 64*CU floor on the largest device here, so both sides of the gate really run body 5 / body 3.
-template <typename T>
+template <typename Scalar>
 int seg_trans_gate() {
-    if constexpr (std::is_same_v<T, float>) return 32;
-    else if constexpr (std::is_same_v<T, std::complex<float>>) return 16;
-    else if constexpr (std::is_same_v<T, double>) return 48;
+    if constexpr (std::is_same_v<Scalar, float>) return 32;
+    else if constexpr (std::is_same_v<Scalar, std::complex<float>>) return 16;
+    else if constexpr (std::is_same_v<Scalar, double>) return 48;
     else return 64;
 }
 
@@ -852,7 +852,7 @@ void check_masked(Queue& q, const MaskCase& k) {
     SCOPED_TRACE(mask_label(k));
     const ScopedEnvVar segt("BATCHLAS_GEMV_SEGT", k.segt);
     if (std::holds_alternative<gv::Cta>(k.c))
-        ASSERT_EQ(sycl_gemv::gemv_seg_trans_width_debug<T>(q, k.m, std::int64_t(k.n) * k.batch), k.width)
+        ASSERT_EQ(ops::gemv::gemv_seg_trans_width_debug<T>(q, k.m, std::int64_t(k.n) * k.batch), k.width)
             << "the cta case does not run the body it names";
     else if (k.t == Transpose::NoTrans)
         ASSERT_EQ(k.m <= 16, k.width >= 2) << "body 4 runs exactly when out <= 16 (gemv_seg_width)";

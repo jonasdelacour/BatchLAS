@@ -49,17 +49,17 @@ SvdVectors job_of(const std::string& vec) {
     return vec == "none" ? SvdVectors::None : vec == "thin" ? SvdVectors::Thin : SvdVectors::All;
 }
 
-template <typename T>
+template <typename Scalar>
 struct GesvdProblem {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
-    using R = typename base_type<T>::type;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+    using R = typename base_type<Scalar>::type;
     Queue& q;
     std::optional<Uplo> herm;
     SvdVectors job;
     int m, n, k, batch, ld, urows, ucols, vrows, vcols, ldu, ldv;
     std::size_t sa, su, sv;
-    UnifiedVector<T> A0, A, U, Vh;
-    UnifiedVector<T*> pA0, pA, pU, pVh;
+    UnifiedVector<Scalar> A0, A, U, Vh;
+    UnifiedVector<Scalar*> pA0, pA, pU, pVh;
     MV A0v, Av, Uv, Vhv;
     UnifiedVector<R> s;
     UnifiedVector<std::int32_t> info;
@@ -91,8 +91,8 @@ struct GesvdProblem {
         if (job == SvdVectors::None && m != n && select::detail::pin_text("gesvd", &src) == std::optional<std::string>("vendor"))
             throw batchlas::invalid_argument("gesvd vendor: values-only non-square faults (known defect 15)");
         try {
-            return herm ? gesvd_buffer_size<kBackend, T>(q, Av, s.to_span(), Uv, Vhv, job, job, *herm)
-                        : gesvd_buffer_size<kBackend, T>(q, Av, s.to_span(), Uv, Vhv, job, job);
+            return herm ? gesvd_buffer_size<kBackend, Scalar>(q, Av, s.to_span(), Uv, Vhv, job, job, *herm)
+                        : gesvd_buffer_size<kBackend, Scalar>(q, Av, s.to_span(), Uv, Vhv, job, job);
         } catch (const batchlas::unsupported& e) {
             throw batchlas::invalid_argument(e.what());
         }
@@ -110,9 +110,9 @@ struct GesvdProblem {
     }
     void run(Span<std::byte> ws) {
         if (herm)
-            (void)gesvd<kBackend, T>(q, Av, s.to_span(), Uv, Vhv, job, job, *herm, ws, info.to_span());
+            (void)gesvd<kBackend, Scalar>(q, Av, s.to_span(), Uv, Vhv, job, job, *herm, ws, info.to_span());
         else
-            (void)gesvd<kBackend, T>(q, Av, s.to_span(), Uv, Vhv, job, job, ws, info.to_span());
+            (void)gesvd<kBackend, Scalar>(q, Av, s.to_span(), Uv, Vhv, job, job, ws, info.to_span());
         q.wait();
     }
     std::pair<double, int> verify() {
@@ -130,27 +130,22 @@ struct GesvdProblem {
         double scale = 0;
         for (int b : items) scale = std::max(scale, ref[std::size_t(b)].empty() ? 0.0 : ref[std::size_t(b)][0]);
         const VectorView<R> sval(s.data(), k, batch);
-        double worst = MV::values_error(sval, ref, scale) / verify::bound<T>(verify::Check::values, k);
+        double worst = MV::values_error(sval, ref, scale) / verify::bound<Scalar>(verify::Check::values, k);
         if (job == SvdVectors::None) return {worst, bad};
-        const double rec = MV::svd_residual(q, A0v, Uv, sval, Vhv) / verify::bound<T>(verify::Check::factorization, std::max(m, n));
-        const double ou = MV::orthogonality(q, Uv) / verify::bound<T>(verify::Check::orthogonality_rotations, ucols);
-        auto vh = Vhv.template astype<T>(items);
-        Matrix<T, MatrixFormat::Dense> vhh(vcols, vrows, int(items.size()));
-        auto eye = Matrix<T, MatrixFormat::Dense>::Identity(vrows, int(items.size()));
+        const double rec = MV::svd_residual(q, A0v, Uv, sval, Vhv) / verify::bound<Scalar>(verify::Check::factorization, std::max(m, n));
+        const double ou = MV::orthogonality(q, Uv) / verify::bound<Scalar>(verify::Check::orthogonality_rotations,
+                                                                           ucols);
+        auto vh = Vhv.template astype<Scalar>(items);
+        Matrix<Scalar, MatrixFormat::Dense> vhh(vcols, vrows, int(items.size()));
+        auto eye = Matrix<Scalar, MatrixFormat::Dense>::Identity(vrows, int(items.size()));
         (void)MV::product(q, vh, Transpose::ConjTrans, eye, Transpose::NoTrans, vhh);
         q.wait();
         const double ov = MV::orthogonality(q, vhh, vhh.all_items()) /
-                          verify::bound<T>(verify::Check::orthogonality_rotations, vrows);
+                          verify::bound<Scalar>(verify::Check::orthogonality_rotations, vrows);
         worst = verify::nanmax(worst, verify::nanmax(rec, verify::nanmax(ou, ov)));
         return {worst, bad};
     }
 };
-
-std::vector<std::string> ints(const auto& xs) {
-    std::vector<std::string> out;
-    for (int v : xs) out.push_back(std::to_string(v));
-    return out;
-}
 
 class GesvdSpec final : public OpSpec {
 public:
@@ -185,16 +180,16 @@ public:
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
-            "src/sycl/kernel_attrs.hh",
-            "src/sycl/sscp_target.hh",
+            "include/batchlas/device/detail/kernel_attrs.hh",
+            "include/batchlas/device/detail/sscp_target.hh",
             "include/batchlas/util/group-collectives.hh",
-            "src/kernels/common/sg_partition/backend_amdgcn.hh",
-            "src/kernels/common/sg_partition/backend_amdgcn_core.hh",
-            "src/kernels/common/sg_partition/backend_generic.hh",
-            "src/kernels/common/sg_partition/backend_nvptx.hh",
-            "src/kernels/common/sg_partition/backend_spirv.hh",
-            "src/kernels/common/sg_partition/backend_sscp.hh",
-            "src/kernels/common/sg_partition/sg_partition.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn.hh",
+            "include/batchlas/device/detail/sg_partition/backend_amdgcn_core.hh",
+            "include/batchlas/device/detail/sg_partition/backend_generic.hh",
+            "include/batchlas/device/detail/sg_partition/backend_nvptx.hh",
+            "include/batchlas/device/detail/sg_partition/backend_spirv.hh",
+            "include/batchlas/device/detail/sg_partition/backend_sscp.hh",
+            "include/batchlas/device/detail/sg_partition/sg_partition.hh",
             // family: jacobi
             "src/ops/gesvd/kernels/gesvdj_cta.cc",
             // family: cta
@@ -204,24 +199,57 @@ public:
             "src/ops/gesvd/gebrd/gebrd_blocked.cc",
             "src/ops/gesvd/bdsdc/bdsdc.cc",
             "src/ops/gesvd/ormbr/ormbr.cc",
+            "include/batchlas/device/lapack/bdsdc.hh",
+            "include/batchlas/device/lapack/stedc.hh",
             // common
             "src/ops/gesvd/kernels/gesvd_blocked.cc",
             "src/ops/gesvd/gesvd_native.hh",
             "src/ops/gesvd/gebrd/gebrd.cc",
             "src/ops/gesvd/choice.hh",
+            "include/batchlas/device.hh",
+            "include/batchlas/device/arith.hh",
+            "include/batchlas/device/core.hh",
+            "include/batchlas/device/exec.hh",
+            "include/batchlas/device/grid.hh",
+            "include/batchlas/device/interop.hh",
+            "include/batchlas/device/lapack/bdsqr.hh",
+            "include/batchlas/device/lapack/gebrd.hh",
+            "include/batchlas/device/lapack/gesvd.hh",
+            "include/batchlas/device/lapack/ormbr.hh",
+            "include/batchlas/device/lapack_aux.hh",
+            "include/batchlas/device/level1.hh",
+            "include/batchlas/device/level2.hh",
+            "include/batchlas/device/level3.hh",
+            "include/batchlas/device/level3/group.hh",
+            "include/batchlas/device/operand.hh",
+            "include/batchlas/device/reduce.hh",
+            "include/batchlas/device/scalar.hh",
+            "include/batchlas/device/tier.hh",
+            "include/batchlas/device/view.hh",
+            "include/batchlas/device/workspace.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin
         // common "src/ops/gesvd/gesvd.cc"
         // cta runs syev_cta (steqr); blocked syev_blocked, stedc (bdsdc) and the public gemm, trmm and syr2k.
-        // family: cta "src/ops/syev/kernels/syev_cta.cc" "src/ops/syev/sytrd/sytrd_cta.cc" "src/ops/syev/sytrd/sytrd_cta_device.hh" "src/ops/syev/steqr/steqr.cc" "src/ops/syev/steqr/steqr_cta.cc" "src/ops/syev/steqr/steqr_cta_device.hh" "src/ops/syev/steqr/steqr_wg.cc"
+        // family: cta "src/ops/syev/kernels/syev_cta.cc" "src/ops/syev/sytrd/sytrd_cta.cc" "include/batchlas/device/lapack/sytrd.hh" "src/ops/syev/steqr/steqr.cc" "src/ops/syev/steqr/steqr_cta.cc" "include/batchlas/device/lapack/steqr.hh" "src/ops/syev/steqr/steqr_wg.cc"
         // family: blocked "src/ops/syev/kernels/syev_blocked.cc" "src/ops/syev/sytrd/sytrd_blocked.cc" "src/ops/syev/sytrd/latrd_lower_panel.cc" "src/ops/syev/sytrd/sytrd_cta.cc" "src/ops/syev/steqr/steqr.cc" "src/ops/syev/steqr/steqr_wg.cc"
-        // family: blocked "src/ops/syev/stedc/stedc.cc" "src/ops/syev/stedc/stedc_merge_cta.cc" "src/ops/syev/stedc/stedc_merge_kernels.cc" "src/ops/syev/stedc/stedc_secular.cc" "src/ops/ormqr/kernels/ormqr_blocked.cc" "src/ops/syev/kernels/uplo_mirror.cc"
+        // family: blocked "src/ops/syev/stedc/stedc.cc" "src/ops/syev/stedc/stedc_merge_cta.cc" "src/ops/syev/stedc/stedc_merge_kernels.cc" "src/ops/ormqr/kernels/ormqr_blocked.cc" "src/ops/syev/kernels/uplo_mirror.cc"
         // family: blocked "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/kernels/gemm_launch.hh" "src/ops/gemm/kernels/gemm_rows.hh" "src/ops/gemm/kernels/gemm_shard.cc.in" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/choice.hh" "src/ops/trmm/trmm.cc" "src/ops/syr2k/syr2k.cc"
-        // family: blocked "src/ops/gemm/kernels/accessors.hh" "src/ops/gemm/kernels/epilogue_linear.hh" "src/ops/gemm/kernels/load_policies.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_256x128.hh" "src/ops/gemm/kernels/copy_async.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh" "src/ops/gemm/kernels/register_launchers.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/register_wide_transposed.hh" "src/ops/gemm/kernels/small_batched.hh" "src/ops/gemm/kernels/tiled_general.hh"
+        // family: blocked "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_256x128.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh" "src/ops/gemm/kernels/register_launchers.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/register_wide_transposed.hh" "src/ops/gemm/kernels/small_batched.hh" "src/ops/gemm/kernels/tiled_general.hh"
         // blocked's own driver and sub-ops; its batch chunk comes from tuning_params.hh (blocked_chunk_items).
-        // family: blocked "src/ops/gesvd/kernels/gesvd_blocked.cc" "src/ops/gesvd/gebrd/gebrd_blocked.cc" "src/ops/gesvd/gebrd/gebrd.cc" "src/ops/gesvd/gebrd/larfg_real_beta.hh" "src/ops/gesvd/bdsqr/bdsqr.cc" "src/ops/gesvd/bdsdc/bdsdc.cc" "src/ops/gesvd/ormbr/ormbr.cc"
+        // family: blocked "src/ops/gesvd/kernels/gesvd_blocked.cc" "src/ops/gesvd/gebrd/gebrd_blocked.cc" "src/ops/gesvd/gebrd/gebrd.cc" "src/ops/gesvd/bdsqr/bdsqr.cc" "src/ops/gesvd/bdsdc/bdsdc.cc" "src/ops/gesvd/ormbr/ormbr.cc"
         // family: blocked "include/batchlas/tuning_params.hh"
+        // The include/batchlas/device/ headers each family's kernels include.
+        // family: blocked "include/batchlas/device/lapack/laed2.hh" "include/batchlas/device/lapack/laed3.hh"
+        // family: blocked "include/batchlas/device/lapack/laed4.hh" "include/batchlas/device/lapack/larft.hh"
+        // family: blocked "include/batchlas/device/level3/cfg.hh" "include/batchlas/device/level3/copy_async.hh"
+        // family: blocked "include/batchlas/device/level3/epilogue.hh" "include/batchlas/device/level3/mma.hh"
+        // family: blocked "include/batchlas/device/level3/packet.hh" "include/batchlas/device/level3/pipeline.hh"
+        // family: blocked "include/batchlas/device/level3/schedule.hh" "include/batchlas/device/level3/stage.hh"
+        // family: blocked "include/batchlas/device/sg_partition.hh"
+        // family: cta "include/batchlas/device/sg_partition.hh"
+        // family: jacobi "include/batchlas/device/lapack/jacobi.hh" "include/batchlas/device/sg_partition.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/gesvd_spec.cc"; }

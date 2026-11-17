@@ -70,10 +70,8 @@ inline int64_t vh_rows_for(SvdVectors job, int64_t n, int64_t k) {
     return job == SvdVectors::None ? k : svd_vh_rows(job, n, k);
 }
 
-} // namespace
-
-template <typename T, Backend B>
-static void BM_GESVD_BLOCKED(minibench::State& state) {
+template <typename Scalar, Backend B>
+void BM_GESVD_BLOCKED(minibench::State& state) {
     const size_t m = state.range(0);
     const size_t n = state.range(1);
     const size_t batch = state.range(2);
@@ -83,10 +81,10 @@ static void BM_GESVD_BLOCKED(minibench::State& state) {
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
-    auto A = Matrix<T>::Random(m, n, /*hermitian=*/false, batch);
-    Matrix<T> U(m, u_cols_for(jobu, m, k), batch);
-    Matrix<T> Vh(vh_rows_for(jobvh, n, k), n, batch);
-    UnifiedVector<typename base_type<T>::type> s(k * batch);
+    auto A = Matrix<Scalar>::Random(m, n, /*hermitian=*/false, batch);
+    Matrix<Scalar> U(m, u_cols_for(jobu, m, k), batch);
+    Matrix<Scalar> Vh(vh_rows_for(jobvh, n, k), n, batch);
+    UnifiedVector<typename base_type<Scalar>::type> s(k * batch);
 
     const size_t ws_size = gesvd_blocked_buffer_size(*q,
                                                             A,
@@ -112,6 +110,8 @@ static void BM_GESVD_BLOCKED(minibench::State& state) {
     state.SetMetric("Matrices/s", static_cast<double>(batch), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / static_cast<double>(batch)) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_GESVD_BLOCKED, GesvdBlockedBenchSizes);
 

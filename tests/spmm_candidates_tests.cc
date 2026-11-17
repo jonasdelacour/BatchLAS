@@ -47,15 +47,15 @@ namespace {
 namespace sp = batchlas::ops::spmm;
 using C = sp::SpmmChoice;
 using Pin = select::ScopedPin<C>;
-template <typename T>
-using Dense = MatrixView<T, MatrixFormat::Dense>;
-template <typename T>
-using Csr = MatrixView<T, MatrixFormat::CSR>;
+template <typename Scalar>
+using Dense = MatrixView<Scalar, MatrixFormat::Dense>;
+template <typename Scalar>
+using Csr = MatrixView<Scalar, MatrixFormat::CSR>;
 
-template <typename T>
-using RealOf = typename batchlas::base_type<T>::type;
-template <typename T>
-constexpr bool kCx = test_utils::is_complex<T>::value;
+template <typename Scalar>
+using RealOf = typename batchlas::base_type<Scalar>::type;
+template <typename Scalar>
+constexpr bool kCx = test_utils::is_complex<Scalar>::value;
 
 using test_support::same_bits;
 
@@ -79,36 +79,36 @@ std::string name(const C& c, const Spec& s) { return select::to_string(c) + " " 
 // A batched CSR A with item-local offsets, an offset stride above m + 1 and a value stride above
 // the capacity; B and C share one buffer of a large finite poison at padded lds and strides that
 // are not ld * cols. Slots above an item's nnz hold the poison with an in-range column index.
-template <typename T>
+template <typename Scalar>
 struct Problem {
     Spec s;
-    T alpha{}, beta{};
+    Scalar alpha{}, beta{};
     int out_rows = 0, red_rows = 0, b_rows = 0, b_cols = 0;
     int ldb = 1, ldc = 1, sb = 1, sc = 1, cap = 1, vstride = 1, ostride = 1;
     std::size_t boff = 0, coff = 0;
-    UnifiedVector<T> val, mem;
+    UnifiedVector<Scalar> val, mem;
     UnifiedVector<int> ro, ci;
-    UnifiedVector<T> mem0;
+    UnifiedVector<Scalar> mem0;
 
-    Csr<T> A() { return {val.data(), ro.data(), ci.data(), s.m, s.k, NonZeros{cap}, vstride, ostride, s.batch}; }
-    Dense<T> B() { return {mem.data() + boff, b_rows, b_cols, ldb, sb, s.batch}; }
-    Dense<T> Cv() { return {mem.data() + coff, out_rows, s.nrhs, ldc, sc, s.batch}; }
+    Csr<Scalar> A() { return {val.data(), ro.data(), ci.data(), s.m, s.k, NonZeros{cap}, vstride, ostride, s.batch}; }
+    Dense<Scalar> B() { return {mem.data() + boff, b_rows, b_cols, ldb, sb, s.batch}; }
+    Dense<Scalar> Cv() { return {mem.data() + coff, out_rows, s.nrhs, ldc, sc, s.batch}; }
     std::size_t bi(int b, int i, int j) const { return boff + std::size_t(b) * sb + std::size_t(j) * ldb + i; }
     std::size_t cidx(int b, int i, int j) const { return coff + std::size_t(b) * sc + std::size_t(j) * ldc + i; }
 };
 
-template <typename T>
-T poison() {
-    return Dense<T>::make(RealOf<T>(-999), RealOf<T>(777));
+template <typename Scalar>
+Scalar poison() {
+    return Dense<Scalar>::make(RealOf<Scalar>(-999), RealOf<Scalar>(777));
 }
 
-template <typename T>
-Problem<T> make(const Spec& s) {
-    using R = RealOf<T>;
-    Problem<T> p;
+template <typename Scalar>
+Problem<Scalar> make(const Spec& s) {
+    using R = RealOf<Scalar>;
+    Problem<Scalar> p;
     p.s = s;
-    p.alpha = Dense<T>::make(R(1.25), R(-0.5));
-    p.beta = Dense<T>::make(R(-0.75), R(0.25));
+    p.alpha = Dense<Scalar>::make(R(1.25), R(-0.5));
+    p.beta = Dense<Scalar>::make(R(-0.75), R(0.25));
     const bool an = s.ta == Transpose::NoTrans, bn = s.tb == Transpose::NoTrans;
     p.out_rows = an ? s.m : s.k;
     p.red_rows = an ? s.k : s.m;
@@ -141,10 +141,10 @@ Problem<T> make(const Spec& s) {
     p.val.resize(std::size_t(p.vstride) * std::max(1, s.batch));
     p.ci.resize(p.val.size());
     p.ro.resize(std::size_t(p.ostride) * std::max(1, s.batch));
-    std::vector<T> vals_rep(std::size_t(p.vstride) * reps);
+    std::vector<Scalar> vals_rep(std::size_t(p.vstride) * reps);
     for (auto& v : vals_rep) {
         const auto re = u(gen), im = u(gen);
-        v = Dense<T>::make(re, im);
+        v = Dense<Scalar>::make(re, im);
     }
     for (int b = 0; b < s.batch; ++b) {
         const int r = b % reps;
@@ -152,23 +152,23 @@ Problem<T> make(const Spec& s) {
         for (int i = 0; i < p.ostride; ++i) p.ro[std::size_t(b) * p.ostride + i] = i <= s.m ? rows[r][i] : p.cap;
         for (int q = 0; q < p.vstride; ++q) {
             const std::size_t at = std::size_t(b) * p.vstride + q;
-            p.val[at] = q < nnz ? vals_rep[std::size_t(r) * p.vstride + q] : Dense<T>::make(R(1e6), R(-1e6));
+            p.val[at] = q < nnz ? vals_rep[std::size_t(r) * p.vstride + q] : Dense<Scalar>::make(R(1e6), R(-1e6));
             p.ci[at] = q < nnz ? cols[r][q] : 0;
         }
     }
     p.boff = 5;
     p.coff = p.boff + std::size_t(p.sb) * std::max(1, s.batch) + 11;
     p.mem.resize(p.coff + std::size_t(p.sc) * std::max(1, s.batch) + 13);
-    for (std::size_t e = 0; e < p.mem.size(); ++e) p.mem[e] = poison<T>();
-    std::vector<T> brep(std::size_t(std::max(1, p.b_rows)) * std::max(1, p.b_cols) * reps),
+    for (std::size_t e = 0; e < p.mem.size(); ++e) p.mem[e] = poison<Scalar>();
+    std::vector<Scalar> brep(std::size_t(std::max(1, p.b_rows)) * std::max(1, p.b_cols) * reps),
         crep(std::size_t(std::max(1, p.out_rows)) * std::max(1, s.nrhs) * reps);
     for (auto& v : brep) {
         const auto re = u(gen), im = u(gen);
-        v = Dense<T>::make(re, im);
+        v = Dense<Scalar>::make(re, im);
     }
     for (auto& v : crep) {
         const auto re = u(gen), im = u(gen);
-        v = Dense<T>::make(re, im);
+        v = Dense<Scalar>::make(re, im);
     }
     for (int b = 0; b < s.batch; ++b) {
         const std::size_t r = std::size_t(b % reps);
@@ -185,19 +185,20 @@ Problem<T> make(const Spec& s) {
 
 // C = alpha op(A) op(B) + beta C judged componentwise by the library (duplicate columns sum, slots
 // above an item's nnz are unread), on every item; every other element of the shared buffer bit for bit.
-template <typename T>
-void expect_correct(Queue& ctx, const Problem<T>& p, const std::string& what) {
+template <typename Scalar>
+void expect_correct(Queue& ctx, const Problem<Scalar>& p, const std::string& what) {
     const Spec& s = p.s;
     {
-        Problem<T>& q = const_cast<Problem<T>&>(p);
-        const Dense<T> B0(q.mem0.data() + p.boff, p.b_rows, p.b_cols, p.ldb, p.sb, s.batch);
-        const Dense<T> C0(q.mem0.data() + p.coff, p.out_rows, s.nrhs, p.ldc, p.sc, s.batch);
-        const Dense<T> C1(q.mem.data() + p.coff, p.out_rows, s.nrhs, p.ldc, p.sc, s.batch);
-        const double err = Dense<T>::spmm_backward_error(ctx, q.A(), s.ta, B0, s.tb, C0, C1, Dense<T>::up(p.alpha),
-                                                         Dense<T>::up(p.beta), C1.all_items());
-        if (!batchlas::verify::pass<T>(batchlas::verify::Check::blas, p.red_rows, err))
+        Problem<Scalar>& q = const_cast<Problem<Scalar>&>(p);
+        const Dense<Scalar> B0(q.mem0.data() + p.boff, p.b_rows, p.b_cols, p.ldb, p.sb, s.batch);
+        const Dense<Scalar> C0(q.mem0.data() + p.coff, p.out_rows, s.nrhs, p.ldc, p.sc, s.batch);
+        const Dense<Scalar> C1(q.mem.data() + p.coff, p.out_rows, s.nrhs, p.ldc, p.sc, s.batch);
+        const double err = Dense<Scalar>::spmm_backward_error(ctx, q.A(), s.ta, B0, s.tb, C0, C1,
+                                                              Dense<Scalar>::up(p.alpha),
+                                                              Dense<Scalar>::up(p.beta), C1.all_items());
+        if (!batchlas::verify::pass<Scalar>(batchlas::verify::Check::blas, p.red_rows, err))
             ADD_FAILURE() << what << ": backward error " << err << " exceeds "
-                          << batchlas::verify::bound<T>(batchlas::verify::Check::blas, p.red_rows);
+                          << batchlas::verify::bound<Scalar>(batchlas::verify::Check::blas, p.red_rows);
     }
     std::vector<char> in_c(p.mem.size(), 0);
     for (int b = 0; b < s.batch; ++b)
@@ -244,9 +245,9 @@ std::string traced_choice(F&& run, std::string* all = nullptr, bool* threw = nul
 
 using test_support::TableGuard;
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;
@@ -319,7 +320,7 @@ protected:
     void direct(const C& c, Problem<T>& p) {
         Queue& q = *this->ctx;
         if (std::holds_alternative<sp::Direct>(c)) {
-            (void)sycl_spmm::spmm_native_csr<T>(q, p.A(), p.B(), p.Cv(), p.alpha, p.beta, p.s.ta, p.s.tb);
+            (void)ops::spmm::spmm_native_csr<T>(q, p.A(), p.B(), p.Cv(), p.alpha, p.beta, p.s.ta, p.s.tb);
         } else if constexpr (kVendor) {
             const std::size_t need =
                 backend::spmm_vendor_buffer_size<B, T>(q, p.A(), p.B(), p.Cv(), p.alpha, p.beta, p.s.ta, p.s.tb);
