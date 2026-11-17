@@ -25,11 +25,11 @@ namespace miniacc_acc {
 
 using namespace batchlas;
 
-template <typename Real>
+template <typename Scalar>
 inline const char* dtype_name() {
-    if constexpr (std::is_same_v<Real, float>) return "float";
-    if constexpr (std::is_same_v<Real, double>) return "double";
-    if constexpr (std::is_same_v<Real, std::complex<float>>) return "complex64";
+    if constexpr (std::is_same_v<Scalar, float>) return "float";
+    if constexpr (std::is_same_v<Scalar, double>) return "double";
+    if constexpr (std::is_same_v<Scalar, std::complex<float>>) return "complex64";
     return "complex128";
 }
 
@@ -288,22 +288,22 @@ inline double gesvd_max_abs_singular_error(const R* ref_desc,
 template <typename T>
 struct gesvd_is_complex : std::false_type {};
 
-template <typename T>
-struct gesvd_is_complex<std::complex<T>> : std::true_type {};
+template <typename Real>
+struct gesvd_is_complex<std::complex<Real>> : std::true_type {};
 
-template <typename T>
-inline T gesvd_conj_value(const T& value) {
-    if constexpr (gesvd_is_complex<T>::value) {
+template <typename Scalar>
+inline Scalar gesvd_conj_value(const Scalar& value) {
+    if constexpr (gesvd_is_complex<Scalar>::value) {
         return std::conj(value);
     } else {
         return value;
     }
 }
 
-template <typename T>
-inline typename base_type<T>::type gesvd_abs_squared_value(const T& value) {
-    using Real = typename base_type<T>::type;
-    if constexpr (gesvd_is_complex<T>::value) {
+template <typename Scalar>
+inline typename base_type<Scalar>::type gesvd_abs_squared_value(const Scalar& value) {
+    using Real = typename base_type<Scalar>::type;
+    if constexpr (gesvd_is_complex<Scalar>::value) {
         return static_cast<Real>(std::norm(value));
     } else {
         return value * value;
@@ -383,7 +383,7 @@ void run_gesvd_acc(miniacc::State& state, const char* impl, BufferSize&& buffer_
         UnifiedVector<Real> s(static_cast<size_t>(n) * static_cast<size_t>(cur_batch));
 
         try {
-            const size_t ws_bytes = [&]() {
+            const size_t ws_bytes = [&] {
                 if constexpr (gesvd_is_complex<Scalar>::value) {
                     return buffer_size(*q, A_work, s.to_span(), U, Vh,
                                        SvdVectors::All, SvdVectors::All, Uplo::Lower);
@@ -494,4 +494,4 @@ void run_gesvd_acc(miniacc::State& state, const char* impl, BufferSize&& buffer_
     }
 }
 
-} // namespace miniacc_acc
+}  // namespace miniacc_acc

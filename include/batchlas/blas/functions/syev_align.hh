@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /// @file
@@ -21,19 +22,19 @@ namespace batchlas {
 // Signature aliases for explicit instantiation (BATCHLAS_INSTANTIATE in
 // src/util/template-instantiations.hh); keep in sync with the declarations below.
 namespace sig {
-template <typename T>
+template <typename Scalar>
 using syev_align = Event(Queue&,
-                         const MatrixView<T, MatrixFormat::Dense>&,
-                         Span<typename base_type<T>::type>,
-                         const MatrixView<T, MatrixFormat::Dense>&,
-                         typename base_type<T>::type,
+                         const MatrixView<Scalar, MatrixFormat::Dense>&,
+                         Span<typename base_type<Scalar>::type>,
+                         const MatrixView<Scalar, MatrixFormat::Dense>&,
+                         typename base_type<Scalar>::type,
                          Span<std::byte>);
 
-template <typename T>
+template <typename Scalar>
 using syev_align_buffer_size = size_t(Queue&,
-                                      const MatrixView<T, MatrixFormat::Dense>&,
-                                      Span<typename base_type<T>::type>,
-                                      const MatrixView<T, MatrixFormat::Dense>&);
+                                      const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                      Span<typename base_type<Scalar>::type>,
+                                      const MatrixView<Scalar, MatrixFormat::Dense>&);
 }  // namespace sig
 
 /// @brief Validates the arguments of syev_align() and syev_align_buffer_size().
@@ -46,10 +47,10 @@ using syev_align_buffer_size = size_t(Queue&,
 /// @param[in] V            batch of \f$n \times m\f$ new eigenvectors
 /// @throws batchlas::invalid_argument if any check fails
 /// @ingroup api_eigen_lowlevel
-template <typename T>
-inline void syev_align_validate_params(const MatrixView<T, MatrixFormat::Dense>& V_old,
-                                       Span<typename base_type<T>::type> eigenvalues,
-                                       const MatrixView<T, MatrixFormat::Dense>& V) {
+template <typename Scalar>
+inline void syev_align_validate_params(const MatrixView<Scalar, MatrixFormat::Dense>& V_old,
+                                       Span<typename base_type<Scalar>::type> eigenvalues,
+                                       const MatrixView<Scalar, MatrixFormat::Dense>& V) {
     if (V_old.rows() != V.rows() || V_old.cols() != V.cols() || V_old.batch_size() != V.batch_size()) {
         throw batchlas::invalid_argument(
             "syev_align: V_old and V must have the same shape and batch size, got " +
@@ -95,7 +96,7 @@ inline void syev_align_validate_params(const MatrixView<T, MatrixFormat::Dense>&
 /// Asynchronous: V is readable after the returned event is waited on.
 /// @pre @p eigenvalues ascending per item (syev()'s order); column \f$j\f$ of V pairs with value \f$j\f$
 /// @tparam B  backend
-/// @tparam T  float, double, std::complex<float> or std::complex<double>
+/// @tparam Scalar  float, double, std::complex<float> or std::complex<double>
 /// @param[in] ctx             queue the work is enqueued on
 /// @param[in] V_old           batch of \f$n \times m\f$ previous eigenvectors; not modified
 /// @param[in] eigenvalues     \f$m\f$ real eigenvalues per item, ascending, packed (`V.cols() * batch` values)
@@ -112,17 +113,17 @@ inline void syev_align_validate_params(const MatrixView<T, MatrixFormat::Dense>&
 /// @throws batchlas::invalid_argument if syev_align_validate_params() rejects the call or @p tol < 0
 /// @throws batchlas::workspace_error if @p workspace is too short
 /// @ingroup api_eigen
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event syev_align(Queue& ctx,
-                              const MatrixView<T, MatrixFormat::Dense>& V_old,
-                              Span<typename base_type<T>::type> eigenvalues,
-                              const MatrixView<T, MatrixFormat::Dense>& V,
-                              typename base_type<T>::type tol,
+                              const MatrixView<Scalar, MatrixFormat::Dense>& V_old,
+                              Span<typename base_type<Scalar>::type> eigenvalues,
+                              const MatrixView<Scalar, MatrixFormat::Dense>& V,
+                              typename base_type<Scalar>::type tol,
                               Span<std::byte> workspace);
 
 /// @brief Workspace, in bytes, that syev_align() needs: about \f$ m^2 + nm + m \f$ scalars per item.
 /// @tparam B  backend
-/// @tparam T  float, double, std::complex<float> or std::complex<double>
+/// @tparam Scalar  float, double, std::complex<float> or std::complex<double>
 /// @param[in] ctx          queue the call will run on
 /// @param[in] V_old        batch of \f$n \times m\f$ previous eigenvectors, as passed to syev_align()
 /// @param[in] eigenvalues  packed real eigenvalues, \f$m\f$ per item, as passed to syev_align()
@@ -130,11 +131,11 @@ BATCHLAS_API Event syev_align(Queue& ctx,
 /// @return the workspace size in bytes
 /// @throws batchlas::invalid_argument if syev_align_validate_params() rejects the operands
 /// @ingroup api_eigen_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t syev_align_buffer_size(Queue& ctx,
-                                           const MatrixView<T, MatrixFormat::Dense>& V_old,
-                                           Span<typename base_type<T>::type> eigenvalues,
-                                           const MatrixView<T, MatrixFormat::Dense>& V);
+                                           const MatrixView<Scalar, MatrixFormat::Dense>& V_old,
+                                           Span<typename base_type<Scalar>::type> eigenvalues,
+                                           const MatrixView<Scalar, MatrixFormat::Dense>& V);
 
 BATCHLAS_DISPATCH_ON_QUEUE(syev_align)
 BATCHLAS_DISPATCH_ON_QUEUE(syev_align_buffer_size)

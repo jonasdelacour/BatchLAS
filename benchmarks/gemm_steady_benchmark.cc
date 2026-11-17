@@ -36,16 +36,16 @@ auto make_host_timed_kernel_ms(std::shared_ptr<Queue> q, F&& kernel) {
     };
 }
 
-template <typename T, Backend B, typename TimerFactory>
+template <typename Scalar, Backend B, typename TimerFactory>
 void configure_steady_gemm(minibench::State& state, TimerFactory&& timer_factory) {
     const size_t m = state.range(0);
     const size_t n = state.range(1);
     const size_t k = state.range(2);
     const size_t batch = state.range(3);
 
-    auto A = std::make_shared<Matrix<T>>(Matrix<T>::Random(m, k, false, batch));
-    auto Bm = std::make_shared<Matrix<T>>(Matrix<T>::Random(k, n, false, batch));
-    auto C = std::make_shared<Matrix<T>>(Matrix<T>::Random(m, n, false, batch));
+    auto A = std::make_shared<Matrix<Scalar>>(Matrix<Scalar>::Random(m, k, false, batch));
+    auto Bm = std::make_shared<Matrix<Scalar>>(Matrix<Scalar>::Random(k, n, false, batch));
+    auto C = std::make_shared<Matrix<Scalar>>(Matrix<Scalar>::Random(m, n, false, batch));
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
     bench::ManagedInputs managed(q);
@@ -57,7 +57,7 @@ void configure_steady_gemm(minibench::State& state, TimerFactory&& timer_factory
     state.SetBeforeEachRun(managed.make_before_each_run());
 
     auto kernel_once = [q, A, Bm, C]() mutable {
-        (void)gemm(*q, A->view(), Bm->view(), C->view(), {.beta = T(1)});
+        (void)gemm(*q, A->view(), Bm->view(), C->view(), {.beta = Scalar(1)});
     };
 
     state.SetKernel(std::function<void()>(kernel_once));
@@ -67,21 +67,21 @@ void configure_steady_gemm(minibench::State& state, TimerFactory&& timer_factory
     state.SetMetric("Time (µs) / matrix", (1.0 / static_cast<double>(batch)) * 1e6, minibench::Reciprocal);
 }
 
-template <typename T, Backend B>
-static void BM_GEMM_STEADY_EVENT(minibench::State& state) {
-    configure_steady_gemm<T, B>(state, [](std::shared_ptr<Queue> q, auto kernel_once) {
+template <typename Scalar, Backend B>
+void BM_GEMM_STEADY_EVENT(minibench::State& state) {
+    configure_steady_gemm<Scalar, B>(state, [](std::shared_ptr<Queue> q, auto kernel_once) {
         return bench::make_event_timed_kernel_ms(std::move(q), std::move(kernel_once));
     });
 }
 
-template <typename T, Backend B>
-static void BM_GEMM_STEADY_HOST(minibench::State& state) {
-    configure_steady_gemm<T, B>(state, [](std::shared_ptr<Queue> q, auto kernel_once) {
+template <typename Scalar, Backend B>
+void BM_GEMM_STEADY_HOST(minibench::State& state) {
+    configure_steady_gemm<Scalar, B>(state, [](std::shared_ptr<Queue> q, auto kernel_once) {
         return make_host_timed_kernel_ms(std::move(q), std::move(kernel_once));
     });
 }
 
-} // namespace
+}  // namespace
 
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_GEMM_STEADY_EVENT, GemmSteadyCampaignSizes);
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_GEMM_STEADY_HOST, GemmSteadyCampaignSizes);

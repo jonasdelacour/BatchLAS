@@ -25,29 +25,13 @@ using namespace batchlas;
 
 namespace {
 
-static inline const char* update_scheme_name(SteqrUpdateScheme scheme) {
-    switch (scheme) {
-        case SteqrUpdateScheme::PG:
-            return "PG";
-        case SteqrUpdateScheme::EXP:
-            return "EXP";
-        default:
-            return "UNKNOWN";
-    }
-}
-
-static constexpr std::array<SteqrUpdateScheme, 2> kCtaUpdateSchemes = {
-    SteqrUpdateScheme::PG,
-    SteqrUpdateScheme::EXP,
-};
-
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct SyevCtaConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 
-} // namespace
+}  // namespace
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 using SyevCtaTestTypes = ::testing::Types<
@@ -95,11 +79,9 @@ TYPED_TEST(SyevCtaTest, EigenvaluesOnlyLowerMatchesNetlib) {
     // Every item against LAPACKE in double (not a BatchLAS syev on this queue).
     const auto all = A0.all_items();
 
-    for (auto scheme : kCtaUpdateSchemes) {
-        SCOPED_TRACE(::testing::Message() << "update_scheme=" << update_scheme_name(scheme));
+    {
         A_cta = A0;
         SteqrParams<Scalar> p;
-        p.cta_update_scheme = scheme;
         auto ws_cta = UnifiedVector<std::byte>(syev_cta_buffer_size<B, Scalar>(*this->ctx, A_cta, JobType::NoEigenVectors, p));
         syev_cta<B, Scalar>(*this->ctx, A_cta, W_cta.to_span(), JobType::NoEigenVectors, Uplo::Lower, ws_cta.to_span(), p).wait();
 
@@ -120,11 +102,9 @@ TYPED_TEST(SyevCtaTest, EigenvectorsLowerResidualAndOrtho) {
 
     auto W_cta = UnifiedVector<Real>(static_cast<std::size_t>(n));
 
-    for (auto scheme : kCtaUpdateSchemes) {
-        SCOPED_TRACE(::testing::Message() << "update_scheme=" << update_scheme_name(scheme));
+    {
         A_cta = A0;
         SteqrParams<Scalar> p;
-        p.cta_update_scheme = scheme;
         auto ws_cta = UnifiedVector<std::byte>(syev_cta_buffer_size<B, Scalar>(*this->ctx, A_cta, JobType::EigenVectors, p));
         syev_cta<B, Scalar>(*this->ctx, A_cta, W_cta.to_span(), JobType::EigenVectors, Uplo::Lower, ws_cta.to_span(), p).wait();
 
@@ -147,11 +127,9 @@ TYPED_TEST(SyevCtaTest, EigenvectorsUpperResidualAndOrtho) {
 
     auto W_cta = UnifiedVector<Real>(static_cast<std::size_t>(n));
 
-    for (auto scheme : kCtaUpdateSchemes) {
-        SCOPED_TRACE(::testing::Message() << "update_scheme=" << update_scheme_name(scheme));
+    {
         A_cta = A0;
         SteqrParams<Scalar> p;
-        p.cta_update_scheme = scheme;
         auto ws_cta = UnifiedVector<std::byte>(syev_cta_buffer_size<B, Scalar>(*this->ctx, A_cta, JobType::EigenVectors, p));
         syev_cta<B, Scalar>(*this->ctx, A_cta, W_cta.to_span(), JobType::EigenVectors, Uplo::Upper, ws_cta.to_span(), p).wait();
 
@@ -173,11 +151,9 @@ TYPED_TEST(SyevCtaTest, EigenvectorsN32RandomLowerResidualAndOrtho) {
 
     auto W_cta = UnifiedVector<Real>(static_cast<std::size_t>(n));
 
-    for (auto scheme : kCtaUpdateSchemes) {
-        SCOPED_TRACE(::testing::Message() << "update_scheme=" << update_scheme_name(scheme));
+    {
         A_cta = A0;
         SteqrParams<Scalar> p;
-        p.cta_update_scheme = scheme;
         auto ws_cta = UnifiedVector<std::byte>(syev_cta_buffer_size<B, Scalar>(*this->ctx, A_cta, JobType::EigenVectors, p));
         syev_cta<B, Scalar>(*this->ctx, A_cta, W_cta.to_span(), JobType::EigenVectors, Uplo::Lower, ws_cta.to_span(), p).wait();
 
@@ -189,7 +165,7 @@ TYPED_TEST(SyevCtaTest, EigenvectorsN32RandomLowerResidualAndOrtho) {
 }
 
 TYPED_TEST(SyevCtaTest, EigenvectorsNearDegenerateLowerResidualAndOrtho_Stress) {
-    const bool dbg = []() {
+    const bool dbg = [] {
         const char* e = std::getenv("BATCHLAS_CTA_DEBUG_SYNC");
         return e && std::string(e) == "1";
     }();
@@ -209,15 +185,12 @@ TYPED_TEST(SyevCtaTest, EigenvectorsNearDegenerateLowerResidualAndOrtho_Stress) 
 
     auto W_cta = UnifiedVector<Real>(static_cast<std::size_t>(n));
 
-
     if (dbg) std::cerr << "[cta-test] running CTA" << std::endl;
-    for (auto scheme : kCtaUpdateSchemes) {
-        SCOPED_TRACE(::testing::Message() << "update_scheme=" << update_scheme_name(scheme));
+    {
         A_cta = A0;
         SteqrParams<Scalar> p;
         p.max_sweeps = 80;
         p.sort = false;
-        p.cta_update_scheme = scheme;
         auto ws_cta = UnifiedVector<std::byte>(syev_cta_buffer_size<B, Scalar>(*this->ctx, A_cta, JobType::EigenVectors, p));
         syev_cta<B, Scalar>(*this->ctx, A_cta, W_cta.to_span(), JobType::EigenVectors, Uplo::Lower, ws_cta.to_span(), p).wait();
 
@@ -243,13 +216,11 @@ TYPED_TEST(SyevCtaTest, EigenvectorsNearDegenerateLowerResidualAndOrtho_N32_Stre
 
     auto W_cta = UnifiedVector<Real>(static_cast<std::size_t>(n));
 
-    for (auto scheme : kCtaUpdateSchemes) {
-        SCOPED_TRACE(::testing::Message() << "update_scheme=" << update_scheme_name(scheme));
+    {
         A_cta = A0;
         SteqrParams<Scalar> p;
         p.max_sweeps = 80;
         p.sort = false;
-        p.cta_update_scheme = scheme;
         auto ws_cta = UnifiedVector<std::byte>(syev_cta_buffer_size<B, Scalar>(*this->ctx, A_cta, JobType::EigenVectors, p));
         syev_cta<B, Scalar>(*this->ctx, A_cta, W_cta.to_span(), JobType::EigenVectors, Uplo::Lower, ws_cta.to_span(), p).wait();
 
@@ -271,9 +242,7 @@ TYPED_TEST(SyevCtaTest, RepeatedRunsDoNotHang) {
     SteqrParams<Scalar> p;
     p.max_sweeps = 30;
 
-    for (auto scheme : kCtaUpdateSchemes) {
-        SCOPED_TRACE(::testing::Message() << "update_scheme=" << update_scheme_name(scheme));
-        p.cta_update_scheme = scheme;
+    {
         for (int t = 0; t < iters; ++t) {
             Matrix<Scalar, MatrixFormat::Dense> A = A0;
             auto ws = UnifiedVector<std::byte>(syev_cta_buffer_size<B, Scalar>(*this->ctx, A, JobType::EigenVectors, p));

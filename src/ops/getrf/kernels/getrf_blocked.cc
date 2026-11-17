@@ -5,6 +5,8 @@
 // evidence: docs/perf/lu.md#getrf-window-evidence
 
 #include <src/ops/getrf/getrf_native.hh>
+#include <src/kernels/common/info_target.hh>
+#include <src/kernels/common/launch.hh>
 #include <src/kernels/common/lu_laswp.hh>
 #include <src/kernels/common/info_span.hh>
 #include <src/util/batch_mask.hh>
@@ -27,37 +29,34 @@
 #include <batchlas/tuning_params.hh>
 
 namespace batchlas {
-namespace sycl_getrf {
+namespace ops::getrf {
 
 namespace {
 
 // Per-TU tag: gives this cluster its own instantiation of the shared LASWP kernel.
 struct GetrfBlockedLaswpTag {};
 
-// Block width, shared by the driver, the workspace query and the debug query. It
-// IS the trailing GEMM's k: a multiple of 16, and never below 32 (the wide-scalar
-// complex gemm kernel is gated on min_dim >= 32).
-template <typename T>
+// Block width of the driver and both queries: the trailing GEMM's k, a multiple of 16 and >= 32
+// (the wide-scalar complex gemm kernel is gated on min_dim >= 32).
+template <typename Scalar>
 constexpr int getrf_nb_for_type() {
     return 32;
 }
 
 // The trailing height up to which the gather beats the walk, swept at n = 1024 and 2048.
-template <typename T>
+template <typename Scalar>
 constexpr int getrf_right_gather_max_rows() {
-    if constexpr (std::is_same_v<T, float>) return 1024;
-    if constexpr (std::is_same_v<T, std::complex<double>>) return 384;
+    if constexpr (std::is_same_v<Scalar, float>) return 1024;
+    if constexpr (std::is_same_v<Scalar, std::complex<double>>) return 384;
     return 768;
 }
 
-template <typename T>
+template <typename Scalar>
 inline int getrf_blocked_nb(int n) {
-    return std::max(1, std::min(getrf_nb_for_type<T>(), n));
+    return std::max(1, std::min(getrf_nb_for_type<Scalar>(), n));
 }
 
-// Three spellings of one left-hand interchange; DeferGather ships. The knob's
-// presence latches in a static, but its value is re-read per call, so a harness
-// can swap arms mid-run.
+// Three spellings of one left-hand interchange; DeferGather ships. The knob's value is re-read per call.
 enum class LeftLaswp { InLoop, DeferWalk, DeferGather };
 
 inline LeftLaswp getrf_left_laswp_mode() {
@@ -76,13 +75,13 @@ inline LeftLaswp getrf_left_laswp_mode() {
 
 // The right-hand pass: gather while the trailing height is under the crossover, the
 // walk above it. Re-read per call. evidence: docs/perf/lu.md#the-right-hand-gather
-template <typename T>
+template <typename Scalar>
 inline bool getrf_right_gather(int R) {
     const char* s = batchlas::settings().selection.getrf_right_laswp.get();
     if (s != nullptr && std::strcmp(s, "walk") == 0) return false;
     if (s != nullptr && std::strcmp(s, "gather") == 0) return true;
     if (s != nullptr && s[0] >= '0' && s[0] <= '9') return R <= std::atoi(s);   // A/B sweeps
-    return R <= getrf_right_gather_max_rows<T>();
+    return R <= getrf_right_gather_max_rows<Scalar>();
 }
 
 // WHICH PANEL LEAF, re-read per call so one process can A/B the two. `Reg` is the default.
@@ -98,133 +97,113 @@ inline PanelLeaf getrf_panel_leaf_mode() {
 
 // A SEPARATE hook from getrf_blocked_debug_params deliberately: that word's leaf field is
 // pinned against getrf_leaf_fits, and widening it would move the laswp field above it.
-template <typename T>
+template <typename Scalar>
 int getrf_blocked_leaf_kind(Queue& ctx, int m, int ib) {
     const auto dev = ctx.device();
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     if (getrf_panel_leaf_mode() == PanelLeaf::Reg &&
-        getrf_panel_reg_fits<T>(m, ib, max_wg)) {
+        getrf_panel_reg_fits<Scalar>(m, ib, max_wg)) {
         return 3;
     }
     const std::size_t budget = resident::device_slm_budget(
         dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
-    return getrf_leaf_fits<T>(m, ib, budget) ? 1 : 2;
+    return getrf_leaf_fits<Scalar>(m, ib, budget) ? 1 : 2;
 }
 
 // Replayed by both the query and the call; no matrix scratch, every phase works in place.
 // ONE POINTER ARRAY PER ROLE, never nullptr and never shared -- init_data_ptr_array
 // rebases from each view's own data_ptr()/stride, so a shared array loses the first's.
-template <typename T>
+template <typename Scalar>
 struct GetrfBlockedWs {
     Span<int32_t> info;
-    Span<T*> p11;
-    Span<T*> p12;
-    Span<T*> p21;
-    Span<T*> p22;
+    Span<Scalar*> p11;
+    Span<Scalar*> p12;
+    Span<Scalar*> p21;
+    Span<Scalar*> p22;
 };
 
 // Items per pass: the phases hand the trailing matrix between kernels through L2, and the
 // children are routed at this batch. One panel has no hand-off, so it never splits. The query
 // and the call must agree, so both use it. evidence: docs/perf/lu.md#lu-l2-batch-chunking
-template <typename T>
+template <typename Scalar>
 int getrf_blocked_chunk(Queue& ctx, int m, int n, int batch) {
-    if (std::min(m, n) <= getrf_blocked_nb<T>(std::min(m, n))) return batch;
+    if (std::min(m, n) <= getrf_blocked_nb<Scalar>(std::min(m, n))) return batch;
     const auto dev = ctx.device();
     return static_cast<int>(tuning::blocked_chunk_items(
-        batch, static_cast<int64_t>(m) * n * static_cast<int64_t>(sizeof(T)),
+        batch, static_cast<int64_t>(m) * n * static_cast<int64_t>(sizeof(Scalar)),
         static_cast<int64_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE)),
         static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS))));
 }
 
-template <typename T>
-GetrfBlockedWs<T> getrf_blocked_layout(Queue& ctx, BumpAllocator& pool, int batch) {
+template <typename Scalar>
+GetrfBlockedWs<Scalar> getrf_blocked_layout(Queue& ctx, BumpAllocator& pool, int batch) {
     const std::size_t b = static_cast<std::size_t>(batch);
-    GetrfBlockedWs<T> ws;
+    GetrfBlockedWs<Scalar> ws;
     ws.info = pool.allocate<int32_t>(ctx, b);
-    ws.p11 = pool.allocate<T*>(ctx, b);
-    ws.p12 = pool.allocate<T*>(ctx, b);
-    ws.p21 = pool.allocate<T*>(ctx, b);
-    ws.p22 = pool.allocate<T*>(ctx, b);
+    ws.p11 = pool.allocate<Scalar*>(ctx, b);
+    ws.p12 = pool.allocate<Scalar*>(ctx, b);
+    ws.p21 = pool.allocate<Scalar*>(ctx, b);
+    ws.p22 = pool.allocate<Scalar*>(ctx, b);
     return ws;
 }
 
 }  // namespace
 
-// Every type has the tier; tuned/getrf.*.txt decides where it runs.
-template <> bool getrf_blocked_available<float>()                { return true; }
-template <> bool getrf_blocked_available<double>()               { return true; }
-template <> bool getrf_blocked_available<std::complex<float>>()  { return true; }
-template <> bool getrf_blocked_available<std::complex<double>>() { return true; }
-
-template <typename T>
+template <typename Scalar>
 std::size_t getrf_blocked_buffer_size(Queue& ctx,
-                                      const MatrixView<T, MatrixFormat::Dense>& A) {
+                                      const MatrixView<Scalar, MatrixFormat::Dense>& A) {
     const int batch = static_cast<int>(A.batch_size());
     if (batch < 1) return 0;
-    const int chunk = getrf_blocked_chunk<T>(ctx, static_cast<int>(A.rows()),
-                                             static_cast<int>(A.cols()), batch);
+    const int chunk = getrf_blocked_chunk<Scalar>(ctx, static_cast<int>(A.rows()),
+                                                  static_cast<int>(A.cols()), batch);
     return workspace_bytes([&](BumpAllocator& pool) {
-        return getrf_blocked_layout<T>(ctx, pool, chunk + batch % chunk);
+        return getrf_blocked_layout<Scalar>(ctx, pool, chunk + batch % chunk);
     });
 }
 
 // Blocking query. Low 16 bits: block width; bits 16-23: the leading panel's leaf
 // (1 = local-memory resident, 2 = global); bits 24+: the resolved LeftLaswp mode;
 // 0 means absent or degenerate.
-template <typename T>
+template <typename Scalar>
 unsigned getrf_blocked_debug_params(Queue& ctx, int n) {
     if (n < 1) return 0u;
-    const int nb = getrf_blocked_nb<T>(n);
+    const int nb = getrf_blocked_nb<Scalar>(n);
 
     const auto dev = ctx.device();
     const std::size_t budget = resident::device_slm_budget(
         dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
     const int ib0 = std::min(nb, n);
-    const unsigned leaf = getrf_leaf_fits<T>(n, ib0, budget) ? 1u : 2u;
+    const unsigned leaf = getrf_leaf_fits<Scalar>(n, ib0, budget) ? 1u : 2u;
     const unsigned lmode = static_cast<unsigned>(getrf_left_laswp_mode());
 
     return (lmode << 24) | (leaf << 16) | static_cast<unsigned>(nb);
 }
 
 // 1 resident, 2 global, 3 register, 0 degenerate. evidence: docs/perf/lu.md#the-register-panel-leaf
-template <typename T>
+template <typename Scalar>
 unsigned getrf_blocked_debug_leaf(Queue& ctx, int n) {
     if (n < 1) return 0u;
-    const int ib0 = std::min(getrf_blocked_nb<T>(n), n);
-    return static_cast<unsigned>(getrf_blocked_leaf_kind<T>(ctx, n, ib0));
+    const int ib0 = std::min(getrf_blocked_nb<Scalar>(n), n);
+    return static_cast<unsigned>(getrf_blocked_leaf_kind<Scalar>(ctx, n, ib0));
 }
 
-template <typename T>
+template <typename Scalar>
 Event getrf_blocked_dispatch(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& A,
+                             const MatrixView<Scalar, MatrixFormat::Dense>& A,
                              Span<int64_t> pivots,
                              Span<std::byte> workspace,
                              Span<int32_t> info_out,
-                             GetrfTrailingGemm<T> trailing_gemm,
-                             GetrfPanelSolveTrsm<T> panel_trsm) {
+                             GetrfTrailingGemm<Scalar> trailing_gemm,
+                             GetrfPanelSolveTrsm<Scalar> panel_trsm) {
     const int m = static_cast<int>(A.rows());
     const int n = static_cast<int>(A.cols());
     const int batch = static_cast<int>(A.batch_size());
 
     // The driver's own gates; src/ops/getrf/getrf.cc's can_run mirrors them (R3).
-    if (m < 1 || n < 1 || batch < 1) {
-        throw batchlas::invalid_argument("getrf_blocked: degenerate extents");
-    }
     // m x n is ?GETRF's own loop: min(m, n) panels of full remaining height, every
     // interchange and update spanning all n columns. The pivot list's stride is min(m, n).
     const int mn = std::min(m, n);
-    if (A.is_heterogeneous()) {
-        throw batchlas::invalid_argument("getrf_blocked: heterogeneous batch is not supported");
-    }
-    const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU) {
-        throw batchlas::invalid_argument("getrf_blocked: GPU queues only");
-    }
-    if (!dev.supports_sub_group_size(32)) {
-        throw batchlas::unsupported(
-            "getrf_blocked: device does not offer sub-group size 32, which the panel leaf "
-            "requires");
-    }
+    const auto dev = native::require_launchable(ctx, "getrf_blocked", A, {});  // sg 32: the panel leaf
     if (pivots.size() < static_cast<std::size_t>(mn) * static_cast<std::size_t>(batch)) {
         throw batchlas::invalid_argument(
             "getrf_blocked: pivot span is shorter than min(m, n) * batch");
@@ -234,7 +213,7 @@ Event getrf_blocked_dispatch(Queue& ctx,
         // be hosted at all, not what the CTA tier advertises.
         const std::size_t budget = resident::device_slm_budget(
             dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
-        if (getrf_cta_max_n_for_slm<T>(budget, 1) < 1) {
+        if (getrf_cta_max_n_for_slm<Scalar>(budget, 1) < 1) {
             throw batchlas::unsupported(
                 "getrf_blocked: this device's local-memory budget cannot host the panel "
                 "leaf's argmax slots, so the tier is unavailable (getrf.cc's can_run "
@@ -255,7 +234,7 @@ Event getrf_blocked_dispatch(Queue& ctx,
             "file, chooses the trsm candidate.");
     }
 
-    const int nb = getrf_blocked_nb<T>(mn);
+    const int nb = getrf_blocked_nb<Scalar>(mn);
     // The deferred gather stages R = n - k0 rows for n - k0 transpositions: a tall item moves
     // rows below min(m, n), so it takes the walk.
     const LeftLaswp mode = (m > n && getrf_left_laswp_mode() == LeftLaswp::DeferGather)
@@ -268,9 +247,9 @@ Event getrf_blocked_dispatch(Queue& ctx,
 
     // Chunk by chunk: each pass is a complete factorisation of its items, so the passes are
     // independent, and the workspace is one chunk's. evidence: docs/perf/lu.md#lu-l2-batch-chunking
-    const int chunk = getrf_blocked_chunk<T>(ctx, m, n, batch);
+    const int chunk = getrf_blocked_chunk<Scalar>(ctx, m, n, batch);
     BumpAllocator pool(workspace);
-    auto ws = getrf_blocked_layout<T>(ctx, pool, chunk + batch % chunk);
+    auto ws = getrf_blocked_layout<Scalar>(ctx, pool, chunk + batch % chunk);
     // detail::info_target's rule, inlined: an empty OR SHORT caller span means "not
     // requested" and falls back to pool scratch, and it is THAT span that is zeroed.
     const bool info_requested = info_out.size() >= static_cast<std::size_t>(batch);
@@ -285,7 +264,7 @@ Event getrf_blocked_dispatch(Queue& ctx,
 
     for (int b0 = 0, cb = 0; b0 < batch; b0 += cb) {
         cb = batch - b0 < 2 * chunk ? batch - b0 : chunk;   // the last part takes the remainder
-        T* const a_ptr = A.data_ptr() + static_cast<std::ptrdiff_t>(b0) * stride;
+        Scalar* const a_ptr = A.data_ptr() + static_cast<std::ptrdiff_t>(b0) * stride;
         int* const piv_ptr = piv_i32.data() + static_cast<std::ptrdiff_t>(b0) * mn;
         int32_t* const info_ptr = info_requested ? info_out.data() + b0 : ws.info.data();
         // This part's mask slice: every launch below and every sub-view skips its inactive items.
@@ -302,8 +281,8 @@ Event getrf_blocked_dispatch(Queue& ctx,
         // The explicit 6-arg constructor, never operator()(Slice, Slice), which would
         // propagate the parent's pointer array; each role passes its own, never nullptr.
         // A raw-pointer view starts unmasked, so the part's mask slice is re-attached.
-        auto sub = [&](int r0, int nr, int c0, int nc, Span<T*> ptrs) {
-            return MatrixView<T, MatrixFormat::Dense>(
+        auto sub = [&](int r0, int nr, int c0, int nc, Span<Scalar*> ptrs) {
+            return MatrixView<Scalar, MatrixFormat::Dense>(
                 a_ptr + static_cast<std::ptrdiff_t>(c0) * ld + r0,
                 nr, nc, ld, stride, cb, ptrs.data()).with_batch_mask(pmask);
         };
@@ -318,13 +297,13 @@ Event getrf_blocked_dispatch(Queue& ctx,
             // (P) piv_stride is min(m, n) and piv_base is j0, which is what makes ipiv global
             // 1-based and info a global column index with no fix-up. The two leaves answer the
             // SAME contract: nothing below this line depends on which one ran.
-            T* const panel = a_ptr + static_cast<std::ptrdiff_t>(j0) * ld + j0;
-            if (leaf_mode == PanelLeaf::Reg && getrf_panel_reg_fits<T>(mp, ib, max_wg)) {
-                (void)getrf_panel_reg_factorize<T>(ctx, panel, ld, stride, mp, ib, cb,
-                                                   piv_ptr, mn, j0, info_ptr, pm);
+            Scalar* const panel = a_ptr + static_cast<std::ptrdiff_t>(j0) * ld + j0;
+            if (leaf_mode == PanelLeaf::Reg && getrf_panel_reg_fits<Scalar>(mp, ib, max_wg)) {
+                (void)getrf_panel_reg_factorize<Scalar>(ctx, panel, ld, stride, mp, ib, cb,
+                                                        piv_ptr, mn, j0, info_ptr, pm);
             } else {
-                (void)getrf_panel_factorize<T>(ctx, panel, ld, stride, mp, ib, cb,
-                                               piv_ptr, mn, j0, info_ptr, nullptr, pm);
+                (void)getrf_panel_factorize<Scalar>(ctx, panel, ld, stride, mp, ib, cb,
+                                                    piv_ptr, mn, j0, info_ptr, nullptr, pm);
             }
 
             // A caller may build an out-of-order queue, so every dependent edge guards itself.
@@ -333,7 +312,7 @@ Event getrf_blocked_dispatch(Queue& ctx,
             // (S-left) The panel's interchanges on the finished columns [0, j0). Skip it
             // and P A = L U silently stops holding: L's finished columns must travel too.
             if (mode == LeftLaswp::InLoop && j0 > 0) {
-                (void)lu_native::lu_laswp_launch<GetrfBlockedLaswpTag, T>(
+                (void)lu_native::lu_laswp_launch<GetrfBlockedLaswpTag, Scalar>(
                     ctx, a_ptr, ld, stride, /*ncols=*/j0, cb,
                     piv_ptr, /*piv_stride=*/mn, /*k0=*/j0, /*k1=*/j2, /*forward=*/true, pm);
                 if (!ctx.in_order()) ctx.wait();
@@ -342,13 +321,13 @@ Event getrf_blocked_dispatch(Queue& ctx,
             if (n2 <= 0) break;   // the short final panel: no trailing work at all
 
             // (S-right) The same interchanges on the trailing columns, before (T) reads them.
-            const bool gathered = getrf_right_gather<T>(mp) &&
-                lu_native::lu_laswp_right_gather_launch<GetrfBlockedLaswpTag, T>(
+            const bool gathered = getrf_right_gather<Scalar>(mp) &&
+                lu_native::lu_laswp_right_gather_launch<GetrfBlockedLaswpTag, Scalar>(
                     ctx, a_ptr, ld, stride, cb, piv_ptr, /*piv_stride=*/mn,
                     /*k0=*/j0, /*L=*/ib, /*R=*/mp, /*c_begin=*/j2, /*ncols=*/n2,
                     slm_budget, max_wg, pm);
             if (!gathered) {
-                (void)lu_native::lu_laswp_launch<GetrfBlockedLaswpTag, T>(
+                (void)lu_native::lu_laswp_launch<GetrfBlockedLaswpTag, Scalar>(
                     ctx, a_ptr + static_cast<std::ptrdiff_t>(j2) * ld, ld, stride,
                     /*ncols=*/n2, cb,
                     piv_ptr, /*piv_stride=*/mn, /*k0=*/j0, /*k1=*/j2, /*forward=*/true, pm);
@@ -359,7 +338,7 @@ Event getrf_blocked_dispatch(Queue& ctx,
             // is U's) is not read. alpha comes THIRD in the public trsm.
             const auto L11 = sub(j0, ib, j0, ib, ws.p11);
             const auto A12 = sub(j0, ib, j2, n2, ws.p12);
-            (void)panel_trsm(ctx, L11, A12, T(1), Side::Left, Uplo::Lower,
+            (void)panel_trsm(ctx, L11, A12, Scalar(1), Side::Left, Uplo::Lower,
                              Transpose::NoTrans, Diag::Unit);
             if (!ctx.in_order()) ctx.wait();
 
@@ -368,7 +347,7 @@ Event getrf_blocked_dispatch(Queue& ctx,
                 // beta is, so A22 must already hold the trailing block -- it does.
                 const auto L21 = sub(j2, m2, j0, ib, ws.p21);
                 const auto A22 = sub(j2, m2, j2, n2, ws.p22);
-                (void)trailing_gemm(ctx, L21, A12, A22, T(-1), T(1),
+                (void)trailing_gemm(ctx, L21, A12, A22, Scalar(-1), Scalar(1),
                                     Transpose::NoTrans, Transpose::NoTrans,
                                     ComputePrecision::Default);
                 if (!ctx.in_order()) ctx.wait();
@@ -381,7 +360,7 @@ Event getrf_blocked_dispatch(Queue& ctx,
         if (mode != LeftLaswp::InLoop) {
             bool done = false;
             if (mode == LeftLaswp::DeferGather) {
-                done = lu_native::lu_laswp_deferred_left_launch<GetrfBlockedLaswpTag, T>(
+                done = lu_native::lu_laswp_deferred_left_launch<GetrfBlockedLaswpTag, Scalar>(
                     ctx, a_ptr, ld, stride, cb, piv_ptr, /*piv_stride=*/mn,
                     mn, nb, slm_budget, max_wg, pm);
                 if (done && !ctx.in_order()) ctx.wait();
@@ -392,7 +371,7 @@ Event getrf_blocked_dispatch(Queue& ctx,
                     const int ib = std::min(nb, mn - c0);
                     const int k0 = c0 + ib;
                     if (k0 >= mn) break;             // the last block: nothing deferred
-                    (void)lu_native::lu_laswp_launch<GetrfBlockedLaswpTag, T>(
+                    (void)lu_native::lu_laswp_launch<GetrfBlockedLaswpTag, Scalar>(
                         ctx, a_ptr + static_cast<std::ptrdiff_t>(c0) * ld, ld, stride,
                         /*ncols=*/ib, cb,
                         piv_ptr, /*piv_stride=*/mn, /*k0=*/k0, /*k1=*/mn, /*forward=*/true, pm);
@@ -423,5 +402,5 @@ BATCHLAS_GETRF_BLOCKED_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_GETRF_BLOCKED_INSTANTIATE
 
-}  // namespace sycl_getrf
+}  // namespace ops::getrf
 }  // namespace batchlas

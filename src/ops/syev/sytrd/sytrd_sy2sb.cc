@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <batchlas/blas/extensions.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/lapack/sy2sb.hh>
 #include <src/util/batch_mask.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>
@@ -75,10 +77,10 @@ inline int32_t sy2sb_ormqr_block_size_hint(int n, int batch, int kd) {
     return 0;
 }
 
-template <typename T>
-inline void validate_sytrd_sy2sb_dims(const MatrixView<T, MatrixFormat::Dense>& a,
-                                     const MatrixView<T, MatrixFormat::Dense>& ab,
-                                     const VectorView<T>& tau,
+template <typename Scalar>
+inline void validate_sytrd_sy2sb_dims(const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                                     const MatrixView<Scalar, MatrixFormat::Dense>& ab,
+                                     const VectorView<Scalar>& tau,
                                      Uplo uplo,
                                      int32_t kd) {
     if (a.rows() != a.cols()) {
@@ -109,41 +111,41 @@ inline void validate_sytrd_sy2sb_dims(const MatrixView<T, MatrixFormat::Dense>& 
     }
 }
 
-template <typename T>
+template <typename Scalar>
 class ZeroABKernel;
 
-template <typename T>
-Event zero_ab(Queue& q, const MatrixView<T, MatrixFormat::Dense>& ab, const std::uint8_t* mask) {
+template <typename Scalar>
+Event zero_ab(Queue& q, const MatrixView<Scalar, MatrixFormat::Dense>& ab, const std::uint8_t* mask) {
     const int rows = ab.rows();
     const int cols = ab.cols();
     const int ldab = ab.ld();
     const int stride_ab = ab.stride();
-    T* ab_ptr = ab.data_ptr();
+    Scalar* ab_ptr = ab.data_ptr();
     const int batch = ab.batch_size();
 
     (void)q->submit([&](sycl::handler& h) {
-        h.parallel_for<ZeroABKernel<T>>(
+        batchlas::impl::parallel_for<ZeroABKernel<Scalar>>(h,
             sycl::range<3>(static_cast<size_t>(batch), static_cast<size_t>(cols), static_cast<size_t>(rows)),
             [=](sycl::id<3> idx) {
                 const int b = static_cast<int>(idx[0]);
                 const int j = static_cast<int>(idx[1]);
                 const int r = static_cast<int>(idx[2]);
                 if (mask != nullptr && mask[b] == 0) return;  // I3
-                T* AB = ab_ptr + b * stride_ab;
-                AB[r + j * ldab] = T(0);
+                Scalar* AB = ab_ptr + b * stride_ab;
+                AB[r + j * ldab] = Scalar(0);
             });
     });
 
     return q.get_event();
 }
 
-template <typename T>
+template <typename Scalar>
 class CopyBandLowerKernel;
 
-template <typename T>
+template <typename Scalar>
 Event copy_band_lower(Queue& q,
-                      const MatrixView<T, MatrixFormat::Dense>& a,
-                      const MatrixView<T, MatrixFormat::Dense>& ab,
+                      const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                      const MatrixView<Scalar, MatrixFormat::Dense>& ab,
                       int i0,
                       int pk,
                       int kd,
@@ -153,12 +155,12 @@ Event copy_band_lower(Queue& q,
     const int stride_a = a.stride();
     const int ldab = ab.ld();
     const int stride_ab = ab.stride();
-    const T* a_ptr = a.data_ptr();
-    T* ab_ptr = ab.data_ptr();
+    const Scalar* a_ptr = a.data_ptr();
+    Scalar* ab_ptr = ab.data_ptr();
     const int batch = a.batch_size();
 
     (void)q->submit([&](sycl::handler& h) {
-        h.parallel_for<CopyBandLowerKernel<T>>(
+        batchlas::impl::parallel_for<CopyBandLowerKernel<Scalar>>(h,
             sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(pk)),
             [=](sycl::id<2> idx) {
                 const int b = static_cast<int>(idx[0]);
@@ -166,36 +168,35 @@ Event copy_band_lower(Queue& q,
                 const int j = i0 + jj;
                 if (j < 0 || j >= n || (mask != nullptr && mask[b] == 0)) return;  // I3
 
-                const T* A = a_ptr + b * stride_a;
-                T* AB = ab_ptr + b * stride_ab;
+                const Scalar* A = a_ptr + b * stride_a;
+                Scalar* AB = ab_ptr + b * stride_ab;
 
-                const int lk = std::min(kd, n - 1 - j) + 1;
-                for (int r = 0; r < lk; ++r) {
-                    AB[r + j * ldab] = A[(j + r) + j * lda];
-                }
+                // The band column copy of device::sy2sb (lapack/sy2sb.hh), one column per item.
+                const int lk = device::detail::band_len(kd, n, j);
+                device::detail::copy_band_col(device::Thread{}, device::mat(A, n, n, lda), device::mat(AB, kd + 1, n, ldab), lk, j);
             });
     });
 
     return q.get_event();
 }
 
-template <typename T>
+template <typename Scalar>
 class CopyTauKernel;
 
-template <typename T>
+template <typename Scalar>
 Event copy_tau_panel_to_out(Queue& q,
-                            const T* tau_panel,
+                            const Scalar* tau_panel,
                             int tau_panel_ld,
-                            const VectorView<T>& tau_out,
+                            const VectorView<Scalar>& tau_out,
                             int i0,
                             int pk,
                             const std::uint8_t* mask) {
     const int stride_tau_out = tau_out.stride();
-    T* tau_out_ptr = tau_out.data_ptr();
+    Scalar* tau_out_ptr = tau_out.data_ptr();
     const int batch = tau_out.batch_size();
 
     (void)q->submit([&](sycl::handler& h) {
-        h.parallel_for<CopyTauKernel<T>>(
+        batchlas::impl::parallel_for<CopyTauKernel<Scalar>>(h,
             sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(pk)),
             [=](sycl::id<2> idx) {
                 const int b = static_cast<int>(idx[0]);
@@ -212,26 +213,27 @@ struct Sy2sbWyTag;
 
 // Per-panel scratch of the two-sided update, sized for the i = 0 panel (pn0 x pk0), which
 // bounds every later one. V, P, Y are pn x pk; Tf, M1, M2 are pk x pk.
-template <typename T>
+template <typename Scalar>
 struct Sy2sbUpdateScratch {
-    Span<T> v, p, y, tf, m1, m2;
+    Span<Scalar> v, p, y, tf, m1, m2;
 
     static size_t bytes(Queue& q, int pn0, int pk0, int batch) {
         const size_t tall = static_cast<size_t>(pn0) * static_cast<size_t>(pk0) * static_cast<size_t>(batch);
         const size_t small = static_cast<size_t>(pk0) * static_cast<size_t>(pk0) * static_cast<size_t>(batch);
-        return 3 * BumpAllocator::allocation_size<T>(q, tall) + 3 * BumpAllocator::allocation_size<T>(q, small);
+        return 3 * BumpAllocator::allocation_size<Scalar>(q, tall) + 3 * BumpAllocator::allocation_size<Scalar>(q,
+                                                                                                                small);
     }
 
     static Sy2sbUpdateScratch allocate(Queue& q, BumpAllocator& pool, int pn0, int pk0, int batch) {
         const size_t tall = static_cast<size_t>(pn0) * static_cast<size_t>(pk0) * static_cast<size_t>(batch);
         const size_t small = static_cast<size_t>(pk0) * static_cast<size_t>(pk0) * static_cast<size_t>(batch);
         Sy2sbUpdateScratch s;
-        s.v = pool.allocate<T>(q, tall);
-        s.p = pool.allocate<T>(q, tall);
-        s.y = pool.allocate<T>(q, tall);
-        s.tf = pool.allocate<T>(q, small);
-        s.m1 = pool.allocate<T>(q, small);
-        s.m2 = pool.allocate<T>(q, small);
+        s.v = pool.allocate<Scalar>(q, tall);
+        s.p = pool.allocate<Scalar>(q, tall);
+        s.y = pool.allocate<Scalar>(q, tall);
+        s.tf = pool.allocate<Scalar>(q, small);
+        s.m1 = pool.allocate<Scalar>(q, small);
+        s.m2 = pool.allocate<Scalar>(q, small);
         return s;
     }
 };
@@ -239,39 +241,39 @@ struct Sy2sbUpdateScratch {
 // A22 -= V W^H + W V^H, writing the lower triangle. syr2k / her2k only where a batched kernel
 // exists (as in sytrd_blocked); the GEMM pair elsewhere also writes the upper triangle, but a
 // lower entry of the result depends only on the same lower entry of A22, never on the upper.
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 void rank2k_lower_update(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& V,
-                         const MatrixView<T, MatrixFormat::Dense>& W,
-                         const MatrixView<T, MatrixFormat::Dense>& A22) {
-    constexpr bool rank2k_supported = select::level3_tile_substitution_enabled<B, T> &&
-                                      (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>);
+                         const MatrixView<Scalar, MatrixFormat::Dense>& V,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& W,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A22) {
+    constexpr bool rank2k_supported = select::level3_tile_substitution_enabled<B, Scalar> &&
+                                      (std::is_same_v<Scalar, float> || std::is_same_v<Scalar, std::complex<float>>);
     if constexpr (rank2k_supported) {
-        if constexpr (detail::is_complex<T>::value) {
-            if (ops::her2k::picks_batched_route<B, T>(ctx, V, W, A22, Transpose::NoTrans)) {
-                (void)her2k<B>(ctx, V, W, A22, {.alpha = T(-1), .beta = float_t<T>(1)});
+        if constexpr (detail::is_complex<Scalar>::value) {
+            if (ops::her2k::picks_batched_route<B, Scalar>(ctx, V, W, A22, Transpose::NoTrans)) {
+                (void)her2k<B>(ctx, V, W, A22, {.alpha = Scalar(-1), .beta = float_t<Scalar>(1)});
                 return;
             }
         } else {
-            (void)syr2k<B>(ctx, V, W, A22, {.alpha = T(-1), .beta = T(1)});
+            (void)syr2k<B>(ctx, V, W, A22, {.alpha = Scalar(-1), .beta = Scalar(1)});
             return;
         }
     }
-    (void)gemm<B>(ctx, V, W, A22, {.alpha = T(-1), .beta = T(1), .transB = Transpose::ConjTrans});
-    (void)gemm<B>(ctx, W, V, A22, {.alpha = T(-1), .beta = T(1), .transB = Transpose::ConjTrans});
+    (void)gemm<B>(ctx, V, W, A22, {.alpha = Scalar(-1), .beta = Scalar(1), .transB = Transpose::ConjTrans});
+    (void)gemm<B>(ctx, W, V, A22, {.alpha = Scalar(-1), .beta = Scalar(1), .transB = Transpose::ConjTrans});
 }
 
 // A22 := Q^H A22 Q for the panel's Q = I - V T V^H, reading only A22's lower triangle (LAPACK
 // sytrd_sy2sb): Y = A22 V T (symm / hemm, Lower), W = Y - V (T^H V^H Y) / 2, then
 // A22 -= V W^H + W V^H. Vg is the geqrf output (pn x pk, V strictly below its diagonal).
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 void two_sided_update_lower(Queue& ctx,
-                            const MatrixView<T, MatrixFormat::Dense>& Vg,
-                            Span<T> tau_panel,
-                            const MatrixView<T, MatrixFormat::Dense>& A22,
-                            const Sy2sbUpdateScratch<T>& s,
+                            const MatrixView<Scalar, MatrixFormat::Dense>& Vg,
+                            Span<Scalar> tau_panel,
+                            const MatrixView<Scalar, MatrixFormat::Dense>& A22,
+                            const Sy2sbUpdateScratch<Scalar>& s,
                             Span<const std::uint8_t> mask) {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     const int pn = Vg.rows();
     const int pk = Vg.cols();
     const int batch = Vg.batch_size();
@@ -282,32 +284,32 @@ void two_sided_update_lower(Queue& ctx,
     const MV M1 = MV(s.m1.data(), pk, pk, pk, pk * pk, batch).with_batch_mask(mask);
     const MV M2 = MV(s.m2.data(), pk, pk, pk, pk * pk, batch).with_batch_mask(mask);
 
-    (void)wy::pack_v_panel_batched<Sy2sbWyTag, T>(ctx, V.data_ptr(), V.ld(), V.stride(), Vg, 0, pk, pn);
-    (void)wy::larft_forward_columnwise_batched_t<Sy2sbWyTag, T, false>(
+    (void)wy::pack_v_panel_batched<Sy2sbWyTag, Scalar>(ctx, V.data_ptr(), V.ld(), V.stride(), Vg, 0, pk, pn);
+    (void)wy::larft_forward_columnwise_batched<Sy2sbWyTag, Scalar>(
         ctx, Tf.data_ptr(), Tf.ld(), Tf.stride(), V.data_ptr(), V.ld(), V.stride(), pn, pk,
         tau_panel.data(), /*tau_stride=*/pk, /*tau_offset=*/0, batch);
-    (void)gemm<B>(ctx, V, Tf, P, GemmOptions<T>{});
-    if constexpr (detail::is_complex<T>::value)
-        (void)hemm<B, T>(ctx, A22, P, Y, T(1), T(0), Side::Left, Uplo::Lower);
+    (void)gemm<B>(ctx, V, Tf, P, GemmOptions<Scalar>{});
+    if constexpr (detail::is_complex<Scalar>::value)
+        (void)hemm<B, Scalar>(ctx, A22, P, Y, Scalar(1), Scalar(0), Side::Left, Uplo::Lower);
     else
-        (void)symm<B, T>(ctx, A22, P, Y, T(1), T(0), Side::Left, Uplo::Lower);
+        (void)symm<B, Scalar>(ctx, A22, P, Y, Scalar(1), Scalar(0), Side::Left, Uplo::Lower);
     (void)gemm<B>(ctx, V, Y, M1, {.transA = Transpose::ConjTrans});
     (void)gemm<B>(ctx, Tf, M1, M2, {.transA = Transpose::ConjTrans});
-    (void)gemm<B>(ctx, V, M2, Y, {.alpha = T(-0.5), .beta = T(1)});
-    rank2k_lower_update<B, T>(ctx, V, Y, A22);
+    (void)gemm<B>(ctx, V, M2, Y, {.alpha = Scalar(-0.5), .beta = Scalar(1)});
+    rank2k_lower_update<B, Scalar>(ctx, V, Y, A22);
 }
 
-} // namespace
+}  // namespace
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 size_t sytrd_sy2sb_buffer_size(Queue& ctx,
-                               const MatrixView<T, MatrixFormat::Dense>& a_in,
-                               const MatrixView<T, MatrixFormat::Dense>& ab_out,
-                               const VectorView<T>& tau_out,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& a_in,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& ab_out,
+                               const VectorView<Scalar>& tau_out,
                                Uplo uplo,
                                int32_t kd) {
     validate_sytrd_sy2sb_dims(a_in, ab_out, tau_out, uplo, kd);
-    const MatrixView<T, MatrixFormat::Dense> A =
+    const MatrixView<Scalar, MatrixFormat::Dense> A =
         a_in.with_batch_mask(batchlas::detail::call_mask("sytrd_sy2sb", a_in, ab_out, tau_out));
 
     const int n = a_in.rows();
@@ -316,7 +318,7 @@ size_t sytrd_sy2sb_buffer_size(Queue& ctx,
 
     size_t size = 0;
     // tau_panel: kd per batch (packed per panel)
-    size += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(kd_i) * static_cast<size_t>(batch));
+    size += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(kd_i) * static_cast<size_t>(batch));
 
     // Add workspace for GEQRF + ORMQR on the largest panel/trailing block.
     // Some backends require a valid device pointer for tau when querying.
@@ -328,42 +330,42 @@ size_t sytrd_sy2sb_buffer_size(Queue& ctx,
         auto A_left0 = A({kd_i, SliceEnd()}, {pk0, SliceEnd()});
 
         const size_t tau_elems = static_cast<size_t>(pk0) * static_cast<size_t>(batch);
-        T* tau_tmp = sycl::malloc_shared<T>(tau_elems, ctx->get_device(), ctx->get_context());
+        Scalar* tau_tmp = sycl::malloc_shared<Scalar>(tau_elems, ctx->get_device(), ctx->get_context());
         if (!tau_tmp && tau_elems != 0) {
             throw std::bad_alloc();
         }
-        Span<T> tau_span(tau_tmp, tau_elems);
+        Span<Scalar> tau_span(tau_tmp, tau_elems);
 
         // MUST use exactly the same hint as the ormqr calls in sytrd_sy2sb below:
         // the blocked provider's V (nq*nb), T (nb*nb) and W1/W2 (nb*nC) are all
         // linear in nb, so a mismatch silently overruns the BumpAllocator.
         const int32_t ormqr_nb_hint = sy2sb_ormqr_block_size_hint(n, batch, kd_i);
 
-        const size_t geqrf_ws = geqrf_buffer_size_bound<B, T>(ctx, V0, tau_span);
-        const Transpose trans_left = detail::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
-        const size_t ormqr_l_ws = ormqr_buffer_size<B, T>(ctx, V0, A_left0, Side::Left, trans_left, tau_span, ormqr_nb_hint);
+        const size_t geqrf_ws = geqrf_buffer_size_bound<B, Scalar>(ctx, V0, tau_span);
+        const Transpose trans_left = detail::is_complex<Scalar>::value ? Transpose::ConjTrans : Transpose::Trans;
+        const size_t ormqr_l_ws = ormqr_buffer_size<B, Scalar>(ctx, V0, A_left0, Side::Left, trans_left, tau_span, ormqr_nb_hint);
         const size_t panel_ws = std::max(geqrf_ws, ormqr_l_ws);
 
         sycl::free(tau_tmp, ctx->get_context());
         size += BumpAllocator::allocation_size<std::byte>(ctx, panel_ws);
-        size += Sy2sbUpdateScratch<T>::bytes(ctx, pn0, pk0, batch);
+        size += Sy2sbUpdateScratch<Scalar>::bytes(ctx, pn0, pk0, batch);
     }
 
     return size;
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event sytrd_sy2sb(Queue& ctx,
-                  const MatrixView<T, MatrixFormat::Dense>& a_in,
-                  const MatrixView<T, MatrixFormat::Dense>& ab_out,
-                  const VectorView<T>& tau_out,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& a_in,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& ab_out,
+                  const VectorView<Scalar>& tau_out,
                   Uplo uplo,
                   int32_t kd,
                   const Span<std::byte>& ws) {
     const Span<const std::uint8_t> mask = batchlas::detail::call_mask("sytrd_sy2sb", a_in, ab_out, tau_out);
     const std::uint8_t* mask_p = batchlas::detail::mask_ptr(mask);
     validate_sytrd_sy2sb_dims(a_in, ab_out, tau_out, uplo, kd);
-    const MatrixView<T, MatrixFormat::Dense> A = a_in.with_batch_mask(mask);
+    const MatrixView<Scalar, MatrixFormat::Dense> A = a_in.with_batch_mask(mask);
 
     if (!ctx.in_order()) {
         throw batchlas::invalid_argument("sytrd_sy2sb: requires an in-order Queue");
@@ -380,18 +382,18 @@ Event sytrd_sy2sb(Queue& ctx,
     // Quick return: just copy the band.
     if (n <= 0) return ctx.get_event();
 
-    (void)zero_ab<T>(ctx, ab_out, mask_p);
+    (void)zero_ab<Scalar>(ctx, ab_out, mask_p);
 
     if (kd_i == 0 || n <= kd_i) {
         // Full band width covers the matrix (or degenerate kd=0): copy diagonal (and up to kd).
-        (void)copy_band_lower<T>(ctx, a_in, ab_out, /*i0=*/0, /*pk=*/n, /*kd=*/kd_i, mask_p);
+        (void)copy_band_lower<Scalar>(ctx, a_in, ab_out, /*i0=*/0, /*pk=*/n, /*kd=*/kd_i, mask_p);
         return ctx.get_event();
     }
 
     BumpAllocator pool(ws);
 
     // tau panel storage packed with per-batch stride = PK (varies by panel); we reuse this buffer.
-    auto tau_panel_buf = pool.allocate<T>(ctx, static_cast<size_t>(kd_i) * static_cast<size_t>(batch));
+    auto tau_panel_buf = pool.allocate<Scalar>(ctx, static_cast<size_t>(kd_i) * static_cast<size_t>(batch));
 
     // Shared workspace for GEQRF + ORMQR on the largest panel/trailing block.
     const int pn0 = n - kd_i;
@@ -399,18 +401,17 @@ Event sytrd_sy2sb(Queue& ctx,
     auto V0 = A({kd_i, SliceEnd()}, {0, pk0});
     // Must match the shapes queried in sytrd_sy2sb_buffer_size exactly.
     auto A_left0 = A({kd_i, SliceEnd()}, {pk0, SliceEnd()});
-    const size_t geqrf_ws_bytes = geqrf_buffer_size_bound<B, T>(ctx, V0, Span<T>(tau_panel_buf.data(), static_cast<size_t>(pk0) * static_cast<size_t>(batch)));
-    const Transpose trans_left = detail::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
+    const size_t geqrf_ws_bytes = geqrf_buffer_size_bound<B, Scalar>(ctx, V0, Span<Scalar>(tau_panel_buf.data(), static_cast<size_t>(pk0) * static_cast<size_t>(batch)));
+    const Transpose trans_left = detail::is_complex<Scalar>::value ? Transpose::ConjTrans : Transpose::Trans;
     // Same hint used for the query and for every ormqr call in the loop below.
     // Keep this identical to sytrd_sy2sb_buffer_size or the pool overruns.
     const int32_t ormqr_nb_hint = sy2sb_ormqr_block_size_hint(n, batch, kd_i);
-    const size_t ormqr_l_ws_bytes = ormqr_buffer_size<B, T>(ctx, V0, A_left0, Side::Left, trans_left,
-                                                           Span<T>(tau_panel_buf.data(), static_cast<size_t>(pk0) * static_cast<size_t>(batch)),
-                                                           ormqr_nb_hint);
+    const size_t ormqr_l_ws_bytes = ormqr_buffer_size<B, Scalar>(ctx, V0, A_left0, Side::Left, trans_left,
+                                                                 Span<Scalar>(tau_panel_buf.data(), static_cast<size_t>(pk0) * static_cast<size_t>(batch)),
+                                                                 ormqr_nb_hint);
     const size_t panel_ws_bytes = std::max(geqrf_ws_bytes, ormqr_l_ws_bytes);
     auto panel_ws = pool.allocate<std::byte>(ctx, panel_ws_bytes);
-    const auto update_ws = Sy2sbUpdateScratch<T>::allocate(ctx, pool, pn0, pk0, batch);
-
+    const auto update_ws = Sy2sbUpdateScratch<Scalar>::allocate(ctx, pool, pn0, pk0, batch);
 
     // Main loop: i advances in blocks of kd.
     for (int i = 0; i <= n - kd_i - 1; i += kd_i) {
@@ -431,32 +432,32 @@ Event sytrd_sy2sb(Queue& ctx,
         auto A22 = A({i + kd_i, SliceEnd()}, {i + kd_i, SliceEnd()});
 
         // tau panel span is packed with per-batch stride = pk.
-        Span<T> tau_panel_span(tau_panel_buf.data(), static_cast<size_t>(pk) * static_cast<size_t>(batch));
+        Span<Scalar> tau_panel_span(tau_panel_buf.data(), static_cast<size_t>(pk) * static_cast<size_t>(batch));
 
         // QR factorization of V in-place.
         // (void) on an Event: deliberate. This Queue is in-order, so the next submission
         // is already ordered after this one and the Event carries nothing the caller needs.
-        (void)geqrf<B, T>(ctx, V, tau_panel_span, panel_ws);
+        (void)geqrf<B, Scalar>(ctx, V, tau_panel_span, panel_ws);
 
         // Copy band portion into AB for columns i..i+pk-1.
-        (void)copy_band_lower<T>(ctx, a_in, ab_out, i, pk, kd_i, mask_p);
+        (void)copy_band_lower<Scalar>(ctx, a_in, ab_out, i, pk, kd_i, mask_p);
 
         if (pk < kd_i) {
             // The hint is clamped to k = min(rows, cols) inside the dispatch, so it degrades
             // to min(nb, pk) and the workspace sized from the i = 0 panel still bounds it.
             auto A_strip = A({i + kd_i, SliceEnd()}, {i + pk, i + kd_i});
-            (void)ormqr<B, T>(ctx, V, A_strip, Side::Left, trans_left, tau_panel_span, panel_ws, ormqr_nb_hint);
+            (void)ormqr<B, Scalar>(ctx, V, A_strip, Side::Left, trans_left, tau_panel_span, panel_ws, ormqr_nb_hint);
         }
-        two_sided_update_lower<B, T>(ctx, V, tau_panel_span, A22, update_ws, mask);
+        two_sided_update_lower<B, Scalar>(ctx, V, tau_panel_span, A22, update_ws, mask);
 
         // Store tau panel into output tau at offset i.
-        (void)copy_tau_panel_to_out<T>(ctx, tau_panel_buf.data(), /*tau_panel_ld=*/pk, tau_out, i, pk, mask_p);
+        (void)copy_tau_panel_to_out<Scalar>(ctx, tau_panel_buf.data(), /*tau_panel_ld=*/pk, tau_out, i, pk, mask_p);
     }
 
     // Copy remaining (already banded) trailing columns into AB.
     const int tail = std::max(0, n - kd_i);
     if (tail < n) {
-        (void)copy_band_lower<T>(ctx, a_in, ab_out, /*i0=*/tail, /*pk=*/n - tail, /*kd=*/kd_i, mask_p);
+        (void)copy_band_lower<Scalar>(ctx, a_in, ab_out, /*i0=*/tail, /*pk=*/n - tail, /*kd=*/kd_i, mask_p);
     }
 
     return ctx.get_event();
@@ -485,4 +486,4 @@ BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(SYTRD_SY2SB_INSTANTIATE)
 
 #undef SYTRD_SY2SB_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

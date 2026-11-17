@@ -21,17 +21,18 @@ namespace batchlas {
 // Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
 // src/util/template-instantiations.hh. Keep in sync with the declarations below.
 namespace sig {
-template <typename T>
-using sygvd = Event(Queue&, const MatrixView<T, MatrixFormat::Dense>&, const MatrixView<T, MatrixFormat::Dense>&,
-                    Span<typename base_type<T>::type>, int, JobType, Uplo, Span<std::byte>, Span<int32_t>);
-template <typename T>
-using sygvd_buffer_size = size_t(Queue&, const MatrixView<T, MatrixFormat::Dense>&,
-                                 const MatrixView<T, MatrixFormat::Dense>&, Span<typename base_type<T>::type>, int,
-                                 JobType, Uplo);
-template <typename T> using sygvd_factored = sygvd<T>;
-template <typename T> using sygvd_factored_buffer_size = sygvd_buffer_size<T>;
-template <typename T> using sygvd_vendor = sygvd<T>;
-template <typename T> using sygvd_vendor_buffer_size = sygvd_buffer_size<T>;
+template <typename Scalar>
+using sygvd = Event(Queue&, const MatrixView<Scalar, MatrixFormat::Dense>&, const MatrixView<Scalar,
+                    MatrixFormat::Dense>&,
+                    Span<typename base_type<Scalar>::type>, int, JobType, Uplo, Span<std::byte>, Span<int32_t>);
+template <typename Scalar>
+using sygvd_buffer_size = size_t(Queue&, const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>&, Span<typename base_type<Scalar>::type>,
+                                 int, JobType, Uplo);
+template <typename Scalar> using sygvd_factored = sygvd<Scalar>;
+template <typename Scalar> using sygvd_factored_buffer_size = sygvd_buffer_size<Scalar>;
+template <typename Scalar> using sygvd_vendor = sygvd<Scalar>;
+template <typename Scalar> using sygvd_vendor_buffer_size = sygvd_buffer_size<Scalar>;
 }  // namespace sig
 
 /// @brief Eigenvalues, and optionally eigenvectors, of a batch of generalized Hermitian-definite
@@ -48,7 +49,7 @@ template <typename T> using sygvd_vendor_buffer_size = sygvd_buffer_size<T>;
 ///
 /// Asynchronous: A, B, @p eigenvalues and @p info are readable after the returned event is waited on.
 /// @tparam Back  backend; the backend-deducing overload takes it from `ctx.backend()`
-/// @tparam T     scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @tparam Scalar     scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in]     ctx          queue the work is enqueued on
 /// @param[in,out] A            batch of \f$n \times n\f$ Hermitian matrices, only the @p uplo triangle read;
 ///                             with `JobType::EigenVectors` overwritten by the eigenvectors (column \f$j\f$
@@ -74,14 +75,15 @@ template <typename T> using sygvd_vendor_buffer_size = sygvd_buffer_size<T>;
 /// @throws batchlas::NoRouteError when no family can run the call in this build
 /// @see sygvd_factored(), sygst(), syev(), @ref perf_sygvd
 /// @ingroup api_eigen
-template <Backend Back, typename T>
-BATCHLAS_API Event sygvd(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                         const MatrixView<T, MatrixFormat::Dense>& B, Span<typename base_type<T>::type> eigenvalues,
+template <Backend Back, typename Scalar>
+BATCHLAS_API Event sygvd(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                         Span<typename base_type<Scalar>::type> eigenvalues,
                          int itype, JobType jobz, Uplo uplo, Span<std::byte> work_space, Span<int32_t> info);
 
 /// @brief Workspace, in bytes, that sygvd() needs for the same arguments (it makes the same choices).
 /// @tparam Back  backend; the backend-deducing overload takes it from `ctx.backend()`
-/// @tparam T     scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @tparam Scalar     scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in] ctx          queue the sygvd() call will run on (selection reads its device)
 /// @param[in] A            batch of \f$n \times n\f$ matrices the call will get; only the shape is read
 /// @param[in] B            batch of \f$n \times n\f$ matrices the call will get; only the shape is read
@@ -91,10 +93,10 @@ BATCHLAS_API Event sygvd(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A
 /// @param[in] uplo         the call's triangle
 /// @return bytes to pass as the `work_space` span of sygvd()
 /// @ingroup api_eigen_lowlevel
-template <Backend Back, typename T>
-BATCHLAS_API size_t sygvd_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                                      const MatrixView<T, MatrixFormat::Dense>& B,
-                                      Span<typename base_type<T>::type> eigenvalues, int itype, JobType jobz,
+template <Backend Back, typename Scalar>
+BATCHLAS_API size_t sygvd_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                      const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                                      Span<typename base_type<Scalar>::type> eigenvalues, int itype, JobType jobz,
                                       Uplo uplo);
 
 /// @brief sygvd() with B already factored: the @p uplo triangle of @p B holds potrf()'s Cholesky factor,
@@ -105,7 +107,7 @@ BATCHLAS_API size_t sygvd_buffer_size(Queue& ctx, const MatrixView<T, MatrixForm
 /// vendor library takes a factored B): sygst(), syev() and the back-transform. `info` is syev()'s
 /// (0, or \f$i \in \{1, \dots, n\}\f$); potrf()'s own `info` is where a non-positive-definite B shows.
 /// @tparam Back  backend; the backend-deducing overload takes it from `ctx.backend()`
-/// @tparam T     scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @tparam Scalar     scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in]     ctx          queue the work is enqueued on
 /// @param[in,out] A            batch of \f$n \times n\f$ Hermitian matrices, only the @p uplo triangle read;
 ///                             with `JobType::EigenVectors` overwritten by the eigenvectors, otherwise
@@ -122,15 +124,15 @@ BATCHLAS_API size_t sygvd_buffer_size(Queue& ctx, const MatrixView<T, MatrixForm
 ///                             converge. An empty span means "not requested".
 /// @return event of the last enqueued kernel
 /// @ingroup api_eigen
-template <Backend Back, typename T>
-BATCHLAS_API Event sygvd_factored(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                                  const MatrixView<T, MatrixFormat::Dense>& B,
-                                  Span<typename base_type<T>::type> eigenvalues, int itype, JobType jobz, Uplo uplo,
-                                  Span<std::byte> work_space, Span<int32_t> info);
+template <Backend Back, typename Scalar>
+BATCHLAS_API Event sygvd_factored(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                  const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                                  Span<typename base_type<Scalar>::type> eigenvalues, int itype, JobType jobz,
+                                  Uplo uplo, Span<std::byte> work_space, Span<int32_t> info);
 
 /// @brief Workspace, in bytes, that sygvd_factored() needs for the same arguments.
 /// @tparam Back  backend; the backend-deducing overload takes it from `ctx.backend()`
-/// @tparam T     scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @tparam Scalar     scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in] ctx          queue the sygvd_factored() call will run on
 /// @param[in] A            batch of \f$n \times n\f$ matrices the call will get; only the shape is read
 /// @param[in] B            batch of \f$n \times n\f$ factors the call will get; only the shape is read
@@ -140,16 +142,16 @@ BATCHLAS_API Event sygvd_factored(Queue& ctx, const MatrixView<T, MatrixFormat::
 /// @param[in] uplo         the call's triangle
 /// @return bytes to pass as the `work_space` span of sygvd_factored()
 /// @ingroup api_eigen_lowlevel
-template <Backend Back, typename T>
-BATCHLAS_API size_t sygvd_factored_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                                               const MatrixView<T, MatrixFormat::Dense>& B,
-                                               Span<typename base_type<T>::type> eigenvalues, int itype,
+template <Backend Back, typename Scalar>
+BATCHLAS_API size_t sygvd_factored_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                               const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                                               Span<typename base_type<Scalar>::type> eigenvalues, int itype,
                                                JobType jobz, Uplo uplo);
 
 /// @brief The complex-Hermitian spelling of sygvd() (LAPACK `?hegvd`); identical semantics, and the same
 ///        backend-deducing overload `hegvd(ctx, ...)`.
 /// @tparam Back  backend; the backend-deducing overload takes it from `ctx.backend()`
-/// @tparam T     scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @tparam Scalar     scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in]     ctx          queue the work is enqueued on
 /// @param[in,out] A            batch of \f$n \times n\f$ Hermitian matrices; overwritten by the
 ///                             eigenvectors or destroyed, as in sygvd()
@@ -163,11 +165,11 @@ BATCHLAS_API size_t sygvd_factored_buffer_size(Queue& ctx, const MatrixView<T, M
 /// @param[out]    info         per-item status as in sygvd(); an empty span means "not requested"
 /// @return event of the last enqueued kernel
 /// @ingroup api_eigen
-template <Backend Back, typename T>
-inline Event hegvd(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                   const MatrixView<T, MatrixFormat::Dense>& B, Span<typename base_type<T>::type> eigenvalues,
+template <Backend Back, typename Scalar>
+inline Event hegvd(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                   const MatrixView<Scalar, MatrixFormat::Dense>& B, Span<typename base_type<Scalar>::type> eigenvalues,
                    int itype, JobType jobz, Uplo uplo, Span<std::byte> work_space, Span<int32_t> info) {
-    return sygvd<Back, T>(ctx, A, B, eigenvalues, itype, jobz, uplo, work_space, info);
+    return sygvd<Back, Scalar>(ctx, A, B, eigenvalues, itype, jobz, uplo, work_space, info);
 }
 
 ///        are not touched (bit-identical on return). The active items are gathered into packed copies in
@@ -193,7 +195,7 @@ namespace batchlas::backend {
 /// @brief The vendor solver's sygvd (cuSOLVER `?sygvd` per item, LAPACKE `?sygvd` per item), sygvd()'s
 ///        `vendor` family; same contract as sygvd().
 /// @tparam B  backend whose vendor library runs the call
-/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @tparam Scalar  scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in]     ctx          queue the work is enqueued on
 /// @param[in,out] A            batch of \f$n \times n\f$ Hermitian matrices; overwritten by the
 ///                             eigenvectors or destroyed, as in sygvd()
@@ -208,15 +210,15 @@ namespace batchlas::backend {
 /// @param[out]    info         per-item status as in sygvd(); an empty span means "not requested"
 /// @return event of the last enqueued kernel
 /// @ingroup api_dispatch
-template <Backend B, typename T>
-BATCHLAS_API Event sygvd_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                                const MatrixView<T, MatrixFormat::Dense>& Bm,
-                                Span<typename base_type<T>::type> eigenvalues, int itype, JobType jobz, Uplo uplo,
+template <Backend B, typename Scalar>
+BATCHLAS_API Event sygvd_vendor(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& Bm,
+                                Span<typename base_type<Scalar>::type> eigenvalues, int itype, JobType jobz, Uplo uplo,
                                 Span<std::byte> work_space, Span<int32_t> info);
 
 /// @brief Workspace, in bytes, for backend::sygvd_vendor().
 /// @tparam B  backend whose vendor library runs the call
-/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @tparam Scalar  scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in] ctx          queue the call will run on
 /// @param[in] A            batch of \f$n \times n\f$ matrices the call will get; only the shape is read
 /// @param[in] Bm           batch of \f$n \times n\f$ matrices the call will get; only the shape is read
@@ -226,10 +228,10 @@ BATCHLAS_API Event sygvd_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::De
 /// @param[in] uplo         the call's triangle
 /// @return bytes to pass as the `work_space` span of backend::sygvd_vendor()
 /// @ingroup api_dispatch
-template <Backend B, typename T>
-BATCHLAS_API size_t sygvd_vendor_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                                             const MatrixView<T, MatrixFormat::Dense>& Bm,
-                                             Span<typename base_type<T>::type> eigenvalues, int itype, JobType jobz,
-                                             Uplo uplo);
+template <Backend B, typename Scalar>
+BATCHLAS_API size_t sygvd_vendor_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                             const MatrixView<Scalar, MatrixFormat::Dense>& Bm,
+                                             Span<typename base_type<Scalar>::type> eigenvalues, int itype,
+                                             JobType jobz, Uplo uplo);
 
 }  // namespace batchlas::backend

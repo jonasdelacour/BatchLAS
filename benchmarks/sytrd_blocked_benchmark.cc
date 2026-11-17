@@ -16,7 +16,7 @@ template <typename Benchmark>
 inline void SytrdBlockedBenchSizes(Benchmark* b) {
     auto ns = std::array{64, 128, 256, 512};
     auto bs = std::array{8192, 4096, 2048, 1024};
-    auto nb = std::array{8,12,16,24,32};
+    auto nb = std::array{8, 12, 16, 24, 32};
     for (size_t i = 0; i < ns.size(); ++i) {
         for (int j = 0; j < nb.size(); ++j) {
             b->Args({ns[i], bs[i], nb[j], 0}); // lower
@@ -24,11 +24,9 @@ inline void SytrdBlockedBenchSizes(Benchmark* b) {
     }
 }
 
-} // namespace
-
 // Batched SYTRD-blocked benchmark
-template <typename T, Backend B>
-static void BM_SYTRD_BLOCKED(minibench::State& state) {
+template <typename Scalar, Backend B>
+void BM_SYTRD_BLOCKED(minibench::State& state) {
 #if BATCHLAS_HAS_CUDA_BACKEND
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
@@ -39,27 +37,27 @@ static void BM_SYTRD_BLOCKED(minibench::State& state) {
     // Rough flop model for blocked SYTRD is still O(n^3).
     const double total_flops = (4.0 / 3.0) * double(n) * double(n) * double(n) * double(batch);
 
-    auto A0 = Matrix<T>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/2026);
-    auto A = Matrix<T>::Zeros(n, n, batch);
-    auto d = Vector<T>::zeros(n, batch);
-    auto e = Vector<T>::zeros(n - 1, batch);
-    auto tau = Vector<T>::zeros(n - 1, batch);
+    auto A0 = Matrix<Scalar>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/2026);
+    auto A = Matrix<Scalar>::Zeros(n, n, batch);
+    auto d = Vector<Scalar>::zeros(n, batch);
+    auto e = Vector<Scalar>::zeros(n - 1, batch);
+    auto tau = Vector<Scalar>::zeros(n - 1, batch);
 
     auto q = std::make_shared<Queue>(Device("gpu"), B, /*in_order=*/true);
 
     const size_t ws_bytes = sytrd_blocked_buffer_size(*q,
                                                            A,
-                                                           VectorView<T>(d),
-                                                           VectorView<T>(e),
-                                                           VectorView<T>(tau),
+                                                           VectorView<Scalar>(d),
+                                                           VectorView<Scalar>(e),
+                                                           VectorView<Scalar>(tau),
                                                            uplo,
                                                            nb);
     UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
 
     state.SetKernel(
         q,
-        bench::pristine(A0), //sytrd_blocked mutates A so if it is not kept pristine between runs the speed results will change between runs.
-        d,e,tau,uplo,ws,nb,
+        bench::pristine(A0), // sytrd_blocked mutates A so if it is not kept pristine between runs the speed results will change between runs.
+        d, e, tau, uplo, ws, nb,
         [](Queue& q, auto&&... xs) {
             (void)sytrd_blocked(q, std::forward<decltype(xs)>(xs)...);
         });
@@ -69,6 +67,8 @@ static void BM_SYTRD_BLOCKED(minibench::State& state) {
     (void)state;
 #endif
 }
+
+}  // namespace
 
 // Register at static-init time
 BATCHLAS_BENCH_CUDA_ALL_TYPES(BM_SYTRD_BLOCKED, SytrdBlockedBenchSizes);

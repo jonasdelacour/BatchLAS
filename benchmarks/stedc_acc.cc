@@ -82,12 +82,12 @@ void run_stedc(miniacc::State& state) {
     }
 }
 
-} // namespace
-
 template <typename Real, Backend B>
-static void ACC_STEDC(miniacc::State& state) {
+void ACC_STEDC(miniacc::State& state) {
     run_stedc<Real, B>(state);
 }
+
+}  // namespace
 
 template <typename Benchmark>
 void EigensolverSizesNetlib(Benchmark* b) {
@@ -96,4 +96,4 @@ void EigensolverSizesNetlib(Benchmark* b) {
 
 BATCHLAS_REGISTER_ACCURACY(ACC_STEDC, EigensolverSizes)
 
-MINI_ACC_MAIN()
+MINI_ACC_MAIN();

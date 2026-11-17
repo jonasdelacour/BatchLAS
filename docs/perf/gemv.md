@@ -17,8 +17,8 @@ row of `tuned/gemv.<device>.txt` that `can_run` admits; last resort `vendor`, th
 
 | spelling | driver | bodies | `can_run` |
 |---|---|---|---|
-| `cta` | `sycl_gemv::gemv_native_cta` | 3, 5 | native term, `gemv_cta_available<T>()`, `d.is_gpu && d.has_sg32 && transA != NoTrans` |
-| `direct` | `sycl_gemv::gemv_native_direct` | 1, 2, 4 | native term and `gemv_direct_available<T>()`; no GPU term (builds for `native_cpu`) |
+| `cta` | `ops::gemv::gemv_native_cta` | 3, 5 | native term, `d.is_gpu && d.has_sg32 && transA != NoTrans` |
+| `direct` | `ops::gemv::gemv_native_direct` | 1, 2, 4 | native term; no GPU term (builds for `native_cpu`) |
 | `vendor` | `backend::gemv_vendor` | — | `!A.is_heterogeneous()` |
 
 The native term refuses a heterogeneous \f$A\f$, negative extents and `batch < 1`, and requires
@@ -77,9 +77,9 @@ means body 1, so body 4 serves `out_len <= 16`. Needs sub-group 32 (false on `na
 | 2: `W = 8` up to `red_len <=`, then `W = 4` | 24 | 16 | 32 | 32 |
 | 3: floor on `out_len*batch` | `16*CU` (`W = 8`), `64*CU` (`W = 4`) | | | |
 
-* **`BATCHLAS_GEMV_ROUTE`** takes `auto`, `native`, `vendor` or a spelling. A spelling the shape
+- **`BATCHLAS_GEMV_ROUTE`** takes `auto`, `native`, `vendor` or a spelling. A spelling the shape
   cannot take throws `invalid_argument` (`cta` on NoTrans is an error, not a reroute).
-* **`BATCHLAS_GEMV_SEGT`** (`off` / `auto` / `2|4|8`) forces the body-5 width and bypasses all three
+- **`BATCHLAS_GEMV_SEGT`** (`off` / `auto` / `2|4|8`) forces the body-5 width and bypasses all three
   gates. Read per launch, never latched (`gemv_segt_mode`).
 
 ## Evidence for each boundary
@@ -145,14 +145,14 @@ at 32; a warp effect, not a bytes effect. After: 24 cells min 0.60, median 1.16.
 
 ## GEMV: the shape builder contract
 
-* **The native term of `can_run` is the only agreement check:** homogeneous \f$A\f$, `batch >= 1`,
+- **The native term of `can_run` is the only agreement check:** homogeneous \f$A\f$, `batch >= 1`,
   \f$x\f$ and \f$y\f$ matching \f$A\f$ in batch, `X.size() == red_len`, `Y.size() == out_len`.
   The public entry validates nothing; a non-conforming call goes to `vendor`, or throws `NoRouteError` vendor-free.
-* **`can_run` reads metadata only**, never `data_ptr()`.
-* **Lengths swap with `transA`**; table keys use `red_len`/`out_len`, coverage `m`/`n` are the stored
+- **`can_run` reads metadata only**, never `data_ptr()`.
+- **Lengths swap with `transA`**; table keys use `red_len`/`out_len`, coverage `m`/`n` are the stored
   extents of \f$A\f$.
-* **`transA` is part of `coverage.cc`'s `variant_key`**; dropping it merges bodies 1 and 2/3.
-* **Only `A` can be heterogeneous.**
+- **`transA` is part of `coverage.cc`'s `variant_key`**; dropping it merges bodies 1 and 2/3.
+- **Only `A` can be heterogeneous.**
 
 ## GEMV: correctness findings
 
@@ -172,12 +172,12 @@ with its numbers when `16*CU`/`64*CU` exceed the body-5 cases' `out_len*batch`.
 
 ## GEMV: open debts
 
-* Nothing above `batch 1024` or `out_len 2048` was measured, yet sm_89 rows rank `cta` first up to 32768.
-* The batch floor 320 is the lowest enumerated threshold: batch 288 wins all six band cells (one pass).
-* `out_len >= 768 && batch >= 128` is measured (~18 cells at 2.26–2.91×) and unrouted.
-* The `red_len <= 352` edge holds only at the smallest `out_len`; at 2048 the vendor is still dipped at 384–448.
-* `complex<double>` transposed at short reduction is 0.86×, cleared but not parity.
-* The sm_89 table is untimed; the sm_120 cdouble `vendor` rows are transcribed.
+- Nothing above `batch 1024` or `out_len 2048` was measured, yet sm_89 rows rank `cta` first up to 32768.
+- The batch floor 320 is the lowest enumerated threshold: batch 288 wins all six band cells (one pass).
+- `out_len >= 768 && batch >= 128` is measured (~18 cells at 2.26–2.91×) and unrouted.
+- The `red_len <= 352` edge holds only at the smallest `out_len`; at 2048 the vendor is still dipped at 384–448.
+- `complex<double>` transposed at short reduction is 0.86×, cleared but not parity.
+- The sm_89 table is untimed; the sm_120 cdouble `vendor` rows are transcribed.
 
 ## Raw evidence
 

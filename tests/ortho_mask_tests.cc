@@ -73,24 +73,24 @@ const char* algo_name(OrthoAlgorithm a) {
 }
 
 // rows x cols items of full rank, distinct per item (or all item 0's when identical).
-template <typename T>
-void fill_full_rank(Matrix<T>& A, int rows, int cols, int batch, bool identical) {
-    std::fill_n(A.data_ptr(), std::size_t(A.stride()) * batch, test_support::poison<T>());
+template <typename Scalar>
+void fill_full_rank(Matrix<Scalar>& A, int rows, int cols, int batch, bool identical) {
+    std::fill_n(A.data_ptr(), std::size_t(A.stride()) * batch, test_support::poison<Scalar>());
     for (int b = 0; b < batch; ++b) {
         const int item = identical ? 0 : b;
-        T* a = A.data_ptr() + std::size_t(A.stride()) * b;
+        Scalar* a = A.data_ptr() + std::size_t(A.stride()) * b;
         for (int j = 0; j < cols; ++j)
             for (int i = 0; i < rows; ++i) {
                 const double re = double(int((i * 7 + j * 3 + item * 5) % 17) - 8) / 8 + (i == j ? 3.0 : 0.0);
                 const double im = double(int((i * 5 + j + item * 3) % 11) - 5) / 8;
-                a[i + std::size_t(A.ld()) * j] = MatrixView<T>::make(re, im);
+                a[i + std::size_t(A.ld()) * j] = MatrixView<Scalar>::make(re, im);
             }
     }
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;

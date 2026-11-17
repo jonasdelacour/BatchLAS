@@ -4,10 +4,14 @@
 // evidence: docs/perf/spmm.md#spmm-the-kernel-contract
 
 #include <src/ops/spmm/spmm_native.hh>
+#include <src/ops/gemv/gemv_native.hh>
 
+#include <batchlas/device.hh>
+#include <batchlas/device/arith.hh>
+#include <batchlas/device/sparse.hh>
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <src/util/batch_mask.hh>
 
 #include <sycl/sycl.hpp>
@@ -17,35 +21,17 @@
 #include <cstdint>
 #include <type_traits>
 
-namespace batchlas::sycl_spmm {
+namespace batchlas::ops::spmm {
 
 using sycl_device::Cx;
 using sycl_device::DevMap;
-using sycl_device::dev_conj;
 using sycl_device::dev_is_complex_v;
-using sycl_device::dev_mul;
-using sycl_device::fma_acc;
 
 namespace {
 
-// Body-for-body copy of gemv_wg_ladder (gemv_native.cc), kept diffable -- hence
-// the `units_per_wg_shift` parameter that every caller here passes 0 for.
-inline int spmm_wg_ladder(int64_t work_units, int max_wg, int cu,
-                          int units_per_wg_shift) {
-    int wg = 32;
-    for (int cand : {256, 128, 64, 32}) {
-        if (cand > max_wg) continue;
-        wg = cand;
-        const int64_t per_wg = cand >> units_per_wg_shift;
-        if (per_wg < 1) continue;
-        const int64_t groups = (work_units + per_wg - 1) / per_wg;
-        if (groups >= static_cast<int64_t>(4) * cu) break;
-    }
-    // No admissible candidate leaves `wg` at its initial 32, which may exceed the
-    // device limit: that is an INVALID nd_range, not merely a slow one.
-    if (max_wg > 0 && wg > max_wg) wg = max_wg;
-    return wg;
-}
+// The work-group ladder is gemv's (src/ops/gemv/gemv_native.hh); every caller here passes
+// units_per_wg_shift 0 (one work-item per unit).
+using ops::gemv::gemv_wg_ladder;
 
 // 64 bytes of accumulator for every scalar type, so the register block shrinks as
 // the scalar widens. evidence: docs/perf/spmm.md#the-gather-window
@@ -55,47 +41,14 @@ inline constexpr int kNCmax = 64 / static_cast<int>(sizeof(D));
 static_assert(kNCmax<float> == 16 && kNCmax<double> == 8, "64-byte register block");
 static_assert(kNCmax<Cx<float>> == 8 && kNCmax<Cx<double>> == 4, "64-byte register block");
 
-// The complex overload below is two independent scalar atomics, NOT an atomic
-// complex add: safe only because nothing reads C between the scatter's first
-// atomic and its last.
-template <typename R>
-inline void spmm_atomic_add(R* p, R v) {
-    sycl::atomic_ref<R, sycl::memory_order::relaxed, sycl::memory_scope::device,
-                     sycl::access::address_space::global_space>
-        ref(*p);
-    ref.fetch_add(v);
-}
+// The scatter's complex atomic (device::atomic_accumulate) is two independent scalar
+// atomics, NOT an atomic complex add: safe only because nothing reads C between
+// the scatter's first atomic and its last.
 
-template <typename R>
-inline void spmm_atomic_add(Cx<R>* p, Cx<R> v) {
-    spmm_atomic_add(&p->re, v.re);
-    spmm_atomic_add(&p->im, v.im);
-}
-
-// One two-component load per complex element. As two scalar loads, both halves of
-// a missing sector go to L2 separately, and the gather is L2-bound: 24% more L2
-// sectors and 18% slower for cfloat under -ffp-model=precise, whose schedule
-// issues every column's pair at once. evidence: docs/perf/blackwell.md#cfloat-spmm-under-the-precise-fp-model
-template <bool Pair, typename D>
-inline D spmm_ld(const D* p) {
-    if constexpr (Pair && dev_is_complex_v<D>) {
-        using R = decltype(D{}.re);
-        const sycl::vec<R, 2> v = *reinterpret_cast<const sycl::vec<R, 2>*>(p);
-        return D{v[0], v[1]};
-    } else {
-        return *p;
-    }
-}
-
-template <bool Pair, typename D>
-inline void spmm_st(D* p, D x) {
-    if constexpr (Pair && dev_is_complex_v<D>) {
-        using R = decltype(D{}.re);
-        *reinterpret_cast<sycl::vec<R, 2>*>(p) = sycl::vec<R, 2>(x.re, x.im);
-    } else {
-        *p = x;
-    }
-}
+// Pair = one two-component load per complex element (device::PairAccess). As two scalar
+// loads, both halves of a missing sector go to L2 separately, and the gather is
+// L2-bound: 24% more L2 sectors and 18% slower for cfloat under -ffp-model=precise,
+// whose schedule issues every column's pair at once. evidence: docs/perf/blackwell.md#cfloat-spmm-under-the-precise-fp-model
 
 // The pair load needs 2*sizeof(R) alignment, which std::complex<R> does not
 // promise: a view built on a raw pointer may be offset by one R.
@@ -107,23 +60,24 @@ inline bool spmm_pair_aligned(const void* a, const void* b, const void* c) {
     return dev_is_complex_v<D> && !mis(a) && !mis(b) && !mis(c);
 }
 
-template <typename T, int NC, bool Pair> class SpmmGatherKernel;
-template <typename T> class SpmmScaleKernel;
-template <typename T> class SpmmScatterKernel;
+template <typename Scalar, int NC, bool Pair> class SpmmGatherKernel;
+template <typename Scalar> class SpmmScaleKernel;
+template <typename Scalar> class SpmmScatterKernel;
 
 // Gather arm (transA == NoTrans):
 //   C[i, c] = alpha * sum_{p in row i of A} A_val[p] * op(B)[A_ci[p], c]
 //             + beta * C[i, c]
 // One work-item per (batch item, row i, block of NC output columns), flattened
 // rows-fastest. The item owns every element it writes: no atomic, no barrier.
-template <typename T, int NC, bool Pair>
+template <typename Scalar, int NC, bool Pair>
 Event spmm_gather(Queue& ctx,
-                  const MatrixView<T, MatrixFormat::CSR>& A,
-                  const MatrixView<T, MatrixFormat::Dense>& B_mat,
-                  const MatrixView<T, MatrixFormat::Dense>& C,
-                  T alpha, T beta, Transpose transB, const std::uint8_t* mask) {
-    using D = typename DevMap<T>::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+                  const MatrixView<Scalar, MatrixFormat::CSR>& A,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& B_mat,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                  Scalar alpha, Scalar beta, Transpose transB, const std::uint8_t* mask) {
+    using D = typename DevMap<Scalar>::type;
+    using Ar = device::arith_t<device::arith::Fma, D>;  // sycl_device::fma_acc's chain, bit for bit
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     const int m = A.rows();
     const int nrhs = C.cols();
@@ -137,7 +91,7 @@ Event spmm_gather(Queue& ctx,
     const auto dev = ctx.device();
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     const int cu = static_cast<int>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS));
-    const int wg = spmm_wg_ladder(items, max_wg, cu, /*units_per_wg_shift=*/0);
+    const int wg = gemv_wg_ladder(items, max_wg, cu, /*units_per_wg_shift=*/0);
     const int64_t groups = (items + wg - 1) / wg;
 
     ctx->submit([&](sycl::handler& h) {
@@ -166,8 +120,8 @@ Event spmm_gather(Queue& ctx,
 
         // beta == 0 means C is NOT read -- the contract, not an optimisation:
         // callers pass unzeroed BumpAllocator memory as C.
-        const bool alpha_zero = (alpha == T(0));
-        const bool beta_zero = (beta == T(0));
+        const bool alpha_zero = (alpha == Scalar(0));
+        const bool beta_zero = (beta == Scalar(0));
         const bool b_notrans = (transB == Transpose::NoTrans);
         const bool conj_b = (transB == Transpose::ConjTrans);
 
@@ -176,7 +130,7 @@ Event spmm_gather(Queue& ctx,
         const int64_t rowblocks = rc;
         const int64_t total = items;
 
-        batchlas::impl::parallel_for<SpmmGatherKernel<T, NC, Pair>>(h,
+        batchlas::impl::parallel_for<SpmmGatherKernel<Scalar, NC, Pair>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(groups) * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
@@ -194,81 +148,48 @@ Event spmm_gather(Queue& ctx,
                 // in plain int and wraps, so no body here calls get().
                 const int64_t ro = b * a_os;   // indexes a_ro ONLY
                 const int64_t vb = b * a_ms;   // indexes a_val AND a_ci
-                const D* Bb = b_ptr + b * sb;
-                D* Cb = c_ptr + b * sc;
 
-                // The only legal bound. Never A.nnz(): that is the per-item
-                // capacity, and slots above each item's own count are garbage.
-                const int rs = a_ro[ro + i];
-                const int re = a_ro[ro + i + 1];
+                // Row i of A; its bound is the row offsets, never A.nnz() (the per-item
+                // capacity: slots above each item's own count are garbage). A column of A
+                // is a row of op(B) = B, B^T or B^H (transB is a kernel argument).
+                const auto arow = device::sp_row(device::LoadVec<const D, Pair>{a_val + vb},
+                                             device::BasedVec<const int, int64_t>{a_ci, vb},
+                                             a_ro[ro + i], a_ro[ro + i + 1]);
+                const device::RtOpMat<const D, Pair> opB{b_ptr + b * sb, ldb, b_notrans, conj_b};
+                const device::ColMat64<D, Pair> Cb{c_ptr + b * sc, ldc};
 
-                D acc[NC];
-BATCHLAS_UNROLL_FULL
-                for (int t = 0; t < NC; ++t) acc[t] = D{};
-
-                if (!alpha_zero) {
-                    for (int p = rs; p < re; ++p) {
-                        const D av = spmm_ld<Pair>(a_val + vb + p);
-                        const int j = a_ci[vb + p];  // a COLUMN of A: a row of B
-BATCHLAS_UNROLL_FULL
-                        for (int t = 0; t < NC; ++t) {
-                            const int c = c0 + t;
-                            if (c < width) {
-                                // op(B)[j,c]: NoTrans -> Bb[c*ldb+j], else
-                                // Bb[j*ldb+c] (conjugated for ConjTrans).
-                                D bv = spmm_ld<Pair>(
-                                    b_notrans ? Bb + static_cast<int64_t>(c) * ldb + j
-                                              : Bb + static_cast<int64_t>(j) * ldb + c);
-                                if constexpr (dev_is_complex_v<D>) {
-                                    if (conj_b) bv = dev_conj(bv);
-                                }
-                                fma_acc(acc[t], av, bv);
-                            }
-                        }
-                    }
-                }
-
-BATCHLAS_UNROLL_FULL
-                for (int t = 0; t < NC; ++t) {
-                    const int c = c0 + t;
-                    if (c < width) {
-                        const int64_t ci = static_cast<int64_t>(c) * ldc + i;
-                        D out{};
-                        fma_acc(out, alpha_d, acc[t]);
-                        if (!beta_zero) fma_acc(out, beta_d, spmm_ld<Pair>(Cb + ci));
-                        spmm_st<Pair>(Cb + ci, out);
-                    }
-                }
+                // C(i, c0:c0+NC) = alpha A(i, :) op(B)(:, c0:c0+NC) + beta C: the device spmm's unit.
+                device::detail::gather_unit<Ar, NC>(alpha_zero, arow, opB, c0, width, alpha_d, device::MaybeZero{beta_d, beta_zero}, Cb, i);
             });
     });
 
     return ctx.get_event();
 }
 
-template <typename T, int NC>
+template <typename Scalar, int NC>
 Event spmm_gather_pair(Queue& ctx,
-                       const MatrixView<T, MatrixFormat::CSR>& A,
-                       const MatrixView<T, MatrixFormat::Dense>& B_mat,
-                       const MatrixView<T, MatrixFormat::Dense>& C,
-                       T alpha, T beta, Transpose transB, const std::uint8_t* mask) {
-    using D = typename DevMap<T>::type;
+                       const MatrixView<Scalar, MatrixFormat::CSR>& A,
+                       const MatrixView<Scalar, MatrixFormat::Dense>& B_mat,
+                       const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                       Scalar alpha, Scalar beta, Transpose transB, const std::uint8_t* mask) {
+    using D = typename DevMap<Scalar>::type;
     if constexpr (dev_is_complex_v<D>) {
         if (spmm_pair_aligned<D>(A.data_ptr(), B_mat.data_ptr(), C.data_ptr())) {
-            return spmm_gather<T, NC, true>(ctx, A, B_mat, C, alpha, beta, transB, mask);
+            return spmm_gather<Scalar, NC, true>(ctx, A, B_mat, C, alpha, beta, transB, mask);
         }
     }
-    return spmm_gather<T, NC, false>(ctx, A, B_mat, C, alpha, beta, transB, mask);
+    return spmm_gather<Scalar, NC, false>(ctx, A, B_mat, C, alpha, beta, transB, mask);
 }
 
 // Scale arm: runs only ahead of the scatter, which cannot fold beta into its
 // accumulation -- no item owns an output element, so beta*C_old must land exactly
 // once before any atomic. At beta == 0 it stores zero rather than reading C.
-template <typename T>
+template <typename Scalar>
 Event spmm_scale(Queue& ctx,
-                 const MatrixView<T, MatrixFormat::Dense>& C,
-                 T beta, int out_rows, int batch, const std::uint8_t* mask) {
-    using D = typename DevMap<T>::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+                 const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                 Scalar beta, int out_rows, int batch, const std::uint8_t* mask) {
+    using D = typename DevMap<Scalar>::type;
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     const int nrhs = C.cols();
     const int64_t per = static_cast<int64_t>(out_rows) * nrhs;
@@ -278,7 +199,7 @@ Event spmm_scale(Queue& ctx,
     const auto dev = ctx.device();
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     const int cu = static_cast<int>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS));
-    const int wg = spmm_wg_ladder(elems, max_wg, cu, /*units_per_wg_shift=*/0);
+    const int wg = gemv_wg_ladder(elems, max_wg, cu, /*units_per_wg_shift=*/0);
     const int64_t groups = (elems + wg - 1) / wg;
 
     ctx->submit([&](sycl::handler& h) {
@@ -288,13 +209,13 @@ Event spmm_scale(Queue& ctx,
 
         D beta_d;
         __builtin_memcpy(&beta_d, &beta, sizeof(D));
-        const bool beta_zero = (beta == T(0));
+        const bool beta_zero = (beta == Scalar(0));
 
         const int rows_out = out_rows;
         const int64_t stride_out = per;
         const int64_t total = elems;
 
-        batchlas::impl::parallel_for<SpmmScaleKernel<T>>(h,
+        batchlas::impl::parallel_for<SpmmScaleKernel<Scalar>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(groups) * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
@@ -308,7 +229,7 @@ Event spmm_scale(Queue& ctx,
                 const int j = static_cast<int>(r - static_cast<int64_t>(c) * rows_out);
 
                 D* p = c_ptr + b * sc + static_cast<int64_t>(c) * ldc + j;
-                *p = beta_zero ? D{} : dev_mul(beta_d, *p);
+                *p = beta_zero ? D{} : device::arith_t<device::arith::Fma, D>::mul(beta_d, *p);  // C := beta C
             });
     });
 
@@ -321,14 +242,15 @@ Event spmm_scale(Queue& ctx,
 // reads one row of op(B) and pushes into many rows of C. NCS is fixed at 4; this
 // arm has no in-tree callers. The unsigned range guard on j is not optional: out
 // of range here is an out-of-range ATOMIC WRITE into uninitialised nnz padding.
-template <typename T>
+template <typename Scalar>
 Event spmm_scatter(Queue& ctx,
-                   const MatrixView<T, MatrixFormat::CSR>& A,
-                   const MatrixView<T, MatrixFormat::Dense>& B_mat,
-                   const MatrixView<T, MatrixFormat::Dense>& C,
-                   T alpha, int out_rows, bool conjugate_a, Transpose transB, const std::uint8_t* mask) {
-    using D = typename DevMap<T>::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+                   const MatrixView<Scalar, MatrixFormat::CSR>& A,
+                   const MatrixView<Scalar, MatrixFormat::Dense>& B_mat,
+                   const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                   Scalar alpha, int out_rows, bool conjugate_a, Transpose transB, const std::uint8_t* mask) {
+    using D = typename DevMap<Scalar>::type;
+    using Ar = device::arith_t<device::arith::Fma, D>;  // sycl_device::dev_mul, bit for bit
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     // Rows of the STORED A, which under Trans/ConjTrans is the REDUCTION extent.
     const int red_rows = A.rows();
@@ -340,12 +262,12 @@ Event spmm_scatter(Queue& ctx,
 
     // A host-side skip, not an in-kernel early return: the scale has already
     // written C = beta*C, and this body only ever adds the alpha term.
-    if (alpha == T(0)) return ctx.get_event();
+    if (alpha == Scalar(0)) return ctx.get_event();
 
     const auto dev = ctx.device();
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     const int cu = static_cast<int>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS));
-    const int wg = spmm_wg_ladder(items, max_wg, cu, /*units_per_wg_shift=*/0);
+    const int wg = gemv_wg_ladder(items, max_wg, cu, /*units_per_wg_shift=*/0);
     const int64_t groups = (items + wg - 1) / wg;
 
     ctx->submit([&](sycl::handler& h) {
@@ -377,7 +299,7 @@ Event spmm_scatter(Queue& ctx,
 
         constexpr int NCS = 4;
 
-        batchlas::impl::parallel_for<SpmmScatterKernel<T>>(h,
+        batchlas::impl::parallel_for<SpmmScatterKernel<Scalar>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(groups) * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
@@ -390,47 +312,15 @@ Event spmm_scatter(Queue& ctx,
 
                 const int64_t ro = b * a_os;
                 const int64_t vb = b * a_ms;
-                const D* Bb = b_ptr + b * sb;
+                const device::RtOpMat<const D> opB{b_ptr + b * sb, ldb, b_notrans, conj_b};
                 D* Cb = c_ptr + b * sc;
-
                 const int rs = a_ro[ro + i];
                 const int re = a_ro[ro + i + 1];
 
-                for (int c0 = 0; c0 < width; c0 += NCS) {
-                    D ab[NCS];
-BATCHLAS_UNROLL_FULL
-                    for (int t = 0; t < NCS; ++t) {
-                        const int c = c0 + t;
-                        ab[t] = D{};
-                        if (c < width) {
-                            // op(B)[i,c]: NoTrans -> Bb[c*ldb+i], else Bb[i*ldb+c].
-                            D bv = b_notrans ? Bb[static_cast<int64_t>(c) * ldb + i]
-                                             : Bb[static_cast<int64_t>(i) * ldb + c];
-                            if constexpr (dev_is_complex_v<D>) {
-                                if (conj_b) bv = dev_conj(bv);
-                            }
-                            ab[t] = dev_mul(alpha_d, bv);
-                        }
-                    }
-
-                    for (int p = rs; p < re; ++p) {
-                        D av = a_val[vb + p];
-                        // ConjTrans conjugates the SPARSE operand.
-                        if constexpr (dev_is_complex_v<D>) {
-                            if (conj_a) av = dev_conj(av);
-                        }
-                        const int j = a_ci[vb + p];  // an OUTPUT ROW of C
-                        if (static_cast<unsigned>(j) >= static_cast<unsigned>(rows_out)) continue;
-BATCHLAS_UNROLL_FULL
-                        for (int t = 0; t < NCS; ++t) {
-                            const int c = c0 + t;
-                            if (c < width) {
-                                spmm_atomic_add(Cb + static_cast<int64_t>(c) * ldc + j,
-                                                dev_mul(av, ab[t]));
-                            }
-                        }
-                    }
-                }
+                // C(A_ci, :) += conj?(A(i, :))^T (alpha op(B)(i, :)), the device spmm's scatter row;
+                // ConjTrans conjugates the SPARSE operand.
+                device::detail::scatter_row<Ar, NCS>(width, alpha_d, opB, i, rs, re, a_val, vb, conj_a, a_ci, rows_out,
+                                                      device::detail::ColPtr<D>{Cb, ldc});
             });
     });
 
@@ -439,13 +329,13 @@ BATCHLAS_UNROLL_FULL
 
 }  // namespace
 
-template <typename T>
+template <typename Scalar>
 Event spmm_native_csr(Queue& ctx,
-                      const MatrixView<T, MatrixFormat::CSR>& A,
-                      const MatrixView<T, MatrixFormat::Dense>& B_mat,
-                      const MatrixView<T, MatrixFormat::Dense>& C,
-                      T alpha, T beta, Transpose transA, Transpose transB) {
-    using D = typename DevMap<T>::type;
+                      const MatrixView<Scalar, MatrixFormat::CSR>& A,
+                      const MatrixView<Scalar, MatrixFormat::Dense>& B_mat,
+                      const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                      Scalar alpha, Scalar beta, Transpose transA, Transpose transB) {
+    using D = typename DevMap<Scalar>::type;
 
     const bool a_notrans = (transA == Transpose::NoTrans);
     const int out_rows = a_notrans ? A.rows() : A.cols();
@@ -460,31 +350,18 @@ Event spmm_native_csr(Queue& ctx,
     if (a_notrans) {
         // nrhs <= 2 is the lanczos shape; everything else gets the full block.
         if (nrhs <= 2) {
-            return spmm_gather_pair<T, 2>(ctx, A, B_mat, C, alpha, beta, transB, mask);
+            return spmm_gather_pair<Scalar, 2>(ctx, A, B_mat, C, alpha, beta, transB, mask);
         }
-        return spmm_gather_pair<T, kNCmax<D>>(ctx, A, B_mat, C, alpha, beta, transB, mask);
+        return spmm_gather_pair<Scalar, kNCmax<D>>(ctx, A, B_mat, C, alpha, beta, transB, mask);
     }
 
     // Ordered: the scale must complete before the first atomic. The default queue
     // is in_order; an out-of-order one pays one host wait here.
-    (void)spmm_scale<T>(ctx, C, beta, out_rows, batch, mask);
+    (void)spmm_scale<Scalar>(ctx, C, beta, out_rows, batch, mask);
     if (!ctx.in_order()) ctx.wait();
-    return spmm_scatter<T>(ctx, A, B_mat, C, alpha, out_rows,
-                           transA == Transpose::ConjTrans, transB, mask);
+    return spmm_scatter<Scalar>(ctx, A, B_mat, C, alpha, out_rows,
+                                transA == Transpose::ConjTrans, transB, mask);
 }
-
-// Specialised in the same TU as the kernels, so a build that drops this file
-// cannot advertise an unlinked kernel. A statement about the BUILD, not the
-// device: there is deliberately no is_gpu gate.
-template <> bool spmm_gather_available<float>()                { return true; }
-template <> bool spmm_gather_available<double>()               { return true; }
-template <> bool spmm_gather_available<std::complex<float>>()  { return true; }
-template <> bool spmm_gather_available<std::complex<double>>() { return true; }
-
-template <> bool spmm_scatter_available<float>()                { return true; }
-template <> bool spmm_scatter_available<double>()               { return true; }
-template <> bool spmm_scatter_available<std::complex<float>>()  { return true; }
-template <> bool spmm_scatter_available<std::complex<double>>() { return true; }
 
 #define BATCHLAS_SPMM_NATIVE_INSTANTIATE(fp)                                   \
     template Event spmm_native_csr<fp>(                                        \
@@ -500,4 +377,4 @@ BATCHLAS_SPMM_NATIVE_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_SPMM_NATIVE_INSTANTIATE
 
-}  // namespace batchlas::sycl_spmm
+}  // namespace batchlas::ops::spmm

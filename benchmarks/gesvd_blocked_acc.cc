@@ -26,12 +26,12 @@ void run_gesvd_blocked_acc(miniacc::State& state) {
         [](auto&&... args) { return gesvd_blocked<B, Scalar>(std::forward<decltype(args)>(args)...); });
 }
 
-} // namespace
-
-template <typename Real, Backend B>
-static void ACC_GESVD_BLOCKED(miniacc::State& state) {
-    run_gesvd_blocked_acc<Real, B>(state);
+template <typename Scalar, Backend B>
+void ACC_GESVD_BLOCKED(miniacc::State& state) {
+    run_gesvd_blocked_acc<Scalar, B>(state);
 }
+
+}  // namespace
 
 template <typename Benchmark>
 void GesvdAccSizesNetlib(Benchmark* b) {
@@ -40,4 +40,4 @@ void GesvdAccSizesNetlib(Benchmark* b) {
 
 BATCHLAS_REGISTER_ACCURACY_ALL_TYPES(ACC_GESVD_BLOCKED, GesvdAccSizes)
 
-MINI_ACC_MAIN()
+MINI_ACC_MAIN();

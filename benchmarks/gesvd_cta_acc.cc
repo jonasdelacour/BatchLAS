@@ -26,13 +26,13 @@ void run_gesvd_cta_acc(miniacc::State& state) {
         [](auto&&... args) { return gesvd_cta<B, Scalar>(std::forward<decltype(args)>(args)...); });
 }
 
-} // namespace
-
-template <typename Real, Backend B>
-static void ACC_GESVD_CTA(miniacc::State& state) {
-    run_gesvd_cta_acc<Real, B>(state);
+template <typename Scalar, Backend B>
+void ACC_GESVD_CTA(miniacc::State& state) {
+    run_gesvd_cta_acc<Scalar, B>(state);
 }
+
+}  // namespace
 
 BATCHLAS_ACC_CUDA_ALL_TYPES(ACC_GESVD_CTA, GesvdCtaAccSizes)
 
-MINI_ACC_MAIN()
+MINI_ACC_MAIN();

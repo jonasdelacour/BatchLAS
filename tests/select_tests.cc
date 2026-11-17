@@ -1087,14 +1087,14 @@ namespace {
 
 using batchlas::Backend;
 using batchlas::MatrixFormat;
-template <typename T>
-using Dense = batchlas::MatrixView<T, MatrixFormat::Dense>;
-template <typename T>
-using RealOf = typename batchlas::base_type<T>::type;
+template <typename Scalar>
+using Dense = batchlas::MatrixView<Scalar, MatrixFormat::Dense>;
+template <typename Scalar>
+using RealOf = typename batchlas::base_type<Scalar>::type;
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct PolicyConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using PolicyTuple = decltype(std::tuple_cat(
@@ -1117,48 +1117,48 @@ TYPED_TEST_SUITE(BatchPolicy, PolicyTypes);
 // Every op once, by name, on `batch` items of order n at a padded ld, a stride that is not
 // ld * n and inc 2; with `het`, A, B and C carry active orders {n, n-3, n, n-5, ...}. Every
 // buffer starts as a large finite sentinel, so a write anywhere shows.
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct OpBattery {
     static constexpr int n = 8, ld = 11, stride = 11 * 8 + 5;
     batchlas::Queue& q;
     int batch;
     batchlas::Span<std::byte> ws;
-    batchlas::UnifiedVector<T> a, b, c, vx, vy, vals, tau;
-    batchlas::UnifiedVector<RealOf<T>> w;
+    batchlas::UnifiedVector<Scalar> a, b, c, vx, vy, vals, tau;
+    batchlas::UnifiedVector<RealOf<Scalar>> w;
     batchlas::UnifiedVector<std::int64_t> piv;
     batchlas::UnifiedVector<std::int32_t> info;
     batchlas::UnifiedVector<int> act, ro, ci;
-    batchlas::UnifiedVector<T*> pa, pb, pc;  // the per-item pointer arrays a vendor batched call fills
+    batchlas::UnifiedVector<Scalar*> pa, pb, pc;  // the per-item pointer arrays a vendor batched call fills
     batchlas::Span<const std::uint8_t> mask, mask_a;  // every view's batch mask; A and the CSR take mask_a if set
     // NETLIB pivots are int64; the GPU backends pack 1-based int32 into the same storage.
     static constexpr std::size_t piv_bytes = B == Backend::NETLIB ? sizeof(std::int64_t) : sizeof(std::int32_t);
 
-    static T sentinel() { return Dense<T>::make(RealOf<T>(-999), RealOf<T>(777)); }
+    static Scalar sentinel() { return Dense<Scalar>::make(RealOf<Scalar>(-999), RealOf<Scalar>(777)); }
     std::size_t items() const { return std::size_t(std::max(batch, 1)); }
     std::size_t len() const { return std::size_t(stride) * items() + 64; }
     OpBattery(batchlas::Queue& queue, int nbatch, batchlas::Span<std::byte> work)
         : q(queue), batch(nbatch), ws(work), a(len(), sentinel()), b(len(), sentinel()), c(len(), sentinel()),
           vx(len(), sentinel()), vy(len(), sentinel()), vals(len(), sentinel()), tau(len(), sentinel()),
-          w(len(), RealOf<T>(-999)), piv(len(), -999), info(len(), -999), act(items(), n), ro(len(), 0),
+          w(len(), RealOf<Scalar>(-999)), piv(len(), -999), info(len(), -999), act(items(), n), ro(len(), 0),
           ci(len(), 0), pa(items(), nullptr), pb(items(), nullptr), pc(items(), nullptr) {
         constexpr int drop[4] = {0, 3, 0, 5};
         for (std::size_t i = 0; i < items(); ++i) act[i] = n - drop[i % 4];
         for (int i = 0; i <= n; ++i) ro[i] = i;
         for (int i = 0; i < n; ++i) ci[i] = (i + 3) % n;
     }
-    Dense<T> view(batchlas::UnifiedVector<T>& buf, bool het) {
-        T** ptrs = &buf == &a ? pa.data() : (&buf == &b ? pb.data() : pc.data());
-        Dense<T> v(buf.data(), n, n, ld, stride, batch, ptrs);
+    Dense<Scalar> view(batchlas::UnifiedVector<Scalar>& buf, bool het) {
+        Scalar** ptrs = &buf == &a ? pa.data() : (&buf == &b ? pb.data() : pc.data());
+        Dense<Scalar> v(buf.data(), n, n, ld, stride, batch, ptrs);
         if (het) v = v.with_active_dims(act.to_span(), act.to_span());
         const auto m = &buf == &a && !mask_a.empty() ? mask_a : mask;
         return m.empty() ? v : v.with_batch_mask(m);
     }
-    batchlas::VectorView<T> vec(batchlas::UnifiedVector<T>& buf) {
-        const batchlas::VectorView<T> v{buf.data(), n, batch, 2, 2 * n + 3};
+    batchlas::VectorView<Scalar> vec(batchlas::UnifiedVector<Scalar>& buf) {
+        const batchlas::VectorView<Scalar> v{buf.data(), n, batch, 2, 2 * n + 3};
         return mask.empty() ? v : v.with_batch_mask(mask);
     }
-    batchlas::MatrixView<T, MatrixFormat::CSR> csr() {
-        const batchlas::MatrixView<T, MatrixFormat::CSR> v{vals.data(), ro.data(), ci.data(), n, n,
+    batchlas::MatrixView<Scalar, MatrixFormat::CSR> csr() {
+        const batchlas::MatrixView<Scalar, MatrixFormat::CSR> v{vals.data(), ro.data(), ci.data(), n, n,
                                                            batchlas::NonZeros{n}, n + 2, 0, batch};
         const auto m = mask_a.empty() ? mask : mask_a;
         return m.empty() ? v : v.with_batch_mask(m);
@@ -1170,15 +1170,15 @@ struct OpBattery {
             for (std::size_t it = 0; it < items(); ++it)
                 for (int j = 0; j < n; ++j)
                     for (int i = 0; i < n; ++i) {
-                        const RealOf<T> re = i == j ? RealOf<T>(2 * n + it) : RealOf<T>(0.25) * RealOf<T>(i + j + 1);
-                        const RealOf<T> im = i == j ? RealOf<T>(0) : RealOf<T>(0.125) * RealOf<T>(i > j ? i - j : j - i);
-                        (*buf)[it * stride + std::size_t(j) * ld + i] = Dense<T>::make(re, i > j ? im : -im);
+                        const RealOf<Scalar> re = i == j ? RealOf<Scalar>(2 * n + it) : RealOf<Scalar>(0.25) * RealOf<Scalar>(i + j + 1);
+                        const RealOf<Scalar> im = i == j ? RealOf<Scalar>(0) : RealOf<Scalar>(0.125) * RealOf<Scalar>(i > j ? i - j : j - i);
+                        (*buf)[it * stride + std::size_t(j) * ld + i] = Dense<Scalar>::make(re, i > j ? im : -im);
                     }
         for (std::size_t k = 0; k < std::size_t(n) * items(); ++k) {
             const std::int64_t p = std::int64_t(k % n) + 1;
             std::memcpy(reinterpret_cast<std::byte*>(piv.data()) + k * piv_bytes, &p, piv_bytes);  // little-endian
         }
-        for (std::size_t k = 0; k < tau.size(); ++k) tau[k] = T(0.5);
+        for (std::size_t k = 0; k < tau.size(); ++k) tau[k] = Scalar(0.5);
     }
     // Every per-item output region, for the masked policy checks.
     std::vector<masked_contract::Output> outputs() {
@@ -1191,44 +1191,46 @@ struct OpBattery {
                 {"piv", reinterpret_cast<const std::byte*>(piv.data()), n * piv_bytes, n * piv_bytes},
                 sv("info", info, 1)};
     }
-    batchlas::Span<RealOf<T>> wspan() { return {w.data(), std::size_t(n) * items()}; }
-    batchlas::Span<T> tspan() { return {tau.data(), std::size_t(n) * items()}; }
+    batchlas::Span<RealOf<Scalar>> wspan() { return {w.data(), std::size_t(n) * items()}; }
+    batchlas::Span<Scalar> tspan() { return {tau.data(), std::size_t(n) * items()}; }
     batchlas::Span<std::int64_t> pspan() { return {piv.data(), std::size_t(n) * items()}; }
     batchlas::Span<std::int32_t> ispan() { return {info.data(), items()}; }
 
     using Calls = std::vector<std::pair<std::string, std::function<void()>>>;
     Calls calls(bool het) {
         using namespace batchlas;
-        const T one = T(1), half = T(0.5);
+        const Scalar one = Scalar(1), half = Scalar(0.5);
         const auto A = view(a, het), Bv = view(b, het), Cv = view(c, het);
         const auto L = Uplo::Lower;
         const auto N = Transpose::NoTrans;
         Calls out = {
-            {"gemm", [=, this] { gemm<B, T>(q, A, Bv, Cv, one, half, N, N); }},
-            {"gemv", [=, this] { gemv<B, T>(q, A, vec(vx), vec(vy), one, half, N); }},
-            {"trsm", [=, this] { trsm<B, T>(q, A, Bv, one, Side::Left, L, N, Diag::NonUnit); }},
-            {"trmm", [=, this] { trmm<B, T>(q, A, Bv, Cv, one, Side::Left, L, N, Diag::NonUnit); }},
-            {"potrf", [=, this] { potrf<B, T>(q, A, L, ws, ispan()); }},
-            {"getrf", [=, this] { getrf<B, T>(q, A, pspan(), ws, ispan()); }},
-            {"getrs", [=, this] { getrs<B, T>(q, A, Bv, N, pspan(), ws); }},
-            {"getri", [=, this] { getri<B, T>(q, A, Cv, pspan(), ws, ispan()); }},
-            {"geqrf", [=, this] { geqrf<B, T>(q, A, tspan(), ws); }},
-            {"orgqr", [=, this] { orgqr<B, T>(q, A, tspan(), ws); }},
-            {"ormqr", [=, this] { ormqr<B, T>(q, A, Cv, Side::Left, N, tspan(), ws); }},
-            {"syev", [=, this] { syev<B, T>(q, A, wspan(), JobType::EigenVectors, L, ws, ispan()); }},
-            {"gesvd", [=, this] { gesvd<B, T>(q, A, wspan(), Bv, Cv, SvdVectors::All, SvdVectors::All, ws, ispan()); }},
-            {"gesv", [=, this] { gesv<B, T>(q, A, Bv, pspan(), ws, ispan()); }},
-            {"posv", [=, this] { posv<B, T>(q, A, Bv, L, ws, ispan()); }},
-            {"spmm", [=, this] { spmm<B, T, MatrixFormat::CSR>(q, csr(), Bv, Cv, one, half, N, N, ws); }},
+            {"gemm", [=, this] { gemm<B, Scalar>(q, A, Bv, Cv, one, half, N, N); }},
+            {"gemv", [=, this] { gemv<B, Scalar>(q, A, vec(vx), vec(vy), one, half, N); }},
+            {"trsm", [=, this] { trsm<B, Scalar>(q, A, Bv, one, Side::Left, L, N, Diag::NonUnit); }},
+            {"trmm", [=, this] { trmm<B, Scalar>(q, A, Bv, Cv, one, Side::Left, L, N, Diag::NonUnit); }},
+            {"potrf", [=, this] { potrf<B, Scalar>(q, A, L, ws, ispan()); }},
+            {"getrf", [=, this] { getrf<B, Scalar>(q, A, pspan(), ws, ispan()); }},
+            {"getrs", [=, this] { getrs<B, Scalar>(q, A, Bv, N, pspan(), ws); }},
+            {"getri", [=, this] { getri<B, Scalar>(q, A, Cv, pspan(), ws, ispan()); }},
+            {"geqrf", [=, this] { geqrf<B, Scalar>(q, A, tspan(), ws); }},
+            {"orgqr", [=, this] { orgqr<B, Scalar>(q, A, tspan(), ws); }},
+            {"ormqr", [=, this] { ormqr<B, Scalar>(q, A, Cv, Side::Left, N, tspan(), ws); }},
+            {"syev", [=, this] { syev<B, Scalar>(q, A, wspan(), JobType::EigenVectors, L, ws, ispan()); }},
+            {"gesvd", [=, this] { gesvd<B, Scalar>(q, A, wspan(), Bv, Cv, SvdVectors::All, SvdVectors::All, ws,
+                                                   ispan()); }},
+            {"gesv", [=, this] { gesv<B, Scalar>(q, A, Bv, pspan(), ws, ispan()); }},
+            {"posv", [=, this] { posv<B, Scalar>(q, A, Bv, L, ws, ispan()); }},
+            {"spmm", [=, this] { spmm<B, Scalar, MatrixFormat::CSR>(q, csr(), Bv, Cv, one, half, N, N, ws); }},
         };
-        if constexpr (is_std_complex_v<T>) {
-            out.emplace_back("hemm", [=, this] { hemm<B, T>(q, A, Bv, Cv, one, half, Side::Left, L); });
-            out.emplace_back("herk", [=, this] { herk<B, T>(q, A, Cv, RealOf<T>(1), RealOf<T>(0.5), L, N); });
-            out.emplace_back("her2k", [=, this] { her2k<B, T>(q, A, Bv, Cv, one, RealOf<T>(0.5), L, N); });
+        if constexpr (is_std_complex_v<Scalar>) {
+            out.emplace_back("hemm", [=, this] { hemm<B, Scalar>(q, A, Bv, Cv, one, half, Side::Left, L); });
+            out.emplace_back("herk",
+                             [=, this] { herk<B, Scalar>(q, A, Cv, RealOf<Scalar>(1), RealOf<Scalar>(0.5), L, N); });
+            out.emplace_back("her2k", [=, this] { her2k<B, Scalar>(q, A, Bv, Cv, one, RealOf<Scalar>(0.5), L, N); });
         } else {
-            out.emplace_back("symm", [=, this] { symm<B, T>(q, A, Bv, Cv, one, half, Side::Left, L); });
-            out.emplace_back("syrk", [=, this] { syrk<B, T>(q, A, Cv, one, half, L, N); });
-            out.emplace_back("syr2k", [=, this] { syr2k<B, T>(q, A, Bv, Cv, one, half, L, N); });
+            out.emplace_back("symm", [=, this] { symm<B, Scalar>(q, A, Bv, Cv, one, half, Side::Left, L); });
+            out.emplace_back("syrk", [=, this] { syrk<B, Scalar>(q, A, Cv, one, half, L, N); });
+            out.emplace_back("syr2k", [=, this] { syr2k<B, Scalar>(q, A, Bv, Cv, one, half, L, N); });
         }
         return out;
     }
@@ -1237,18 +1239,19 @@ struct OpBattery {
         const auto A = view(a, false), Bv = view(b, false), Cv = view(c, false);
         const auto N = Transpose::NoTrans;
         return {
-            {"potrf", [=, this] { return potrf_buffer_size<B, T>(q, A, Uplo::Lower); }},
-            {"getrf", [=, this] { return getrf_buffer_size<B, T>(q, A); }},
-            {"getrs", [=, this] { return getrs_buffer_size<B, T>(q, A, Bv, N); }},
-            {"getri", [=, this] { return getri_buffer_size<B, T>(q, A); }},
-            {"geqrf", [=, this] { return geqrf_buffer_size<B, T>(q, A, tspan()); }},
-            {"orgqr", [=, this] { return orgqr_buffer_size<B, T>(q, A, tspan()); }},
-            {"ormqr", [=, this] { return ormqr_buffer_size<B, T>(q, A, Cv, Side::Left, N, tspan()); }},
-            {"syev", [=, this] { return syev_buffer_size<B, T>(q, A, wspan(), JobType::EigenVectors, Uplo::Lower); }},
-            {"gesvd", [=, this] { return gesvd_buffer_size<B, T>(q, A, wspan(), Bv, Cv, SvdVectors::All, SvdVectors::All); }},
-            {"gesv", [=, this] { return gesv_buffer_size<B, T>(q, A, Bv); }},
-            {"posv", [=, this] { return posv_buffer_size<B, T>(q, A, Bv, Uplo::Lower); }},
-            {"spmm", [=, this] { return spmm_buffer_size<B, T, MatrixFormat::CSR>(q, csr(), Bv, Cv, T(1), T(0.5), N, N); }},
+            {"potrf", [=, this] { return potrf_buffer_size<B, Scalar>(q, A, Uplo::Lower); }},
+            {"getrf", [=, this] { return getrf_buffer_size<B, Scalar>(q, A); }},
+            {"getrs", [=, this] { return getrs_buffer_size<B, Scalar>(q, A, Bv, N); }},
+            {"getri", [=, this] { return getri_buffer_size<B, Scalar>(q, A); }},
+            {"geqrf", [=, this] { return geqrf_buffer_size<B, Scalar>(q, A, tspan()); }},
+            {"orgqr", [=, this] { return orgqr_buffer_size<B, Scalar>(q, A, tspan()); }},
+            {"ormqr", [=, this] { return ormqr_buffer_size<B, Scalar>(q, A, Cv, Side::Left, N, tspan()); }},
+            {"syev", [=, this] { return syev_buffer_size<B, Scalar>(q, A, wspan(), JobType::EigenVectors,
+                                                                    Uplo::Lower); }},
+            {"gesvd", [=, this] { return gesvd_buffer_size<B, Scalar>(q, A, wspan(), Bv, Cv, SvdVectors::All, SvdVectors::All); }},
+            {"gesv", [=, this] { return gesv_buffer_size<B, Scalar>(q, A, Bv); }},
+            {"posv", [=, this] { return posv_buffer_size<B, Scalar>(q, A, Bv, Uplo::Lower); }},
+            {"spmm", [=, this] { return spmm_buffer_size<B, Scalar, MatrixFormat::CSR>(q, csr(), Bv, Cv, Scalar(1), Scalar(0.5), N, N); }},
         };
     }
     template <typename U>
@@ -1256,9 +1259,9 @@ struct OpBattery {
         return int(std::count_if(v.data(), v.data() + v.size(), [&](const U& x) { return !(x == s); }));
     }
     int touched() const {
-        const T s = sentinel();
+        const Scalar s = sentinel();
         return changed(a, s) + changed(b, s) + changed(c, s) + changed(vx, s) + changed(vy, s) + changed(vals, s) +
-               changed(tau, s) + changed(w, RealOf<T>(-999)) + changed(piv, std::int64_t(-999)) +
+               changed(tau, s) + changed(w, RealOf<Scalar>(-999)) + changed(piv, std::int64_t(-999)) +
                changed(info, std::int32_t(-999));
     }
 };
@@ -1388,32 +1391,32 @@ std::vector<std::string> spellings(const std::array<Choice, N>& cs) {
     return out;
 }
 
-template <typename T>
+template <typename Scalar>
 std::vector<std::string> pins_of(const std::string& op) {
     namespace o = batchlas::ops;
     const std::map<std::string, std::function<std::vector<std::string>()>> by_op = {
-        {"gemm", [] { return spellings(o::gemm::candidates<T>()); }},
-        {"gemv", [] { return spellings(o::gemv::candidates<T>()); }},
-        {"trsm", [] { return spellings(o::trsm::candidates<T>()); }},
-        {"trmm", [] { return spellings(o::trmm::candidates<T>()); }},
-        {"potrf", [] { return spellings(o::potrf::candidates<T>()); }},
-        {"getrf", [] { return spellings(o::getrf::candidates<T>()); }},
-        {"getrs", [] { return spellings(o::getrs::candidates<T>()); }},
-        {"getri", [] { return spellings(o::getri::candidates<T>()); }},
-        {"geqrf", [] { return spellings(o::geqrf::candidates<T>()); }},
-        {"orgqr", [] { return spellings(o::orgqr::candidates<T>()); }},
-        {"ormqr", [] { return spellings(o::ormqr::candidates<T>()); }},
-        {"syev", [] { return spellings(o::syev::candidates<T>()); }},
-        {"gesvd", [] { return spellings(o::gesvd::candidates<T>()); }},
-        {"gesv", [] { return spellings(o::gesv::candidates<T>()); }},
-        {"posv", [] { return spellings(o::posv::candidates<T>()); }},
-        {"spmm", [] { return spellings(o::spmm::candidates<T>()); }},
-        {"hemm", [] { return spellings(o::hemm::candidates<T>()); }},
-        {"herk", [] { return spellings(o::herk::candidates<T>()); }},
-        {"her2k", [] { return spellings(o::her2k::candidates<T>()); }},
-        {"symm", [] { return spellings(o::symm::candidates<T>()); }},
-        {"syrk", [] { return spellings(o::syrk::candidates<T>()); }},
-        {"syr2k", [] { return spellings(o::syr2k::candidates<T>()); }},
+        {"gemm", [] { return spellings(o::gemm::candidates<Scalar>()); }},
+        {"gemv", [] { return spellings(o::gemv::candidates<Scalar>()); }},
+        {"trsm", [] { return spellings(o::trsm::candidates<Scalar>()); }},
+        {"trmm", [] { return spellings(o::trmm::candidates<Scalar>()); }},
+        {"potrf", [] { return spellings(o::potrf::candidates<Scalar>()); }},
+        {"getrf", [] { return spellings(o::getrf::candidates<Scalar>()); }},
+        {"getrs", [] { return spellings(o::getrs::candidates<Scalar>()); }},
+        {"getri", [] { return spellings(o::getri::candidates<Scalar>()); }},
+        {"geqrf", [] { return spellings(o::geqrf::candidates<Scalar>()); }},
+        {"orgqr", [] { return spellings(o::orgqr::candidates<Scalar>()); }},
+        {"ormqr", [] { return spellings(o::ormqr::candidates<Scalar>()); }},
+        {"syev", [] { return spellings(o::syev::candidates<Scalar>()); }},
+        {"gesvd", [] { return spellings(o::gesvd::candidates<Scalar>()); }},
+        {"gesv", [] { return spellings(o::gesv::candidates<Scalar>()); }},
+        {"posv", [] { return spellings(o::posv::candidates<Scalar>()); }},
+        {"spmm", [] { return spellings(o::spmm::candidates<Scalar>()); }},
+        {"hemm", [] { return spellings(o::hemm::candidates<Scalar>()); }},
+        {"herk", [] { return spellings(o::herk::candidates<Scalar>()); }},
+        {"her2k", [] { return spellings(o::her2k::candidates<Scalar>()); }},
+        {"symm", [] { return spellings(o::symm::candidates<Scalar>()); }},
+        {"syrk", [] { return spellings(o::syrk::candidates<Scalar>()); }},
+        {"syr2k", [] { return spellings(o::syr2k::candidates<Scalar>()); }},
     };
     const auto it = by_op.find(op);
     if (it == by_op.end()) {
@@ -1432,8 +1435,8 @@ bool is_mask_refusal(const std::exception& e) {
            (what.find("cannot run this shape") != std::string::npos || what.find("(strict): no ") != std::string::npos);
 }
 
-template <typename T, Backend B>
-void run_op(OpBattery<T, B>& ops, const std::string& name) {
+template <typename Scalar, Backend B>
+void run_op(OpBattery<Scalar, B>& ops, const std::string& name) {
     for (const auto& [n, call] : ops.calls(false))
         if (n == name) {
             call();

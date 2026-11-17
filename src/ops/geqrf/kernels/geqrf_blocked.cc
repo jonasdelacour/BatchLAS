@@ -5,6 +5,7 @@
 // the wrong one only breaks complex. Design and evidence: docs/perf/qr.md
 
 #include <src/ops/geqrf/geqrf_native.hh>
+#include <src/kernels/common/launch.hh>
 #include <src/ops/geqrf/geqrf_panel_reg_device.hh>
 #include <src/kernels/common/larft_wy.hh>
 
@@ -31,32 +32,32 @@ namespace batchlas {
 // Kernel-name tag for this TU's copies of the WY kernels; ormqr_blocked.cc has its own.
 struct GeqrfWyTag;
 
-namespace sycl_geqrf {
+namespace ops::geqrf {
 
 namespace {
 
 // ConjTrans for complex, Trans for real: identical on a real scalar, but the native
 // GEMM gates its float transposed-register kernel on Transpose::Trans.
-template <typename T>
+template <typename Scalar>
 inline constexpr Transpose kConjT =
-    batchlas::detail::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
+    batchlas::detail::is_complex<Scalar>::value ? Transpose::ConjTrans : Transpose::Trans;
 
 // Keep a multiple of 16, and never below 32 for complex: the wide-scalar GEMM gates on
 // min_dim >= 32, and min_dim of the trailing NN update IS the block width.
 // evidence: docs/perf/qr.md#block-width-evidence
-template <typename T>
+template <typename Scalar>
 constexpr int geqrf_nb_for_type() {
-    if constexpr (std::is_same_v<T, double>) {
+    if constexpr (std::is_same_v<Scalar, double>) {
         return 16;
     } else {
         return 32;
     }
 }
 
-template <typename T>
+template <typename Scalar>
 inline int geqrf_blocked_nb(int m, int n) {
     const int k = std::min(m, n);
-    return std::max(1, std::min(geqrf_nb_for_type<T>(), k));
+    return std::max(1, std::min(geqrf_nb_for_type<Scalar>(), k));
 }
 
 // WHICH PANEL LEAF, re-read per call. evidence: docs/perf/qr.md#qr-the-register-leaf-ab
@@ -84,41 +85,41 @@ BATCHLAS_GEQRF_REG_WIDTH_ASSERT(std::complex<double>);
 // Must read no element of A or tau: band_reduction.cc sizes against a null view, then calls
 // geqrf with a smaller sub-view. Per part the total is monotone in (rows, cols, part), and the
 // run fits its part to the workspace it is given, so a larger shape's size always suffices.
-template <typename T>
+template <typename Scalar>
 struct GeqrfBlockedWs {
-    Span<T> v;
-    Span<T> t;
-    Span<T> w1;
-    Span<T> w2;
+    Span<Scalar> v;
+    Span<Scalar> t;
+    Span<Scalar> w1;
+    Span<Scalar> w2;
 };
 
-template <typename T>
-GeqrfBlockedWs<T> geqrf_blocked_layout(Queue& ctx, BumpAllocator& pool,
-                                       int m, int n, int nb, int batch) {
-    GeqrfBlockedWs<T> ws;
+template <typename Scalar>
+GeqrfBlockedWs<Scalar> geqrf_blocked_layout(Queue& ctx, BumpAllocator& pool,
+                                            int m, int n, int nb, int batch) {
+    GeqrfBlockedWs<Scalar> ws;
     const std::size_t b = static_cast<std::size_t>(batch);
 
     // W1/W2 are sized on the widest trailing block, n - nb, which is also their stride.
     const std::size_t n2max = static_cast<std::size_t>(std::max(0, n - nb));
 
-    ws.v = pool.allocate<T>(ctx, static_cast<std::size_t>(m) *
-                                     static_cast<std::size_t>(nb) * b);
-    ws.t = pool.allocate<T>(ctx, static_cast<std::size_t>(nb) *
-                                     static_cast<std::size_t>(nb) * b);
-    ws.w1 = pool.allocate<T>(ctx, std::max<std::size_t>(
+    ws.v = pool.allocate<Scalar>(ctx, static_cast<std::size_t>(m) *
+                                          static_cast<std::size_t>(nb) * b);
+    ws.t = pool.allocate<Scalar>(ctx, static_cast<std::size_t>(nb) *
+                                          static_cast<std::size_t>(nb) * b);
+    ws.w1 = pool.allocate<Scalar>(ctx, std::max<std::size_t>(
                                       1, static_cast<std::size_t>(nb) * n2max * b));
-    ws.w2 = pool.allocate<T>(ctx, std::max<std::size_t>(
+    ws.w2 = pool.allocate<Scalar>(ctx, std::max<std::size_t>(
                                       1, static_cast<std::size_t>(nb) * n2max * b));
     return ws;
 }
 
 // Items per pass (panel, V, W1, W2 through L2). evidence: docs/perf/qr.md#qr-l2-batch-chunking
-template <typename T>
+template <typename Scalar>
 int geqrf_blocked_chunk(Queue& ctx, int m, int n, int nb, int batch) {
     if (std::min(m, n) <= nb) return select::grid_capped_chunk(ctx, batch, batch);
     const auto dev = ctx.device();
     const int64_t item = (static_cast<int64_t>(m) * (n + nb) +
-                          2 * static_cast<int64_t>(nb) * (n - nb)) * static_cast<int64_t>(sizeof(T));
+                          2 * static_cast<int64_t>(nb) * (n - nb)) * static_cast<int64_t>(sizeof(Scalar));
     return select::grid_capped_chunk(ctx, static_cast<int>(tuning::blocked_chunk_items(
         batch, item, static_cast<int64_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE)),
         static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS)),
@@ -132,35 +133,25 @@ inline int blocked_part(int chunk, int batch) {
 
 }  // namespace
 
-// Co-located with the driver so "the flag is true" and "this TU is compiled" are one fact.
-// geqrf's can_run reads it, and tuned/geqrf.*.txt ranks blocked first on large and tall
-// shapes, so this flag also gates the DEFAULT choice and not only vendor-free builds:
-// reporting false here sends every such shape back to the vendor.
-// evidence: docs/perf/small-n-baseline.md#geqrf, docs/perf/qr.md#qr-route-arms
-template <> bool geqrf_blocked_available<float>()                { return true; }
-template <> bool geqrf_blocked_available<double>()               { return true; }
-template <> bool geqrf_blocked_available<std::complex<float>>()  { return true; }
-template <> bool geqrf_blocked_available<std::complex<double>>() { return true; }
-
-template <typename T>
+template <typename Scalar>
 std::size_t geqrf_blocked_buffer_size(Queue& ctx,
-                                      const MatrixView<T, MatrixFormat::Dense>& A) {
+                                      const MatrixView<Scalar, MatrixFormat::Dense>& A) {
     const int m = static_cast<int>(A.rows());
     const int n = static_cast<int>(A.cols());
     const int batch = static_cast<int>(A.batch_size());
     if (m < 1 || n < 1 || batch < 1) return 0;
 
-    const int nb = geqrf_blocked_nb<T>(m, n);
-    const int part = blocked_part(geqrf_blocked_chunk<T>(ctx, m, n, nb, batch), batch);
+    const int nb = geqrf_blocked_nb<Scalar>(m, n);
+    const int part = blocked_part(geqrf_blocked_chunk<Scalar>(ctx, m, n, nb, batch), batch);
     return workspace_bytes([&](BumpAllocator& pool) {
-        return geqrf_blocked_layout<T>(ctx, pool, m, n, nb, part);
+        return geqrf_blocked_layout<Scalar>(ctx, pool, m, n, nb, part);
     });
 }
 
-template <typename T>
+template <typename Scalar>
 unsigned geqrf_blocked_debug_params(Queue& ctx, int m, int n) {
     if (m < 1 || n < 1) return 0u;
-    const int nb = geqrf_blocked_nb<T>(m, n);
+    const int nb = geqrf_blocked_nb<Scalar>(m, n);
 
     const auto dev = ctx.device();
     const std::size_t budget = resident::device_slm_budget(
@@ -168,17 +159,17 @@ unsigned geqrf_blocked_debug_params(Queue& ctx, int m, int n) {
     const int ib0 = std::min(nb, std::min(m, n));
     // geqrf_leaf_fits, not geqrf_cta_fits: this reports which leaf geqrf_panel_factorize
     // will take, and that is the residency question, asked at the whole budget.
-    const unsigned leaf = geqrf_leaf_fits<T>(m, ib0, budget) ? 1u : 2u;
+    const unsigned leaf = geqrf_leaf_fits<Scalar>(m, ib0, budget) ? 1u : 2u;
 
     return (leaf << 16) | static_cast<unsigned>(nb);
 }
 
-template <typename T>
+template <typename Scalar>
 Event geqrf_blocked_dispatch(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& A,
-                             Span<T> tau,
+                             const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                             Span<Scalar> tau,
                              Span<std::byte> workspace,
-                             GeqrfTrailingGemm<T> trailing_gemm,
+                             GeqrfTrailingGemm<Scalar> trailing_gemm,
                              GeqrfPanelLeaf panel_leaf) {
     if (!trailing_gemm) {
         throw batchlas::invalid_argument(
@@ -197,42 +188,28 @@ Event geqrf_blocked_dispatch(Queue& ctx,
 
     // Re-applies every gate can_run applies: this entry point is reachable without the
     // selector, so a gate missing here would launch a shape the kernel cannot run.
-    if (m < 1 || n < 1 || batch < 1) {
-        throw batchlas::invalid_argument("geqrf_blocked: degenerate extents");
-    }
     // m < n is ?GEQRF's own loop: k = m panels, each trailing update spanning all n columns,
     // so the reflectors' Q^H reaches A(:, m:n) with no separate ormqr pass.
-    if (A.is_heterogeneous()) {
-        throw batchlas::invalid_argument("geqrf_blocked: heterogeneous batch is not supported");
-    }
-    const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU) {
-        throw batchlas::invalid_argument("geqrf_blocked: GPU queues only");
-    }
-    if (!dev.supports_sub_group_size(32)) {
-        throw batchlas::unsupported(
-            "geqrf_blocked: device does not offer sub-group size 32, which the panel leaf "
-            "requires");
-    }
+    const auto dev = native::require_launchable(ctx, "geqrf_blocked", A, {});  // sg 32: the panel leaf
     if (tau.size() < static_cast<std::size_t>(k) * static_cast<std::size_t>(batch)) {
         throw batchlas::invalid_argument("geqrf_blocked: tau span is shorter than k * batch");
     }
 
-    const int nb = geqrf_blocked_nb<T>(m, n);
+    const int nb = geqrf_blocked_nb<Scalar>(m, n);
     const int n2max = std::max(0, n - nb);
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
 
     // A caller that sized a larger shape (sytrd's sub-views) may hold less than this shape's part
     // needs, so the chunk halves until it fits. evidence: docs/perf/qr.md#qr-l2-batch-chunking
-    int chunk = geqrf_blocked_chunk<T>(ctx, m, n, nb, batch);
+    int chunk = geqrf_blocked_chunk<Scalar>(ctx, m, n, nb, batch);
     auto part_bytes = [&](int c) {
         return workspace_bytes([&](BumpAllocator& p) {
-            return geqrf_blocked_layout<T>(ctx, p, m, n, nb, blocked_part(c, batch));
+            return geqrf_blocked_layout<Scalar>(ctx, p, m, n, nb, blocked_part(c, batch));
         });
     };
     while (chunk > 1 && part_bytes(chunk) > workspace.size()) chunk = (chunk + 1) / 2;
     BumpAllocator pool(workspace);
-    auto ws = geqrf_blocked_layout<T>(ctx, pool, m, n, nb, blocked_part(chunk, batch));
+    auto ws = geqrf_blocked_layout<Scalar>(ctx, pool, m, n, nb, blocked_part(chunk, batch));
 
     const int ld = A.ld();
     const int stride = A.stride();
@@ -240,8 +217,8 @@ Event geqrf_blocked_dispatch(Queue& ctx,
 
     for (int b0 = 0, cb = 0; b0 < batch; b0 += cb) {
         cb = batch - b0 < 2 * chunk ? batch - b0 : chunk;   // the last part takes the remainder
-        T* const a_ptr = A.data_ptr() + static_cast<std::ptrdiff_t>(b0) * stride;
-        T* const tau_ptr = tau.data() + static_cast<std::ptrdiff_t>(b0) * k;
+        Scalar* const a_ptr = A.data_ptr() + static_cast<std::ptrdiff_t>(b0) * stride;
+        Scalar* const tau_ptr = tau.data() + static_cast<std::ptrdiff_t>(b0) * k;
         const auto Apart = A.batch_range(b0, cb);
         // The part's mask slice: every view below is rebuilt from a raw pointer (the drop hazard),
         // and the panel, pack and larft kernels take it as an argument.
@@ -254,7 +231,7 @@ Event geqrf_blocked_dispatch(Queue& ctx,
         // Never operator()(Slice, Slice): a slice propagates the parent's pointer array, and a
         // 0 stride defaults to ld*cols, so an ib-column sub-view silently gets stride = ld*ib.
         auto sub = [&](int r0, int nr, int c0, int nc) {
-            return MatrixView<T, MatrixFormat::Dense>(
+            return MatrixView<Scalar, MatrixFormat::Dense>(
                 a_ptr + static_cast<std::ptrdiff_t>(c0) * ld + r0,
                 nr, nc, ld, stride, cb, nullptr).with_batch_mask(mpart);
         };
@@ -271,16 +248,16 @@ Event geqrf_blocked_dispatch(Queue& ctx,
             // forced leaf throws. evidence: docs/perf/qr.md#the-panel-height-window
             const GeqrfPanelLeaf leaf_here =
                 (panel_leaf == GeqrfPanelLeaf::Register &&
-                 !geqrf_panel_reg_preferred<T>(mp, ib, max_wg))
+                 !geqrf_panel_reg_preferred<Scalar>(mp, ib, max_wg))
                     ? GeqrfPanelLeaf::Auto
                     : panel_leaf;
 
             // tau's batch stride is k, the whole matrix's reflector count (geqrf's contract),
             // at offset j0; the panel's own min(mp, ib) would scatter tau for every item but one.
-            (void)geqrf_panel_factorize<T>(ctx,
-                                           a_ptr + static_cast<std::ptrdiff_t>(j0) * ld + j0,
-                                           ld, stride, mp, ib, cb,
-                                           tau_ptr, k, j0, nullptr, leaf_here, nullptr, mp_ptr);
+            (void)geqrf_panel_factorize<Scalar>(ctx,
+                                                a_ptr + static_cast<std::ptrdiff_t>(j0) * ld + j0,
+                                                ld, stride, mp, ib, cb,
+                                                tau_ptr, k, j0, nullptr, leaf_here, nullptr, mp_ptr);
 
             if (n2 <= 0) break;
 
@@ -294,18 +271,16 @@ Event geqrf_blocked_dispatch(Queue& ctx,
             const int ld_v = mp;
             const int stride_v = mp * ib;
 
-            const auto Vblk = MatrixView<T, MatrixFormat::Dense>(ws.v.data(), mp, ib, ld_v,
-                                                                 stride_v, cb).with_batch_mask(mpart);
-            (void)wy::pack_v_panel_batched<GeqrfWyTag, T>(
+            const auto Vblk = MatrixView<Scalar, MatrixFormat::Dense>(ws.v.data(), mp, ib, ld_v,
+                                                                      stride_v, cb).with_batch_mask(mpart);
+            (void)wy::pack_v_panel_batched<GeqrfWyTag, Scalar>(
                 ctx, ws.v.data(), ld_v, stride_v, Apart, j0, ib, m, mp_ptr);
 
             if (!ctx.in_order()) ctx.wait();
 
-            const auto Tblk = MatrixView<T, MatrixFormat::Dense>(ws.t.data(), ib, ib, nb,
-                                                                 nb * nb, cb).with_batch_mask(mpart);
-            // Compile-time `false`: a runtime literal also instantiates the device-BLAS larft
-            // for GeqrfWyTag, 32 entry functions that can never launch.
-            (void)wy::larft_forward_columnwise_batched_t<GeqrfWyTag, T, false>(
+            const auto Tblk = MatrixView<Scalar, MatrixFormat::Dense>(ws.t.data(), ib, ib, nb,
+                                                                      nb * nb, cb).with_batch_mask(mpart);
+            (void)wy::larft_forward_columnwise_batched<GeqrfWyTag, Scalar>(
                 ctx, ws.t.data(), nb, nb * nb,
                 ws.v.data(), ld_v, stride_v,
                 mp, ib,
@@ -316,20 +291,20 @@ Event geqrf_blocked_dispatch(Queue& ctx,
             const auto A22 = sub(j0, mp, j2, n2);
             // Batch stride is the layout's nb * n2max, not this panel's nb * n2: the GEMMs agree
             // either way, so a wrong stride is silent, but only n2max matches what was reserved.
-            const auto W1 = MatrixView<T, MatrixFormat::Dense>(ws.w1.data(), ib, n2, nb,
-                                                               nb * n2max, cb).with_batch_mask(mpart);
-            const auto W2 = MatrixView<T, MatrixFormat::Dense>(ws.w2.data(), ib, n2, nb,
-                                                               nb * n2max, cb).with_batch_mask(mpart);
+            const auto W1 = MatrixView<Scalar, MatrixFormat::Dense>(ws.w1.data(), ib, n2, nb,
+                                                                    nb * n2max, cb).with_batch_mask(mpart);
+            const auto W2 = MatrixView<Scalar, MatrixFormat::Dense>(ws.w2.data(), ib, n2, nb,
+                                                                    nb * n2max, cb).with_batch_mask(mpart);
 
-            (void)trailing_gemm(ctx, Vblk, A22, W1, T(1), T(0), kConjT<T>, Transpose::NoTrans,
+            (void)trailing_gemm(ctx, Vblk, A22, W1, Scalar(1), Scalar(0), kConjT<Scalar>, Transpose::NoTrans,
                           ComputePrecision::Default);
             if (!ctx.in_order()) ctx.wait();
 
-            (void)trailing_gemm(ctx, Tblk, W1, W2, T(1), T(0), kConjT<T>, Transpose::NoTrans,
+            (void)trailing_gemm(ctx, Tblk, W1, W2, Scalar(1), Scalar(0), kConjT<Scalar>, Transpose::NoTrans,
                           ComputePrecision::Default);
             if (!ctx.in_order()) ctx.wait();
 
-            (void)trailing_gemm(ctx, Vblk, W2, A22, T(-1), T(1), Transpose::NoTrans,
+            (void)trailing_gemm(ctx, Vblk, W2, A22, Scalar(-1), Scalar(1), Transpose::NoTrans,
                           Transpose::NoTrans, ComputePrecision::Default);
 
             // The next pack_v OVERWRITES the V this update is still reading.
@@ -356,5 +331,5 @@ BATCHLAS_GEQRF_BLOCKED_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_GEQRF_BLOCKED_INSTANTIATE
 
-}  // namespace sycl_geqrf
+}  // namespace ops::geqrf
 }  // namespace batchlas

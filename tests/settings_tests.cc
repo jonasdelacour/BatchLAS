@@ -79,7 +79,6 @@ TEST(SettingsConfigure, ConfigureBeatsTheEnvironment) {
         << "a Queue already exists, so this case ran after one that builds one; "
            "configure() is closed. See the ordering contract at the top of this file.";
 
-
     // Prove the environment is being honoured first, or the assertion below proves
     // nothing: a configure() that "wins" against a variable nobody read is vacuous.
     ScopedEnvVar pin("BATCHLAS_GEMM_ROUTE", "vendor");

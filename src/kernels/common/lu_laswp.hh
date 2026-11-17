@@ -10,8 +10,10 @@
 #include <src/sycl/device_scalar.hh>
 // ../queue.hh: the public header only forward-declares QueueImpl; ctx->submit needs it defined.
 #include <src/queue.hh>
+#include <src/util/resident_capacity.hh>
 
 #include <batchlas/util/sycl-device-queue.hh>
+#include <batchlas/device/lapack_aux.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -21,29 +23,29 @@
 
 namespace batchlas::lu_native {
 
-template <typename Tag, typename T> class LuLaswpKernel;
+template <typename Tag, typename Scalar> class LuLaswpKernel;
 
 // Apply pivots k0 .. k1-1 (0-based positions in the list) to the column block at
 // `base`: forward gives P B (?LASWP incx = +1), !forward gives P^T B (incx = -1).
 // Values are GLOBAL 1-BASED rows (getrf_native.hh's pivot contract), so `base`
 // must point at row 0, offset only in COLUMN; `piv_stride` is the order of A.
 // `mask` (null: unmasked) is the batch mask from item 0 of `base`; an inactive item is skipped.
-template <typename Tag, typename T>
+template <typename Tag, typename Scalar>
 Event lu_laswp_launch(Queue& ctx,
-                      T* base, int ld, int stride, int ncols, int batch,
+                      Scalar* base, int ld, int stride, int ncols, int batch,
                       const int* piv, int piv_stride,
                       int k0, int k1, bool forward, const std::uint8_t* mask = nullptr) {
     if (ncols <= 0 || batch <= 0 || k1 <= k0) return ctx.get_event();
 
     // Re-type std::complex at the pointer boundary only; device_scalar.hh's rule.
-    using DM = sycl_device::DevMap<T>;
+    using DM = sycl_device::DevMap<Scalar>;
     using D = typename DM::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     D* const bp = reinterpret_cast<D*>(base);
 
     ctx->submit([&](sycl::handler& h) {
-        h.parallel_for<LuLaswpKernel<Tag, T>>(
+        batchlas::impl::parallel_for<LuLaswpKernel<Tag, Scalar>>(h,
             sycl::range<2>(static_cast<std::size_t>(batch),
                            static_cast<std::size_t>(ncols)),
             [=](sycl::item<2> it) {
@@ -51,31 +53,14 @@ Event lu_laswp_launch(Queue& ctx,
                 if (mask != nullptr && mask[b] == 0) return;  // I3
                 const int c = static_cast<int>(it.get_id(1));
 
-                D* const col = bp + static_cast<std::ptrdiff_t>(b) * stride +
-                               static_cast<std::ptrdiff_t>(c) * ld;
-                const int* const ip = piv + static_cast<std::ptrdiff_t>(b) * piv_stride;
-
-                if (forward) {
-                    for (int k = k0; k < k1; ++k) {
-                        const int p = ip[k] - 1;      // 1-BASED on the wire
-                        if (p != k) {
-                            const D t = col[k];
-                            col[k] = col[p];
-                            col[p] = t;
-                        }
-                    }
-                } else {
-                    // REVERSE ORDER: the same list applied forwards computes P,
-                    // not P^T -- a silently wrong answer in a transposed getrs.
-                    for (int k = k1 - 1; k >= k0; --k) {
-                        const int p = ip[k] - 1;
-                        if (p != k) {
-                            const D t = col[k];
-                            col[k] = col[p];
-                            col[p] = t;
-                        }
-                    }
-                }
+                // ?LASWP on one (matrix, column); laswp never reads the extent (targets lie below).
+                const auto col = device::mat(bp + static_cast<std::ptrdiff_t>(b) * stride +
+                                             static_cast<std::ptrdiff_t>(c) * ld, k1, 1, ld);
+                const auto ipiv = device::vec(piv + static_cast<std::ptrdiff_t>(b) * piv_stride, k1);  // 1-BASED
+                // Backward is REVERSE ORDER: the same list applied forwards computes P,
+                // not P^T -- a silently wrong answer in a transposed getrs.
+                if (forward) device::laswp<device::Direct::Forward>(device::Thread{}, col, ipiv, k0, k1);
+                else device::laswp<device::Direct::Backward>(device::Thread{}, col, ipiv, k0, k1);
             });
     });
     return ctx.get_event();
@@ -85,17 +70,7 @@ Event lu_laswp_launch(Queue& ctx,
 // the blocked driver's P-1 left-side launches, and composes to the same permutation.
 // evidence: docs/perf/lu.md#getrf-deferred-left-gather
 
-template <typename Tag, typename T> class LuLaswpGatherKernel;
-
-// The 48 KB launch hole: static shared-memory sizes in this band fail to launch
-// on this box, so pad past it. evidence: docs/perf/lu.md#lu-the-48-kb-launch-hole
-constexpr std::size_t kLuLaswpHoleLo = 47104;
-constexpr std::size_t kLuLaswpHoleHi = 49664;
-constexpr std::size_t kLuLaswpHolePadTo = 49920;
-
-constexpr std::size_t lu_laswp_hole_padded(std::size_t bytes) {
-    return (bytes > kLuLaswpHoleLo && bytes <= kLuLaswpHoleHi) ? kLuLaswpHolePadTo : bytes;
-}
+template <typename Tag, typename Scalar> class LuLaswpGatherKernel;
 
 // The tile's share of local memory: bigger buys nothing and costs occupancy.
 constexpr std::size_t kLuLaswpTileCap = 24576;
@@ -104,9 +79,9 @@ constexpr std::size_t kLuLaswpTileCap = 24576;
 // block's own columns. `base` points at row 0 column 0 of item 0; `piv` is the
 // FULL interchange list, global 1-based. Returns false having enqueued NOTHING
 // when the staging tile does not fit -- the caller must then use the walk.
-template <typename Tag, typename T>
+template <typename Tag, typename Scalar>
 bool lu_laswp_deferred_left_launch(Queue& ctx,
-                                   T* base, int ld, int stride, int batch,
+                                   Scalar* base, int ld, int stride, int batch,
                                    const int* piv, int piv_stride,
                                    int n, int nb,
                                    std::size_t slm_budget, int max_wg,
@@ -117,9 +92,9 @@ bool lu_laswp_deferred_left_launch(Queue& ctx,
     const int nblk = P - 1;                 // blocks that receive anything
     if (nblk <= 0) return true;             // a single panel defers nothing
 
-    using DM = sycl_device::DevMap<T>;
+    using DM = sycl_device::DevMap<Scalar>;
     using D = typename DM::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     // r = 0 carries the longest suffix and sizes the allocation for every group.
     const int rmax = n - nb;
@@ -142,7 +117,7 @@ bool lu_laswp_deferred_left_launch(Queue& ctx,
 
     std::size_t tile_elems = static_cast<std::size_t>(Cs) * static_cast<std::size_t>(ldt);
     const std::size_t raw = int_bytes + tile_elems * sizeof(D);
-    const std::size_t padded = lu_laswp_hole_padded(raw);
+    const std::size_t padded = resident::hole_padded(raw);  // the 48 KB launch hole
     // Only pad if the padded size still FITS. Unguarded, a device whose budget
     // lands just above the hole grows the tile past its own local-memory limit and
     // the local_accessor throws at enqueue, instead of taking the `return false`
@@ -162,15 +137,14 @@ bool lu_laswp_deferred_left_launch(Queue& ctx,
             sycl::range<1>(2u * static_cast<std::size_t>(rmax)), h);
         sycl::local_accessor<D, 1> tile(sycl::range<1>(tile_elems), h);
 
-        batchlas::impl::parallel_for<LuLaswpGatherKernel<Tag, T>>(h,
+        batchlas::impl::parallel_for<LuLaswpGatherKernel<Tag, Scalar>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(nblk) *
                                              static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
             [=](sycl::nd_item<1> it) {
-                const auto grp = it.get_group();
+                const device::RtGroup<device::Scope::Group> ex{it};
                 const int gid = static_cast<int>(it.get_group(0));
-                const int lid = static_cast<int>(it.get_local_id(0));
                 const int r = gid / batch;
                 const int b = gid - r * batch;
 
@@ -187,77 +161,60 @@ bool lu_laswp_deferred_left_launch(Queue& ctx,
                 D* const Ab = bp + static_cast<std::ptrdiff_t>(b) * stride;
                 const int* const ip = piv + static_cast<std::ptrdiff_t>(b) * piv_stride;
 
-                for (int i = lid; i < R; i += wg) {
+                // ips = relative pivots, idxs = identity. p in [i, R) is the contract; clamped
+                // anyway: a bad value corrupts the index array for the WHOLE block.
+                device::for_each_owned(ex, R, [&](int i) {
                     int p = ip[k0 + i] - 1 - k0;
-                    // Contract is p in [i, R); clamped anyway because a bad
-                    // value corrupts the index array for the WHOLE block.
                     if (p < 0 || p >= R) p = i;
                     ips[i] = p;
                     idxs[i] = i;
+                });
+                ex.barrier();
+                // idxs := P idxs, ?LASWP on the INT array: the only serial phase.
+                if (ex.leader()) {
+                    const auto ipiv1 = [ips](int i) { return ips[i] + 1; };   // laswp takes 1-based
+                    device::laswp(device::Thread{}, device::mat<device::Mem::Local>(idxs, R, 1, R), ipiv1, 0, R);
                 }
-                sycl::group_barrier(grp);
+                ex.barrier();
 
-                // The only serial phase, and it is on the INT array.
-                if (lid == 0) {
-                    for (int i = 0; i < R; ++i) {
-                        const int p = ips[i];
-                        if (p != i) {
-                            const int t = idxs[i];
-                            idxs[i] = idxs[p];
-                            idxs[p] = t;
-                        }
-                    }
-                }
-                sycl::group_barrier(grp);
-
+                // Per chunk: ?LACPY to the tile, then A(row) = T(idxs(row)); ROW fastest (contiguous).
                 for (int cb = 0; cb < ib; cb += Cs) {
                     const int cw = ((ib - cb) < Cs) ? (ib - cb) : Cs;
-
-                    // Flat over (column, row), ROW fastest -- the contiguous direction.
-                    int col = lid / R;
-                    int row = lid - col * R;
-                    while (col < cw) {
+                    device::for_each_owned_2d<device::alg::Stepped>(ex, R, cw, [&](int row, int col) {
                         tile[static_cast<std::size_t>(col) * ldt + row] =
                             Ab[static_cast<std::ptrdiff_t>(c0 + cb + col) * ld + k0 + row];
-                        row += wg;
-                        while (row >= R) { row -= R; ++col; }
-                    }
-                    sycl::group_barrier(grp);
-
-                    col = lid / R;
-                    row = lid - col * R;
-                    while (col < cw) {
+                    });
+                    ex.barrier();
+                    device::for_each_owned_2d<device::alg::Stepped>(ex, R, cw, [&](int row, int col) {
                         Ab[static_cast<std::ptrdiff_t>(c0 + cb + col) * ld + k0 + row] =
                             tile[static_cast<std::size_t>(col) * ldt + idxs[row]];
-                        row += wg;
-                        while (row >= R) { row -= R; ++col; }
-                    }
-                    sycl::group_barrier(grp);
+                    });
+                    ex.barrier();
                 }
             });
     });
     return true;
 }
 
-template <typename Tag, typename T> class LuLaswpRightGatherKernel;
+template <typename Tag, typename Scalar> class LuLaswpRightGatherKernel;
 
 // The in-loop RIGHT-hand interchange as the same gather: pivots [k0, k0 + L) applied to
 // columns [c_begin, c_begin + ncols), rows [k0, k0 + R). One group per (column tile, item),
 // so it is parallel over columns as well as batch; only rows the permutation MOVES are
 // written back. Returns false having enqueued nothing when a column does not fit.
 // evidence: docs/perf/lu.md#the-right-hand-gather
-template <typename Tag, typename T>
+template <typename Tag, typename Scalar>
 bool lu_laswp_right_gather_launch(Queue& ctx,
-                                  T* base, int ld, int stride, int batch,
+                                  Scalar* base, int ld, int stride, int batch,
                                   const int* piv, int piv_stride,
                                   int k0, int L, int R, int c_begin, int ncols,
                                   std::size_t slm_budget, int max_wg,
                                   const std::uint8_t* mask = nullptr) {
     if (batch <= 0 || ncols <= 0 || L <= 0 || R <= 0) return true;
 
-    using DM = sycl_device::DevMap<T>;
+    using DM = sycl_device::DevMap<Scalar>;
     using D = typename DM::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     const int ldt = R | 1;
     const std::size_t int_bytes = static_cast<std::size_t>(R) * sizeof(int);
@@ -281,15 +238,14 @@ bool lu_laswp_right_gather_launch(Queue& ctx,
         sycl::local_accessor<int, 1> idxs(sycl::range<1>(static_cast<std::size_t>(R)), h);
         sycl::local_accessor<D, 1> tile(sycl::range<1>(tile_elems), h);
 
-        batchlas::impl::parallel_for<LuLaswpRightGatherKernel<Tag, T>>(h,
+        batchlas::impl::parallel_for<LuLaswpRightGatherKernel<Tag, Scalar>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(ntile) *
                                              static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
             [=](sycl::nd_item<1> it) {
-                const auto grp = it.get_group();
+                const device::RtGroup<device::Scope::Group> ex{it};
                 const int gid = static_cast<int>(it.get_group(0));
-                const int lid = static_cast<int>(it.get_local_id(0));
                 const int t = gid / batch;
                 const int b = gid - t * batch;
                 if (mask != nullptr && mask[b] == 0) return;  // I1: before the first barrier
@@ -299,37 +255,34 @@ bool lu_laswp_right_gather_launch(Queue& ctx,
                 D* const Ab = bp + static_cast<std::ptrdiff_t>(b) * stride;
                 const int* const ip = piv + static_cast<std::ptrdiff_t>(b) * piv_stride;
 
-                for (int i = lid; i < R; i += wg) idxs[i] = i;
-                sycl::group_barrier(grp);
-                // L serial swaps on the int array; clamped as the deferred gather is.
-                if (lid == 0) {
-                    for (int i = 0; i < L; ++i) {
+                int* const ix = &idxs[0];
+                device::for_each_owned(ex, R, [&](int i) { ix[i] = i; });
+                ex.barrier();
+                // idxs := P idxs over the panel's L pivots, ?LASWP on the INT array (serial);
+                // clamped as the deferred gather is.
+                if (ex.leader()) {
+                    const auto ipiv1 = [=](int i) {   // relative, clamped, 1-based for laswp
                         int p = ip[k0 + i] - 1 - k0;
                         if (p < 0 || p >= R) p = i;
-                        if (p != i) {
-                            const int s = idxs[i];
-                            idxs[i] = idxs[p];
-                            idxs[p] = s;
-                        }
-                    }
+                        return p + 1;
+                    };
+                    device::laswp(device::Thread{}, device::mat<device::Mem::Local>(ix, R, 1, R), ipiv1, 0, L);
                 }
 
-                // Row fastest, the contiguous direction; overlaps the serial phase.
-                for (int e = lid; e < cw * R; e += wg) {
-                    const int col = e / R, row = e - col * R;
+                // ?LACPY into the tile, row fastest; overlaps the serial phase.
+                device::for_each_owned_2d<device::alg::Flat>(ex, R, cw, [&](int row, int col) {
                     tile[static_cast<std::size_t>(col) * ldt + row] =
                         Ab[static_cast<std::ptrdiff_t>(cb + col) * ld + k0 + row];
-                }
-                sycl::group_barrier(grp);
-
-                for (int e = lid; e < cw * R; e += wg) {
-                    const int col = e / R, row = e - col * R;
-                    const int src = idxs[row];
+                });
+                ex.barrier();
+                // The row gather; only rows the permutation MOVES are written back.
+                device::for_each_owned_2d<device::alg::Flat>(ex, R, cw, [&](int row, int col) {
+                    const int src = ix[row];
                     if (src != row) {
                         Ab[static_cast<std::ptrdiff_t>(cb + col) * ld + k0 + row] =
                             tile[static_cast<std::size_t>(col) * ldt + src];
                     }
-                }
+                });
             });
     });
     return true;

@@ -151,7 +151,6 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # without a system GTest the FetchContent clone makes an offline configure fail.
 option(BATCHLAS_BUILD_TESTS "Build BatchLAS tests" ${BATCHLAS_IS_TOP_LEVEL})
 option(BATCHLAS_BUILD_BENCHMARKS "Build BatchLAS benchmarks" OFF)
-option(BATCHLAS_BUILD_DEVICE_BLAS_BENCHMARKS "Build device_blas_* benchmark targets" OFF)
 option(BATCHLAS_BUILD_DOCS "Build BatchLAS documentation" OFF)
 # Tri-state on purpose. This used to be option(... OFF), and
 # BatchLASDetectSYCL.cmake then force-promoted it to ON in PARENT_SCOPE whenever
@@ -335,7 +334,7 @@ endif()
 if(BATCHLAS_ENABLE_METAL_MODE STREQUAL "ON" AND NOT BATCHLAS_SYCL_IMPL_ACPP)
     message(FATAL_ERROR "BATCHLAS_ENABLE_METAL=ON needs BATCHLAS_SYCL_IMPL=ACPP (DPC++ has no Metal backend)")
 endif()
-# Resolved by detect_sycl_gpu_architectures() in BatchLASDetectSYCL.cmake; this
+# Resolved by batchlas_detect_sycl_gpu_architectures() in BatchLASDetectSYCL.cmake; this
 # is the value that survives if sycl-ls is missing and detection bails out early.
 if(BATCHLAS_ENABLE_CUDA_MODE STREQUAL "ON")
     set(BATCHLAS_CUDA_ENABLED ON)

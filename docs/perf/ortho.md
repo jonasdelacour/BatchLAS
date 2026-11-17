@@ -9,7 +9,7 @@ for real types at small `k`, else GEMM; absolute times are on
 
 ## ortho: the Gram matrix through syrk, per precision
 
-`gram_max_k` is 64 for float and 128 for double (`ortho.cc:175`). End-to-end `syrk` over GEMM,
+`gram_max_k` is 64 for float and 128 for double (`ortho.cc:174`). End-to-end `syrk` over GEMM,
 `m = 1024`, batch 512, `Chol2` (no recorded date or raw file):
 
 | \f$k\f$ | float | double |

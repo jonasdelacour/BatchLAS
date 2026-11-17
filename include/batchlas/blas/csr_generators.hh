@@ -10,9 +10,8 @@
 /// @file
 /// @brief Random CSR test-matrix generators (`batchlas::csr_generators`).
 
-namespace batchlas {
 /// @brief Random sparse test-matrix generators.
-namespace csr_generators {
+namespace batchlas::csr_generators {
 
 /// @brief Generates a batch of random sparse symmetric (real) or Hermitian (complex) \f$n \times n\f$ CSR matrices.
 ///
@@ -25,7 +24,7 @@ namespace csr_generators {
 /// within each row. Storage is allocated and
 /// filled on the device; the call waits before returning. Equivalent to
 /// Matrix::RandomSparseHermitian().
-/// @tparam T  `float`, `double`, `std::complex<float>` or `std::complex<double>`
+/// @tparam Scalar  `float`, `double`, `std::complex<float>` or `std::complex<double>`
 /// @param[in] n               matrix order \f$n\f$
 /// @param[in] density         target fraction of stored entries over the full \f$n \times n\f$
 ///                            matrix, diagonal included; clamped to \f$[0, 1]\f$. The count is
@@ -39,13 +38,12 @@ namespace csr_generators {
 /// @return an owning CSR Matrix; `nnz()` is the same for every item
 /// @throws batchlas::invalid_argument if \f$n \le 0\f$ or \f$\mathit{batch\_size} \le 0\f$
 /// @ingroup api_sparse_lowlevel
-template <typename T>
-BATCHLAS_API Matrix<T, MatrixFormat::CSR> random_sparse_hermitian_csr(int n,
-                                                                      float density,
-                                                                      int batch_size = 1,
-                                                                      unsigned seed = 42,
-                                                                      typename base_type<T>::type diagonal_boost = typename base_type<T>::type(1),
-                                                                      bool shared_pattern = true);
+template <typename Scalar>
+BATCHLAS_API Matrix<Scalar, MatrixFormat::CSR> random_sparse_hermitian_csr(int n,
+                                                                           float density,
+                                                                           int batch_size = 1,
+                                                                           unsigned seed = 42,
+                                                                           typename base_type<Scalar>::type diagonal_boost = typename base_type<Scalar>::type(1),
+                                                                           bool shared_pattern = true);
 
-}  // namespace csr_generators
-}  // namespace batchlas
+}  // namespace batchlas::csr_generators

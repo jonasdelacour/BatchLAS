@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Native batched POTRF, the TINY tier: right-looking unblocked Cholesky with one matrix
 // per SubGroupPartition<N>, lane r owning row r in registers. Zero local memory, zero
-// barriers, every cross-lane value a sub-group shuffle; the shared load/pad/store helpers
-// are in tiny_device.hh. It stays in EXTENSIONS_CTA_SOURCES with potrf_cta.cc, the same
+// barriers, every cross-lane value a sub-group shuffle. The kernel is a thin launcher: its body
+// is device::potrf's tier::Reg body, detail::potrf_reg_run (include/batchlas/device/lapack/potrf.hh),
+// with the triangle at run time. It stays in EXTENSIONS_CTA_SOURCES with potrf_cta.cc, the same
 // device-code cluster. evidence: docs/perf/potrf.md#potrf-the-tiny-tier
 //
 // Why no local-memory scratch. Each of the two things a column publishes -- the pivot and
@@ -11,13 +12,17 @@
 // on masked SPIR-V, so a publish/read pair ordered only by it is not ordered everywhere.
 
 #include <src/ops/potrf/potrf_native.hh>
+#include <src/kernels/common/info_target.hh>
+#include <src/kernels/common/launch.hh>
+#include <batchlas/device/lapack/potrf.hh>
+#include <batchlas/device/sg_partition.hh>
 #include <src/kernels/common/tiny_device.hh>
 
 #include <src/queue.hh>
 #include <src/util/resident_capacity.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/util/batch_mask.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <batchlas/util/mempool.hh>
 
@@ -30,21 +35,19 @@
 namespace batchlas {
 
 // Kernel name tag; outside the anonymous namespace so it names no internal-linkage entity.
-template <typename T, int N, bool Masked>
+template <typename Scalar, int N, bool Masked>
 class PotrfTinyKernel;
 
-namespace sycl_potrf {
+namespace ops::potrf {
 
 namespace {
 
 using tiny_native::kTinySubGroupSize;
-using tiny_native::kTinySubGroups;
-using tiny_native::kTinyWgSize;
-static_assert(kTinyWgSize == kPotrfTinyWgSize, "potrf.cc's can_run reads kPotrfTinyWgSize");
+using resident::kTinyWgSize;
 
 // A flat compile-time constant, not a budget walk: the tier owns no local memory.
 // evidence: docs/perf/potrf.md#potrf-the-tiny-tier
-template <typename T>
+template <typename Scalar>
 struct PotrfTinyCap { static constexpr int kMaxN = 32; };
 template <>
 struct PotrfTinyCap<std::complex<double>> { static constexpr int kMaxN = 16; };
@@ -69,18 +72,18 @@ inline int potrf_tiny_matrices_per_wg(int N, int max_wg) {
 // Masked: the batch mask folds into `live` (I2: an inactive item is a dead slot, never a return).
 // A template so the unmasked instance is the kernel as it was: the fold cost 2-4.5% on float.
 // evidence: docs/design/masked-batches.md#masked-batches-kernel-contract
-template <typename T, int N, bool Masked>
+template <typename Scalar, int N, bool Masked>
 Event potrf_tiny_launch(Queue& ctx,
-                        const MatrixView<T, MatrixFormat::Dense>& A,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& A,
                         bool upper,
                         Span<int32_t> info,
                         int n, int batch, int per_wg, const std::uint8_t* mask) {
     // std::complex is re-typed to the POD device scalar at the pointer boundary: its
     // Annex-G operator* costs an isnan branch and a __mulsc3 call in device code.
-    using DM = sycl_device::DevMap<T>;
+    using DM = sycl_device::DevMap<Scalar>;
     using D = typename DM::type;
     using R = typename DM::real;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
     static_assert(tiny_native::tiny_n_is_legal(N),
                   "N must divide the sub-group: SubGroupPartition<P> bases a chunk at "
                   "(lane/P)*P, so a P that does not divide 32 shuffles off the end");
@@ -90,15 +93,14 @@ Event potrf_tiny_launch(Queue& ctx,
     const int stride_a = A.stride();
     int32_t* info_ptr = info.data();
 
+    // A Hermitian diagonal's imaginary part is contractually ignored (potrf_reg_run's load);
+    // for a real type the transform is the identity.
+
     const int wg_size = per_wg * N;
     const int num_wg = (batch + per_wg - 1) / per_wg;
 
-    // A Hermitian diagonal's imaginary part is contractually ignored; for a real type
-    // the transform is the identity.
-    constexpr bool real_diag = DM::is_complex;
-
     ctx->submit([&](sycl::handler& h) {
-        batchlas::impl::parallel_for<PotrfTinyKernel<T, N, Masked>>(h,
+        batchlas::impl::parallel_for<PotrfTinyKernel<Scalar, N, Masked>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) * wg_size),
                               sycl::range<1>(wg_size)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(kTinySubGroupSize) {
@@ -113,80 +115,11 @@ Event potrf_tiny_launch(Queue& ctx,
                 const bool in_range = (prob_id < batch);
                 bool live = in_range;
                 if constexpr (Masked) live = live && mask[prob_id] != 0;
-                const bool row_live = live && (lane < n);
 
-                const D* __restrict Ag =
-                    a_ptr + static_cast<std::ptrdiff_t>(in_range ? prob_id : 0) * stride_a;
-
-                D rA[N];
-                if (upper) {
-                    tiny_native::tiny_load_upper<D, N>(rA, Ag, ld, lane, row_live, real_diag);
-                } else {
-                    tiny_native::tiny_load_lower<D, N>(rA, Ag, ld, lane, row_live, real_diag);
-                }
-
-                // `linfo` is partition-uniform because `akk` is a broadcast.
-                bool alive = live;
-                int32_t linfo = 0;
-
-                // The order guard is a PREDICATE, never a `break`: a runtime break
-                // defeats the unroll at N >= 16, after which rA[j] is a dynamic index.
-                // evidence: docs/perf/potrf.md#potrf-the-tiny-tier
-BATCHLAS_UNROLL_FULL
-                for (int j = 0; j < N; ++j) {
-                    const bool col_live = (j < n);
-
-                    const R akk = select_from_group(part, sycl_device::dev_real(rA[j]),
-                                                    static_cast<uint32_t>(j));
-
-                    // `!(akk > 0)`, not `akk <= 0`, so NaN is rejected too, as LAPACK does.
-                    const bool bad = !(akk > R(0));
-                    if (alive && col_live && bad) {
-                        linfo = j + 1;   // 1-based; sticky, so FIRST FAILURE WINS
-                        alive = false;
-                    }
-
-                    // EVERY failure effect below is a value substitution, never control
-                    // flow: `alive` is partition-uniform but NOT sub-group-uniform, so an
-                    // `if (alive) { ...shuffle... }` would wrap a collective in divergence.
-                    const bool act = alive && col_live;
-                    const R dkk = act ? sycl::sqrt(akk) : R(1);
-
-                    // NOT rsqrt: rsqrt.approx is not the reference.
-                    const R rinv = R(1) / dkk;
-
-                    // tiny_select, not `?:` -- see tiny_device.hh on why a ternary over a
-                    // 16-byte aggregate stops the array being promotable.
-                    rA[j] = tiny_native::tiny_select(
-                        act,
-                        tiny_native::tiny_select(lane == j,
-                                                 sycl_device::dev_from_real<D>(dkk),
-                                                 sycl_device::dev_mul_real(rA[j], rinv)),
-                        rA[j]);
-
-BATCHLAS_UNROLL_FULL
-                    for (int k = j + 1; k < N; ++k) {
-                        // The lane guard is INSIDE the collective, never around it.
-                        const D vk = tiny_native::tiny_bcast<D>(part, rA[j],
-                                                                static_cast<uint32_t>(k));
-                        const D upd = sycl_device::dev_sub(
-                            rA[k],
-                            sycl_device::dev_mul(rA[j], sycl_device::dev_conj(vk)));
-
-                        // `k <= lane` keeps rA[k] for k > lane exactly zero for the
-                        // kernel's whole life, which is what makes the padding inert.
-                        rA[k] = tiny_native::tiny_select(act && k < n && k <= lane,
-                                                         upd, rA[k]);
-                    }
-                }
-
-                D* __restrict Aout =
-                    a_ptr + static_cast<std::ptrdiff_t>(in_range ? prob_id : 0) * stride_a;
-                if (upper) {
-                    tiny_native::tiny_store_upper<D, N>(rA, Aout, ld, lane, row_live);
-                } else {
-                    tiny_native::tiny_store_lower<D, N>(rA, Aout, ld, lane, row_live);
-                }
+                // The public tier::Reg body (load, potf2, store); `linfo` is partition-uniform
+                // because the pivot is a broadcast.
+                D* const Ag = a_ptr + static_cast<std::ptrdiff_t>(in_range ? prob_id : 0) * stride_a;
+                const int32_t linfo = device::detail::potrf_reg_run<D, N>(device::wrap(part), Ag, ld, lane, n, live, upper);
 
                 if (live && part.leader()) info_ptr[prob_id] = linfo;
             });
@@ -195,40 +128,33 @@ BATCHLAS_UNROLL_FULL
     return ctx.get_event();
 }
 
-template <typename T, int N>
-Event potrf_tiny_leg(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, bool upper, Span<int32_t> info,
+template <typename Scalar, int N>
+Event potrf_tiny_leg(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, bool upper, Span<int32_t> info,
                      int n, int batch, int per_wg, const std::uint8_t* mask) {
-    if (mask) return potrf_tiny_launch<T, N, true>(ctx, A, upper, info, n, batch, per_wg, mask);
-    return potrf_tiny_launch<T, N, false>(ctx, A, upper, info, n, batch, per_wg, nullptr);
-}
-
-template <typename T>
-Span<int32_t> potrf_tiny_layout(Queue& ctx, BumpAllocator& pool, int batch) {
-    return pool.allocate<int32_t>(ctx, static_cast<std::size_t>(batch));
+    if (mask) return potrf_tiny_launch<Scalar, N, true>(ctx, A, upper, info, n, batch, per_wg, mask);
+    return potrf_tiny_launch<Scalar, N, false>(ctx, A, upper, info, n, batch, per_wg, nullptr);
 }
 
 }  // namespace
 
-template <typename T>
+template <typename Scalar>
 int potrf_tiny_max_n() {
-    return PotrfTinyCap<T>::kMaxN;
+    return PotrfTinyCap<Scalar>::kMaxN;
 }
 
-template <typename T>
-std::size_t potrf_tiny_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
+template <typename Scalar>
+std::size_t potrf_tiny_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A) {
     // NOT zero: an empty or short caller `info` span draws `batch` int32s of pool scratch.
     const int batch = A.batch_size();
-    return workspace_bytes([&](BumpAllocator& p) {
-        return potrf_tiny_layout<T>(ctx, p, batch);
-    });
+    return detail::info_scratch_bytes(ctx, batch);
 }
 
-template <typename T>
+template <typename Scalar>
 unsigned potrf_tiny_debug_launch(Queue& ctx, int n) {
     const auto dev = ctx.device();
     if (dev.type != DeviceType::GPU) return 0u;
     const int N = tiny_native::tiny_bucket_ge(n);
-    if (N == 0 || n > potrf_tiny_max_n<T>()) return 0u;
+    if (N == 0 || n > potrf_tiny_max_n<Scalar>()) return 0u;
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     const int per_wg = potrf_tiny_matrices_per_wg(N, max_wg);
     const int wg = per_wg * N;
@@ -238,9 +164,9 @@ unsigned potrf_tiny_debug_launch(Queue& ctx, int n) {
     return (static_cast<unsigned>(S) << 16) | static_cast<unsigned>(G);
 }
 
-template <typename T>
+template <typename Scalar>
 Event potrf_tiny_dispatch(Queue& ctx,
-                          const MatrixView<T, MatrixFormat::Dense>& A,
+                          const MatrixView<Scalar, MatrixFormat::Dense>& A,
                           Uplo uplo,
                           Span<std::byte> workspace,
                           Span<int32_t> info_out) {
@@ -248,25 +174,8 @@ Event potrf_tiny_dispatch(Queue& ctx,
     const int batch = static_cast<int>(A.batch_size());
 
     // can_run()'s gates (src/ops/potrf/potrf.cc), re-applied: this entry point is public.
-    if (A.rows() != A.cols()) {
-        throw batchlas::invalid_argument("potrf_tiny: A must be square");
-    }
-    if (n < 1 || batch < 1) {
-        throw batchlas::invalid_argument("potrf_tiny: degenerate extents");
-    }
-    if (A.is_heterogeneous()) {
-        throw batchlas::invalid_argument("potrf_tiny: heterogeneous batch is not supported");
-    }
-    const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU) {
-        throw batchlas::invalid_argument("potrf_tiny: GPU queues only");
-    }
-    if (!dev.supports_sub_group_size(32)) {
-        // Enumerated, never MAX_SUB_GROUP_SIZE >= 32, which reports entry [0].
-        throw batchlas::unsupported(
-            "potrf_tiny: device does not offer sub-group size 32, which the kernel requires");
-    }
-    const int cap = potrf_tiny_max_n<T>();
+    const auto dev = native::require_launchable(ctx, "potrf_tiny", A, {.square = true});
+    const int cap = potrf_tiny_max_n<Scalar>();
     if (n > cap) {
         throw batchlas::invalid_argument(
             "potrf_tiny: order " + std::to_string(n) +
@@ -280,11 +189,7 @@ Event potrf_tiny_dispatch(Queue& ctx,
     }
 
     BumpAllocator pool(workspace);
-    // detail::info_target's rule, inlined to avoid including src/linalg-impl.hh: an
-    // empty or short caller span means "not requested" and draws pool scratch instead.
-    Span<int32_t> info = (info_out.size() >= static_cast<std::size_t>(batch))
-                             ? info_out
-                             : potrf_tiny_layout<T>(ctx, pool, batch);
+    Span<int32_t> info = detail::info_target(ctx, pool, info_out, static_cast<std::size_t>(batch));
 
     const bool upper = (uplo == Uplo::Upper);
     const int N = tiny_native::tiny_bucket_ge(n);
@@ -294,15 +199,15 @@ Event potrf_tiny_dispatch(Queue& ctx,
     // pulls the three N in (trsm_native.cc's discipline).
     switch (N) {
         case 8:
-            return potrf_tiny_leg<T, 8>(ctx, A, upper, info, n, batch,
-                                           potrf_tiny_matrices_per_wg(8, max_wg), mask);
+            return potrf_tiny_leg<Scalar, 8>(ctx, A, upper, info, n, batch,
+                                             potrf_tiny_matrices_per_wg(8, max_wg), mask);
         case 16:
-            return potrf_tiny_leg<T, 16>(ctx, A, upper, info, n, batch,
-                                            potrf_tiny_matrices_per_wg(16, max_wg), mask);
+            return potrf_tiny_leg<Scalar, 16>(ctx, A, upper, info, n, batch,
+                                              potrf_tiny_matrices_per_wg(16, max_wg), mask);
         case 32:
-            if constexpr (PotrfTinyCap<T>::kMaxN >= 32) {
-                return potrf_tiny_leg<T, 32>(ctx, A, upper, info, n, batch,
-                                                potrf_tiny_matrices_per_wg(32, max_wg), mask);
+            if constexpr (PotrfTinyCap<Scalar>::kMaxN >= 32) {
+                return potrf_tiny_leg<Scalar, 32>(ctx, A, upper, info, n, batch,
+                                                  potrf_tiny_matrices_per_wg(32, max_wg), mask);
             }
             break;
         default:
@@ -328,5 +233,5 @@ BATCHLAS_POTRF_TINY_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_POTRF_TINY_INSTANTIATE
 
-}  // namespace sycl_potrf
+}  // namespace ops::potrf
 }  // namespace batchlas

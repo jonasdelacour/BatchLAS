@@ -13,9 +13,9 @@
 
 using namespace batchlas;
 
-template <typename T, Backend B>
+template <typename Real, Backend B>
 struct SyrkConfig {
-    using ScalarType = T;
+    using ScalarType = Real;
     static constexpr Backend BackendVal = B;
 };
 
@@ -218,7 +218,7 @@ void expect_triangle_respected(Queue& ctx,
     }
 }
 
-} // namespace
+}  // namespace
 
 TEST(SyrkCudaCustomTest, TriangularTilesLeaveTheOtherHalfUntouched) {
     Queue ctx;

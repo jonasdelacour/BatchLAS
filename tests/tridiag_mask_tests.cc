@@ -27,39 +27,39 @@ namespace {
 
 namespace mc = masked_contract;
 
-template <typename T>
+template <typename Real>
 struct Strided {
-    UnifiedVector<T> store;
+    UnifiedVector<Real> store;
     int n, batch, stride;
     Strided(int n_, int batch_, int pad) : store(std::size_t(std::max(1, n_ + pad)) * batch_), n(n_), batch(batch_), stride(n_ + pad) {}
-    VectorView<T> view() const { return VectorView<T>(store.data(), n, batch, 1, stride); }
+    VectorView<Real> view() const { return VectorView<Real>(store.data(), n, batch, 1, stride); }
     mc::Output output(std::string name) const {
-        return {std::move(name), reinterpret_cast<const std::byte*>(store.data()), sizeof(T) * std::size_t(n),
-                sizeof(T) * std::size_t(stride)};
+        return {std::move(name), reinterpret_cast<const std::byte*>(store.data()), sizeof(Real) * std::size_t(n),
+                sizeof(Real) * std::size_t(stride)};
     }
-    T& at(int i, int b) { return store[std::size_t(b) * stride + i]; }
+    Real& at(int i, int b) { return store[std::size_t(b) * stride + i]; }
 };
 
 // Graded diagonal, distinct per item unless `identical`, every off-diagonal nonzero.
-template <typename T>
-void fill_tridiagonal(Strided<T>& d, Strided<T>& e, bool identical) {
+template <typename Real>
+void fill_tridiagonal(Strided<Real>& d, Strided<Real>& e, bool identical) {
     for (int b = 0; b < d.batch; ++b) {
         const int item = identical ? 0 : b;
-        for (int i = 0; i < d.n; ++i) d.at(i, b) = T(1 + i + 0.125 * ((i * 7 + item * 3) % 11));
-        for (int i = 0; i + 1 < d.n; ++i) e.at(i, b) = T(0.25 + 0.0625 * ((i * 5 + item) % 7));
+        for (int i = 0; i < d.n; ++i) d.at(i, b) = Real(1 + i + 0.125 * ((i * 7 + item * 3) % 11));
+        for (int i = 0; i + 1 < d.n; ++i) e.at(i, b) = Real(0.25 + 0.0625 * ((i * 5 + item) % 7));
     }
 }
 
-template <typename T, Backend B>
+template <typename Real, Backend B>
 struct Stebz {
     Queue& q;
     int n, batch;
-    StebzParams<T> params;
+    StebzParams<Real> params;
     bool identical, d_only;
-    Strided<T> d, e, w;
+    Strided<Real> d, e, w;
     UnifiedVector<int32_t> m;
 
-    Stebz(Queue& queue, int n_, int batch_, StebzParams<T> p, bool ident = false, bool d_only_ = false)
+    Stebz(Queue& queue, int n_, int batch_, StebzParams<Real> p, bool ident = false, bool d_only_ = false)
         : q(queue), n(n_), batch(batch_), params(p), identical(ident), d_only(d_only_), d(n_, batch_, 3), e(n_ - 1, batch_, 2),
           w(n_, batch_, 4), m(std::size_t(batch_)) {}
 
@@ -69,15 +69,15 @@ struct Stebz {
         c.identical_items = identical;
         c.prepare = [this] {
             fill_tridiagonal(d, e, identical);
-            std::fill_n(w.store.data(), w.store.size(), test_support::poison<T>());
+            std::fill_n(w.store.data(), w.store.size(), test_support::poison<Real>());
             std::fill_n(m.data(), m.size(), int32_t(-7));
         };
         c.call = [this](Span<const std::uint8_t> mask, Span<std::byte> ws) {
             const Span<const std::uint8_t> rest = d_only ? Span<const std::uint8_t>{} : mask;
-            (void)stebz<B, T>(q, d.view().with_batch_mask(mask), e.view().with_batch_mask(rest), w.view().with_batch_mask(rest),
-                              Span<int32_t>(m.data(), m.size()), ws, params);
+            (void)stebz<B, Real>(q, d.view().with_batch_mask(mask), e.view().with_batch_mask(rest), w.view().with_batch_mask(rest),
+                                 Span<int32_t>(m.data(), m.size()), ws, params);
         };
-        c.buffer_size = [this](Span<const std::uint8_t>) { return stebz_buffer_size<B, T>(q, n, batch, params); };
+        c.buffer_size = [this](Span<const std::uint8_t>) { return stebz_buffer_size<B, Real>(q, n, batch, params); };
         c.outputs = [this] {
             return std::vector<mc::Output>{w.output("w"), mc::Output::span<int32_t>("m", {m.data(), m.size()}, 1),
                                            d.output("d"), e.output("e")};
@@ -86,18 +86,18 @@ struct Stebz {
     }
 };
 
-template <typename T, Backend B>
+template <typename Real, Backend B>
 struct Stein {
     Queue& q;
     int n, k, batch;
     bool counts_on, identical, z_only;
-    Strided<T> d, e, w;
-    Matrix<T> Z;
+    Strided<Real> d, e, w;
+    Matrix<Real> Z;
     UnifiedVector<int32_t> counts;
 
     Stein(Queue& queue, int n_, int k_, int batch_, bool counts_, bool ident = false, bool z_only_ = false)
         : q(queue), n(n_), k(k_), batch(batch_), counts_on(counts_), identical(ident), z_only(z_only_), d(n_, batch_, 3),
-          e(n_ - 1, batch_, 2), w(k_, batch_, 4), Z(test_support::padded<T>(n_, k_, batch_)), counts(std::size_t(batch_)) {}
+          e(n_ - 1, batch_, 2), w(k_, batch_, 4), Z(test_support::padded<Real>(n_, k_, batch_)), counts(std::size_t(batch_)) {}
 
     mc::Case make_case() {
         mc::Case c;
@@ -107,20 +107,20 @@ struct Stein {
             fill_tridiagonal(d, e, identical);
             // Ascending shifts near the diagonal, a close pair among them: the reorthogonalisation runs.
             for (int b = 0; b < batch; ++b) {
-                for (int j = 0; j < k; ++j) w.at(j, b) = d.at(j, b) + T(j == 1 ? -0.5 : 0.01 * j);
+                for (int j = 0; j < k; ++j) w.at(j, b) = d.at(j, b) + Real(j == 1 ? -0.5 : 0.01 * j);
                 std::sort(&w.at(0, b), &w.at(0, b) + k);
                 counts[std::size_t(b)] = identical ? k : k - (b % 3);
             }
-            std::fill_n(Z.data_ptr(), std::size_t(Z.stride()) * batch, test_support::poison<T>());
+            std::fill_n(Z.data_ptr(), std::size_t(Z.stride()) * batch, test_support::poison<Real>());
         };
         c.call = [this](Span<const std::uint8_t> mask, Span<std::byte> ws) {
             const Span<const std::uint8_t> in = z_only ? Span<const std::uint8_t>{} : mask;
             const auto Zv = Z.view().with_batch_mask(mask);
             const Span<const int32_t> cnt = counts_on ? Span<const int32_t>(counts.data(), counts.size()) : stein_all_counts;
-            (void)stein<B, T>(q, d.view().with_batch_mask(in), e.view().with_batch_mask(in), w.view().with_batch_mask(in), k, cnt,
-                              Zv, ws, SteinParams<T>{});
+            (void)stein<B, Real>(q, d.view().with_batch_mask(in), e.view().with_batch_mask(in), w.view().with_batch_mask(in), k, cnt,
+                                 Zv, ws, SteinParams<Real>{});
         };
-        c.buffer_size = [this](Span<const std::uint8_t>) { return stein_buffer_size<B, T>(q, n, k, batch, SteinParams<T>{}); };
+        c.buffer_size = [this](Span<const std::uint8_t>) { return stein_buffer_size<B, Real>(q, n, k, batch, SteinParams<Real>{}); };
         c.outputs = [this] {
             return std::vector<mc::Output>{mc::Output::matrix("Z", Z.view()), d.output("d"), e.output("e"), w.output("w")};
         };
@@ -128,18 +128,18 @@ struct Stein {
     }
 };
 
-template <typename T, Backend B>
+template <typename Real, Backend B>
 struct TridiagSolver {
     Queue& q;
     int n, batch;
     JobType jobz;
     bool identical;
-    UnifiedVector<T> alphas, betas, W;
-    Matrix<T> Q;
+    UnifiedVector<Real> alphas, betas, W;
+    Matrix<Real> Q;
 
     TridiagSolver(Queue& queue, int n_, int batch_, JobType jz, bool ident = false)
         : q(queue), n(n_), batch(batch_), jobz(jz), identical(ident), alphas(std::size_t(n_) * batch_),
-          betas(std::size_t(n_) * batch_), W(std::size_t(n_) * batch_), Q(test_support::padded<T>(n_, n_, batch_)) {}
+          betas(std::size_t(n_) * batch_), W(std::size_t(n_) * batch_), Q(test_support::padded<Real>(n_, n_, batch_)) {}
 
     mc::Case make_case() {
         mc::Case c;
@@ -149,22 +149,22 @@ struct TridiagSolver {
             for (int b = 0; b < batch; ++b) {
                 const int item = identical ? 0 : b;
                 for (int i = 0; i < n; ++i) {
-                    alphas[std::size_t(b) * n + i] = T(1 + i + 0.125 * ((i * 7 + item * 3) % 11));
-                    betas[std::size_t(b) * n + i] = i + 1 < n ? T(0.25 + 0.0625 * ((i * 5 + item) % 7)) : T(0);
+                    alphas[std::size_t(b) * n + i] = Real(1 + i + 0.125 * ((i * 7 + item * 3) % 11));
+                    betas[std::size_t(b) * n + i] = i + 1 < n ? Real(0.25 + 0.0625 * ((i * 5 + item) % 7)) : Real(0);
                 }
             }
-            std::fill_n(W.data(), W.size(), test_support::poison<T>());
-            std::fill_n(Q.data_ptr(), std::size_t(Q.stride()) * batch, test_support::poison<T>());
+            std::fill_n(W.data(), W.size(), test_support::poison<Real>());
+            std::fill_n(Q.data_ptr(), std::size_t(Q.stride()) * batch, test_support::poison<Real>());
         };
         c.call = [this](Span<const std::uint8_t> mask, Span<std::byte> ws) {
-            (void)tridiagonal_solver<B, T>(q, Span<T>(alphas.data(), alphas.size()), Span<T>(betas.data(), betas.size()),
-                                           Span<T>(W.data(), W.size()), ws, jobz, Q.view().with_batch_mask(mask), n, batch);
+            (void)tridiagonal_solver<B, Real>(q, Span<Real>(alphas.data(), alphas.size()), Span<Real>(betas.data(), betas.size()),
+                                              Span<Real>(W.data(), W.size()), ws, jobz, Q.view().with_batch_mask(mask), n, batch);
         };
-        c.buffer_size = [this](Span<const std::uint8_t>) { return tridiagonal_solver_buffer_size<B, T>(q, n, batch, jobz); };
+        c.buffer_size = [this](Span<const std::uint8_t>) { return tridiagonal_solver_buffer_size<B, Real>(q, n, batch, jobz); };
         c.outputs = [this] {
-            std::vector<mc::Output> o{mc::Output::span<T>("W", {W.data(), W.size()}, std::size_t(n)),
-                                      mc::Output::span<T>("alphas", {alphas.data(), alphas.size()}, std::size_t(n)),
-                                      mc::Output::span<T>("betas", {betas.data(), betas.size()}, std::size_t(n))};
+            std::vector<mc::Output> o{mc::Output::span<Real>("W", {W.data(), W.size()}, std::size_t(n)),
+                                      mc::Output::span<Real>("alphas", {alphas.data(), alphas.size()}, std::size_t(n)),
+                                      mc::Output::span<Real>("betas", {betas.data(), betas.size()}, std::size_t(n))};
             if (jobz == JobType::EigenVectors) o.push_back(mc::Output::matrix("Q", Q.view()));
             return o;
         };
@@ -172,9 +172,9 @@ struct TridiagSolver {
     }
 };
 
-template <typename T, Backend B>
+template <typename Real, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Real;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types_filtered<Cfg, false>::type;
