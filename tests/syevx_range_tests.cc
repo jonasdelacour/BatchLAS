@@ -137,7 +137,7 @@ const ResolveCase kCases[] = {
 
 class SyevxResolveRangeTest : public ::testing::TestWithParam<ResolveCase> {};
 
-} // namespace
+}  // namespace
 
 TEST_P(SyevxResolveRangeTest, MatchesTheNormalizationTable) {
     const auto& c = GetParam();

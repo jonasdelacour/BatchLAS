@@ -40,7 +40,7 @@ inline constexpr T broadcast_from_leader_impl(const Group& group, T value) {
     }
 }
 
-} // namespace detail
+}  // namespace detail
 
 /// @addtogroup api_internal_helpers
 /// @{
@@ -105,4 +105,4 @@ inline constexpr auto invoke_one_broadcast(const Group& group, Fn&& fn, Args&&..
 
 /// @}
 
-} // namespace batchlas
+}  // namespace batchlas

@@ -30,7 +30,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 SEARCH_DIRS = ("include", "src", "tests", "benchmarks", "python", "examples", "tools")
 SUFFIXES = (".h", ".hh", ".hpp", ".hxx", ".inc", ".ipp", ".c", ".cc", ".cpp", ".cxx", ".cu")
 
-BAD_INCLUDE = re.compile(r'^\s*#\s*include\s*<(blas|util|internal)/')
+BAD_INCLUDE = re.compile(r"^\s*#\s*include\s*<(blas|util|internal)/")
 # In-tree sources include each other root-based (<src/...>, <tests/...>, <tools/...>), never by a
 # quoted path: a relative "../../x.hh" breaks silently when either file moves.
 QUOTED_INCLUDE = re.compile(r'^\s*#\s*include\s*"')

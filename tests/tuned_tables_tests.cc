@@ -405,7 +405,6 @@ TEST(TunedTables, TranscribedRowsSkipTheTieRuleButNotTheSpellingCheck) {
     EXPECT_EQ(tie_rule_problems(edge), std::vector<std::string>{"line 5: tied entries out of candidate order"});
 }
 
-
 // One dtype's table of the embedded tuned/<op>.<device>.txt.
 const sel::Table& embedded(const std::string& op, const std::string& dtype, const std::string& device) {
     static std::map<std::string, sel::Table> cache;
@@ -706,7 +705,6 @@ TEST(TunedTables, OrgqrTablesHoldExactlyTheChoiceGridOnBothDevices) {
         }
 }
 
-
 // ormqr's transcriber spells choice.hh's grid by hand (k over grid_m up to m), and one
 // transcription on sm_89 holds exactly that grid, both sides, N/T/C.
 TEST(TunedTables, OrmqrTablesHoldExactlyTheChoiceGridOnBothDevices) {
@@ -796,11 +794,10 @@ TEST(TunedTables, GetriTranscribedTablesHoldExactlyTheChoiceGrid) {
 TEST(TunedTables, PotriTablesCoverTheChoiceGridAndRankCtaOnlyWhereItFits) {
     namespace potri = batchlas::ops::potri;
     constexpr std::size_t kSlm = 99 * 1024 - 4096;  // sm_89 and sm_120 LOCAL_MEM_SIZE less the reserve
-    namespace sp = batchlas::sycl_potri;
-    const std::map<std::string, int> ceiling{{"float", sp::cta_max_n<float>(kSlm, 1024)},
-                                             {"double", sp::cta_max_n<double>(kSlm, 1024)},
-                                             {"cfloat", sp::cta_max_n<std::complex<float>>(kSlm, 1024)},
-                                             {"cdouble", sp::cta_max_n<std::complex<double>>(kSlm, 1024)}};
+    const std::map<std::string, int> ceiling{{"float", batchlas::ops::potri::cta_max_n<float>(kSlm, 1024)},
+                                             {"double", batchlas::ops::potri::cta_max_n<double>(kSlm, 1024)},
+                                             {"cfloat", batchlas::ops::potri::cta_max_n<std::complex<float>>(kSlm, 1024)},
+                                             {"cdouble", batchlas::ops::potri::cta_max_n<std::complex<double>>(kSlm, 1024)}};
     for (const char* dev : {"sm_89", "sm_120"})
         for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
             const sel::Table& t = embedded("potri", dt, dev);

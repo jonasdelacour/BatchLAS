@@ -48,28 +48,28 @@ std::string label(const Shape& s) {
            (s.leaf ? std::string(" leaf ") + s.leaf : "");
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Problem {
     Queue& q;
     Shape s;
-    Matrix<T> A;
-    UnifiedVector<T> tau;
+    Matrix<Scalar> A;
+    UnifiedVector<Scalar> tau;
 
     int k() const { return std::min(s.m, s.n); }
     Problem(Queue& queue, const Shape& shape)
-        : q(queue), s(shape), A(test_support::padded<T>(s.m, s.n, s.batch)),
+        : q(queue), s(shape), A(test_support::padded<Scalar>(s.m, s.n, s.batch)),
           tau(std::size_t(std::min(s.m, s.n)) * s.batch) {}
 
     void fill() {
-        T* p = A.data_ptr();
+        Scalar* p = A.data_ptr();
         const std::size_t per = std::size_t(A.stride());
         for (std::size_t e = 0; e < per * std::size_t(s.batch); ++e) {
             const std::size_t item = s.identical ? 0 : e / per, off = e % per;
             const double re = double(int((off * 7 + item * 3 + 1) % 23) - 11) / 8;
             const double im = double(int((off * 5 + item + 4) % 13) - 6) / 8;
-            p[e] = MatrixView<T>::make(re, im);
+            p[e] = MatrixView<Scalar>::make(re, im);
         }
-        std::fill(tau.begin(), tau.end(), test_support::poison<T>());
+        std::fill(tau.begin(), tau.end(), test_support::poison<Scalar>());
     }
     mc::Case make_case() {
         mc::Case c;
@@ -81,22 +81,22 @@ struct Problem {
         c.masked_reference = s.spelling == "blocked" && (B == Backend::CUDA || B == Backend::ROCM);
         c.prepare = [this] { fill(); };
         c.call = [this](Span<const std::uint8_t> mask, Span<std::byte> ws) {
-            geqrf<B, T>(q, A.view().with_batch_mask(mask), tau.to_span(), ws);
+            geqrf<B, Scalar>(q, A.view().with_batch_mask(mask), tau.to_span(), ws);
         };
         c.buffer_size = [this](Span<const std::uint8_t> mask) {
-            return geqrf_buffer_size<B, T>(q, A.view().with_batch_mask(mask), tau.to_span());
+            return geqrf_buffer_size<B, Scalar>(q, A.view().with_batch_mask(mask), tau.to_span());
         };
         c.outputs = [this] {
             return std::vector<mc::Output>{mc::Output::matrix("A", A.view()),
-                                           mc::Output::span<T>("tau", {tau.data(), tau.size()}, std::size_t(k()))};
+                                           mc::Output::span<Scalar>("tau", {tau.data(), tau.size()}, std::size_t(k()))};
         };
         return c;
     }
 };
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;
@@ -117,9 +117,9 @@ protected:
         mc::check<og::GeqrfChoice>(*this->ctx, "geqrf", s.spelling, p.make_case());
     }
     // Items per tiny work-group at order n (0: the tier does not take n here).
-    int tiny_items(int n) { return int(sycl_geqrf::geqrf_tiny_debug_launch<T>(*this->ctx, n) & 0xffffu); }
+    int tiny_items(int n) { return int(ops::geqrf::geqrf_tiny_debug_launch<T>(*this->ctx, n) & 0xffffu); }
     // The blocked panel leaf at m x n: 1 resident, 2 global, 3 register.
-    int blocked_leaf(int m, int n) { return int(sycl_geqrf::geqrf_blocked_debug_params<T>(*this->ctx, m, n) >> 16); }
+    int blocked_leaf(int m, int n) { return int(ops::geqrf::geqrf_blocked_debug_params<T>(*this->ctx, m, n) >> 16); }
 
     std::vector<Shape> tiny_shapes(int batch, bool identical) {
         std::vector<Shape> v;

@@ -6,6 +6,7 @@
 // See docs/perf/potrf.md#the-blocked-driver and #the-blocked-upper-driver
 
 #include <src/ops/potrf/potrf_native.hh>
+#include <src/kernels/common/launch.hh>
 #include <src/ops/potrf/kernels/symmetric_product_fold.hh>
 
 #include <src/ops/trsm/trsm_native.hh>
@@ -31,25 +32,25 @@
 #include <batchlas/tuning_params.hh>
 
 namespace batchlas {
-namespace sycl_potrf {
+namespace ops::potrf {
 
 namespace {
 
-template <typename T> struct PotrfIsComplex : std::false_type {};
+template <typename Scalar> struct PotrfIsComplex : std::false_type {};
 template <> struct PotrfIsComplex<std::complex<float>>  : std::true_type {};
 template <> struct PotrfIsComplex<std::complex<double>> : std::true_type {};
 
 // Complex: A22 -= L21 L21^H is Hermitian, so ConjTrans here is correctness, not tuning.
-template <typename T>
+template <typename Scalar>
 constexpr Transpose kTrailingTransB =
-    PotrfIsComplex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
+    PotrfIsComplex<Scalar>::value ? Transpose::ConjTrans : Transpose::Trans;
 
-template <typename T>
-constexpr Transpose kTrailingTransA = kTrailingTransB<T>;
+template <typename Scalar>
+constexpr Transpose kTrailingTransA = kTrailingTransB<Scalar>;
 
 // nb is the diagonal block order -- the leaf's order and the trailing update's k -- and W
-// the trailing panel width; neither is potrf_cta_max_n<T>(). evidence: docs/perf/potrf.md#nb-and-w
-template <typename T> struct PotrfBlockedConst;
+// the trailing panel width; neither is potrf_cta_max_n<Scalar>(). evidence: docs/perf/potrf.md#nb-and-w
+template <typename Scalar> struct PotrfBlockedConst;
 template <> struct PotrfBlockedConst<float>                { static constexpr int NB = 128; static constexpr int W = 128; };
 template <> struct PotrfBlockedConst<double>               { static constexpr int NB = 96;  static constexpr int W = 32; };
 template <> struct PotrfBlockedConst<std::complex<float>>  { static constexpr int NB = 96;  static constexpr int W = 32; };
@@ -73,11 +74,11 @@ struct PotrfBlockedParams {
     int leaf_min_blocks;    // the occupancy target nb was clamped against
 };
 
-template <typename T>
+template <typename Scalar>
 PotrfBlockedParams potrf_blocked_params(Queue& ctx, int n) {
-    using C = PotrfBlockedConst<T>;
+    using C = PotrfBlockedConst<Scalar>;
 
-    // From THIS device's SLM: the hardcoded potrf_cta_max_n<T>() can name a block the leaf
+    // From THIS device's SLM: the hardcoded potrf_cta_max_n<Scalar>() can name a block the leaf
     // refuses. WHICH ceiling is the choice above: the advertised (occupancy-scaled) one
     // while the leaf dominates, the residency one once the trailing GEMM does. The leaf
     // is launched at the same target, so the two can never disagree.
@@ -85,14 +86,14 @@ PotrfBlockedParams potrf_blocked_params(Queue& ctx, int n) {
         static_cast<std::size_t>(ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE)));
     const int leaf_min_blocks =
         (n > 0 && n <= kPotrfOccupancyNbMaxOrder) ? resident::kMinBlocksPerSm : 1;
-    const int ceiling = potrf_cta_max_n_for_slm<T>(budget, leaf_min_blocks);
+    const int ceiling = potrf_cta_max_n_for_slm<Scalar>(budget, leaf_min_blocks);
 
     const int want = potrf_nb_env() ? potrf_nb_env() : C::NB;
     int nb = std::min(want, std::max(ceiling, 1));
     if (n > 0) nb = std::min(nb, n);
 
-    // Rounded to whole trsm_cta_max_n<T>() blocks, so a hand-set BATCHLAS_POTRF_NB stays measured.
-    const int leaf_trsm = sycl_trsm::trsm_cta_max_n<T>();
+    // Rounded to whole trsm_cta_max_n<Scalar>() blocks, so a hand-set BATCHLAS_POTRF_NB stays measured.
+    const int leaf_trsm = ops::trsm::trsm_cta_max_n<Scalar>();
     if (leaf_trsm > 0 && nb >= leaf_trsm) {
         nb = (nb / leaf_trsm) * leaf_trsm;
     }
@@ -108,31 +109,31 @@ PotrfBlockedParams potrf_blocked_params(Queue& ctx, int n) {
 // are routed at this batch. An item is its lower triangle; one block has no hand-off, so it
 // never splits. The query and the call must agree, so both use it.
 // evidence: docs/perf/potrf.md#potrf-l2-batch-chunking
-template <typename T>
+template <typename Scalar>
 int potrf_blocked_chunk(Queue& ctx, int n, int nb, int batch) {
     if (n <= nb) return batch;
     const auto dev = ctx.device();
     return static_cast<int>(tuning::blocked_chunk_items(
-        batch, static_cast<int64_t>(n) * (n + 1) / 2 * static_cast<int64_t>(sizeof(T)),
+        batch, static_cast<int64_t>(n) * (n + 1) / 2 * static_cast<int64_t>(sizeof(Scalar)),
         static_cast<int64_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE)),
         static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS))));
 }
 
-template <typename T>
+template <typename Scalar>
 struct PotrfBlockedWs {
     Span<int32_t> info;       // driver-owned info fallback
     Span<int32_t> leaf_info;  // what the leaf writes, per panel, before merging
-    Span<T*>      a11_ptrs;   // pointer array for the L11 role
-    Span<T*>      a21_ptrs;   // pointer array for the panel role
-    Span<T>       product;    // W x W x batch scratch for the diagonal-block gemm
+    Span<Scalar*>      a11_ptrs;   // pointer array for the L11 role
+    Span<Scalar*>      a21_ptrs;   // pointer array for the panel role
+    Span<Scalar>       product;    // W x W x batch scratch for the diagonal-block gemm
     Span<std::byte> leaf_ws;  // handed straight to potrf_cta_dispatch
 };
 
-template <typename T>
-PotrfBlockedWs<T> potrf_blocked_layout(Queue& ctx, BumpAllocator& pool,
-                                       int n, int nb, int batch, int W,
-                                       std::size_t leaf_bytes) {
-    PotrfBlockedWs<T> ws;
+template <typename Scalar>
+PotrfBlockedWs<Scalar> potrf_blocked_layout(Queue& ctx, BumpAllocator& pool,
+                                            int n, int nb, int batch, int W,
+                                            std::size_t leaf_bytes) {
+    PotrfBlockedWs<Scalar> ws;
     const std::size_t b = static_cast<std::size_t>(batch);
 
     ws.info = pool.allocate<int32_t>(ctx, b);
@@ -141,13 +142,13 @@ PotrfBlockedWs<T> potrf_blocked_layout(Queue& ctx, BumpAllocator& pool,
     ws.leaf_info = pool.allocate<int32_t>(ctx, b);
 
     // One pointer array PER ROLE: init_data_ptr_array recomputes from each view's base.
-    ws.a11_ptrs = pool.allocate<T*>(ctx, b);
-    ws.a21_ptrs = pool.allocate<T*>(ctx, b);
+    ws.a11_ptrs = pool.allocate<Scalar*>(ctx, b);
+    ws.a21_ptrs = pool.allocate<Scalar*>(ctx, b);
 
     // The fold has no alpha (C = product + beta*C), so the feeding gemm carries the -1.
-    ws.product = (n > nb) ? pool.allocate<T>(ctx, static_cast<std::size_t>(W) *
-                                                  static_cast<std::size_t>(W) * b)
-                          : Span<T>{};
+    ws.product = (n > nb) ? pool.allocate<Scalar>(ctx, static_cast<std::size_t>(W) *
+                                                       static_cast<std::size_t>(W) * b)
+                          : Span<Scalar>{};
 
     // An explicit draw, never pool.remaining(): a sizing pool has no tail and throws.
     ws.leaf_ws = pool.allocate<std::byte>(ctx, leaf_bytes);
@@ -157,9 +158,9 @@ PotrfBlockedWs<T> potrf_blocked_layout(Queue& ctx, BumpAllocator& pool,
 
 }  // namespace
 
-template <typename T>
+template <typename Scalar>
 std::size_t potrf_blocked_buffer_size(Queue& ctx,
-                                      const MatrixView<T, MatrixFormat::Dense>& A,
+                                      const MatrixView<Scalar, MatrixFormat::Dense>& A,
                                       Uplo uplo) {
     static_cast<void>(uplo);
 
@@ -167,45 +168,45 @@ std::size_t potrf_blocked_buffer_size(Queue& ctx,
     const int n = static_cast<int>(A.rows());
     if (batch < 1 || n < 1) return 0;
 
-    const auto p = potrf_blocked_params<T>(ctx, n);
+    const auto p = potrf_blocked_params<Scalar>(ctx, n);
 
-    const int chunk = potrf_blocked_chunk<T>(ctx, n, p.nb, batch);
+    const int chunk = potrf_blocked_chunk<Scalar>(ctx, n, p.nb, batch);
     const int part = chunk + batch % chunk;
-    const std::size_t leaf_bytes = potrf_cta_buffer_size<T>(
-        ctx, MatrixView<T, MatrixFormat::Dense>(A.data_ptr(), n, n, A.ld(), A.stride(), part));
+    const std::size_t leaf_bytes = potrf_cta_buffer_size<Scalar>(
+        ctx, MatrixView<Scalar, MatrixFormat::Dense>(A.data_ptr(), n, n, A.ld(), A.stride(), part));
 
     return workspace_bytes([&](BumpAllocator& pool) {
-        return potrf_blocked_layout<T>(ctx, pool, n, p.nb, part, p.W, leaf_bytes);
+        return potrf_blocked_layout<Scalar>(ctx, pool, n, p.nb, part, p.W, leaf_bytes);
     });
 }
 
-template <typename T>
+template <typename Scalar>
 unsigned potrf_blocked_debug_params(Queue& ctx, int n) {
-    const auto p = potrf_blocked_params<T>(ctx, n);
+    const auto p = potrf_blocked_params<Scalar>(ctx, n);
     return (static_cast<unsigned>(p.W) << 16) | static_cast<unsigned>(p.nb);
 }
 
 namespace {
 
-template <typename T> class PotrfBlockedFixupKernel;
+template <typename Scalar> class PotrfBlockedFixupKernel;
 
 // Runs after the leaf and BEFORE the panel solve, which would otherwise divide by the failed
 // pivot. Merges the leaf's 1-based sub-view-local index as j + leaf[b], first failure wins,
 // and quenches a failed item to the IDENTITY diagonal (zeroing the panel alone gives 0/0).
-template <typename T>
+template <typename Scalar>
 Event potrf_blocked_panel_fixup(Queue& ctx,
-                                T* a_ptr, int ld, int stride,
+                                Scalar* a_ptr, int ld, int stride,
                                 int j, int ib, int m2, int batch,
                                 int32_t* info_ptr, const int32_t* leaf_ptr,
                                 int wg, bool upper, const std::uint8_t* mask) {
     // Lower: the whole column panel A(j:n, j:j+ib) (rows x ib). Upper: the whole row panel
     // A(j:j+ib, j:n), stored as ib rows x cols columns.
     const int rows = ib + m2;
-    const T one = T(1);
-    const T zero = T(0);
+    const Scalar one = Scalar(1);
+    const Scalar zero = Scalar(0);
 
     ctx->submit([&](sycl::handler& h) {
-        batchlas::impl::parallel_for<PotrfBlockedFixupKernel<T>>(h,
+        batchlas::impl::parallel_for<PotrfBlockedFixupKernel<Scalar>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
@@ -225,7 +226,7 @@ Event potrf_blocked_panel_fixup(Queue& ctx,
                 const bool dead = (prev != 0) || (li != 0);
                 if (!dead) return;
 
-                T* base = a_ptr + static_cast<std::ptrdiff_t>(b) * stride +
+                Scalar* base = a_ptr + static_cast<std::ptrdiff_t>(b) * stride +
                           static_cast<std::ptrdiff_t>(j) * ld + j;
                 const std::size_t total = static_cast<std::size_t>(rows) *
                                           static_cast<std::size_t>(ib);
@@ -250,14 +251,14 @@ Event potrf_blocked_panel_fixup(Queue& ctx,
 
 }  // namespace
 
-template <typename T>
+template <typename Scalar>
 Event potrf_blocked_dispatch(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& A,
+                             const MatrixView<Scalar, MatrixFormat::Dense>& A,
                              Uplo uplo,
                              Span<std::byte> workspace,
                              Span<int32_t> info_out,
-                             PotrfTrailingGemm<T> trailing_gemm,
-                             PotrfPanelSolve<T> panel_solve) {
+                             PotrfTrailingGemm<Scalar> trailing_gemm,
+                             PotrfPanelSolve<Scalar> panel_solve) {
     // Both seams are required: a hidden default here would bypass the child op's selection.
     if (!trailing_gemm) {
         throw batchlas::invalid_argument(
@@ -270,40 +271,28 @@ Event potrf_blocked_dispatch(Queue& ctx,
     const int n = static_cast<int>(A.rows());
     const int batch = static_cast<int>(A.batch_size());
 
-    if (A.rows() != A.cols()) {
-        throw batchlas::invalid_argument("potrf_blocked: A must be square");
-    }
-    if (n < 1 || batch < 1) {
-        throw batchlas::invalid_argument("potrf_blocked: degenerate extents");
-    }
+    const auto dev = native::require_launchable(ctx, "potrf_blocked", A, {.square = true, .sub_group = 0});
     const bool upper = (uplo == Uplo::Upper);
-    if (A.is_heterogeneous()) {
-        throw batchlas::invalid_argument("potrf_blocked: heterogeneous batch is not supported");
-    }
-    const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU) {
-        throw batchlas::invalid_argument("potrf_blocked: GPU queues only");
-    }
 
-    const auto p = potrf_blocked_params<T>(ctx, n);
+    const auto p = potrf_blocked_params<Scalar>(ctx, n);
     const int nb = p.nb;
     const int W = p.W;
 
     // Chunk by chunk: each pass factors its items completely, so the passes are independent,
     // and the workspace is one chunk's. evidence: docs/perf/potrf.md#potrf-l2-batch-chunking
-    const int chunk = potrf_blocked_chunk<T>(ctx, n, nb, batch);
+    const int chunk = potrf_blocked_chunk<Scalar>(ctx, n, nb, batch);
     const int part = chunk + batch % chunk;   // the largest part: the last takes the remainder
-    const std::size_t leaf_bytes = potrf_cta_buffer_size<T>(
-        ctx, MatrixView<T, MatrixFormat::Dense>(A.data_ptr(), n, n, A.ld(), A.stride(), part));
+    const std::size_t leaf_bytes = potrf_cta_buffer_size<Scalar>(
+        ctx, MatrixView<Scalar, MatrixFormat::Dense>(A.data_ptr(), n, n, A.ld(), A.stride(), part));
     BumpAllocator pool(workspace);
-    auto ws = potrf_blocked_layout<T>(ctx, pool, n, nb, part, W, leaf_bytes);
+    auto ws = potrf_blocked_layout<Scalar>(ctx, pool, n, nb, part, W, leaf_bytes);
 
     // An empty OR SHORT caller span means "not requested"; zero THIS span, not info_out.
     const bool info_requested = info_out.size() >= static_cast<std::size_t>(batch);
 
     const int ld = A.ld();
     const int stride = A.stride();
-    T* const prod_ptr = ws.product.data();
+    Scalar* const prod_ptr = ws.product.data();
 
     // Every view below carries its part's slice of the mask, so each child skips the inactive items.
     const Span<const std::uint8_t> mask = detail::call_mask("potrf", A);
@@ -314,7 +303,7 @@ Event potrf_blocked_dispatch(Queue& ctx,
 
     for (int b0 = 0, cb = 0; b0 < batch; b0 += cb) {
         cb = batch - b0 < 2 * chunk ? batch - b0 : chunk;
-        T* const a_ptr = A.data_ptr() + static_cast<std::ptrdiff_t>(b0) * stride;
+        Scalar* const a_ptr = A.data_ptr() + static_cast<std::ptrdiff_t>(b0) * stride;
         int32_t* const info_ptr = info_requested ? info_out.data() + b0 : ws.info.data();
         const Span<const std::uint8_t> part_mask =
             mask.empty() ? mask : mask.subspan(static_cast<std::size_t>(b0), static_cast<std::size_t>(cb));
@@ -329,8 +318,8 @@ Event potrf_blocked_dispatch(Queue& ctx,
 
         // The explicit 6-arg constructor, never operator()(Slice, Slice): the constructor defaults
         // stride to ld*cols when 0 is passed, so a sub-view would read the wrong matrix past item 0.
-        auto sub = [&](int r0, int nr, int c0, int nc, T** ptrs) {
-            return MatrixView<T, MatrixFormat::Dense>(
+        auto sub = [&](int r0, int nr, int c0, int nc, Scalar** ptrs) {
+            return MatrixView<Scalar, MatrixFormat::Dense>(
                 a_ptr + static_cast<std::ptrdiff_t>(c0) * ld + r0,
                 nr, nc, ld, stride, cb, ptrs).with_batch_mask(part_mask);
         };
@@ -345,15 +334,15 @@ Event potrf_blocked_dispatch(Queue& ctx,
             // is already ordered after this one and the Event carries nothing the caller needs.
             // The SAME occupancy target nb was clamped against: the leaf's gate and the block
             // width are one decision, and a mismatch makes the leaf throw on a legal block.
-            (void)potrf_cta_dispatch<T>(ctx, A11, uplo, ws.leaf_ws, ws.leaf_info,
-                                        p.leaf_min_blocks);
+            (void)potrf_cta_dispatch<Scalar>(ctx, A11, uplo, ws.leaf_ws, ws.leaf_info,
+                                             p.leaf_min_blocks);
 
             // Unguarded: stale leaf_info, and a solve dividing by a pivot the quench has not replaced.
             if (!ctx.in_order()) ctx.wait();
 
-            (void)potrf_blocked_panel_fixup<T>(ctx, a_ptr, ld, stride, j, ib, m2, cb,
-                                               info_ptr, ws.leaf_info.data(), fixup_wg, upper,
-                                               detail::mask_ptr(part_mask));
+            (void)potrf_blocked_panel_fixup<Scalar>(ctx, a_ptr, ld, stride, j, ib, m2, cb,
+                                                    info_ptr, ws.leaf_info.data(), fixup_wg, upper,
+                                                    detail::mask_ptr(part_mask));
 
             if (m2 == 0) break;
 
@@ -362,7 +351,7 @@ Event potrf_blocked_dispatch(Queue& ctx,
             // Lower: A21 (m2 x ib) = A21 L11^{-H}. Upper: A12 (ib x m2) = U11^{-H} A12.
             const auto A21 = upper ? sub(j, ib, j + ib, m2, ws.a21_ptrs.data())
                                    : sub(j + ib, m2, j, ib, ws.a21_ptrs.data());
-            (void)panel_solve(ctx, A11, A21, T(1), upper ? Side::Left : Side::Right, uplo,
+            (void)panel_solve(ctx, A11, A21, Scalar(1), upper ? Side::Left : Side::Right, uplo,
                               Transpose::ConjTrans, Diag::NonUnit);
 
             if (!ctx.in_order()) ctx.wait();
@@ -377,23 +366,23 @@ Event potrf_blocked_dispatch(Queue& ctx,
                 const auto Lrow = upper ? sub(j, ib, j + ib + c, w, nullptr)
                                         : sub(j + ib + c, w, j, ib, nullptr);
                 const auto Cd = sub(j + ib + c, w, j + ib + c, w, nullptr);
-                const MatrixView<T, MatrixFormat::Dense> Sc(prod_ptr, w, w, W, W * W, cb);
+                const MatrixView<Scalar, MatrixFormat::Dense> Sc(prod_ptr, w, w, W, W * W, cb);
 
                 if (upper) {
-                    (void)trailing_gemm(ctx, Lrow, Lrow, Sc, T(-1), T(0),
-                                        kTrailingTransA<T>, Transpose::NoTrans,
+                    (void)trailing_gemm(ctx, Lrow, Lrow, Sc, Scalar(-1), Scalar(0),
+                                        kTrailingTransA<Scalar>, Transpose::NoTrans,
                                         ComputePrecision::Default);
                 } else {
-                    (void)trailing_gemm(ctx, Lrow, Lrow, Sc, T(-1), T(0),
-                                        Transpose::NoTrans, kTrailingTransB<T>,
+                    (void)trailing_gemm(ctx, Lrow, Lrow, Sc, Scalar(-1), Scalar(0),
+                                        Transpose::NoTrans, kTrailingTransB<Scalar>,
                                         ComputePrecision::Default);
                 }
 
                 // RAW: out of order the fold reads stale scratch -- a wrong factor with info == 0.
                 if (!ctx.in_order()) ctx.wait();
 
-                (void)::batchlas::detail::fold_symmetric_product_into_triangle<T>(
-                    ctx, Cd, Sc, T(1), uplo);
+                (void)::batchlas::detail::fold_symmetric_product_into_triangle<Scalar>(
+                    ctx, Cd, Sc, Scalar(1), uplo);
 
                 const int mr = m2 - c - w;
                 if (mr > 0) {
@@ -401,14 +390,14 @@ Event potrf_blocked_dispatch(Queue& ctx,
                         // Rest of this block row of the upper triangle: C(w x mr) -= Lrow^H U12(:, rest).
                         const auto Ur = sub(j, ib, j + ib + c + w, mr, nullptr);
                         const auto Cr = sub(j + ib + c, w, j + ib + c + w, mr, nullptr);
-                        (void)trailing_gemm(ctx, Lrow, Ur, Cr, T(-1), T(1),
-                                            kTrailingTransA<T>, Transpose::NoTrans,
+                        (void)trailing_gemm(ctx, Lrow, Ur, Cr, Scalar(-1), Scalar(1),
+                                            kTrailingTransA<Scalar>, Transpose::NoTrans,
                                             ComputePrecision::Default);
                     } else {
                         const auto Lr = sub(j + ib + c + w, mr, j, ib, nullptr);
                         const auto Cr = sub(j + ib + c + w, mr, j + ib + c, w, nullptr);
-                        (void)trailing_gemm(ctx, Lr, Lrow, Cr, T(-1), T(1),
-                                            Transpose::NoTrans, kTrailingTransB<T>,
+                        (void)trailing_gemm(ctx, Lr, Lrow, Cr, Scalar(-1), Scalar(1),
+                                            Transpose::NoTrans, kTrailingTransB<Scalar>,
                                             ComputePrecision::Default);
                     }
                 }
@@ -423,11 +412,6 @@ Event potrf_blocked_dispatch(Queue& ctx,
 
     return ctx.get_event();
 }
-
-template <> bool potrf_blocked_available<float>()                { return true; }
-template <> bool potrf_blocked_available<double>()               { return true; }
-template <> bool potrf_blocked_available<std::complex<float>>()  { return true; }
-template <> bool potrf_blocked_available<std::complex<double>>() { return true; }
 
 #define BATCHLAS_POTRF_BLOCKED_INSTANTIATE(T)                                                 \
     template unsigned potrf_blocked_debug_params<T>(Queue&, int);                              \
@@ -444,5 +428,5 @@ BATCHLAS_POTRF_BLOCKED_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_POTRF_BLOCKED_INSTANTIATE
 
-}  // namespace sycl_potrf
+}  // namespace ops::potrf
 }  // namespace batchlas

@@ -46,4 +46,4 @@ inline StedcLevelPlan plan_stedc_levels(int64_t n, int64_t threshold) {
     return plan;
 }
 
-} // namespace batchlas
+}  // namespace batchlas

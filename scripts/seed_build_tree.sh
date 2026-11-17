@@ -126,11 +126,14 @@ if [ -n "$late" ]; then
 fi
 
 nchanged=$(grep -c . "$work/changed" || true)
+seed_cuda=$(cache_get "$src_build" CUDAToolkit_BIN_DIR)
+dst_cuda=$(cache_get "$dst_build" CUDAToolkit_BIN_DIR)
 cat <<EOF
 seed: summary
   seed tree       $src_build (source $old_src @ ${seed_rev:0:12}${seed_dirty:+, dirty})
   destination     $dst_build (source $dst_src @ $(git -C "$dst_src" rev-parse --short=12 HEAD))
   size            $(du -sh "$dst_build" | cut -f1)
+  cuda bin dir    ${dst_cuda:-none}$([ "$seed_cuda" = "$dst_cuda" ] || echo " (seed: ${seed_cuda:-none}; the toolkit changed: all device code rebuilds)")
   changed files   $nchanged (touched: make rebuilds them and their dependents)
 $(head -n 15 "$work/changed" | sed 's/^/                  /')
   elapsed         $(( $(date +%s) - t0 )) s

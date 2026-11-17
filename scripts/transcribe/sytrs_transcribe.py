@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Append transcribed sytrs cells to a ledger: every row of a measured table, its ranking kept.
 
 Usage (from the repo root):
@@ -10,7 +11,8 @@ The shipped rows of run `transcribed-sytrs-d67ad754` (tuned/README.md) came from
   sm_89:  TABLE=tuned/sytrs.sm_89.txt  pairs float:double,cfloat:cdouble
   sm_120: TABLE=tuned/sytrs.sm_89.txt  pairs float:float,cfloat:cfloat,float:double,cfloat:cdouble
 """
-import json, sys
+import json
+import sys
 
 if len(sys.argv) != 9:
     sys.exit(__doc__)

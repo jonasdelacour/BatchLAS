@@ -41,71 +41,72 @@ namespace {
 namespace mc = masked_contract;
 namespace ts = test_support;
 
-template <typename T>
-using Real = typename base_type<T>::type;
+template <typename Scalar>
+using Real = typename base_type<Scalar>::type;
 
 /// Hermitian items: a graded real diagonal 0.25 (i + 1)^2 (+ an item offset unless `same`) and
 /// small complex off-diagonals, so the spectrum is spread and its ends separated.
-template <typename T>
-void fill_hermitian(Matrix<T>& A, int n, int batch, bool same) {
+template <typename Scalar>
+void fill_hermitian(Matrix<Scalar>& A, int n, int batch, bool same) {
     const int ld = A.ld();
     const int64_t stride = A.stride();
-    T* p = A.data_ptr();
+    Scalar* p = A.data_ptr();
     for (int b = 0; b < batch; ++b) {
         const int item = same ? 0 : b;
-        T* a = p + stride * b;
+        Scalar* a = p + stride * b;
         for (int j = 0; j < n; ++j) {
-            a[j + j * ld] = T(0.25 * (j + 1) * (j + 1) + 0.03125 * item);
+            a[j + j * ld] = Scalar(0.25 * (j + 1) * (j + 1) + 0.03125 * item);
             for (int i = j + 1; i < n; ++i) {
                 const double re = double(int((i * 7 + j * 3 + item * 5) % 17) - 8) / 64;
                 const double im = double(int((i * 5 + j + item * 3) % 11) - 5) / 64;
-                const T v = MatrixView<T>::make(re, im);
+                const Scalar v = MatrixView<Scalar>::make(re, im);
                 a[i + j * ld] = v;
-                if constexpr (is_std_complex_v<T>) a[j + i * ld] = std::conj(v);
+                if constexpr (is_std_complex_v<Scalar>) a[j + i * ld] = std::conj(v);
                 else a[j + i * ld] = v;
             }
         }
     }
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;
 
 /// One syevx call: A (read only), W (neigs per item), V (n x neigs, padded), m and info.
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Problem {
-    using R = Real<T>;
+    using R = Real<Scalar>;
     Queue& q;
     int n, batch, neigs;
     JobType jobz;
-    SyevxParams<T> params;
+    SyevxParams<Scalar> params;
     bool same;
-    Matrix<T> A, V;
+    Matrix<Scalar> A, V;
     UnifiedVector<R> w;
     UnifiedVector<int32_t> m, info;
-    Problem(Queue& q_, int n_, int batch_, int neigs_, JobType j, const SyevxParams<T>& p, bool same_)
-        : q(q_), n(n_), batch(batch_), neigs(neigs_), jobz(j), params(p), same(same_), A(ts::padded<T>(n_, n_, batch_)),
-          V(ts::padded<T>(n_, neigs_, batch_)), w(std::size_t(neigs_) * batch_), m(std::size_t(batch_)),
+    Problem(Queue& q_, int n_, int batch_, int neigs_, JobType j, const SyevxParams<Scalar>& p, bool same_)
+        : q(q_), n(n_), batch(batch_), neigs(neigs_), jobz(j), params(p), same(same_), A(ts::padded<Scalar>(n_, n_,
+                                                                                                            batch_)),
+          V(ts::padded<Scalar>(n_, neigs_, batch_)), w(std::size_t(neigs_) * batch_), m(std::size_t(batch_)),
           info(std::size_t(batch_)) {}
 
     void prepare() {
         fill_hermitian(A, n, batch, same);
-        std::fill_n(V.data_ptr(), std::size_t(V.stride()) * batch, ts::poison<T>());
+        std::fill_n(V.data_ptr(), std::size_t(V.stride()) * batch, ts::poison<Scalar>());
         std::fill_n(w.data(), w.size(), ts::poison<R>());
         std::fill_n(m.data(), m.size(), int32_t(-55));
         std::fill_n(info.data(), info.size(), int32_t(-77));
     }
     void call(Span<const std::uint8_t> mask, Span<std::byte> ws) {
-        syevx<B, T, MatrixFormat::Dense>(q, A.view().with_batch_mask(mask), w.to_span(), m.to_span(), std::size_t(neigs), ws,
-                                         jobz, V.view().with_batch_mask(mask), params, info.to_span());
+        syevx<B, Scalar, MatrixFormat::Dense>(q, A.view().with_batch_mask(mask), w.to_span(), m.to_span(), std::size_t(neigs), ws,
+                                              jobz, V.view().with_batch_mask(mask), params, info.to_span());
     }
     std::size_t buffer_size(Span<const std::uint8_t> mask) {
-        return syevx_buffer_size<B, T, MatrixFormat::Dense>(q, A.view().with_batch_mask(mask), w.to_span(),
-                                                             std::size_t(neigs), jobz, V.view().with_batch_mask(mask), params);
+        return syevx_buffer_size<B, Scalar, MatrixFormat::Dense>(q, A.view().with_batch_mask(mask), w.to_span(),
+                                                                 std::size_t(neigs), jobz, V.view().with_batch_mask(mask), params);
     }
     std::vector<mc::Output> outputs() {
         return {mc::Output::matrix("A", A.view()), mc::Output::matrix("V", V.view()),

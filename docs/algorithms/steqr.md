@@ -107,28 +107,25 @@ inequality no eigenvalue moves more: a backward-stable perturbation [1, §8.1].
   ([`src/math-helpers.hh:L559-L651`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/math-helpers.hh#L559-L651); [`src/ops/syev/steqr/steqr_cta_device.hh:L276-L293`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_cta_device.hh#L276-L293),
   [`src/ops/syev/steqr/steqr_wg.cc:L121-L136`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_wg.cc#L121-L136)).
 
-## steqr: the CTA update schemes EXP and PG
+## steqr: the CTA QL step
 
-`SteqrParams::cta_update_scheme` (default `EXP`) picks one of two equal-in-exact-arithmetic forms of
-the QL step on \f$[\ell, m]\f$.
+The CTA solver's QL step on \f$[\ell, m]\f$ (`EXP`) chases the bulge upward with the band update
+above, in virtual indices \f$v \mapsto m - v\f$, seeded with \f$(x, z) = (d_m - \mu, e_{m-1})\f$
+([`src/ops/syev/steqr/steqr_cta_device.hh:L368-L369`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_cta_device.hh#L368-L369), [`:L378-L442`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_cta_device.hh#L378-L442)).
 
-- **`EXP`** chases the bulge upward with the band update above, in virtual indices \f$v \mapsto m - v\f$,
-  seeded with \f$(x, z) = (d_m - \mu, e_{m-1})\f$
-  ([`src/ops/syev/steqr/steqr_cta_device.hh:L368-L369`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_cta_device.hh#L368-L369), [`:L378-L442`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_cta_device.hh#L378-L442)).
-- **`PG`** is the scalar recurrence of the `dsteqr` QL loop [2]. With \f$g = d_m - \mu\f$,
-  \f$c = s = 1\f$, \f$p = 0\f$, for \f$i = m-1, \dots, \ell\f$:
+The padded form (the gated schedule of [the full-warp partition](../perf/steqr.md#full-warp-partition))
+runs every chunk of the sub-group for the longest sweep: a chunk past its own \f$m - \ell\f$
+rotations feeds \f$\operatorname{lartg}(1, 0)\f$, the exact identity, and keeps its chase state by
+select, so its operations equal the unpadded step's (`implicit_ql_step<T, P, Pad>` in
+`include/batchlas/device/lapack/steqr.hh`).
 
-\f[
-\begin{aligned}
-&f = s e_i,\quad \beta = c e_i,\quad (c, s, \rho) = \operatorname{lartg}(g, f),\quad
-e_{i+1} \leftarrow \rho \;\;(i \ne m-1),\\
-&g \leftarrow d_{i+1} - p,\quad \rho \leftarrow (d_i - g)s + 2c\beta,\quad p = s\rho,\quad
-d_{i+1} \leftarrow g + p,\quad g \leftarrow c\rho - \beta,
-\end{aligned}
-\f]
-
-  then \f$d_\ell \leftarrow d_\ell - p\f$, \f$e_\ell \leftarrow g\f$
-  ([`src/ops/syev/steqr/steqr_cta_device.hh:L468-L541`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/steqr/steqr_cta_device.hh#L468-L541)). The lockstep solver always uses `EXP`.
+The scalar recurrence of the `dsteqr` QL loop [2] (`PG`: with \f$g = d_m - \mu\f$, \f$c = s = 1\f$,
+\f$p = 0\f$, for \f$i = m-1, \dots, \ell\f$: \f$f = s e_i\f$, \f$\beta = c e_i\f$,
+\f$(c, s, \rho) = \operatorname{lartg}(g, f)\f$, \f$e_{i+1} \leftarrow \rho\f$ for \f$i \ne m-1\f$,
+\f$g \leftarrow d_{i+1} - p\f$, \f$\rho \leftarrow (d_i - g)s + 2c\beta\f$, \f$p = s\rho\f$,
+\f$d_{i+1} \leftarrow g + p\f$, \f$g \leftarrow c\rho - \beta\f$, then \f$d_\ell \leftarrow d_\ell - p\f$,
+\f$e_\ell \leftarrow g\f$) shipped beside it, selectable, until it was deleted: faster, but it does not
+converge on a `stedc` leaf that this step solves ([STEQR: one QL step](../perf/steqr.md#steqr-one-ql-step)).
 
 ## steqr: the CTA kernel
 

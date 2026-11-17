@@ -201,7 +201,7 @@ void append_static_rows(std::ostringstream& out) {
     }
 }
 
-} // namespace
+}  // namespace
 
 void record_choice(Op op, ScalarKind scalar, Backend backend, const Shape& shape,
                    const char* origin, const char* spelling, bool native_existed, int native_supported) {
@@ -301,4 +301,4 @@ std::string static_table() {
     return out.str();
 }
 
-} // namespace batchlas::coverage
+}  // namespace batchlas::coverage

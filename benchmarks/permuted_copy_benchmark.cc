@@ -8,16 +8,18 @@
 
 using namespace batchlas;
 
+namespace {
+
 // Batched permuted copy benchmark
 // Measures bandwidth of permuted_copy across batched matrices.
 template <typename T, Backend B>
-static void BM_PERMUTED_COPY(minibench::State& state) {
+void BM_PERMUTED_COPY(minibench::State& state) {
     const int rows = state.range(0);
     const int cols = state.range(1);
     const int batch = state.range(2);
     const int n_blocks = state.range(3) > 0 ? state.range(3) : -1;
     const int block_size = state.range(4) > 0 ? state.range(4) : -1;
-    //std::cout << "Running BM_PERMUTED_COPY with rows=" << rows << ", cols=" << cols << ", batch=" << batch << ", n_blocks=" << n_blocks << ", block_size=" << block_size << std::endl;
+    // std::cout << "Running BM_PERMUTED_COPY with rows=" << rows << ", cols=" << cols << ", batch=" << batch << ", n_blocks=" << n_blocks << ", block_size=" << block_size << std::endl;
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 
     auto src = Matrix<T>::Random(rows, cols, false, batch);
@@ -54,6 +56,8 @@ static void BM_PERMUTED_COPY(minibench::State& state) {
     state.SetMetric("GB/s", bytes_moved * 1e-9, minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 BATCHLAS_REGISTER_BENCHMARK(BM_PERMUTED_COPY, SquareBatchSizes);
 

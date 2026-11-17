@@ -29,7 +29,7 @@ transposition \f$(k\ p_k)\f$ acting on indices.
 - The pivot metric is \f$\operatorname{cabs1}(z) = |\operatorname{Re} z| + |\operatorname{Im} z|\f$
   as in `izamax` [6], not the modulus ([`src/ops/getrf/getrf_cta_device.hh:34-41`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getrf/getrf_cta_device.hh#L34-L41)); ties go to
   the smallest row. Unlike `izamax`, a NaN is never chosen
-  ([`src/ops/getrf/kernels/getrf_tiny.cc:140`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getrf/kernels/getrf_tiny.cc#L140)) and cabs1 overflow is not rescaled.
+  ([`src/ops/getrf/kernels/getrf_tiny.cc:139`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getrf/kernels/getrf_tiny.cc#L140)) and cabs1 overflow is not rescaled.
 
 ## getrf: the elimination step
 
@@ -83,9 +83,9 @@ pivot row. At the end each row is stored at row \f$\rho\f$. The label carries th
 
 | Phase | `tiny` | register leaf |
 | --- | --- | --- |
-| argmax, relabel | [`src/ops/getrf/kernels/getrf_tiny.cc:138-149`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getrf/kernels/getrf_tiny.cc#L138-L149) | [`src/ops/getrf/kernels/getrf_panel_reg_device.hh:67-96`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getrf/kernels/getrf_panel_reg_device.hh#L67-L96) |
-| pivot row, scale, update | local memory (32-bit types) or shuffles (fp64): [`src/ops/getrf/kernels/getrf_tiny.cc:151-211`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getrf/kernels/getrf_tiny.cc#L151-L211) | local memory: [`src/ops/getrf/kernels/getrf_panel_reg_device.hh:99-127`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getrf/kernels/getrf_panel_reg_device.hh#L99-L127) |
-| store at \f$\rho\f$ | [`src/ops/getrf/kernels/getrf_tiny.cc:214-223`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getrf/kernels/getrf_tiny.cc#L214-L223) | [`src/ops/getrf/kernels/getrf_panel_reg_device.hh:132-138`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getrf/kernels/getrf_panel_reg_device.hh#L132-L138) |
+| argmax, relabel | [`src/ops/getrf/kernels/getrf_tiny.cc:137-148`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getrf/kernels/getrf_tiny.cc#L138-L149) | [`src/ops/getrf/kernels/getrf_panel_reg_device.hh:67-96`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getrf/kernels/getrf_panel_reg_device.hh#L67-L96) |
+| pivot row, scale, update | local memory (32-bit types) or shuffles (fp64): [`src/ops/getrf/kernels/getrf_tiny.cc:150-210`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getrf/kernels/getrf_tiny.cc#L151-L211) | local memory: [`src/ops/getrf/kernels/getrf_panel_reg_device.hh:99-127`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getrf/kernels/getrf_panel_reg_device.hh#L99-L127) |
+| store at \f$\rho\f$ | [`src/ops/getrf/kernels/getrf_tiny.cc:213-222`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getrf/kernels/getrf_tiny.cc#L214-L223) | [`src/ops/getrf/kernels/getrf_panel_reg_device.hh:132-138`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getrf/kernels/getrf_panel_reg_device.hh#L132-L138) |
 
 ## getrf: the blocked right-looking form
 
@@ -115,7 +115,7 @@ steps and can be postponed: the columns of the block ending at \f$c\f$ receive
 
 | Phase | Implementation | Lines |
 | --- | --- | --- |
-| (P) | register leaf if selected and `getrf_panel_reg_fits`, else `getf2_panel_device` | [`src/ops/getrf/kernels/getrf_blocked.cc:322-328`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getrf/kernels/getrf_blocked.cc#L322-L328), [`src/ops/getrf/kernels/getrf_cta.cc:363-384`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getrf/kernels/getrf_cta.cc#L363-L384) |
+| (P) | register leaf if selected and `getrf_panel_reg_fits`, else `getf2_panel_device` | [`src/ops/getrf/kernels/getrf_blocked.cc:322-328`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getrf/kernels/getrf_blocked.cc#L322-L328), [`src/ops/getrf/kernels/getrf_cta.cc:362-383`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getrf/kernels/getrf_cta.cc#L363-L384) |
 | (S) right | local-memory gather or `laswp` walk (same permutation) | [`src/ops/getrf/kernels/getrf_blocked.cc:345-355`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getrf/kernels/getrf_blocked.cc#L345-L355) |
 | (T) | routed public `trsm`: left, lower, unit | [`src/ops/getrf/kernels/getrf_blocked.cc:360-363`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getrf/kernels/getrf_blocked.cc#L360-L363) |
 | (G) | routed public `gemm`, \f$\alpha = -1\f$, \f$\beta = 1\f$ | [`src/ops/getrf/kernels/getrf_blocked.cc:369-373`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getrf/kernels/getrf_blocked.cc#L369-L373) |
@@ -150,7 +150,7 @@ increments \f$\pm 1\f$ [8].
 
 - `blocked`: a local-memory gather or the `laswp` walk (same permutation), plus two routed
   `trsm` calls ([`src/ops/getrs/kernels/getrs_native.cc:301-332`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getrs/kernels/getrs_native.cc#L301-L332)); the walk is
-  [`src/kernels/common/lu_laswp.hh:58-79`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/kernels/common/lu_laswp.hh#L58-L79).
+  [`src/kernels/common/lu_laswp.hh:57-78`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/kernels/common/lu_laswp.hh#L58-L79).
 - `cta` (fused): one work-group per matrix keeps \f$B\f$ and one \f$b_s \times b_s\f$ diagonal
   block in local memory (\f$b_s = 16\f$, or 32 for \f$n \ge 1024\f$;
   [`src/ops/getrs/kernels/getrs_fused.cc:39-46`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getrs/kernels/getrs_fused.cc#L39-L46)). Lane \f$i\f$ owns row \f$i\f$ of the block and
@@ -173,13 +173,13 @@ y_J \leftarrow L_{JJ}^{-1} y_J, \qquad y_I \leftarrow y_I - L_{IJ} y_J \quad (I 
 - `tiny` (\f$n \le 32\f$, complex double 16; \f$n_{rhs} \le 4\f$): eliminates on the augmented
   \f$[A \mid B]\f$. The rows of \f$B\f$ carry the same labels \f$\rho\f$, so the elimination ends
   at \f$[U \mid Y]\f$ with \f$Y = L^{-1} P B\f$, with no `laswp`
-  ([`src/ops/gesv/kernels/gesv_tiny.cc:220-261`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/gesv/kernels/gesv_tiny.cc#L220-L261)). Back substitution is column-oriented:
+  ([`src/ops/gesv/kernels/gesv_tiny.cc:218-259`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/gesv/kernels/gesv_tiny.cc#L220-L261)). Back substitution is column-oriented:
 
 \f[
 x_i = y_i / u_{ii}, \qquad y_k \leftarrow y_k - u_{ki} x_i \ \ (k < i), \qquad i = n, \dots, 1
 \f]
 
-  ([`src/ops/gesv/kernels/gesv_tiny.cc:264-299`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/gesv/kernels/gesv_tiny.cc#L264-L299)). A zero \f$u_{ii}\f$ gives \f$x_i = 0\f$ and
+  ([`src/ops/gesv/kernels/gesv_tiny.cc:262-297`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/gesv/kernels/gesv_tiny.cc#L264-L299)). A zero \f$u_{ii}\f$ gives \f$x_i = 0\f$ and
   `info` reports it (LAPACK leaves \f$X\f$ undefined). \f$X\f$ is stored unpermuted, at row
   \f$\rho\f$.
 - There is no vendor route. `can_run` is at [`src/ops/gesv/gesv.cc:44-55`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/gesv/gesv.cc#L44-L55).
@@ -190,13 +190,13 @@ x_i = y_i / u_{ii}, \qquad y_k \leftarrow y_k - u_{ki} x_i \ \ (k < i), \qquad i
 \f$C \leftarrow L^{-1} C\f$ and \f$C \leftarrow U^{-1} C\f$, both by routed `trsm`
 ([`src/ops/getri/kernels/getri_blocked.cc:230-245`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getri/kernels/getri_blocked.cc#L230-L245)). Row \f$i\f$ of \f$P\f$ holds its 1 in
 column \f$\pi(i) = T_1(T_2(\cdots T_r(i)))\f$: \f$i\f$ walked backwards through the list
-([`src/ops/getri/kernels/getri_blocked.cc:102-113`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getri/kernels/getri_blocked.cc#L102-L113)). `info` is the first exact
-\f$u_{ii} = 0\f$ ([`src/ops/getri/kernels/getri_blocked.cc:115-125`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getri/kernels/getri_blocked.cc#L115-L125)).
+([`src/ops/getri/kernels/getri_blocked.cc:101-112`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getri/kernels/getri_blocked.cc#L102-L113)). `info` is the first exact
+\f$u_{ii} = 0\f$ ([`src/ops/getri/kernels/getri_blocked.cc:114-123`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getri/kernels/getri_blocked.cc#L115-L125)).
 
 - Unlike `dgetri` [9] (`dtrtri` on \f$U\f$, solve \f$XL = U^{-1}\f$, swap columns), no
   triangular inverse and no workspace; the cost is two \f$n\f$-column `trsm` calls. \f$C\f$ must
   not alias \f$A\f$
-  ([`src/ops/getri/kernels/getri_blocked.cc:197-202`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getri/kernels/getri_blocked.cc#L197-L202)).
+  ([`src/ops/getri/kernels/getri_blocked.cc:195-200`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getri/kernels/getri_blocked.cc#L197-L202)).
 - The routes are `blocked` and `vendor` (cuBLAS `getriBatched`, rocSOLVER, LAPACKE);
   `can_run` is at [`src/ops/getri/getri.cc:48-60`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/getri/getri.cc#L48-L60).
 

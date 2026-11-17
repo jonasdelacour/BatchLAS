@@ -32,15 +32,15 @@ enum class Op : uint8_t {
 /// @ingroup api_errors
 enum class ScalarKind : uint8_t { F32, F64, C32, C64 };
 
-/// @brief The ScalarKind of scalar type @p T (any type that is not float, double or
+/// @brief The ScalarKind of scalar type @p Scalar (any type that is not float, double or
 ///        complex<float> maps to C64).
-/// @tparam T  scalar type
+/// @tparam Scalar  scalar type
 /// @ingroup api_errors
-template <typename T>
+template <typename Scalar>
 inline constexpr ScalarKind scalar_kind_of =
-    std::is_same_v<T, float>                ? ScalarKind::F32 :
-    std::is_same_v<T, double>               ? ScalarKind::F64 :
-    std::is_same_v<T, std::complex<float>>  ? ScalarKind::C32 :
+    std::is_same_v<Scalar, float>                ? ScalarKind::F32 :
+    std::is_same_v<Scalar, double>               ? ScalarKind::F64 :
+    std::is_same_v<Scalar, std::complex<float>>  ? ScalarKind::C32 :
                                               ScalarKind::C64;
 
 /// @brief The C++ spelling of a ScalarKind, e.g. `"complex<float>"`.
@@ -139,4 +139,4 @@ private:
     ScalarKind scalar_;
 };
 
-} // namespace batchlas
+}  // namespace batchlas

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Append `transcribed` potrs cells: the best current sm_89 float/cfloat record's ranking at each measured key,
 copied to sm_89 double (from float) and cdouble (from cfloat), and to all four sm_120 dtypes (float, double from
 float; cfloat, cdouble from cfloat). Untimed (m = null), the tuned/README.md convention for FP64 on a 1:64 part

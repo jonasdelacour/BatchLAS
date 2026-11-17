@@ -40,42 +40,41 @@ struct Spec {
     bool identical = false;     ///< every item the same input (the saturating case)
     bool deflation_mix = false; ///< odd items deflate most of every merge, even items almost none
     StedcMergeVariant merge = StedcMergeVariant::Auto;
-    StedcSecularSolver secular = StedcSecularSolver::Rocm;
     bool cpu_queue = true;      ///< false: n >= 256, where the CPU queue's float stedc is NaN on base too
 };
 
-template <typename T, Backend B>
+template <typename Real, Backend B>
 struct Problem {
     Queue& q;
     Spec s;
     int dinc = 2, dstride, estride, wstride;
-    UnifiedVector<T> d, e, w;
-    Matrix<T> Z;
+    UnifiedVector<Real> d, e, w;
+    Matrix<Real> Z;
     UnifiedVector<std::int32_t> info;
 
     Problem(Queue& queue, const Spec& spec)
         : q(queue), s(spec), dstride(2 * s.n + 3), estride(s.n + 4), wstride(s.n + 3),
           d(std::size_t(dstride) * s.batch), e(std::size_t(estride) * s.batch), w(std::size_t(wstride) * s.batch),
-          Z(s.packed_z ? Matrix<T>(s.n, s.n, s.batch) : test_support::padded<T>(s.n, s.n, s.batch)),
+          Z(s.packed_z ? Matrix<Real>(s.n, s.n, s.batch) : test_support::padded<Real>(s.n, s.n, s.batch)),
           info(std::size_t(s.batch)) {}
 
-    StedcParams<T> params() const {
-        StedcParams<T> p{.recursion_threshold = s.threshold, .algorithm = s.algorithm, .secular_solver = s.secular};
+    StedcParams<Real> params() const {
+        StedcParams<Real> p{.recursion_threshold = s.threshold, .algorithm = s.algorithm};
         p.merge_variant = s.merge;
         return p;
     }
-    VectorView<T> dv() const { return VectorView<T>(d.data(), s.n, s.batch, dinc, dstride); }
-    VectorView<T> ev() const { return VectorView<T>(e.data(), s.n - 1, s.batch, 1, estride); }
-    VectorView<T> wv() const { return VectorView<T>(w.data(), s.n, s.batch, 1, wstride); }
+    VectorView<Real> dv() const { return VectorView<Real>(d.data(), s.n, s.batch, dinc, dstride); }
+    VectorView<Real> ev() const { return VectorView<Real>(e.data(), s.n - 1, s.batch, 1, estride); }
+    VectorView<Real> wv() const { return VectorView<Real>(w.data(), s.n, s.batch, 1, wstride); }
 
     // Graded diagonal, item-dependent unless identical. deflation_mix decouples an odd item's left
     // half (tiny e), so its merges keep few poles, and gives an even item a ramp that keeps most.
     void fill() {
-        std::fill_n(d.data(), d.size(), test_support::poison<T>());
-        std::fill_n(e.data(), e.size(), test_support::poison<T>());
+        std::fill_n(d.data(), d.size(), test_support::poison<Real>());
+        std::fill_n(e.data(), e.size(), test_support::poison<Real>());
         for (int b = 0; b < s.batch; ++b) {
-            for (int i = 0; i < s.n; ++i) d[std::size_t(b) * dstride + std::size_t(i) * dinc] = T(input(b, i, true));
-            for (int i = 0; i + 1 < s.n; ++i) e[std::size_t(b) * estride + i] = T(input(b, i, false));
+            for (int i = 0; i < s.n; ++i) d[std::size_t(b) * dstride + std::size_t(i) * dinc] = Real(input(b, i, true));
+            for (int i = 0; i + 1 < s.n; ++i) e[std::size_t(b) * estride + i] = Real(input(b, i, false));
         }
     }
 
@@ -84,11 +83,11 @@ struct Problem {
         if (s.deflation_mix && b % 2 == 0) {
             // A slow ramp under a unit off-diagonal: delocalised eigenvectors and distinct poles,
             // so the top merge keeps more than 3/4 of them.
-            return double(T(diag ? (0.25 + 0.05 * b) * double(i) / s.n : 1.0));
+            return double(Real(diag ? (0.25 + 0.05 * b) * double(i) / s.n : 1.0));
         }
-        if (diag) return double(T((1.0 + double(i) / s.n) * std::cos(0.37 * i + 1.3 * item)));
+        if (diag) return double(Real((1.0 + double(i) / s.n) * std::cos(0.37 * i + 1.3 * item)));
         const bool tiny = s.deflation_mix && b % 2 == 1 && i + 1 < s.n / 2;
-        return tiny ? double(T(1e-30)) : double(T(0.5 + 0.25 * std::sin(0.91 * i + 0.7 * item)));
+        return tiny ? double(Real(1e-30)) : double(Real(0.5 + 0.25 * std::sin(0.91 * i + 0.7 * item)));
     }
 
     mc::Case make_case() {
@@ -100,34 +99,34 @@ struct Problem {
         c.masked_reference = B == Backend::CUDA || B == Backend::ROCM;
         c.prepare = [this] {
             fill();
-            std::fill_n(w.data(), w.size(), test_support::poison<T>());
-            std::fill_n(Z.data_ptr(), std::size_t(Z.stride()) * s.batch, test_support::poison<T>());
+            std::fill_n(w.data(), w.size(), test_support::poison<Real>());
+            std::fill_n(Z.data_ptr(), std::size_t(Z.stride()) * s.batch, test_support::poison<Real>());
             std::fill_n(info.data(), info.size(), std::int32_t(-7));
         };
         // Poisoned workspace (a live problem in an inactive item's working copy), as steqr_mask_tests.
         c.call = [this](Span<const std::uint8_t> mask, Span<std::byte> ws) {
             std::memset(ws.data(), 0x3F, ws.size());
-            (void)stedc<B, T>(q, dv().with_batch_mask(mask), ev().with_batch_mask(mask), wv().with_batch_mask(mask), ws, s.jobz,
+            (void)stedc<B, Real>(q, dv().with_batch_mask(mask), ev().with_batch_mask(mask), wv().with_batch_mask(mask), ws, s.jobz,
                         params(), Z.view().with_batch_mask(mask), Span<std::int32_t>(info.data(), info.size()));
         };
         c.buffer_size = [this](Span<const std::uint8_t>) {
-            return stedc_buffer_size<B, T>(q, std::size_t(s.n), std::size_t(s.batch), s.jobz, params());
+            return stedc_buffer_size<B, Real>(q, std::size_t(s.n), std::size_t(s.batch), s.jobz, params());
         };
         c.outputs = [this] {
             return std::vector<mc::Output>{
                 mc::Output::matrix("Z", Z.view()),
-                mc::Output::span("w", std::span<const T>(w.data(), w.size()), std::size_t(wstride)),
+                mc::Output::span("w", std::span<const Real>(w.data(), w.size()), std::size_t(wstride)),
                 mc::Output::span("info", std::span<const std::int32_t>(info.data(), info.size()), 1),
-                mc::Output::span("d", std::span<const T>(d.data(), d.size()), std::size_t(dstride)),
-                mc::Output::span("e", std::span<const T>(e.data(), e.size()), std::size_t(estride))};
+                mc::Output::span("d", std::span<const Real>(d.data(), d.size()), std::size_t(dstride)),
+                mc::Output::span("e", std::span<const Real>(e.data(), e.size()), std::size_t(estride))};
         };
         return c;
     }
 };
 
-template <typename T, Backend B>
+template <typename Real, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Real;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types_filtered<Cfg, false>::type;
@@ -138,8 +137,8 @@ protected:
     using T = typename Config::ScalarType;
     static constexpr Backend B = Config::BackendVal;
 
-    // The fixture's queue, and on the SYCL backend also a CPU queue: there stedc takes the CPU
-    // merge path (the legacy secular solver), which the GPU queue never runs.
+    // The fixture's queue, and on the SYCL backend also a CPU queue: there stedc takes the
+    // Baseline merge, which the GPU tuning never picks.
     std::vector<std::pair<std::string, Queue*>> queues() {
         std::vector<std::pair<std::string, Queue*>> out{{"default", this->ctx.get()}};
         if constexpr (B == Backend::SYCL) {
@@ -189,9 +188,7 @@ TYPED_TEST(StedcMask, GpuMergeVariants) {
     using V = StedcMergeVariant;
     for (const auto alg : {kRec, kLvl}) {
         const std::string a = alg == kRec ? "recursive " : "levels ";
-        this->check({a + "baseline rocm", 64, 6, 16, alg, JobType::EigenVectors, true, false, false, V::Baseline});
-        this->check({a + "baseline legacy", 64, 6, 16, alg, JobType::EigenVectors, true, false, false, V::Baseline,
-                     StedcSecularSolver::Legacy});
+        this->check({a + "baseline", 64, 6, 16, alg, JobType::EigenVectors, true, false, false, V::Baseline});
         this->check({a + "fused", 64, 6, 16, alg, JobType::EigenVectors, true, false, false, V::Fused});
         this->check({a + "fused cta", 64, 6, 16, alg, JobType::EigenVectors, true, false, false, V::FusedCta});
     }
@@ -204,9 +201,8 @@ TYPED_TEST(StedcMask, GpuMergeVariants) {
 // CPU queue is left out: its float stedc returns NaN at n >= 256 on base 02801019 as well.
 TYPED_TEST(StedcMask, DeflationMaximumAt512) {
     using V = StedcMergeVariant;
-    constexpr auto kRocm = StedcSecularSolver::Rocm;
-    this->check({"recursive n=512 deflation mix", 512, 4, 32, kRec, JobType::EigenVectors, false, false, true, V::Auto, kRocm, false});
-    this->check({"levels n=512 deflation mix", 512, 4, 32, kLvl, JobType::EigenVectors, true, false, true, V::Auto, kRocm, false});
+    this->check({"recursive n=512 deflation mix", 512, 4, 32, kRec, JobType::EigenVectors, false, false, true, V::Auto, false});
+    this->check({"levels n=512 deflation mix", 512, 4, 32, kLvl, JobType::EigenVectors, true, false, true, V::Auto, false});
 }
 
 TYPED_TEST(StedcMask, SaturatingIdenticalItems) {
