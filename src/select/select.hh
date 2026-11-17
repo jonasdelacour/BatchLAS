@@ -79,13 +79,13 @@ const Device& device_of(const Queue& q, Lib vendor = Lib::none) {
 }
 
 /// The dtype key of a table row (the first, exact key of every tuned file): float, double, cfloat or cdouble.
-template <typename T>
+template <typename Scalar>
 constexpr std::string_view dtype_name() {
-    if constexpr (std::is_same_v<T, float>) return "float";
-    else if constexpr (std::is_same_v<T, double>) return "double";
-    else if constexpr (std::is_same_v<T, std::complex<float>>) return "cfloat";
+    if constexpr (std::is_same_v<Scalar, float>) return "float";
+    else if constexpr (std::is_same_v<Scalar, double>) return "double";
+    else if constexpr (std::is_same_v<Scalar, std::complex<float>>) return "cfloat";
     else {
-        static_assert(std::is_same_v<T, std::complex<double>>, "unsupported scalar");
+        static_assert(std::is_same_v<Scalar, std::complex<double>>, "unsupported scalar");
         return "cdouble";
     }
 }
@@ -539,45 +539,45 @@ struct OpSpec {
 };
 
 /// The Vendor arm of an op without its library: record the miss and throw NoRouteError.
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 [[noreturn]] void no_vendor(const OpSpec& op) {
-    throw_no_vendor_route<T>(op.op, B, library_name<B>(op.vendor));
+    throw_no_vendor_route<Scalar>(op.op, B, library_name<B>(op.vendor));
 }
 
 /// choose(), with "nothing runnable" in a build without the op's library reported as
 /// NoRouteError plus a coverage `miss` row (the vendor-free burn-down reads them).
 /// can_run(choice, device) is the op's R3 predicate. `<op>_buffer_size` calls this (R5).
-template <Backend B, typename T, typename Choice, std::size_t N, typename CanRun>
+template <Backend B, typename Scalar, typename Choice, std::size_t N, typename CanRun>
 Choice pick(const OpSpec& op, const Device& d, const Key& key, const std::array<Choice, N>& candidates,
             CanRun&& can_run) {
     auto ok = [&](const Choice& c) { return can_run(c, d); };
     try {
-        return choose(op.name(), dtype_name<T>(), d, key, candidates, ok, op.rules);
+        return choose(op.name(), dtype_name<Scalar>(), d, key, candidates, ok, op.rules);
     } catch (const ::batchlas::unsupported&) {
         if (op.vendor != Lib::none && !has_library<B>(op.vendor) &&
             std::none_of(candidates.begin(), candidates.end(), ok))
-            no_vendor<B, T>(op);
+            no_vendor<B, Scalar>(op);
         throw;
     }
 }
 
-template <Backend B, typename T, typename Choice, std::size_t N, typename CanRun>
+template <Backend B, typename Scalar, typename Choice, std::size_t N, typename CanRun>
 Choice pick(const OpSpec& op, const Queue& q, const Key& key, const std::array<Choice, N>& candidates,
             CanRun&& can_run) {
-    ::batchlas::detail::require_device_fp64<T>(q, std::string(op.name()).c_str());  // <NETLIB> on Metal
-    return pick<B, T>(op, device_of<B>(q, op.vendor), key, candidates, can_run);
+    ::batchlas::detail::require_device_fp64<Scalar>(q, std::string(op.name()).c_str());  // <NETLIB> on Metal
+    return pick<B, Scalar>(op, device_of<B>(q, op.vendor), key, candidates, can_run);
 }
 
 /// A public entry point after validation: pick, open the trace/coverage scope (the shape's
 /// scalar and backend are filled here; `trace_fields` as for TraceScope), then launch(choice)
 /// inside it, so children nest under this line. @return whatever @p launch returns.
-template <Backend B, typename T, typename Choice, std::size_t N, typename CanRun, typename Launch>
+template <Backend B, typename Scalar, typename Choice, std::size_t N, typename CanRun, typename Launch>
 decltype(auto) run(const OpSpec& op, Queue& q, const Key& key, const std::array<Choice, N>& candidates,
                    CanRun&& can_run, coverage::Shape shape, const Key& trace_fields, Launch&& launch) {
-    ::batchlas::detail::require_device_fp64<T>(q, std::string(op.name()).c_str());  // <NETLIB> on Metal
+    ::batchlas::detail::require_device_fp64<Scalar>(q, std::string(op.name()).c_str());  // <NETLIB> on Metal
     const Device& d = device_of<B>(q, op.vendor);
-    const Choice c = pick<B, T>(op, d, key, candidates, can_run);
-    shape.scalar = scalar_kind_of<T>;
+    const Choice c = pick<B, Scalar>(op, d, key, candidates, can_run);
+    shape.scalar = scalar_kind_of<Scalar>;
     shape.backend = B;
     NativeFacts facts;
     if (coverage::dynamic_enabled()) facts = native_facts(candidates, [&](const Choice& k) { return can_run(k, d); });

@@ -44,7 +44,7 @@ MEMBER_HEAD = re.compile(r'<a id="([^"]+)" name="[^"]+"></a>\s*<h2 class="memtit
 TAG = re.compile(r"<[^>]+>")
 WS = re.compile(r"\s+")
 SKIP_BLOCKS = re.compile(r'<div class="ttc"[^>]*>.*?</div></div>|<div class="dyn(?:header|content)".*?</div>'
-                         r'|<script.*?</script>', re.S)
+                         r"|<script.*?</script>", re.S)
 
 
 def text_of(fragment):

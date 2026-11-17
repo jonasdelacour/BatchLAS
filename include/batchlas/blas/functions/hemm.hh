@@ -12,26 +12,25 @@ namespace batchlas {
 // Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
 // src/util/template-instantiations.hh. Keep in sync with the declarations below.
 namespace sig {
-template <typename T>
+template <typename Scalar>
 using hemm = Event(Queue&,
-                   const MatrixView<T, MatrixFormat::Dense>&,
-                   const MatrixView<T, MatrixFormat::Dense>&,
-                   const MatrixView<T, MatrixFormat::Dense>&,
-                   T, T, Side, Uplo);
+                   const MatrixView<Scalar, MatrixFormat::Dense>&,
+                   const MatrixView<Scalar, MatrixFormat::Dense>&,
+                   const MatrixView<Scalar, MatrixFormat::Dense>&,
+                   Scalar, Scalar, Side, Uplo);
 
 // Spelled out, not aliased to sig::hemm: a vendor parameter order may differ
 // from the public one (trsm's alpha is last).
-template <typename T>
+template <typename Scalar>
 using hemm_vendor = Event(Queue&,
-                          const MatrixView<T, MatrixFormat::Dense>&,
-                          const MatrixView<T, MatrixFormat::Dense>&,
-                          const MatrixView<T, MatrixFormat::Dense>&,
-                          T,
-                          T,
+                          const MatrixView<Scalar, MatrixFormat::Dense>&,
+                          const MatrixView<Scalar, MatrixFormat::Dense>&,
+                          const MatrixView<Scalar, MatrixFormat::Dense>&,
+                          Scalar,
+                          Scalar,
                           Side,
                           Uplo);
 }  // namespace sig
-
 
 /// @brief Batched Hermitian matrix-matrix multiply.
 ///
@@ -87,7 +86,6 @@ BATCHLAS_API Event hemm(Queue& ctx,
 
 }  // namespace batchlas
 
-
 namespace batchlas::backend {
 
 // DECLARATION ONLY: each vendor TU defines and instantiates it for its Backend;
@@ -126,7 +124,6 @@ namespace batchlas {
 
 // Owning-argument (`f(ctx, Matrix, ...)`) and backend-deducing (`f(ctx, ...)`)
 // overloads; see blas/queue-dispatch.hh.
-
 
 BATCHLAS_DISPATCH_ON_QUEUE(hemm)
 

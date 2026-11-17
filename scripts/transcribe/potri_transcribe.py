@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Append a transcribed potri run to the sm_89 and sm_120 ledgers (no timing).
 
 usage: scripts/transcribe/potri_transcribe.py SHA MODE [--date YYYY-MM-DD] [--ledger-dir DIR]
@@ -21,11 +22,11 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 DATE = datetime.date.today().isoformat()
 GRID_N = [1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512]
 GRID_B = [128, 512, 2048, 8192, 32768]
-CANDS = {'float': ['cta', 'blocked:nb=64', 'blocked:nb=128']}
-for d in ('double', 'cfloat', 'cdouble'):
-    CANDS[d] = ['cta', 'blocked:nb=64']
-SIZES = {'float': (4, 4), 'double': (8, 8), 'cfloat': (8, 4), 'cdouble': (16, 8)}
-BUDGET = {'sm_89': 99 * 1024 - 4096, 'sm_120': 99 * 1024 - 4096}  # LOCAL_MEM_SIZE less the reserve
+CANDS = {"float": ["cta", "blocked:nb=64", "blocked:nb=128"]}
+for d in ("double", "cfloat", "cdouble"):
+    CANDS[d] = ["cta", "blocked:nb=64"]
+SIZES = {"float": (4, 4), "double": (8, 8), "cfloat": (8, 4), "cdouble": (16, 8)}
+BUDGET = {"sm_89": 99 * 1024 - 4096, "sm_120": 99 * 1024 - 4096}  # LOCAL_MEM_SIZE less the reserve
 MAX_WG = 1024
 
 
@@ -49,16 +50,16 @@ def cta_max_n(dt, dev):
 
 def runnable(dt, dev, fam, n):
     cap = cta_max_n(dt, dev)
-    if fam == 'cta':
+    if fam == "cta":
         return n <= cap
-    return min(int(fam.split('=')[1]), n) <= cap
+    return min(int(fam.split("=")[1]), n) <= cap
 
 
 def emit(path, sha, rule, dev, ranked_of):
     date = DATE
-    run_id = 'transcribed-' + sha
-    with open(path, 'a') as f:
-        for dt in ('float', 'double', 'cfloat', 'cdouble'):
+    run_id = "transcribed-" + sha
+    with open(path, "a") as f:
+        for dt in ("float", "double", "cfloat", "cdouble"):
             cands = CANDS[dt]
             f.write(json.dumps({"kind": "run", "dtype": dt, "run_id": run_id, "host": "", "device": dev,
                                 "device_name": "", "batchlas": sha, "argv": rule, "date": date,
@@ -87,8 +88,8 @@ def measured_winners(path):
             continue
         if r.get("dtype") not in ("float", "cfloat") or not r.get("ranked"):
             continue
-        kv = dict(x.split('=') for x in r["key"].split(','))
-        best[(r["dtype"], int(kv["n"]), int(kv["batch"]))] = (r["date"], r["ranked"].split('|'))
+        kv = dict(x.split("=") for x in r["key"].split(","))
+        best[(r["dtype"], int(kv["n"]), int(kv["batch"]))] = (r["date"], r["ranked"].split("|"))
     return {k: v[1] for k, v in best.items()}
 
 
@@ -105,35 +106,35 @@ def main():
     ap.add_argument("sha")
     ap.add_argument("mode", choices=("provisional", "measured"))
     ap.add_argument("--date", default=DATE)
-    ap.add_argument("--ledger-dir", default=REPO + '/benchmarks/results/tuning/ledger')
+    ap.add_argument("--ledger-dir", default=REPO + "/benchmarks/results/tuning/ledger")
     args = ap.parse_args()
     sha, mode, DATE = args.sha, args.mode, args.date
-    led = args.ledger_dir + '/potri.%s.jsonl'
-    if mode == 'provisional':
+    led = args.ledger_dir + "/potri.%s.jsonl"
+    if mode == "provisional":
         rule = "transcribed: cta first where its tile fits the device, else blocked:nb=64, then nb=128 (no timing; replaced by measured rows)"
-        order = lambda dt, n, b: ['cta', 'blocked:nb=64', 'blocked:nb=128']
-        for dev in ('sm_89', 'sm_120'):
+        order = lambda dt, n, b: ["cta", "blocked:nb=64", "blocked:nb=128"]
+        for dev in ("sm_89", "sm_120"):
             emit(led % dev, sha, rule, dev, order)
         return
-    win = measured_winners(led % 'sm_89')
-    src = {'float': 'float', 'double': 'float', 'cfloat': 'cfloat', 'cdouble': 'cfloat'}
+    win = measured_winners(led % "sm_89")
+    src = {"float": "float", "double": "float", "cfloat": "cfloat", "cdouble": "cfloat"}
     rule89 = "transcribed: double from the measured sm_89 float ranking, cdouble from cfloat's, nearest cell, filtered to the dtype's runnable families"
     rule120 = "transcribed: every dtype from the measured sm_89 float/cfloat ranking (double from float, cdouble from cfloat), nearest cell, filtered to runnable families"
-    order = lambda dt, n, b: nearest(win, src[dt], n, b) + ['blocked:nb=64']
+    order = lambda dt, n, b: nearest(win, src[dt], n, b) + ["blocked:nb=64"]
     dedup = lambda f: (lambda dt, n, b: list(dict.fromkeys(f(dt, n, b))))
     # sm_89: only double and cdouble are transcribed; the measured float/cfloat rows stand.
-    emit_dt(led % 'sm_89', sha, rule89, 'sm_89', dedup(order), ('double', 'cdouble'))
+    emit_dt(led % "sm_89", sha, rule89, "sm_89", dedup(order), ("double", "cdouble"))
     # float and cfloat cells the campaign could not hold (over the 8 GiB operand cap): their nearest measured cell.
     rule_gap = "transcribed: sm_89 float/cfloat cells over the campaign's operand cap, from the nearest measured cell"
-    emit_dt(led % 'sm_89', sha + '-gap', rule_gap, 'sm_89', dedup(order), ('float', 'cfloat'),
+    emit_dt(led % "sm_89", sha + "-gap", rule_gap, "sm_89", dedup(order), ("float", "cfloat"),
             skip=lambda dt, n, b: (dt, n, b) in win)
-    emit_dt(led % 'sm_120', sha, rule120, 'sm_120', dedup(order), ('float', 'double', 'cfloat', 'cdouble'))
+    emit_dt(led % "sm_120", sha, rule120, "sm_120", dedup(order), ("float", "double", "cfloat", "cdouble"))
 
 
 def emit_dt(path, sha, rule, dev, ranked_of, dtypes, skip=lambda dt, n, b: False):
     date = DATE
-    run_id = 'transcribed-' + sha
-    with open(path, 'a') as f:
+    run_id = "transcribed-" + sha
+    with open(path, "a") as f:
         for dt in dtypes:
             cands = CANDS[dt]
             f.write(json.dumps({"kind": "run", "dtype": dt, "run_id": run_id, "host": "", "device": dev,
@@ -156,5 +157,5 @@ def emit_dt(path, sha, rule, dev, ranked_of, dtypes, skip=lambda dt, n, b: False
                     f.write(json.dumps(cell) + "\n")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

@@ -12,13 +12,13 @@
 
 namespace batchlas::ops::gemv {
 
-struct Cta : select::NoFields<"cta"> {};        ///< sycl_gemv::gemv_native_cta, sub-group per output; Trans/ConjTrans
-struct Direct : select::NoFields<"direct"> {};  ///< sycl_gemv::gemv_native_direct, item per output; every device
+struct Cta : select::NoFields<"cta"> {};        ///< ops::gemv::gemv_native_cta, sub-group per output; Trans/ConjTrans
+struct Direct : select::NoFields<"direct"> {};  ///< ops::gemv::gemv_native_direct, item per output; every device
 struct Vendor : select::NoFields<"vendor"> {};  ///< backend::gemv_vendor; any shape, needs the library
 
 using GemvChoice = std::variant<Cta, Direct, Vendor>;  ///< fieldless: body and segment width W derived in the drivers
 
-template <typename T>  /// Every compiled choice, in tie-break order: the transcribed ladder.
+template <typename Scalar>  /// Every compiled choice, in tie-break order: the transcribed ladder.
 constexpr auto candidates() { return select::all_of<GemvChoice>(); }
 
 /// can_run's device terms (host-callable for tests). Cta body 3 is reqd_sub_group_size(32).

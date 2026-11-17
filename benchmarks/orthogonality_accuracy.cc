@@ -40,9 +40,8 @@ struct Options {
     int samples = 4096;
     double log10_cond_min = 0.0;
     double log10_cond_max = 10.0;
-    unsigned int seed = 1234u;
+    unsigned seed = 1234u;
     size_t max_sweeps = 100;
-    SteqrUpdateScheme scheme = SteqrUpdateScheme::PG;
     std::string cta_shift = "wilkinson";
     std::string output = "output/accuracy/orthogonality_accuracy.csv";
     std::string inputs;  // --inputs DIR: share generated matrices across runs (accuracy::share_inputs)
@@ -63,15 +62,6 @@ Options parse_args(int argc, char** argv) {
             opt.inputs = get_value(arg);
         } else if (arg.starts_with("--impl")) {
             opt.impl = to_lower(get_value(arg));
-        } else if (arg.starts_with("--scheme")) {
-            const auto val = to_lower(get_value(arg));
-            if (val == "pg") {
-                opt.scheme = SteqrUpdateScheme::PG;
-            } else if (val == "exp") {
-                opt.scheme = SteqrUpdateScheme::EXP;
-            } else {
-                throw batchlas::invalid_argument("Invalid --scheme value (use pg or exp)");
-            }
         } else if (arg.starts_with("--backend")) {
             opt.backend = get_value(arg);
         } else if (arg.starts_with("--type")) {
@@ -87,7 +77,7 @@ Options parse_args(int argc, char** argv) {
         } else if (arg.starts_with("--log10-cond-max")) {
             opt.log10_cond_max = std::stod(get_value(arg));
         } else if (arg.starts_with("--seed")) {
-            opt.seed = static_cast<unsigned int>(std::stoul(get_value(arg)));
+            opt.seed = static_cast<unsigned>(std::stoul(get_value(arg)));
         } else if (arg.starts_with("--max-sweeps")) {
             opt.max_sweeps = static_cast<size_t>(std::stoul(get_value(arg)));
         } else if (arg.starts_with("--cta-shift")) {
@@ -98,7 +88,6 @@ Options parse_args(int argc, char** argv) {
             std::cout << "Orthogonality accuracy sampler\n\n"
                       << "Options:\n"
                       << "  --impl all|ortho_all|eig_all|ortho_chol2|ortho_cholesky|ortho_shiftchol3|ortho_householder|ortho_cgs2|ortho_svqb|ortho_svqb2|syev|steqr|steqr_cta|stedc\n"
-                      << "  --scheme pg|exp\n"
                       << "  --backend CUDA|ROCM|NETLIB\n"
                       << "  --type float|double\n"
                       << "  --n N\n"
@@ -204,7 +193,7 @@ int run_accuracy(const Options& opt) {
                 static_cast<Real>(target_log10),
                 NormType::Spectral,
                 cur_batch,
-                opt.seed + static_cast<unsigned int>(sample_id));
+                opt.seed + static_cast<unsigned>(sample_id));
             q->wait();
             accuracy::share_inputs(opt.inputs, sample_id, dense_A);
 
@@ -275,8 +264,7 @@ int run_accuracy(const Options& opt) {
                     extract_tridiagonal(*q, dense_A, d_work, e_work);
                     auto eigvals = Vector<Real>::zeros(n, cur_batch);
                     auto eigvects = Matrix<Real>::Identity(n, cur_batch);
-                    steqr_params.cta_update_scheme = opt.scheme;
-                    const char* cta_name = opt.scheme == SteqrUpdateScheme::PG ? "steqr_cta_pg" : "steqr_cta_exp";
+                    const char* cta_name = "steqr_cta";
                     UnifiedVector<std::byte> ws(
                         steqr_cta_buffer_size<Real>(*q, d_work, e_work, eigvals, JobType::EigenVectors, steqr_params));
                     (void)steqr_cta<B, Real>(*q,
@@ -360,7 +348,7 @@ int run_selected(const Options& opt) {
     return 1;
 }
 
-} // namespace
+}  // namespace
 
 int main(int argc, char** argv) {
     auto opt = parse_args(argc, argv);

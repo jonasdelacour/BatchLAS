@@ -44,7 +44,7 @@ struct CopyCase {
         c.chunk_items = 5;
         c.prepare = [this] {
             for (std::size_t e = 0; e < std::size_t(src.stride()) * kBatch; ++e)
-                src.data_ptr()[e] = T(float(e % 97) - 40.f, float(e % 13) + 0.5f);
+                src.data_ptr()[e] = T(float(e % 97) - 40.0f, float(e % 13) + 0.5f);
             std::fill_n(dst.data_ptr(), std::size_t(dst.stride()) * kBatch, test_support::poison<T>());
         };
         c.call = [this](Span<const std::uint8_t> mask, Span<std::byte> ws) {

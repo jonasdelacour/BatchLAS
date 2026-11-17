@@ -21,27 +21,27 @@ namespace batchlas {
 // Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
 // src/util/template-instantiations.hh. Keep in sync with the declarations below.
 namespace sig {
-template <typename T>
+template <typename Scalar>
 using potrf = Event(Queue&,
-                    const MatrixView<T, MatrixFormat::Dense>&,
+                    const MatrixView<Scalar, MatrixFormat::Dense>&,
                     Uplo, Span<std::byte>, Span<int32_t>);
 
-template <typename T>
+template <typename Scalar>
 using potrf_buffer_size = size_t(Queue&,
-                                 const MatrixView<T, MatrixFormat::Dense>&,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>&,
                                  Uplo);
 
 // Vendor signatures are spelled out, not aliased: a vendor parameter list can differ.
-template <typename T>
+template <typename Scalar>
 using potrf_vendor = Event(Queue&,
-                           const MatrixView<T, MatrixFormat::Dense>&,
+                           const MatrixView<Scalar, MatrixFormat::Dense>&,
                            Uplo,
                            Span<std::byte>,
                            Span<int32_t>);
 
-template <typename T>
+template <typename Scalar>
 using potrf_vendor_buffer_size = size_t(Queue&,
-                                        const MatrixView<T,MatrixFormat::Dense>&,
+                                        const MatrixView<Scalar, MatrixFormat::Dense>&,
                                         Uplo);
 }  // namespace sig
 
@@ -56,8 +56,8 @@ using potrf_vendor_buffer_size = size_t(Queue&,
 ///         invalid @p uplo.
 /// @ingroup api_factorizations_lowlevel
 // evidence: docs/design/vendor-independence.md#positional-validators-reject-only-what-no-route-can-serve
-template <typename T>
-inline void potrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
+template <typename Scalar>
+inline void potrf_validate_params(const MatrixView<Scalar, MatrixFormat::Dense>& A,
                                   Uplo uplo) {
     if (A.rows() < 0 || A.cols() < 0) {
         throw batchlas::invalid_argument(
@@ -76,21 +76,20 @@ inline void potrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
     }
 }
 
-
 /// @brief Workspace, in bytes, that potrf() needs for this shape on this queue.
 ///
 /// The size does not depend on whether a caller passes an `info` span, so the
 /// same value serves both potrf() overloads.
 /// @tparam B  backend; the backend-deducing overload takes it from `ctx.backend()`
-/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @tparam Scalar  scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in] ctx   queue the factorization will run on (kernel selection reads its device)
 /// @param[in] A     batch of \f$n \times n\f$ matrices to be factorized; only its shape is read
 /// @param[in] uplo  triangle that will be factorized
 /// @return bytes to pass as the `workspace` span of potrf()
 /// @ingroup api_factorizations_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t potrf_buffer_size(Queue& ctx,
-                                 const MatrixView<T, MatrixFormat::Dense>& A,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& A,
                                  Uplo uplo);
 
 /// @brief Batched Cholesky factorization of Hermitian positive-definite matrices.
@@ -103,7 +102,7 @@ BATCHLAS_API size_t potrf_buffer_size(Queue& ctx,
 /// The call is asynchronous: it enqueues on @p ctx and returns; A and @p info
 /// are readable only after the returned event (or the queue) has been waited on.
 /// @tparam B  backend; the backend-deducing overload takes it from `ctx.backend()`
-/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @tparam Scalar  scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in]     ctx        queue the kernels are enqueued on
 /// @param[in,out] descrA     batch of \f$n \times n\f$ Hermitian positive-definite matrices
 ///                           (any `ld >= n`, any batch stride); the @p uplo triangle is
@@ -128,9 +127,9 @@ BATCHLAS_API size_t potrf_buffer_size(Queue& ctx,
 ///      validate the info span, and its arena overloads lease the workspace.
 /// @ingroup api_factorizations
 // evidence: docs/design/vendor-independence.md#per-item-info-spans-for-potrf-getrf-and-getri
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event potrf(Queue& ctx,
-                     const MatrixView<T, MatrixFormat::Dense>& descrA,
+                     const MatrixView<Scalar, MatrixFormat::Dense>& descrA,
                      Uplo uplo,
                      Span<std::byte> workspace,
                      Span<int32_t> info);
@@ -147,16 +146,15 @@ BATCHLAS_API Event potrf(Queue& ctx,
 /// @ingroup api_factorizations
 // Not a defaulted `info`: the sig:: aliases are function types, which cannot
 // carry default arguments, so a default would not be part of the instantiation.
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 inline Event potrf(Queue& ctx,
-        const MatrixView<T, MatrixFormat::Dense>& descrA,
+        const MatrixView<Scalar, MatrixFormat::Dense>& descrA,
         Uplo uplo,
         Span<std::byte> workspace) {
-        return potrf<B,T>(ctx, descrA, uplo, workspace, Span<int32_t>{});
+        return potrf<B, Scalar>(ctx, descrA, uplo, workspace, Span<int32_t>{});
 }
 
 }  // namespace batchlas
-
 
 namespace batchlas::backend {
 
@@ -172,13 +170,12 @@ namespace batchlas::backend {
 /// @ingroup api_dispatch
 // Declaration only: the public potrf lives in src/ops/potrf/potrf.cc.
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event potrf_vendor(Queue& ctx,
-                                const MatrixView<T, MatrixFormat::Dense>& descrA,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& descrA,
                                 Uplo uplo,
                                 Span<std::byte> workspace,
                                 Span<int32_t> info_out);
-
 
 /// @brief Workspace query of the vendor arm of potrf().
 /// @param[in] ctx   queue the vendor call will run on
@@ -186,9 +183,9 @@ BATCHLAS_API Event potrf_vendor(Queue& ctx,
 /// @param[in] uplo  triangle that will be factorized
 /// @return bytes to pass as the `workspace` span of potrf_vendor()
 /// @ingroup api_dispatch
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t potrf_vendor_buffer_size(Queue& ctx,
-                                             const MatrixView<T,MatrixFormat::Dense>& A,
+                                             const MatrixView<Scalar, MatrixFormat::Dense>& A,
                                              Uplo uplo);
 
 }  // namespace batchlas::backend

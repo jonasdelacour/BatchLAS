@@ -6,9 +6,11 @@
 #include <benchmarks/bench_utils.hh>
 using namespace batchlas;
 
+namespace {
+
 // Symmetric eigenvalue decomposition benchmark
 template <typename T, Backend B>
-static void BM_LANCZOS(minibench::State& state) {
+void BM_LANCZOS(minibench::State& state) {
     const size_t m = state.range(0);
     const size_t n = state.range(1);
     const size_t batch = state.range(2);
@@ -40,6 +42,8 @@ static void BM_LANCZOS(minibench::State& state) {
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * flops), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 BATCHLAS_REGISTER_BENCHMARK(BM_LANCZOS, SquareBatchSizes);
 MINI_BENCHMARK_MAIN();

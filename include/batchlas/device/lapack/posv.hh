@@ -1,0 +1,68 @@
+// SPDX-License-Identifier: MIT
+#pragma once
+// LAPACK xPOSV inside a kernel: A = L L^H (Lower) or U^H U (Upper) in
+// place, then B := A^-1 B when the factorization succeeded. Public entry:
+//   int posv<UL, Tier>(ex, A, B, ws)           potrf's info (uniform over ex), or -i
+//   WorkspaceSize buffer_size<routine::posv<UL>, Tier, T>(n)
+//   tier::Blocked<NB>  ex = WorkGroup<256, 32>, any n and nrhs: potrf's then potrs's Blocked tier
+//                      on one workspace (potrf's plan, whose first slot potrs carves)
+// The small tiers land with WP7. info = k > 0: the leading minor of order k is not positive
+// definite, B unchanged; -2: A not square; -3: B's rows differ from n; -4: ws.local bad.
+
+#include <type_traits>
+
+#include <batchlas/blas/enums.hh>
+#include <batchlas/device/lapack/potrf.hh>
+#include <batchlas/device/lapack/potrs.hh>
+#include <batchlas/device/tier.hh>
+#include <batchlas/device/workspace.hh>
+
+namespace batchlas::device {
+
+namespace detail {
+template <Uplo UL, int NB, class Alg, int WG, int SG, class MA, class MB>
+BATCHLAS_DEVICE_INLINE int posv_blocked_op(const WorkGroup<WG, SG>& ex, const MA& a, const MB& b, const Workspace& ws) {
+    static_assert(std::is_same_v<Alg, alg::Default>, "posv: tier::Blocked has one algorithm");
+    static_assert(std::is_same_v<typename MA::value_type, typename MB::value_type>, "posv: A and B hold the same scalar type");
+    const int n = a.rows();
+    if (n < 0 || a.cols() != n) return -2;
+    if (b.rows() != n || b.cols() < 0) return -3;
+    if (n == 0) return 0;
+    if (!detail::blocked_ws_ok(ws, false)) return -4;  // potrf would report it as its -3
+    const int info = detail::potrf_blocked_op<UL, NB, Alg>(ex, a, ws);
+    if (info != 0 || b.cols() == 0) return info;
+    detail::potrs_blocked_solve<UL, NB>(ex, a, b, ws);
+    return 0;
+}
+}  // namespace detail
+
+namespace routine {
+template <Uplo UL> struct posv {
+    static constexpr const char* name = "posv";
+    static constexpr Uplo uplo = UL;
+};
+}  // namespace routine
+
+template <Uplo UL, int NB, class Alg, class Scalar> struct tier_info<routine::posv<UL>, tier::Blocked<NB, Alg>, Scalar> {
+    static constexpr int wg_size = detail::kBlockedWg;
+    static constexpr int sg_size = 32;
+    using executor = WorkGroup<wg_size, sg_size>;
+    static constexpr int per_group = 1;
+    static constexpr bool admits(int n) { return n >= 0 && NB <= detail::reg_max_n<Scalar>; }
+    static constexpr WorkspaceSize buffer_size(int) { return detail::PotrfBlockedPlan<Scalar, NB>::make().size; }
+};
+template <Uplo UL, class Scalar> struct tiers<routine::posv<UL>, Scalar> {
+    using type = tier::list<tier::Blocked<(detail::reg_max_n<Scalar> >= 32 ? 32 : 16)>>;
+};
+
+// A := its Cholesky factor (UL triangle read and overwritten, the other neither read nor written),
+// then B := A^-1 B for the n x nrhs B; returns info (see the file head).
+template <Uplo UL, class Tier, class Ex, class MA, class MB>
+BATCHLAS_DEVICE_INLINE int posv(const Ex& ex, const MA& A, const MB& B, const Workspace& ws) {
+    using T = typename MA::value_type;
+    using Tr = resolve_tier_t<routine::posv<UL>, T, Tier>;
+    static_assert(tier::is_blocked_v<Tr>, "posv: tier::Blocked<NB> (the small tiers land with WP7)");
+    return detail::posv_blocked_op<UL, Tr::nb, typename Tr::alg_type>(ex, A, B, ws);
+}
+
+}  // namespace batchlas::device

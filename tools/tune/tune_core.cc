@@ -708,7 +708,6 @@ std::optional<std::vector<OldChoice>> parse_old_csv(std::string_view text, const
     return out;
 }
 
-
 void gate_count(GateCounts& c, const std::string& v) {
     (v == "same" ? c.same : v == "pass" ? c.pass : v == "FAIL" ? c.fail : v == "BAD_ROW" ? c.bad : v == "cap" ? c.cap
                                                                                                       : c.error)++;

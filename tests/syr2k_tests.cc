@@ -15,9 +15,9 @@
 
 using namespace batchlas;
 
-template <typename T, Backend B>
+template <typename Real, Backend B>
 struct Syr2kConfig {
-    using ScalarType = T;
+    using ScalarType = Real;
     static constexpr Backend BackendVal = B;
 };
 
@@ -224,7 +224,7 @@ void expect_route_respects_triangle(Queue& ctx,
     }
 }
 
-} // namespace
+}  // namespace
 
 TEST(Syr2kCudaCustomTest, TriangularTilesLeaveTheOtherHalfUntouched) {
     Queue ctx;
@@ -380,7 +380,7 @@ TEST(Syr2kTriangular, RealConjTransEqualsTrans) {
     if (ctx.device().type != DeviceType::GPU) GTEST_SKIP() << "the tile kernel is native GPU only";
     const int n = 200, k = 53, batch = 5, lda = k + 3, sa = lda * n + 7, ldc = n + 2, sc = ldc * n + 5;
     auto fill = [](UnifiedVector<float>& v, unsigned seed) {
-        for (std::size_t e = 0; e < v.size(); ++e) v[e] = float(int((e * 2654435761u + seed) % 2001) - 1000) / 1000.f;
+        for (std::size_t e = 0; e < v.size(); ++e) v[e] = float(int((e * 2654435761u + seed) % 2001) - 1000) / 1000.0f;
     };
     UnifiedVector<float> a(std::size_t(sa) * batch), b(std::size_t(sa) * batch), c0(std::size_t(sc) * batch);
     fill(a, 11), fill(b, 29), fill(c0, 41);

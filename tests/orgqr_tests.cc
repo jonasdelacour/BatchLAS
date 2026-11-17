@@ -14,9 +14,9 @@
 
 using namespace batchlas;
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct OrgqrConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 
@@ -70,7 +70,6 @@ TYPED_TEST(OrgqrTest, BatchedMatrices) {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     EXPECT_VERIFY(T, verify::Check::orthogonality, A.rows(), MV::orthogonality(*this->ctx, A, A.all_items()));
 }
-
 
 // ===========================================================================
 // WP5 -- ORGQR AGAINST A HOST REFERENCE.
@@ -198,4 +197,3 @@ TYPED_TEST(OrgqrTest, OutOfOrderQueueGeqrfThenOrgqrVendor) {
     EXPECT_VERIFY(T, verify::Check::orthogonality, m, MV::orthogonality(*this->ctx, Qv, Qv.all_items()));
     EXPECT_VERIFY(T, verify::Check::factorization, m, MV::qr_reconstruction(*this->ctx, A0v, Qv, Fv, Qv.all_items()));
 }
-
