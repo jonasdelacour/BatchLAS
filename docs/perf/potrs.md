@@ -9,7 +9,7 @@
 
 | family | driver | `can_run` (correctness only) |
 |---|---|---|
-| `fused` | `sycl_getrs::potrs_fused_dispatch`: both substitutions in one launch, B in SLM (`getrs_fused.cc`) | `ops::potrs::fused_fits`: GPU, sub-group 32, `nrhs <= 8`, `n * nrhs <= getrs_fused_max_rhs_elems` of the SLM budget |
+| `fused` | `ops::getrs::potrs_fused_dispatch`: both substitutions in one launch, B in SLM (`getrs_fused.cc`) | `ops::potrs::fused_fits`: GPU, sub-group 32, `nrhs <= 8`, `n * nrhs <= getrs_fused_max_rhs_elems` of the SLM budget |
 | `trsm` | two public `trsm` calls, each choosing its own kernel | always; the children refuse what they cannot take |
 
 - Keys (`src/ops/potrs/choice.hh`): `dtype`, `uplo:exact` (the triangles run different bodies),

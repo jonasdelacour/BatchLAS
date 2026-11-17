@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /// @file
@@ -23,27 +24,27 @@ namespace batchlas {
 // Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
 // src/util/template-instantiations.hh. Keep in sync with the declarations below.
 namespace sig {
-template <typename T>
+template <typename Scalar>
 using potri = Event(Queue&,
-                    const MatrixView<T, MatrixFormat::Dense>&,
+                    const MatrixView<Scalar, MatrixFormat::Dense>&,
                     Uplo, bool, Span<std::byte>, Span<int32_t>);
 
-template <typename T>
+template <typename Scalar>
 using potri_buffer_size = size_t(Queue&,
-                                 const MatrixView<T, MatrixFormat::Dense>&,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>&,
                                  Uplo);
 }  // namespace sig
 
 /// @brief Validates the arguments of potri() and potri_buffer_size().
 ///
 /// Checks non-negative extents, a square A and a valid @p uplo.
-/// @tparam T  scalar type
+/// @tparam Scalar  scalar type
 /// @param[in] A     batch of matrices that will be passed to potri(); expected \f$n \times n\f$
 /// @param[in] uplo  triangle argument that will be passed; must be `Lower` or `Upper`
 /// @throws batchlas::invalid_argument if any check fails
 /// @ingroup api_factorizations_lowlevel
-template <typename T>
-inline void potri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
+template <typename Scalar>
+inline void potri_validate_params(const MatrixView<Scalar, MatrixFormat::Dense>& A, Uplo uplo) {
     if (A.rows() < 0 || A.cols() < 0) {
         throw batchlas::invalid_argument(
             "potri: Matrix dimensions cannot be negative (A: rows=" + std::to_string(A.rows()) +
@@ -70,7 +71,7 @@ inline void potri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A, U
 ///
 /// Asynchronous: A and @p info are readable after the returned event is waited on.
 /// @tparam Back  backend; the backend-deducing overload takes it from `ctx.backend()`
-/// @tparam T     scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @tparam Scalar     scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in] ctx          queue the kernels are enqueued on
 /// @param[in,out] A        batch of \f$n \times n\f$ Cholesky factors; overwritten with the inverse
 /// @param[in] uplo         triangle of A that holds the factor and receives the inverse
@@ -87,9 +88,9 @@ inline void potri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A, U
 /// @throws batchlas::internal_error for \f$n < 1\f$ (batch 0 is a no-op) and for a heterogeneous batch
 /// @throws batchlas::workspace_error if @p work_space is smaller than potri_buffer_size()
 /// @ingroup api_factorizations
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 BATCHLAS_API Event potri(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A,
                          Uplo uplo,
                          bool full,
                          Span<std::byte> work_space,
@@ -106,9 +107,9 @@ BATCHLAS_API Event potri(Queue& ctx,
 /// @return required workspace size in bytes
 /// @throws batchlas::invalid_argument if potri_validate_params() rejects the operands
 /// @ingroup api_factorizations_lowlevel
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 BATCHLAS_API size_t potri_buffer_size(Queue& ctx,
-                                      const MatrixView<T, MatrixFormat::Dense>& A,
+                                      const MatrixView<Scalar, MatrixFormat::Dense>& A,
                                       Uplo uplo);
 
 /// @brief potri() writing only the @p uplo triangle.
@@ -121,13 +122,13 @@ BATCHLAS_API size_t potri_buffer_size(Queue& ctx,
 /// @return event of the last enqueued kernel
 /// @ingroup api_factorizations
 // Not a defaulted `full`: the sig:: aliases are function types (see potrf.hh).
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 inline Event potri(Queue& ctx,
-                   const MatrixView<T, MatrixFormat::Dense>& A,
+                   const MatrixView<Scalar, MatrixFormat::Dense>& A,
                    Uplo uplo,
                    Span<std::byte> work_space,
                    Span<int32_t> info) {
-    return potri<Back, T>(ctx, A, uplo, false, work_space, info);
+    return potri<Back, Scalar>(ctx, A, uplo, false, work_space, info);
 }
 
 /// @brief potri() writing only the @p uplo triangle, without per-item status.
@@ -138,12 +139,12 @@ inline Event potri(Queue& ctx,
 /// @param[out] work_space  scratch of at least potri_buffer_size() bytes; contents undefined on return
 /// @return event of the last enqueued kernel
 /// @ingroup api_factorizations
-template <Backend Back, typename T>
+template <Backend Back, typename Scalar>
 inline Event potri(Queue& ctx,
-                   const MatrixView<T, MatrixFormat::Dense>& A,
+                   const MatrixView<Scalar, MatrixFormat::Dense>& A,
                    Uplo uplo,
                    Span<std::byte> work_space) {
-    return potri<Back, T>(ctx, A, uplo, false, work_space, Span<int32_t>{});
+    return potri<Back, Scalar>(ctx, A, uplo, false, work_space, Span<int32_t>{});
 }
 
 BATCHLAS_DISPATCH_ON_QUEUE(potri)

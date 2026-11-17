@@ -6,10 +6,12 @@
 
 using namespace batchlas;
 
+namespace {
+
 // Batched MatrixView copy benchmark
 // Exercises MatrixView::copy across batched dense matrices.
 template <typename T, Backend B>
-static void BM_MATRIX_COPY(minibench::State& state) {
+void BM_MATRIX_COPY(minibench::State& state) {
     const int rows = state.range(0);
     const int cols = state.range(1);
     const int batch = state.range(2);
@@ -32,6 +34,8 @@ static void BM_MATRIX_COPY(minibench::State& state) {
     state.SetMetric("GB/s", bytes_moved * 1e-9, minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 BATCHLAS_REGISTER_BENCHMARK(BM_MATRIX_COPY, SquareBatchSizes);
 

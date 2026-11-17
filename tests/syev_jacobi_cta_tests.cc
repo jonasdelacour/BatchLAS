@@ -39,7 +39,7 @@ namespace {
 // the relative-accuracy property, and this routine is deliberately simple and
 // independent of the kernel under test.
 // ---------------------------------------------------------------------------
-static std::vector<double> reference_jacobi_eigenvalues(const std::vector<double>& A_in, int n) {
+std::vector<double> reference_jacobi_eigenvalues(const std::vector<double>& A_in, int n) {
     std::vector<double> A = A_in; // column-major n x n
     const double tol = double(n) * std::numeric_limits<double>::epsilon();
 
@@ -95,9 +95,9 @@ static std::vector<double> reference_jacobi_eigenvalues(const std::vector<double
 // column-equilibrated matrix stays ~kappa(M), which is precisely the regime
 // where Jacobi's relative-accuracy bound bites and a tridiagonalizing method
 // loses the small eigenvalues.
-static void make_graded_spd(int n, int grade, unsigned seed,
-                            std::vector<double>& out_double,
-                            std::vector<float>& out_float) {
+void make_graded_spd(int n, int grade, unsigned seed,
+                     std::vector<double>& out_double,
+                     std::vector<float>& out_float) {
     std::minstd_rand rng(seed);
     std::uniform_int_distribution<int> dist(-16, 16);
 
@@ -130,9 +130,9 @@ static void make_graded_spd(int n, int grade, unsigned seed,
 
 // Random symmetric matrix with dyadic entries, so it is represented exactly in
 // both float and double and the two precisions see identical input.
-static void make_dyadic_symmetric(int n, unsigned seed,
-                                  std::vector<double>& out_double,
-                                  std::vector<float>& out_float) {
+void make_dyadic_symmetric(int n, unsigned seed,
+                           std::vector<double>& out_double,
+                           std::vector<float>& out_float) {
     std::minstd_rand rng(seed);
     std::uniform_int_distribution<int> dist(-1024, 1024);
 
@@ -149,13 +149,13 @@ static void make_dyadic_symmetric(int n, unsigned seed,
     }
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct SyevJacobiCtaConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 
-} // namespace
+}  // namespace
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 using SyevJacobiCtaTestTypes = ::testing::Types<
@@ -206,7 +206,6 @@ TYPED_TEST(SyevJacobiCtaTest, EigenvaluesOnlyMatchesNetlib) {
 
         auto W_jac = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
 
-
         syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac, W_jac.to_span(), JobType::NoEigenVectors, uplo).wait();
 
         test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0, W_jac, n, false, A0.all_items());
@@ -256,7 +255,6 @@ TYPED_TEST(SyevJacobiCtaTest, EigenvectorsResidualAndOrtho) {
 
             auto W_jac = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
 
-
             syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac, W_jac.to_span(), JobType::EigenVectors, uplo).wait();
 
             test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0, W_jac, n, false, A0.all_items());
@@ -283,7 +281,6 @@ TYPED_TEST(SyevJacobiCtaTest, OddAndSmallSizes) {
         Matrix<Scalar, MatrixFormat::Dense> A_jac = A0;
 
         auto W_jac = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
-
 
         syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac, W_jac.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
 
@@ -456,6 +453,39 @@ TYPED_TEST(SyevJacobiCtaTest, BatchTailStoresNothingAndKeepsItemsBitwise) {
     }
 }
 
+// The float rotation cosine c = 1/sqrt(1 + t^2) is rsqrt.approx + one Newton step. A bare
+// rsqrt.approx (NVPTX folded origin/main's `1 / sqrt` into one) leaves c^2 + s^2 = 1 + O(2^-22)
+// per rotation, which accumulates into the eigenvectors. ||Z^H Z - I||_F, worst of 1024 graded
+// items at n = 32, ld/stride gaps, in eps: float 171.5 (bare rsqrt 520.9), complex<float> 304.2
+// (bare rsqrt 383.0). The bound sits just above the Newton value. double divides: unchanged.
+TYPED_TEST(SyevJacobiCtaTest, RotationCosineKeepsEigenvectorsOrthonormal) {
+    using Scalar = typename TestFixture::ScalarType;
+    using Real = typename base_type<Scalar>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (!std::is_same_v<Real, float>) {
+        GTEST_SKIP() << "the rsqrt + Newton cosine is float-only";
+    } else {
+        constexpr int n = 32, ld = n + 3, stride = ld * n + 5, batch = 1024;
+        constexpr double max_eps = std::is_same_v<Scalar, std::complex<float>> ? 320.0 : 180.0;
+        auto A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/4274u);
+        UnifiedVector<Scalar> buf(static_cast<size_t>(batch) * stride, Scalar(0));
+        for (int b = 0; b < batch; ++b)
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < n; ++i)  // graded: (i, j) scaled by 2^-floor(20 (i + j) / n)
+                    buf[static_cast<size_t>(b) * stride + i + j * ld] =
+                        A0.view()(i, j, b) * Real(std::ldexp(1.0, -(i + j) * 20 / n));
+        MatrixView<Scalar, MatrixFormat::Dense> Z(buf.data(), n, n, ld, stride, batch);
+        UnifiedVector<Real> W(static_cast<size_t>(n) * batch);
+        syev_jacobi_cta<B, Scalar>(*this->ctx, Z, W.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
+        const double ortho = MatrixView<Scalar, MatrixFormat::Dense>::orthogonality(*this->ctx, Z, Z.all_items());
+        constexpr double eps = std::numeric_limits<Real>::epsilon();
+        const double factor = max_eps * eps / verify::bound<Scalar>(verify::Check::orthogonality_rotations, n);
+        EXPECT_VERIFY_SLACK(Scalar, verify::Check::orthogonality_rotations, n, ortho,
+                            verify::Slack{factor, "rsqrt + Newton cosine: measured Newton max, below the bare rsqrt"})
+            << "||Z^H Z - I||_F = " << ortho / eps << " eps, bound " << max_eps << " eps";
+    }
+}
+
 // Verifies that the float kernel agrees with an exact-input double reference to
 // within a small multiple of eps*||A||, i.e. that it is backward stable at the
 // level theory predicts. This is what licenses the ||A||-scaled values check used
@@ -471,10 +501,10 @@ TEST(SyevJacobiCtaAccuracy, RandomSymmetricMatchesDoubleReference) {
     constexpr Backend B = Backend::ROCM;
 #endif
     if (!test_utils::should_run_backend(B)) {
-        GTEST_SKIP() << "Backend filtered by BATCHLAS_TEST_BACKEND environment variable";
+        GTEST_SKIP() << "backend filtered by BATCHLAS_TEST_BACKEND environment variable";
     }
     if (!test_utils::should_run_float_type<float>()) {
-        GTEST_SKIP() << "Float type filtered by BATCHLAS_TEST_FLOAT_TYPE environment variable";
+        GTEST_SKIP() << "float type filtered by BATCHLAS_TEST_FLOAT_TYPE environment variable";
     }
     auto ctx = Queue("gpu", true);
     if (ctx.device().type != DeviceType::GPU) {
@@ -546,10 +576,10 @@ TEST(SyevJacobiCtaAccuracy, GradedSpdRelativeAccuracy) {
 #endif
 
     if (!test_utils::should_run_backend(B)) {
-        GTEST_SKIP() << "Backend filtered by BATCHLAS_TEST_BACKEND environment variable";
+        GTEST_SKIP() << "backend filtered by BATCHLAS_TEST_BACKEND environment variable";
     }
     if (!test_utils::should_run_float_type<float>()) {
-        GTEST_SKIP() << "Float type filtered by BATCHLAS_TEST_FLOAT_TYPE environment variable";
+        GTEST_SKIP() << "float type filtered by BATCHLAS_TEST_FLOAT_TYPE environment variable";
     }
     auto ctx = Queue("gpu", true);
     if (ctx.device().type != DeviceType::GPU) {

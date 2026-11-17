@@ -48,12 +48,12 @@ namespace {
 namespace sy = batchlas::ops::syev;
 using C = sy::SyevChoice;
 using Pin = select::ScopedPin<C>;
-template <typename T>
-using MVof = MatrixView<T, MatrixFormat::Dense>;
-template <typename T>
-using RealOf = typename batchlas::base_type<T>::type;
-template <typename T>
-constexpr bool kCx = test_utils::is_complex<T>::value;
+template <typename Scalar>
+using MVof = MatrixView<Scalar, MatrixFormat::Dense>;
+template <typename Scalar>
+using RealOf = typename batchlas::base_type<Scalar>::type;
+template <typename Scalar>
+constexpr bool kCx = test_utils::is_complex<Scalar>::value;
 using cd = std::complex<double>;
 
 template <typename T>
@@ -77,36 +77,36 @@ struct Spec {
 
 // A in a buffer of large finite poison at ld = n + 3 and a stride that is not ld * n. The other
 // triangle holds the mirror, or poison under Spec::poison_other (OtherTriangleIsNeverRead).
-template <typename T>
+template <typename Scalar>
 struct Eig {
     Spec s;
     int ld = 0, stride = 0;
-    UnifiedVector<T> mem;
-    std::vector<T> mem0;
-    UnifiedVector<RealOf<T>> w;
-    UnifiedVector<T*> ptrs;
+    UnifiedVector<Scalar> mem;
+    std::vector<Scalar> mem0;
+    UnifiedVector<RealOf<Scalar>> w;
+    UnifiedVector<Scalar*> ptrs;
     std::vector<std::vector<double>> lambda;  // sorted, per representative item
 
-    MVof<T> A() { return {mem.data(), s.n, s.n, ld, stride, s.batch, ptrs.data()}; }
+    MVof<Scalar> A() { return {mem.data(), s.n, s.n, ld, stride, s.batch, ptrs.data()}; }
     std::size_t at(int it, int i, int j) const { return std::size_t(it) * stride + std::size_t(j) * ld + i; }
     bool stored(int i, int j) const { return s.uplo == Uplo::Lower ? i >= j : i <= j; }
 };
 
-template <typename T>
-T poison() {
-    return MVof<T>::make(-9.0e3, 7.0e3);
+template <typename Scalar>
+Scalar poison() {
+    return MVof<Scalar>::make(-9.0e3, 7.0e3);
 }
 
 // Graded spectrum +-10^[-2, 2] and a dense complex Householder Q, built in double on the host.
-template <typename T>
-Eig<T> make_eig(const Spec& s) {
-    Eig<T> p;
+template <typename Scalar>
+Eig<Scalar> make_eig(const Spec& s) {
+    Eig<Scalar> p;
     p.s = s;
     p.ld = s.n + 3;
     p.stride = p.ld * s.n + 5;
-    p.mem = UnifiedVector<T>(std::size_t(p.stride) * s.batch + 7, poison<T>());
-    p.w = UnifiedVector<RealOf<T>>(std::size_t(s.n) * s.batch, RealOf<T>(0));
-    p.ptrs = UnifiedVector<T*>(s.batch, nullptr);
+    p.mem = UnifiedVector<Scalar>(std::size_t(p.stride) * s.batch + 7, poison<Scalar>());
+    p.w = UnifiedVector<RealOf<Scalar>>(std::size_t(s.n) * s.batch, RealOf<Scalar>(0));
+    p.ptrs = UnifiedVector<Scalar*>(s.batch, nullptr);
     const int reps = s.period > 0 ? std::min(s.period, s.batch) : s.batch;
     std::mt19937 gen(s.seed);
     std::uniform_real_distribution<double> u(-1, 1);
@@ -119,7 +119,7 @@ Eig<T> make_eig(const Spec& s) {
         double vv = 0;
         for (int i = 0; i < n; ++i) {
             const double re = u(gen);
-            v[i] = cd(re, kCx<T> ? u(gen) : 0.0);
+            v[i] = cd(re, kCx<Scalar> ? u(gen) : 0.0);
             vv += std::norm(v[i]);
         }
         auto q = [&](int i, int j) { return (i == j ? 1.0 : 0.0) - 2.0 * v[i] * std::conj(v[j]) / vv; };
@@ -129,9 +129,9 @@ Eig<T> make_eig(const Spec& s) {
                 cd a = 0;
                 for (int k = 0; k < n; ++k) a += q(i, k) * lam[k] * std::conj(q(j, k));
                 if (i == j) a = cd(a.real(), 0.0);
-                p.mem[p.at(it, i, j)] = MVof<T>::make(a.real(), a.imag());
+                p.mem[p.at(it, i, j)] = MVof<Scalar>::make(a.real(), a.imag());
                 // The mirror is the stored entry's exact conjugate, as a Hermitian matrix holds it.
-                if (!s.poison_other && i != j) p.mem[p.at(it, j, i)] = MVof<T>::make(a.real(), -a.imag());
+                if (!s.poison_other && i != j) p.mem[p.at(it, j, i)] = MVof<Scalar>::make(a.real(), -a.imag());
             }
         std::sort(lam.begin(), lam.end());
         p.lambda.push_back(lam);
@@ -242,9 +242,9 @@ std::vector<std::pair<std::string, std::string>> tables_without_syev() {
     return files;
 }
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Cfg {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 using Types = typename test_utils::backend_types<Cfg>::type;

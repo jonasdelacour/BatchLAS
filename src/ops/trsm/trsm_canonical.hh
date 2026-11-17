@@ -7,7 +7,7 @@
 
 #include <batchlas/blas/enums.hh>
 
-namespace batchlas::sycl_trsm {
+namespace batchlas::ops::trsm {
 
 struct Canonical {
     bool do_trans;
@@ -28,4 +28,4 @@ inline Canonical canonicalise(Side side, Uplo uplo, Transpose transA, Diag diag)
     return c;
 }
 
-}  // namespace batchlas::sycl_trsm
+}  // namespace batchlas::ops::trsm

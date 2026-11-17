@@ -19,62 +19,48 @@
 #include <batchlas/blas/functions/syev.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/util/batch_mask.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/lapack/syevx.hh>
 
 namespace batchlas {
 
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 struct SyevxDirectSelectKernel;
 
 namespace {
 
 // Shape of the private copy of A that syev consumes. Packed (ld == n,
 // stride == n*n) regardless of the input view's own layout.
-template <typename T>
-inline MatrixView<T, MatrixFormat::Dense> packed_copy_view(T* data,
-                                                           int64_t n,
-                                                           int64_t batch_size,
-                                                           T** ptr_array) {
-    return MatrixView<T, MatrixFormat::Dense>(data,
-                                              static_cast<int>(n),
-                                              static_cast<int>(n),
-                                              static_cast<int>(n),
-                                              n * n,
-                                              static_cast<int>(batch_size),
-                                              ptr_array);
+template <typename Scalar>
+inline MatrixView<Scalar, MatrixFormat::Dense> packed_copy_view(Scalar* data,
+                                                                int64_t n,
+                                                                int64_t batch_size,
+                                                                Scalar** ptr_array) {
+    return MatrixView<Scalar, MatrixFormat::Dense>(data,
+                                                   static_cast<int>(n),
+                                                   static_cast<int>(n),
+                                                   static_cast<int>(n),
+                                                   n * n,
+                                                   static_cast<int>(batch_size),
+                                                   ptr_array);
 }
 
-// Number of eigenvalues <= x in an ASCENDING array (upper_bound, not lower_bound).
-// The `<=` must not become `<`: it is stebz's Sturm-count predicate, which is what
-// makes Direct and DirectSubset agree on m (up to one at a rounding boundary).
-// evidence: docs/design/syevx.md#syevx-range-direct-and-directsubset-may-disagree-on-m-by-one
-template <typename R>
-inline int64_t count_le(const R* asc, int64_t n, R x) {
-    int64_t lo = 0;
-    int64_t hi = n;
-    while (lo < hi) {
-        const int64_t mid = lo + (hi - lo) / 2;
-        if (asc[mid] <= x) lo = mid + 1;
-        else               hi = mid;
-    }
-    return lo;
-}
+}  // namespace
 
-} // namespace
-
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 Event syevx_direct(Queue& ctx,
-                   const MatrixView<T, MFormat>& A,
-                   Span<typename base_type<T>::type> W,
+                   const MatrixView<Scalar, MFormat>& A,
+                   Span<typename base_type<Scalar>::type> W,
                    Span<int32_t> m,
                    size_t neigs,
                    Span<std::byte> workspace,
                    JobType jobz,
-                   const MatrixView<T, MatrixFormat::Dense>& V,
-                   const SyevxParams<T>& params,
+                   const MatrixView<Scalar, MatrixFormat::Dense>& V,
+                   const SyevxParams<Scalar>& params,
                    Span<int32_t> info) {
     // Honours the mask: the copy, the public syev and the select kernel all skip an inactive item.
     const Span<const std::uint8_t> mask = ::batchlas::detail::call_mask("syevx_direct", A, V);
-    using float_type = typename base_type<T>::type;
+    using float_type = typename base_type<Scalar>::type;
 
     if constexpr (MFormat != MatrixFormat::Dense) {
         (void)ctx; (void)A; (void)W; (void)m; (void)neigs; (void)workspace;
@@ -110,22 +96,22 @@ Event syevx_direct(Queue& ctx,
         }
 
         auto pool = BumpAllocator(workspace);
-        auto a_copy_data = pool.allocate<T>(ctx, static_cast<size_t>(n * n * batch_size));
-        auto a_copy_ptrs = pool.allocate<T*>(ctx, static_cast<size_t>(batch_size));
+        auto a_copy_data = pool.allocate<Scalar>(ctx, static_cast<size_t>(n * n * batch_size));
+        auto a_copy_ptrs = pool.allocate<Scalar*>(ctx, static_cast<size_t>(batch_size));
         auto lambdas = pool.allocate<float_type>(ctx, static_cast<size_t>(n * batch_size));
 
-        auto A_copy = packed_copy_view<T>(a_copy_data.data(), n, batch_size, a_copy_ptrs.data())
+        auto A_copy = packed_copy_view<Scalar>(a_copy_data.data(), n, batch_size, a_copy_ptrs.data())
                           .with_batch_mask(mask);
 
         // syev overwrites its input; syevx must leave A intact.
-        (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, A_copy, A);
+        (void)MatrixView<Scalar, MatrixFormat::Dense>::copy(ctx, A_copy, A);
 
         auto syev_ws = pool.allocate<std::byte>(
             ctx, syev_buffer_size<B>(ctx, A_copy, lambdas, jobz, Uplo::Lower));
         // (void) on an Event: deliberate (in-order Queue). `info` is syev's verbatim.
         // Positional because the option overload has no `info`; Uplo::Lower must
         // match the syev_buffer_size call above.
-        (void)syev<B, T>(ctx, A_copy, lambdas, jobz, Uplo::Lower, syev_ws, info);
+        (void)syev<B, Scalar>(ctx, A_copy, lambdas, jobz, Uplo::Lower, syev_ws, info);
 
         // syev is ascending, so every range is a contiguous block of `lambdas`.
         const auto rr = syevx_resolve_range(n, neigs, params);
@@ -143,8 +129,8 @@ Event syevx_direct(Queue& ctx,
         const size_t wg = std::min<size_t>(256, static_cast<size_t>(std::max<int64_t>(n, 1)));
         const auto* lam_ptr = lambdas.data();
         auto* w_ptr = W.data();
-        const T* src_ptr = A_copy.data_ptr();
-        T* dst_ptr = want_eigenvectors ? V.data_ptr() : nullptr;
+        const Scalar* src_ptr = A_copy.data_ptr();
+        Scalar* dst_ptr = want_eigenvectors ? V.data_ptr() : nullptr;
         const int64_t dst_ld = want_eigenvectors ? V.ld() : 0;
         const int64_t dst_stride = want_eigenvectors ? V.stride() : 0;
         // V may be narrower than a capacity above n; the zeroing pass must not overrun.
@@ -159,68 +145,24 @@ Event syevx_direct(Queue& ctx,
             // first index of the block, and its true (untruncated) size.
             auto block = sycl::local_accessor<int64_t, 1>(sycl::range<1>(2), h);
 
-            batchlas::impl::parallel_for<SyevxDirectSelectKernel<B, T, MFormat>>(h,
-                sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch_size) * wg}, sycl::range{wg}),
-                [=](sycl::nd_item<1> item) {
-                    const int64_t tid = static_cast<int64_t>(item.get_local_linear_id());
-                    const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
-                    const int64_t local_size = static_cast<int64_t>(item.get_local_range(0));
-                    auto cta = item.get_group();
+            batchlas::impl::parallel_for<SyevxDirectSelectKernel<B, Scalar, MFormat>>(h,
+                sycl::nd_range<1>(sycl::range<1>{static_cast<size_t>(batch_size) * wg}, sycl::range<1>{wg}),
+                [=](sycl::nd_item<1> it) {
+                    const device::RtGroup<> ex{it};
+                    const int64_t bid = static_cast<int64_t>(it.get_group_linear_id());
                     if (masked && !mk[bid]) return;  // I1: uniform per work-group, before the barrier
+                    const int nn = static_cast<int>(n);
+                    // Truncation keeps the LOWEST `capacity`; `reverse` flips only what was kept;
+                    // V's columns [write, dst_cols) are exactly zero, as on the DirectSubset path.
+                    const int count = device::detail::syevx_select(
+                        ex, device::vec(lam_ptr + bid * n, nn), value_range, vl, vu, range_il, range_count, capacity,
+                        reverse, block, device::vec(w_ptr + bid * capacity, static_cast<int>(capacity)), dst_ptr != nullptr,
+                        device::mat(src_ptr + bid * n * n, nn, nn, nn),
+                        device::mat(dst_ptr + bid * dst_stride, nn, static_cast<int>(dst_cols), static_cast<int>(dst_ld)));
 
-                    const auto* lam = lam_ptr + bid * n;
-
-                    int64_t first;
-                    int64_t count;
-                    if (value_range) {
-                        if (tid == 0) {
-                            const int64_t c_lo = count_le<float_type>(lam, n, vl);
-                            const int64_t c_hi = count_le<float_type>(lam, n, vu);
-                            block[0] = c_lo;
-                            // Clamped anyway: m[b] is a loop bound downstream.
-                            block[1] = (c_hi > c_lo) ? (c_hi - c_lo) : int64_t(0);
-                        }
-                        sycl::group_barrier(cta);
-                        first = block[0];
-                        count = block[1];
-                    } else {
-                        first = range_il;
-                        count = range_count;
-                    }
-
-                    // Truncation keeps the LOWEST `capacity`; `reverse` flips only what was kept.
-                    const int64_t write = (count < capacity) ? count : capacity;
-                    const int64_t hi_src = first + write - 1;
-
-                    auto* w = w_ptr + bid * capacity;
-                    for (int64_t i = tid; i < write; i += local_size) {
-                        const int64_t src = reverse ? (hi_src - i) : (first + i);
-                        w[i] = lam[src];
-                    }
-
-                    if (dst_ptr != nullptr) {
-                        const auto* vsrc = src_ptr + bid * n * n;
-                        auto* vdst = dst_ptr + bid * dst_stride;
-                        for (int64_t linear = tid; linear < n * write; linear += local_size) {
-                            const int64_t row = linear % n;
-                            const int64_t col = linear / n;
-                            const int64_t src_col = reverse ? (hi_src - col) : (first + col);
-                            vdst[row + col * dst_ld] = vsrc[row + src_col * n];
-                        }
-                        // Columns [write, dst_cols) are EXACTLY zero, as on the
-                        // DirectSubset path; unused W slots are deliberately untouched.
-                        // evidence: docs/design/syevx.md#syevx-range-the-m-output-and-what-neigs-means
-                        for (int64_t linear = tid; linear < n * (dst_cols - write);
-                             linear += local_size) {
-                            const int64_t row = linear % n;
-                            const int64_t col = write + linear / n;
-                            vdst[row + col * dst_ld] = T(0);
-                        }
-                    }
-
-                    if (m_ptr != nullptr && tid == 0) {
+                    if (m_ptr != nullptr && ex.leader()) {
                         // The TRUE count: m[b] > capacity is the truncation signal.
-                        m_ptr[bid] = static_cast<int32_t>(count);
+                        m_ptr[bid] = count;
                     }
                 });
         });
@@ -229,15 +171,15 @@ Event syevx_direct(Queue& ctx,
     }
 }
 
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 size_t syevx_direct_buffer_size(Queue& ctx,
-                                const MatrixView<T, MFormat>& A,
-                                Span<typename base_type<T>::type> W,
+                                const MatrixView<Scalar, MFormat>& A,
+                                Span<typename base_type<Scalar>::type> W,
                                 size_t neigs,
                                 JobType jobz,
-                                const MatrixView<T, MatrixFormat::Dense>& V,
-                                const SyevxParams<T>& params) {
-    using float_type = typename base_type<T>::type;
+                                const MatrixView<Scalar, MatrixFormat::Dense>& V,
+                                const SyevxParams<Scalar>& params) {
+    using float_type = typename base_type<Scalar>::type;
 
     if constexpr (MFormat != MatrixFormat::Dense) {
         (void)ctx; (void)A; (void)W; (void)neigs; (void)jobz; (void)V; (void)params;
@@ -249,13 +191,13 @@ size_t syevx_direct_buffer_size(Queue& ctx,
         const int64_t batch_size = A.batch_size();
 
         size_t work_size = 0;
-        work_size += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(n * n * batch_size));
-        work_size += BumpAllocator::allocation_size<T*>(ctx, static_cast<size_t>(batch_size));
+        work_size += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(n * n * batch_size));
+        work_size += BumpAllocator::allocation_size<Scalar*>(ctx, static_cast<size_t>(batch_size));
         work_size += BumpAllocator::allocation_size<float_type>(ctx, static_cast<size_t>(n * batch_size));
 
         // The masked view picks the masked syev family; only the mask's presence matters.
         const auto mask = ::batchlas::detail::call_mask("syevx_direct_buffer_size", A, V);
-        auto A_copy = packed_copy_view<T>(nullptr, n, batch_size, nullptr).with_batch_mask(mask);
+        auto A_copy = packed_copy_view<Scalar>(nullptr, n, batch_size, nullptr).with_batch_mask(mask);
         work_size += BumpAllocator::allocation_size<std::byte>(
             ctx, syev_buffer_size<B>(ctx, A_copy, Span<float_type>(), jobz, Uplo::Lower));
 
@@ -265,36 +207,36 @@ size_t syevx_direct_buffer_size(Queue& ctx,
 
 #define SYEVX_DIRECT_INSTANTIATE(back, fp, fmt) \
     template Event syevx_direct<back, BATCHLAS_UNPAREN fp, fmt>(\
-        Queue&,\
-        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\
-        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>,\
-        Span<int32_t>,\
-        size_t,\
-        Span<std::byte>,\
-        JobType,\
-        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
-        const SyevxParams<BATCHLAS_UNPAREN fp>&,\
+        Queue&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&, \
+        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>, \
+        Span<int32_t>, \
+        size_t, \
+        Span<std::byte>, \
+        JobType, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const SyevxParams<BATCHLAS_UNPAREN fp>&, \
         Span<int32_t>);\
     /* The m-less forwarder is inline and would not need an instantiation to be \
        CALLED, but instantiating it keeps the symbol this library exported before \
        `m` was added, so an object file built against the old header still links. */\
     template Event syevx_direct<back, BATCHLAS_UNPAREN fp, fmt>(\
-        Queue&,\
-        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\
-        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>,\
-        size_t,\
-        Span<std::byte>,\
-        JobType,\
-        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
-        const SyevxParams<BATCHLAS_UNPAREN fp>&,\
+        Queue&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&, \
+        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>, \
+        size_t, \
+        Span<std::byte>, \
+        JobType, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const SyevxParams<BATCHLAS_UNPAREN fp>&, \
         Span<int32_t>);\
     template size_t syevx_direct_buffer_size<back, BATCHLAS_UNPAREN fp, fmt>(\
-        Queue&,\
-        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\
-        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>,\
-        size_t,\
-        JobType,\
-        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
+        Queue&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&, \
+        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>, \
+        size_t, \
+        JobType, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
         const SyevxParams<BATCHLAS_UNPAREN fp>&);
 
 #define SYEVX_DIRECT_INSTANTIATE_FOR_BACKEND_TYPE(back, fp) \
@@ -305,4 +247,4 @@ size_t syevx_direct_buffer_size(Queue& ctx,
 #undef SYEVX_DIRECT_INSTANTIATE_FOR_BACKEND_TYPE
 #undef SYEVX_DIRECT_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

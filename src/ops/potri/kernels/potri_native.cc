@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // potri's triangle finish (potri_native.hh): element-wise, grid-strided.
 
 #include <src/ops/potri/potri_native.hh>
@@ -5,6 +6,7 @@
 
 #include <src/sycl/device_scalar.hh>
 #include <src/queue.hh>
+#include <src/sycl/impl.hh>
 #include <batchlas/util/kernel-heuristics.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/util/batch_mask.hh>
@@ -15,18 +17,19 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace batchlas::sycl_potri {
+namespace batchlas::ops::potri {
 
 namespace {
 
-template <typename T> class PotriFinishKernel;
+template <typename Scalar> class PotriFinishKernel;
 
 }  // namespace
 
-template <typename T>
-Event potri_finish(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, bool full, const int32_t* skip) {
-    using D = typename sycl_device::DevMap<T>::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+template <typename Scalar>
+Event potri_finish(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, Uplo uplo, bool full,
+                   const int32_t* skip) {
+    using D = typename sycl_device::DevMap<Scalar>::type;
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
     D* const ap = reinterpret_cast<D*>(A.data_ptr());
     const int n = static_cast<int>(A.rows());
     const std::ptrdiff_t lda = A.ld(), sa = A.stride();
@@ -38,7 +41,7 @@ Event potri_finish(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo
     const std::uint8_t* const mask = detail::mask_ptr(detail::call_mask("potri", A));
 
     ctx->submit([&](sycl::handler& h) {
-        h.parallel_for<PotriFinishKernel<T>>(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
+        batchlas::impl::parallel_for<PotriFinishKernel<Scalar>>(h, sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
             for (std::size_t f = it.get_global_id(0); f < total; f += it.get_global_range(0)) {
                 const std::ptrdiff_t b = static_cast<std::ptrdiff_t>(f / elems);
                 if ((skip && skip[b] != 0) || (mask && mask[b] == 0)) continue;
@@ -69,4 +72,4 @@ BATCHLAS_POTRI_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_POTRI_INSTANTIATE
 
-}  // namespace batchlas::sycl_potri
+}  // namespace batchlas::ops::potri

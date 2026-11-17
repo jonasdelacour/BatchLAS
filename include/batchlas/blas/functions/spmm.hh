@@ -13,27 +13,26 @@ namespace batchlas {
 // Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
 // src/util/template-instantiations.hh. Keep in sync with the declarations below.
 namespace sig {
-template <typename T, MatrixFormat F>
+template <typename Scalar, MatrixFormat F>
 using spmm = Event(Queue&,
-                   const MatrixView<T, F>&,
-                   const MatrixView<T, MatrixFormat::Dense>&,
-                   const MatrixView<T, MatrixFormat::Dense>&,
-                   T, T, Transpose, Transpose, Span<std::byte>);
+                   const MatrixView<Scalar, F>&,
+                   const MatrixView<Scalar, MatrixFormat::Dense>&,
+                   const MatrixView<Scalar, MatrixFormat::Dense>&,
+                   Scalar, Scalar, Transpose, Transpose, Span<std::byte>);
 
-template <typename T, MatrixFormat F>
+template <typename Scalar, MatrixFormat F>
 using spmm_buffer_size = size_t(Queue&,
-                                const MatrixView<T, F>&,
-                                const MatrixView<T, MatrixFormat::Dense>&,
-                                const MatrixView<T, MatrixFormat::Dense>&,
-                                T, T, Transpose, Transpose);
+                                const MatrixView<Scalar, F>&,
+                                const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                Scalar, Scalar, Transpose, Transpose);
 
 // backend::spmm_vendor / _vendor_buffer_size share the public signatures.
-template <typename T, MatrixFormat F>
-using spmm_vendor = spmm<T, F>;
-template <typename T, MatrixFormat F>
-using spmm_vendor_buffer_size = spmm_buffer_size<T, F>;
+template <typename Scalar, MatrixFormat F>
+using spmm_vendor = spmm<Scalar, F>;
+template <typename Scalar, MatrixFormat F>
+using spmm_vendor_buffer_size = spmm_buffer_size<Scalar, F>;
 }  // namespace sig
-
 
 /// @brief Batched sparse-times-dense matrix multiply.
 ///
@@ -48,10 +47,10 @@ using spmm_vendor_buffer_size = spmm_buffer_size<T, F>;
 /// arguments. Lease it from the queue's arena with `ctx.workspace(bytes)`. Also
 /// callable with owning `Matrix` arguments and without `B` (taken from
 /// `ctx.backend()`); spell a partial explicit call `spmm<Backend::CUDA>(...)`
-/// and let `T` and `MFormat` deduce.
+/// and let `Scalar` and `MFormat` deduce.
 ///
 /// @tparam B        backend the call is compiled for; must match `ctx`'s device
-/// @tparam T        scalar type: `float`, `double`, `std::complex<float>` or `std::complex<double>`
+/// @tparam Scalar        scalar type: `float`, `double`, `std::complex<float>` or `std::complex<double>`
 /// @tparam MFormat  storage format of `A`; only `MatrixFormat::CSR` is instantiated
 /// @param[in]     ctx        queue the work is enqueued on
 /// @param[in]     A          batch of sparse (CSR) matrices with \f$\mathrm{op}(A)\f$ of size \f$m \times k\f$;
@@ -73,17 +72,17 @@ using spmm_vendor_buffer_size = spmm_buffer_size<T, F>;
 ///         (a heterogeneous batch, or negative extents).
 /// @note No argument validation is done up front: a shape the native kernel
 ///       refuses goes to the vendor library, which reports it.
-/// @note On `Backend::ROCM` a real `T` with `ConjTrans` is suspected to give wrong
+/// @note On `Backend::ROCM` a real `Scalar` with `ConjTrans` is suspected to give wrong
 ///       results (known defect 4, @ref md_docs_2design_2known-defects); use `Trans`.
 /// @see spmm_buffer_size, @ref md_docs_2perf_2spmm
 /// @ingroup api_sparse
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 BATCHLAS_API Event spmm(Queue& ctx,
-                 const MatrixView<T, MFormat>& A,
-                 const MatrixView<T, MatrixFormat::Dense>& descrB,
-                 const MatrixView<T, MatrixFormat::Dense>& descrC,
-                 T alpha,
-                 T beta,
+                 const MatrixView<Scalar, MFormat>& A,
+                 const MatrixView<Scalar, MatrixFormat::Dense>& descrB,
+                 const MatrixView<Scalar, MatrixFormat::Dense>& descrC,
+                 Scalar alpha,
+                 Scalar beta,
                  Transpose transA,
                  Transpose transB,
                  Span<std::byte> workspace);
@@ -94,7 +93,7 @@ BATCHLAS_API Event spmm(Queue& ctx,
 /// routed call needs zero bytes and is sized without touching device memory.
 /// Pass exactly the arguments the spmm call will get.
 /// @tparam B        backend the call is compiled for
-/// @tparam T        scalar type
+/// @tparam Scalar        scalar type
 /// @tparam MFormat  storage format of `A`; only `MatrixFormat::CSR` is instantiated
 /// @param[in] ctx     queue the call will run on
 /// @param[in] A       the sparse operand of the spmm call
@@ -107,18 +106,17 @@ BATCHLAS_API Event spmm(Queue& ctx,
 /// @return required workspace size in bytes (may be 0)
 /// @throws batchlas::NoRouteError under the same conditions as spmm
 /// @ingroup api_sparse_lowlevel
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 BATCHLAS_API size_t spmm_buffer_size(Queue& ctx,
-                                     const MatrixView<T, MFormat>& A,
-                                     const MatrixView<T, MatrixFormat::Dense>& B_mat,
-                                     const MatrixView<T, MatrixFormat::Dense>& C,
-                                     T alpha,
-                                     T beta,
+                                     const MatrixView<Scalar, MFormat>& A,
+                                     const MatrixView<Scalar, MatrixFormat::Dense>& B_mat,
+                                     const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                                     Scalar alpha,
+                                     Scalar beta,
                                      Transpose transA,
                                      Transpose transB);
 
 }  // namespace batchlas
-
 
 namespace batchlas::backend {
 
@@ -141,13 +139,13 @@ namespace batchlas::backend {
 ///                           on return
 /// @return event of the last enqueued kernel
 /// @ingroup api_dispatch
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 BATCHLAS_API Event spmm_vendor(Queue& ctx,
-                               const MatrixView<T, MFormat>& A,
-                               const MatrixView<T, MatrixFormat::Dense>& B_mat,
-                               const MatrixView<T, MatrixFormat::Dense>& C,
-                               T alpha,
-                               T beta,
+                               const MatrixView<Scalar, MFormat>& A,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& B_mat,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                               Scalar alpha,
+                               Scalar beta,
                                Transpose transA,
                                Transpose transB,
                                Span<std::byte> workspace);
@@ -163,13 +161,13 @@ BATCHLAS_API Event spmm_vendor(Queue& ctx,
 /// @param[in] transB  the call's `transB`
 /// @return required workspace size in bytes
 /// @ingroup api_dispatch
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 BATCHLAS_API size_t spmm_vendor_buffer_size(Queue& ctx,
-                                            const MatrixView<T, MFormat>& A,
-                                            const MatrixView<T, MatrixFormat::Dense>& B_mat,
-                                            const MatrixView<T, MatrixFormat::Dense>& C,
-                                            T alpha,
-                                            T beta,
+                                            const MatrixView<Scalar, MFormat>& A,
+                                            const MatrixView<Scalar, MatrixFormat::Dense>& B_mat,
+                                            const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                                            Scalar alpha,
+                                            Scalar beta,
                                             Transpose transA,
                                             Transpose transB);
 
@@ -179,7 +177,6 @@ namespace batchlas {
 
 // Owning-argument (`f(ctx, Matrix, ...)`) and backend-deducing (`f(ctx, ...)`)
 // overloads; see blas/queue-dispatch.hh.
-
 
 BATCHLAS_DISPATCH_ON_QUEUE(spmm)
 BATCHLAS_DISPATCH_ON_QUEUE(spmm_buffer_size)

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 """Execute every example notebook and summarise the result.
 

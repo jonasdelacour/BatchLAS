@@ -40,17 +40,18 @@
 #include <src/util/batch_mask.hh>
 #include <src/ops/syevx/syevx.hh>
 #include <batchlas/settings.hh>
+#include <batchlas/device.hh>
 
 namespace batchlas {
 
-template <Backend B, typename T, MatrixFormat MFormat> struct SyevxFilterBoundsPartialKernel;
-template <Backend B, typename T, MatrixFormat MFormat> struct SyevxFilterBoundsReduceKernel;
-template <Backend B, typename T, MatrixFormat MFormat> struct SyevxFilterInitKernel;
-template <Backend B, typename T, MatrixFormat MFormat> struct SyevxFilterStepKernel;
-template <Backend B, typename T, MatrixFormat MFormat> struct SyevxFilterSigmaKernel;
-template <Backend B, typename T, MatrixFormat MFormat> struct SyevxFilterIntervalKernel;
-template <Backend B, typename T, MatrixFormat MFormat> struct SyevxFilterResidualKernel;
-template <Backend B, typename T, MatrixFormat MFormat> struct SyevxFilterFinalizeKernel;
+template <Backend B, typename Scalar, MatrixFormat MFormat> struct SyevxFilterBoundsPartialKernel;
+template <Backend B, typename Scalar, MatrixFormat MFormat> struct SyevxFilterBoundsReduceKernel;
+template <Backend B, typename Scalar, MatrixFormat MFormat> struct SyevxFilterInitKernel;
+template <Backend B, typename Scalar, MatrixFormat MFormat> struct SyevxFilterStepKernel;
+template <Backend B, typename Scalar, MatrixFormat MFormat> struct SyevxFilterSigmaKernel;
+template <Backend B, typename Scalar, MatrixFormat MFormat> struct SyevxFilterIntervalKernel;
+template <Backend B, typename Scalar, MatrixFormat MFormat> struct SyevxFilterResidualKernel;
+template <Backend B, typename Scalar, MatrixFormat MFormat> struct SyevxFilterFinalizeKernel;
 
 namespace {
 
@@ -73,24 +74,24 @@ inline uint32_t splitmix(uint32_t x) {
     return x ^ (x >> 16);
 }
 
-} // namespace
+}  // namespace
 
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 Event syevx_filtered(Queue& ctx,
-                     const MatrixView<T, MFormat>& A,
-                     Span<typename base_type<T>::type> W,
+                     const MatrixView<Scalar, MFormat>& A,
+                     Span<typename base_type<Scalar>::type> W,
                      size_t neigs,
                      Span<std::byte> workspace,
                      JobType jobz,
-                     const MatrixView<T, MatrixFormat::Dense>& V,
-                     const SyevxParams<T>& params,
+                     const MatrixView<Scalar, MatrixFormat::Dense>& V,
+                     const SyevxParams<Scalar>& params,
                      Span<int32_t> info) {
     const Span<const std::uint8_t> mask = ::batchlas::detail::call_mask("syevx_filtered", A, V);
     const std::uint8_t* mk = ::batchlas::detail::mask_ptr(mask);
     // Tested through a captured bool: a null pointer captured by a kernel has read non-null on
     // AdaptiveCpp Metal (syevx_filtered's coefficient kernel skipped items of an unmasked call).
     const bool masked = mk != nullptr;
-    using Real = typename base_type<T>::type;
+    using Real = typename base_type<Scalar>::type;
 
     const int64_t n = A.rows();
     const int64_t batch = A.batch_size();
@@ -108,7 +109,7 @@ Event syevx_filtered(Queue& ctx,
             "syevx_direct_subset for an index or value range");
     }
     // Before any write: the parts whose children refuse a masked view.
-    ::batchlas::detail::syevx_iterative_refuse_mask<B, T>(ctx, "syevx_filtered", mask, params, /*lobpcg=*/false);
+    ::batchlas::detail::syevx_iterative_refuse_mask<B, Scalar>(ctx, "syevx_filtered", mask, params, /*lobpcg=*/false);
 
     // Guard directions keep the filter's cut off the edge of the wanted block.
     int64_t m = k + static_cast<int64_t>(params.extra_directions);
@@ -134,19 +135,19 @@ Event syevx_filtered(Queue& ctx,
     BumpAllocator pool(workspace);
 
     const size_t block_elems = static_cast<size_t>(n) * m * batch;
-    auto x_span     = pool.allocate<T>(ctx, block_elems);
-    auto ax_span    = pool.allocate<T>(ctx, block_elems);
-    auto y_span     = pool.allocate<T>(ctx, block_elems);
-    auto yprev_span = pool.allocate<T>(ctx, block_elems);
-    auto tmp_span   = pool.allocate<T>(ctx, block_elems);
+    auto x_span     = pool.allocate<Scalar>(ctx, block_elems);
+    auto ax_span    = pool.allocate<Scalar>(ctx, block_elems);
+    auto y_span     = pool.allocate<Scalar>(ctx, block_elems);
+    auto yprev_span = pool.allocate<Scalar>(ctx, block_elems);
+    auto tmp_span   = pool.allocate<Scalar>(ctx, block_elems);
 
     // Batched BLAS needs a per-item pointer array alongside each view. Every workspace view
     // carries the call's mask, so each child skips the same items.
-    auto block_view = [&](Span<T> s) {
-        auto ptrs = pool.allocate<T*>(ctx, static_cast<size_t>(batch));
-        return MatrixView<T, MatrixFormat::Dense>(s.data(), n, m, n,
-                                                  static_cast<int64_t>(n) * m, batch,
-                                                  ptrs.data())
+    auto block_view = [&](Span<Scalar> s) {
+        auto ptrs = pool.allocate<Scalar*>(ctx, static_cast<size_t>(batch));
+        return MatrixView<Scalar, MatrixFormat::Dense>(s.data(), n, m, n,
+                                                       static_cast<int64_t>(n) * m, batch,
+                                                       ptrs.data())
             .with_batch_mask(mask);
     };
     auto X = block_view(x_span);
@@ -155,11 +156,11 @@ Event syevx_filtered(Queue& ctx,
     auto Yprev = block_view(yprev_span);
     auto Tmp = block_view(tmp_span);
 
-    auto h_span = pool.allocate<T>(ctx, static_cast<size_t>(m) * m * batch);
-    auto h_ptrs = pool.allocate<T*>(ctx, static_cast<size_t>(batch));
-    const auto H = MatrixView<T, MatrixFormat::Dense>(h_span.data(), m, m, m,
-                                                      static_cast<int64_t>(m) * m, batch,
-                                                      h_ptrs.data())
+    auto h_span = pool.allocate<Scalar>(ctx, static_cast<size_t>(m) * m * batch);
+    auto h_ptrs = pool.allocate<Scalar*>(ctx, static_cast<size_t>(batch));
+    const auto H = MatrixView<Scalar, MatrixFormat::Dense>(h_span.data(), m, m, m,
+                                                           static_cast<int64_t>(m) * m, batch,
+                                                           h_ptrs.data())
                        .with_batch_mask(mask);
     auto theta_span = pool.allocate<Real>(ctx, static_cast<size_t>(m) * batch);
 
@@ -177,7 +178,7 @@ Event syevx_filtered(Queue& ctx,
     Span<std::byte> spmm_ws;
     if constexpr (MFormat == MatrixFormat::CSR) {
         spmm_ws = pool.allocate<std::byte>(ctx,
-            spmm_buffer_size<B>(ctx, A, X, AX, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans));
+            spmm_buffer_size<B>(ctx, A, X, AX, Scalar(1), Scalar(0), Transpose::NoTrans, Transpose::NoTrans));
     }
     auto ortho_ws = pool.allocate<std::byte>(ctx,
         ortho_buffer_size<B>(ctx, X, Transpose::NoTrans, params.algorithm));
@@ -193,16 +194,16 @@ Event syevx_filtered(Queue& ctx,
     // Per-batch degree the current residuals actually ask for (auto mode).
     UnifiedVector<int32_t> degree_need(static_cast<size_t>(batch));
 
-    const Transpose conj_t = is_std_complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
+    const Transpose conj_t = is_std_complex_v<Scalar> ? Transpose::ConjTrans : Transpose::Trans;
 
-    auto matvec = [&](const MatrixView<T, MatrixFormat::Dense>& in,
-                      const MatrixView<T, MatrixFormat::Dense>& out) {
+    auto matvec = [&](const MatrixView<Scalar, MatrixFormat::Dense>& in,
+                      const MatrixView<Scalar, MatrixFormat::Dense>& out) {
         if constexpr (MFormat == MatrixFormat::Dense) {
             // (void) on an Event: deliberate. This Queue is in-order, so the next submission
             // is already ordered after this one and the Event carries nothing the caller needs.
-            (void)gemm<B>(ctx, A, in, out, GemmOptions<T>{});
+            (void)gemm<B>(ctx, A, in, out, GemmOptions<Scalar>{});
         } else {
-            (void)spmm<B>(ctx, A, in, out, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans, spmm_ws);
+            (void)spmm<B>(ctx, A, in, out, Scalar(1), Scalar(0), Transpose::NoTrans, Transpose::NoTrans, spmm_ws);
         }
     };
 
@@ -210,17 +211,17 @@ Event syevx_filtered(Queue& ctx,
     // sharpness, never correctness). Invariant: the inner j loop stays serial and
     // ascending, so the bounds are bit-identical to a serial row-by-row scan.
     // evidence: docs/perf/syevx.md#syevx-the-parallel-gershgorin-bounds-kernel
-    auto row_bound = [](const auto& Akv, int64_t i, int b, int64_t nn) {
+    auto row_bound = [](const auto& Akv, int64_t i, int b, int64_t nn) BATCHLAS_DEVICE_BODY {
         Real diag = Real(0);
         Real radius = Real(0);
         if constexpr (MFormat == MatrixFormat::Dense) {
             for (int64_t j = 0; j < nn; ++j) {
-                const T v = Akv(static_cast<int>(i), static_cast<int>(j), b);
+                const Scalar v = Akv(static_cast<int>(i), static_cast<int>(j), b);
                 if (i == j) {
-                    if constexpr (is_std_complex_v<T>) diag = v.real();
+                    if constexpr (is_std_complex_v<Scalar>) diag = v.real();
                     else diag = v;
                 } else {
-                    if constexpr (is_std_complex_v<T>)
+                    if constexpr (is_std_complex_v<Scalar>)
                         radius += sycl::hypot(v.real(), v.imag());
                     else radius += sycl::fabs(v);
                 }
@@ -232,12 +233,12 @@ Event syevx_filtered(Queue& ctx,
             const int re = Akv.row_offsets_[ro + i + 1];
             for (int p = rs; p < re; ++p) {
                 const int j = Akv.col_indices_[vb + p];
-                const T v = Akv.data_[vb + p];
+                const Scalar v = Akv.data_[vb + p];
                 if (j == static_cast<int>(i)) {
-                    if constexpr (is_std_complex_v<T>) diag = v.real();
+                    if constexpr (is_std_complex_v<Scalar>) diag = v.real();
                     else diag = v;
                 } else {
-                    if constexpr (is_std_complex_v<T>)
+                    if constexpr (is_std_complex_v<Scalar>)
                         radius += sycl::hypot(v.real(), v.imag());
                     else radius += sycl::fabs(v);
                 }
@@ -256,16 +257,16 @@ Event syevx_filtered(Queue& ctx,
         const int64_t nn = n;
         const size_t rg = row_groups;
         ctx->submit([&](sycl::handler& h) {
-            batchlas::impl::parallel_for<SyevxFilterBoundsPartialKernel<B, T, MFormat>>(h,
-                sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * rg * kBoundsWG},
-                                  sycl::range{kBoundsWG}),
-                [=](sycl::nd_item<1> item) {
-                    const size_t gid = item.get_group_linear_id();
+            batchlas::impl::parallel_for<SyevxFilterBoundsPartialKernel<B, Scalar, MFormat>>(h,
+                sycl::nd_range<1>(sycl::range<1>{static_cast<size_t>(batch) * rg * kBoundsWG},
+                                  sycl::range<1>{kBoundsWG}),
+                [=](sycl::nd_item<1> it) {
+                    const device::WorkGroup<static_cast<int>(kBoundsWG)> ex{it};
+                    const size_t gid = it.get_group_linear_id();
                     const int b = static_cast<int>(gid / rg);
                     if (masked && !mk[b]) return;  // I1: the group is one item's, before the reduction
                     const size_t g = gid % rg;
-                    const size_t lid = item.get_local_linear_id();
-                    const int64_t i = static_cast<int64_t>(g * kBoundsWG + lid);
+                    const int64_t i = static_cast<int64_t>(g * kBoundsWG + static_cast<size_t>(ex.lid()));
                     Real l = std::numeric_limits<Real>::max();
                     Real u = -std::numeric_limits<Real>::max();
                     if (i < nn) {
@@ -273,9 +274,9 @@ Event syevx_filtered(Queue& ctx,
                         l = rb[0];
                         u = rb[1];
                     }
-                    l = batchlas::portable::reduce_over_group(item.get_group(), l, sycl::minimum<Real>());
-                    u = batchlas::portable::reduce_over_group(item.get_group(), u, sycl::maximum<Real>());
-                    if (lid == 0) {
+                    l = device::allreduce(ex, l, sycl::minimum<Real>());
+                    u = device::allreduce(ex, u, sycl::maximum<Real>());
+                    if (ex.leader()) {
                         part[2 * gid + 0] = l;
                         part[2 * gid + 1] = u;
                     }
@@ -283,26 +284,27 @@ Event syevx_filtered(Queue& ctx,
         });
         auto lo = lo_span.data();
         auto hi = hi_span.data();
-        const size_t rwg = 128;
+        constexpr int rwg = 128;
         ctx->submit([&](sycl::handler& h) {
-            batchlas::impl::parallel_for<SyevxFilterBoundsReduceKernel<B, T, MFormat>>(h,
-                sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * rwg},
-                                  sycl::range{rwg}),
-                [=](sycl::nd_item<1> item) {
-                    const int b = static_cast<int>(item.get_group_linear_id());
+            batchlas::impl::parallel_for<SyevxFilterBoundsReduceKernel<B, Scalar, MFormat>>(h,
+                sycl::nd_range<1>(sycl::range<1>{static_cast<size_t>(batch) * rwg},
+                                  sycl::range<1>{static_cast<size_t>(rwg)}),
+                [=](sycl::nd_item<1> it) {
+                    const device::RtGroup<> ex{it};
+                    const int b = static_cast<int>(it.get_group_linear_id());
                     if (masked && !mk[b]) return;  // I1
-                    const size_t lid = item.get_local_linear_id();
-                    const size_t lsz = item.get_local_range(0);
+                    // Partials are interleaved (lo, hi) pairs, one per row group.
+                    const auto plo = device::vec(part + 2 * static_cast<size_t>(b) * rg, static_cast<int>(rg), 2);
+                    const auto phi = device::vec(part + 2 * static_cast<size_t>(b) * rg + 1, static_cast<int>(rg), 2);
                     Real l = std::numeric_limits<Real>::max();
                     Real u = -std::numeric_limits<Real>::max();
-                    for (size_t g = lid; g < rg; g += lsz) {
-                        const size_t idx = static_cast<size_t>(b) * rg + g;
-                        l = sycl::min(l, part[2 * idx + 0]);
-                        u = sycl::max(u, part[2 * idx + 1]);
-                    }
-                    l = batchlas::portable::reduce_over_group(item.get_group(), l, sycl::minimum<Real>());
-                    u = batchlas::portable::reduce_over_group(item.get_group(), u, sycl::maximum<Real>());
-                    if (lid == 0) {
+                    device::for_each_owned(ex, static_cast<int>(rg), [&](int g) {
+                        l = sycl::min(l, plo(g));
+                        u = sycl::max(u, phi(g));
+                    });
+                    l = device::allreduce(ex, l, sycl::minimum<Real>());
+                    u = device::allreduce(ex, u, sycl::maximum<Real>());
+                    if (ex.leader()) {
                         // Degenerate spectrum: widen so e > 0 below.
                         if (!(u > l)) { u = l + Real(1); }
                         lo[b] = l;
@@ -317,7 +319,7 @@ Event syevx_filtered(Queue& ctx,
         auto Xk = X.kernel_view();
         const int64_t nn = n, mm = m;
         ctx->submit([&](sycl::handler& h) {
-            h.parallel_for<SyevxFilterInitKernel<B, T, MFormat>>(
+            batchlas::impl::parallel_for<SyevxFilterInitKernel<B, Scalar, MFormat>>(h,
                 sycl::range<1>(static_cast<size_t>(batch * nn * mm)), [=](sycl::id<1> tid) {
                     const int64_t idx = static_cast<int64_t>(tid[0]);
                     const int b = static_cast<int>(idx / (nn * mm));
@@ -327,12 +329,12 @@ Event syevx_filtered(Queue& ctx,
                     const int c = static_cast<int>(rem / nn);
                     const uint32_t s = splitmix(static_cast<uint32_t>(idx) ^ 0x5bf03635u);
                     const Real v = Real(static_cast<int32_t>(s & 0xffffu) - 32768) / Real(32768);
-                    if constexpr (is_std_complex_v<T>) {
+                    if constexpr (is_std_complex_v<Scalar>) {
                         const uint32_t s2 = splitmix(s);
                         const Real v2 = Real(static_cast<int32_t>(s2 & 0xffffu) - 32768) / Real(32768);
-                        Xk(r, c, b) = T(v, v2);
+                        Xk(r, c, b) = Scalar(v, v2);
                     } else {
-                        Xk(r, c, b) = T(v);
+                        Xk(r, c, b) = Scalar(v);
                     }
                 });
         });
@@ -341,15 +343,15 @@ Event syevx_filtered(Queue& ctx,
     (void)ortho<B>(ctx, X, Transpose::NoTrans, ortho_ws, params.algorithm);
 
     // Rayleigh-Ritz on the current block: X <- X Z, AX <- AX Z, theta <- eigenvalues.
-    auto rayleigh_ritz = [&](const MatrixView<T, MatrixFormat::Dense>& blk,
-                             const MatrixView<T, MatrixFormat::Dense>& ablk) {
+    auto rayleigh_ritz = [&](const MatrixView<Scalar, MatrixFormat::Dense>& blk,
+                             const MatrixView<Scalar, MatrixFormat::Dense>& ablk) {
         matvec(blk, ablk);
         (void)gemm<B>(ctx, blk, ablk, H, {.transA = conj_t});
         (void)syev<B>(ctx, H, theta_span, SyevOptions{}, syev_ws);
-        (void)gemm<B>(ctx, blk, H, Tmp, GemmOptions<T>{});
-        (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, blk, Tmp);
-        (void)gemm<B>(ctx, ablk, H, Tmp, GemmOptions<T>{});
-        (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, ablk, Tmp);
+        (void)gemm<B>(ctx, blk, H, Tmp, GemmOptions<Scalar>{});
+        (void)MatrixView<Scalar, MatrixFormat::Dense>::copy(ctx, blk, Tmp);
+        (void)gemm<B>(ctx, ablk, H, Tmp, GemmOptions<Scalar>{});
+        (void)MatrixView<Scalar, MatrixFormat::Dense>::copy(ctx, ablk, Tmp);
     };
 
     rayleigh_ritz(X, AX);
@@ -370,43 +372,43 @@ Event syevx_filtered(Queue& ctx,
             const int64_t nn = n, mm = m, kk = k;
             const bool large = find_largest;
             const Real tolv = use_tol;
-            const size_t wg = 128;
+            constexpr int wg = 128;
             ctx->submit([&](sycl::handler& h) {
-                batchlas::impl::parallel_for<SyevxFilterResidualKernel<B, T, MFormat>>(h,
-                    sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * wg},
-                                      sycl::range{wg}),
-                    [=](sycl::nd_item<1> item) {
-                        const int b = static_cast<int>(item.get_group_linear_id());
-                        const int lid = static_cast<int>(item.get_local_linear_id());
-                        const int lsz = static_cast<int>(item.get_local_range(0));
+                batchlas::impl::parallel_for<SyevxFilterResidualKernel<B, Scalar, MFormat>>(h,
+                    sycl::nd_range<1>(sycl::range<1>{static_cast<size_t>(batch) * wg},
+                                      sycl::range<1>{static_cast<size_t>(wg)}),
+                    [=](sycl::nd_item<1> it) {
+                        const device::RtGroup<> ex{it};
+                        const int b = static_cast<int>(it.get_group_linear_id());
                         // I1, before the reduction. "Converged" is the neutral flag: the host
                         // loop then stops on the active items alone.
                         if (masked && !mk[b]) {
-                            if (lid == 0) flag[b] = 1;
+                            if (ex.leader()) flag[b] = 1;
                             return;
                         }
+                        // One item per wanted column j: ||A x - theta x||_2, serial over rows.
                         int local_ok = 1;
-                        for (int64_t j = lid; j < kk; j += lsz) {
-                            const int64_t col = large ? (mm - 1 - j) : j;
+                        device::for_each_owned(ex, static_cast<int>(kk), [&](int j) {
+                            const int col = large ? static_cast<int>(mm) - 1 - j : j;
                             const Real lam = th[b * mm + col];
+                            // The legacy expression (arith::Native: strict). alg::UnrollNone keeps the
+                            // row loop rolled; without it LLVM unrolls it (LDG 8 -> 82, +98%).
                             Real acc = Real(0);
-                            for (int64_t r = 0; r < nn; ++r) {
-                                const T d = AXk(static_cast<int>(r), static_cast<int>(col), b)
-                                          - T(lam) * Xk(static_cast<int>(r), static_cast<int>(col), b);
-                                if constexpr (is_std_complex_v<T>) {
+                            device::for_each_owned<device::alg::UnrollNone>(device::Thread{}, static_cast<int>(nn), [&](int i) {
+                                const Scalar d = AXk(i, col, b) - Scalar(lam) * Xk(i, col, b);
+                                if constexpr (is_std_complex_v<Scalar>) {
                                     acc += d.real() * d.real() + d.imag() * d.imag();
                                 } else {
                                     acc += d * d;
                                 }
-                            }
+                            });
                             const Real nrm = sycl::sqrt(acc);
                             rn[b * kk + j] = nrm;
                             const Real scale = sycl::fmax(sycl::fabs(lam), Real(1));
                             if (!(nrm <= tolv * scale)) local_ok = 0;
-                        }
-                        const int all_ok = batchlas::portable::reduce_over_group(
-                            item.get_group(), local_ok, sycl::minimum<int>());
-                        if (lid == 0) flag[b] = all_ok;
+                        });
+                        const int all_ok = device::allreduce(ex, local_ok, sycl::minimum<int>());
+                        if (ex.leader()) flag[b] = all_ok;
                     });
             });
         }
@@ -436,7 +438,7 @@ Event syevx_filtered(Queue& ctx,
             const int auto_min = kAutoDegreeMin;
             const int auto_max = kAutoDegreeMax;
             ctx->submit([&](sycl::handler& h) {
-                h.parallel_for<SyevxFilterIntervalKernel<B, T, MFormat>>(
+                batchlas::impl::parallel_for<SyevxFilterIntervalKernel<B, Scalar, MFormat>>(h,
                     sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
                         const int b = static_cast<int>(tid[0]);
                         // I3. The host folds these two over the batch (min, max): neutral values.
@@ -531,9 +533,9 @@ Event syevx_filtered(Queue& ctx,
         //
         //   Y_1     = (sigma1/e) (A - cI) X
         //   Y_{j+1} = (2 sigma'/e) (A - cI) Y_j - (sigma sigma') Y_{j-1}
-        auto apply_step = [&](const MatrixView<T, MatrixFormat::Dense>& src,
-                              const MatrixView<T, MatrixFormat::Dense>& prev,
-                              const MatrixView<T, MatrixFormat::Dense>& dst,
+        auto apply_step = [&](const MatrixView<Scalar, MatrixFormat::Dense>& src,
+                              const MatrixView<Scalar, MatrixFormat::Dense>& prev,
+                              const MatrixView<Scalar, MatrixFormat::Dense>& dst,
                               bool first) {
             matvec(src, Tmp);
             auto Sk = src.kernel_view();
@@ -546,7 +548,7 @@ Event syevx_filtered(Queue& ctx,
             const int64_t nn = n, mm = m;
             const bool is_first = first;
             ctx->submit([&](sycl::handler& h) {
-                h.parallel_for<SyevxFilterStepKernel<B, T, MFormat>>(
+                batchlas::impl::parallel_for<SyevxFilterStepKernel<B, Scalar, MFormat>>(h,
                     sycl::range<1>(static_cast<size_t>(batch * nn * mm)), [=](sycl::id<1> tid) {
                         const int64_t idx = static_cast<int64_t>(tid[0]);
                         const int b = static_cast<int>(idx / (nn * mm));
@@ -554,9 +556,13 @@ Event syevx_filtered(Queue& ctx,
                         const int64_t rem = idx - static_cast<int64_t>(b) * nn * mm;
                         const int r = static_cast<int>(rem % nn);
                         const int c = static_cast<int>(rem / nn);
-                        const T av = Tk(r, c, b) - T(cvals[b]) * Sk(r, c, b);
-                        T out = T(ca[b]) * av;
-                        if (!is_first) out = out - T(cb[b]) * Pk(r, c, b);
+                        using batchlas::device::sub_scale_real;
+                        using Ar = batchlas::device::Arith<Scalar>;
+                        // D := ca (A S - c S) - cb P, every scalar real (complex: algo mode,
+                        // no Annex-G multiply; real: the legacy expressions).
+                        const Scalar av = sub_scale_real(Tk(r, c, b), cvals[b], Sk(r, c, b));
+                        Scalar out = Ar::scale_real(ca[b], av);
+                        if (!is_first) out = sub_scale_real(out, cb[b], Pk(r, c, b));
                         Dk(r, c, b) = out;
                     });
             });
@@ -567,7 +573,7 @@ Event syevx_filtered(Queue& ctx,
             auto ca = ca_span.data(); auto cb = cb_span.data();
             auto s1 = sig1_span.data(); auto ee = ee_span.data();
             ctx->submit([&](sycl::handler& h) {
-                h.parallel_for(sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
+                batchlas::impl::parallel_for(h, sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
                     const int b = static_cast<int>(tid[0]);
                     if (masked && !mk[b]) return;  // I3
                     ca[b] = s1[b] / ee[b];
@@ -576,7 +582,7 @@ Event syevx_filtered(Queue& ctx,
             });
         }
         apply_step(X, X, Y, /*first=*/true);
-        (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, Yprev, X);
+        (void)MatrixView<Scalar, MatrixFormat::Dense>::copy(ctx, Yprev, X);
 
         // One degree for the whole batch keeps every GEMM shape batched: the
         // largest need, trimmed by the strictest precision cap.
@@ -603,8 +609,8 @@ Event syevx_filtered(Queue& ctx,
                     rmax = std::max(rmax, resid_span[static_cast<size_t>(b * k + j)]);
                 std::fprintf(stderr,
                     "[filt] iter=%zu b=%lld dcap=%d dneed=%d auto=%d rmax=%g tol=%g eff=%zu\n",
-                    iter, (long long)b, degree_cap[b], degree_need[b], (int)auto_degree,
-                    (double)rmax, (double)use_tol, eff_degree);
+                    iter, static_cast<long long>(b), degree_cap[b], degree_need[b], static_cast<int>(auto_degree),
+                    static_cast<double>(rmax), static_cast<double>(use_tol), eff_degree);
             }
         }
 
@@ -614,7 +620,7 @@ Event syevx_filtered(Queue& ctx,
                 auto sn = signew_span.data(); auto ee = ee_span.data();
                 auto ca = ca_span.data(); auto cb = cb_span.data();
                 ctx->submit([&](sycl::handler& h) {
-                    h.parallel_for<SyevxFilterSigmaKernel<B, T, MFormat>>(
+                    batchlas::impl::parallel_for<SyevxFilterSigmaKernel<B, Scalar, MFormat>>(h,
                         sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
                             const int b = static_cast<int>(tid[0]);
                             if (masked && !mk[b]) return;  // I3
@@ -633,7 +639,7 @@ Event syevx_filtered(Queue& ctx,
         }
 
         (void)ortho<B>(ctx, Y, Transpose::NoTrans, ortho_ws, params.algorithm);
-        (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, X, Y);
+        (void)MatrixView<Scalar, MatrixFormat::Dense>::copy(ctx, X, Y);
         rayleigh_ritz(X, AX);
     }
 
@@ -642,32 +648,30 @@ Event syevx_filtered(Queue& ctx,
         auto th = theta_span.data();
         auto Xk = X.kernel_view();
         auto* w_out = W.data();
-        T* v_ptr = want_vectors ? V.data_ptr() : nullptr;
+        Scalar* v_ptr = want_vectors ? V.data_ptr() : nullptr;
         const int64_t v_ld = want_vectors ? V.ld() : 0;
         const int64_t v_stride = want_vectors ? V.stride() : 0;
         const int64_t nn = n, mm = m, kk = k;
         const bool large = find_largest;
-        const size_t wg = 128;
+        constexpr int wg = 128;
         ctx->submit([&](sycl::handler& h) {
-            batchlas::impl::parallel_for<SyevxFilterFinalizeKernel<B, T, MFormat>>(h,
-                sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * wg}, sycl::range{wg}),
-                [=](sycl::nd_item<1> item) {
-                    const int b = static_cast<int>(item.get_group_linear_id());
+            batchlas::impl::parallel_for<SyevxFilterFinalizeKernel<B, Scalar, MFormat>>(h,
+                sycl::nd_range<1>(sycl::range<1>{static_cast<size_t>(batch) * wg},
+                                  sycl::range<1>{static_cast<size_t>(wg)}),
+                [=](sycl::nd_item<1> it) {
+                    const device::RtGroup<> ex{it};
+                    const int b = static_cast<int>(it.get_group_linear_id());
                     if (masked && !mk[b]) return;  // I1
-                    const int lid = static_cast<int>(item.get_local_linear_id());
-                    const int lsz = static_cast<int>(item.get_local_range(0));
-                    for (int64_t j = lid; j < kk; j += lsz) {
-                        const int64_t col = large ? (mm - 1 - j) : j;
-                        w_out[b * kk + j] = th[b * mm + col];
-                    }
+                    const int n_ = static_cast<int>(nn), m_ = static_cast<int>(mm), k_ = static_cast<int>(kk);
+                    // theta is ascending: the wanted block is its head, or its tail reversed.
+                    const auto th_b = device::vec(th + b * mm, m_);
+                    device::copy(ex, device::flip(large ? th_b.tail(m_ - k_) : th_b.head(k_), large),
+                             device::vec(w_out + b * kk, k_));
                     if (v_ptr != nullptr) {
-                        for (int64_t linear = lid; linear < nn * kk; linear += lsz) {
-                            const int64_t r = linear % nn;
-                            const int64_t j = linear / nn;
-                            const int64_t col = large ? (mm - 1 - j) : j;
-                            v_ptr[b * v_stride + j * v_ld + r] =
-                                Xk(static_cast<int>(r), static_cast<int>(col), b);
-                        }
+                        const auto Xb = device::mat(Xk.data() + static_cast<int64_t>(b) * Xk.stride(), n_, m_, Xk.ld());
+                        device::lacpy<device::Part::Full, Transpose::NoTrans, device::alg::Flat>(
+                            ex, device::flip<device::Axis::Cols>(Xb.sub(0, large ? m_ - k_ : 0, n_, k_), large),
+                            device::mat(v_ptr + b * v_stride, n_, k_, static_cast<int>(v_ld)));
                     }
                 });
         });
@@ -686,17 +690,17 @@ Event syevx_filtered(Queue& ctx,
     return ctx.get_event();
 }
 
-template <Backend B, typename T, MatrixFormat MFormat>
+template <Backend B, typename Scalar, MatrixFormat MFormat>
 size_t syevx_filtered_buffer_size(Queue& ctx,
-                                  const MatrixView<T, MFormat>& A,
-                                  Span<typename base_type<T>::type> W,
+                                  const MatrixView<Scalar, MFormat>& A,
+                                  Span<typename base_type<Scalar>::type> W,
                                   size_t neigs,
                                   JobType jobz,
-                                  const MatrixView<T, MatrixFormat::Dense>& V,
-                                  const SyevxParams<T>& params) {
+                                  const MatrixView<Scalar, MatrixFormat::Dense>& V,
+                                  const SyevxParams<Scalar>& params) {
     // Workspace lockstep: bounds_partial, converged and degree_cap are UnifiedVectors
     // outside the pool, so they have no term here; the degree allocates nothing.
-    using Real = typename base_type<T>::type;
+    using Real = typename base_type<Scalar>::type;
     (void)W; (void)jobz;
 
     // Must reject exactly what the solver rejects.
@@ -708,8 +712,8 @@ size_t syevx_filtered_buffer_size(Queue& ctx,
 
     // Sized for the masked families: only the mask's presence matters, never its contents.
     const auto mask = ::batchlas::detail::call_mask("syevx_filtered_buffer_size", A, V);
-    ::batchlas::detail::syevx_iterative_refuse_mask<B, T>(ctx, "syevx_filtered_buffer_size", mask, params,
-                                                          /*lobpcg=*/false);
+    ::batchlas::detail::syevx_iterative_refuse_mask<B, Scalar>(ctx, "syevx_filtered_buffer_size", mask, params,
+                                                               /*lobpcg=*/false);
     const int64_t n = A.rows();
     const int64_t batch = A.batch_size();
     const int64_t k = static_cast<int64_t>(neigs);
@@ -721,11 +725,11 @@ size_t syevx_filtered_buffer_size(Queue& ctx,
     size_t bytes = 0;
     const size_t block_elems = static_cast<size_t>(n) * m * batch;
     for (int i = 0; i < 5; ++i) {
-        bytes += BumpAllocator::allocation_size<T>(ctx, block_elems);
-        bytes += BumpAllocator::allocation_size<T*>(ctx, static_cast<size_t>(batch));
+        bytes += BumpAllocator::allocation_size<Scalar>(ctx, block_elems);
+        bytes += BumpAllocator::allocation_size<Scalar*>(ctx, static_cast<size_t>(batch));
     }
-    bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(m) * m * batch);
-    bytes += BumpAllocator::allocation_size<T*>(ctx, static_cast<size_t>(batch));
+    bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(m) * m * batch);
+    bytes += BumpAllocator::allocation_size<Scalar*>(ctx, static_cast<size_t>(batch));
     bytes += BumpAllocator::allocation_size<Real>(ctx, static_cast<size_t>(m) * batch);
     for (int i = 0; i < 9; ++i) {
         bytes += BumpAllocator::allocation_size<Real>(ctx, static_cast<size_t>(batch));
@@ -733,12 +737,14 @@ size_t syevx_filtered_buffer_size(Queue& ctx,
 
     // Shapes must match the runtime views so the providers agree.
     const auto blk_dummy =
-        MatrixView<T, MatrixFormat::Dense>(nullptr, n, m, n, static_cast<int64_t>(n) * m, batch).with_batch_mask(mask);
+        MatrixView<Scalar, MatrixFormat::Dense>(nullptr, n, m, n, static_cast<int64_t>(n) * m,
+                                                batch).with_batch_mask(mask);
     const auto h_dummy =
-        MatrixView<T, MatrixFormat::Dense>(nullptr, m, m, m, static_cast<int64_t>(m) * m, batch).with_batch_mask(mask);
+        MatrixView<Scalar, MatrixFormat::Dense>(nullptr, m, m, m, static_cast<int64_t>(m) * m,
+                                                batch).with_batch_mask(mask);
     if constexpr (MFormat == MatrixFormat::CSR) {
         bytes += BumpAllocator::allocation_size<std::byte>(ctx,
-            spmm_buffer_size<B>(ctx, A, blk_dummy, blk_dummy, T(1), T(0),
+            spmm_buffer_size<B>(ctx, A, blk_dummy, blk_dummy, Scalar(1), Scalar(0),
                                 Transpose::NoTrans, Transpose::NoTrans));
     }
     bytes += BumpAllocator::allocation_size<std::byte>(ctx,
@@ -752,22 +758,22 @@ size_t syevx_filtered_buffer_size(Queue& ctx,
 
 #define SYEVX_FILTERED_INSTANTIATE(back, fp, fmt) \
     template Event syevx_filtered<back, BATCHLAS_UNPAREN fp, fmt>(\
-        Queue&,\
-        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\
-        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>,\
-        size_t,\
-        Span<std::byte>,\
-        JobType,\
-        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
-        const SyevxParams<BATCHLAS_UNPAREN fp>&,\
+        Queue&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&, \
+        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>, \
+        size_t, \
+        Span<std::byte>, \
+        JobType, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const SyevxParams<BATCHLAS_UNPAREN fp>&, \
         Span<int32_t>);\
     template size_t syevx_filtered_buffer_size<back, BATCHLAS_UNPAREN fp, fmt>(\
-        Queue&,\
-        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\
-        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>,\
-        size_t,\
-        JobType,\
-        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
+        Queue&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, fmt>&, \
+        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>, \
+        size_t, \
+        JobType, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
         const SyevxParams<BATCHLAS_UNPAREN fp>&);
 
 #define SYEVX_FILTERED_INSTANTIATE_FOR_BACKEND_TYPE(back, fp) \
@@ -778,4 +784,4 @@ size_t syevx_filtered_buffer_size(Queue& ctx,
 #undef SYEVX_FILTERED_INSTANTIATE_FOR_BACKEND_TYPE
 #undef SYEVX_FILTERED_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas

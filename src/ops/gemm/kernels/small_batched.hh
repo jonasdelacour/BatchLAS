@@ -21,24 +21,27 @@
 #include <stdexcept>
 #include <type_traits>
 #include <src/sycl/device_scalar.hh>
-#include <src/sycl/kernel_attrs.hh>
-#include <src/ops/gemm/kernels/vec4.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/level3/epilogue.hh>
+#include <batchlas/device/level3/mma.hh>
+#include <batchlas/device/level3/packet.hh>
+#include <batchlas/device/level3/stage.hh>
+#include <src/ops/gemm/choice.hh>
 #include <src/ops/gemm/gemm_kernels.hh>
 
-namespace batchlas::sycl_gemm_small {
+namespace batchlas::ops::gemm {
 
-template <typename T, int NB, bool Masked>
+template <typename Scalar, int NB, bool Masked>
 class GemmSmallBatchedKernel;
 
-inline constexpr int kSmallWg = 128;
-
-// The largest order the kernel serves; \f$\max(m, n, k)\f$ picks the bucket.
-inline constexpr int kSmallMaxDim = 64;
+// kSmallWg, kSmallMaxDim (the largest order served; \f$\max(m, n, k)\f$ picks the bucket) and
+// kSmallTiledMaxDim are choice.hh's.
 
 // A 16-byte scalar stops at 32: its 64 bucket stages \f$64 \times 65 \times 16\f$ B = 66.5 KB and holds a
 // 64-entry row plus 32 accumulators, 384 registers. choice.hh's small_max_dim mirrors it.
-template <typename T>
-inline constexpr int kSmallMaxDimFor = sizeof(T) >= 16 ? 32 : kSmallMaxDim;
+template <typename Scalar>
+inline constexpr int kSmallMaxDimFor = sizeof(Scalar) >= 16 ? 32 : kSmallMaxDim;
 
 inline int small_bucket(int max_dim) {
     return max_dim <= 8 ? 8 : max_dim <= 16 ? 16 : max_dim <= 32 ? 32 : 64;
@@ -52,17 +55,17 @@ inline constexpr std::int64_t kSmallBatchedSlmElems = std::int64_t(kSmallWg / (2
 // inactive one is clamped like a tail slot, never returned). A template so the unmasked instance
 // is the kernel as it was: the fold cost 2-4.5% unmasked in a packed kernel (potrf tiny).
 // evidence: docs/design/masked-batches.md#masked-batches-kernel-contract
-template <typename T, int NB, bool Masked>
+template <typename Scalar, int NB, bool Masked>
 Event launch_small_batched(Queue& ctx,
-                           const MatrixView<T, MatrixFormat::Dense>& A,
-                           const MatrixView<T, MatrixFormat::Dense>& B,
-                           const MatrixView<T, MatrixFormat::Dense>& C,
-                           T alpha, T beta, Transpose transA, Transpose transB,
+                           const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                           const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                           const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                           Scalar alpha, Scalar beta, Transpose transA, Transpose transB,
                            int m, int n, int k, const std::uint8_t* mask) {
-    using D = typename sycl_device::DevMap<T>::type;
+    using D = typename sycl_device::DevMap<Scalar>::type;
     constexpr bool kCx = sycl_device::dev_is_complex_v<D>;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
-    static_assert(NB <= kSmallMaxDimFor<T>, "no bucket above the scalar's ceiling");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
+    static_assert(NB <= kSmallMaxDimFor<Scalar>, "no bucket above the scalar's ceiling");
     constexpr int kTpm = 2 * NB;          // lanes per matrix: NB rows x 2 column halves
     constexpr int kCpt = NB / 2;          // columns of C per lane
     constexpr int kG = kSmallWg / kTpm;   // matrices per work-group
@@ -84,18 +87,17 @@ Event launch_small_batched(Queue& ctx,
     const bool tb = (transB != Transpose::NoTrans);
     const bool ca = kCx && transA == Transpose::ConjTrans;
     const bool cb = kCx && transB == Transpose::ConjTrans;
-    const bool beta_zero = (beta == T(0));
+    const bool beta_zero = (beta == Scalar(0));
     D alpha_d, beta_d;
     __builtin_memcpy(&alpha_d, &alpha, sizeof(D));
     __builtin_memcpy(&beta_d, &beta, sizeof(D));
 
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<D, 1> slm(sycl::range<1>(static_cast<std::size_t>(kG) * NB * kLdb), h);
-        batchlas::impl::parallel_for<GemmSmallBatchedKernel<T, NB, Masked>>(h,
+        batchlas::impl::parallel_for<GemmSmallBatchedKernel<Scalar, NB, Masked>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) * kSmallWg),
                               sycl::range<1>(kSmallWg)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-                using sycl_device::dev_conj;
                 const int t = static_cast<int>(it.get_local_id(0));
                 const int slot = t / kTpm;
                 const int tt = t % kTpm;
@@ -114,75 +116,41 @@ Event launch_small_batched(Queue& ctx,
                 // stored \f$k \times m\f$, so a lane's row is a stored column, lda from its neighbours':
                 // it goes through sB in storage order (coalesced) as sB[r + l * kLdb], and the
                 // second barrier keeps it there until every lane of the slot has read its row.
-                D a[NB];
+                const device::WorkGroup<kSmallWg> ex{it};
+                using Ops = device::arith::Fma;  // sycl_device's fma_acc / dev_mul, bit for bit
+                device::Frag<D, NB> a;
                 if (ta) {
-                    for (int e = tt; e < NB * NB; e += kTpm) {
-                        const int l = e % NB, rr = e / NB;
-                        D v{};
-                        if (live && l < k && rr < m) v = Ab[l + rr * lda];
-                        sB[rr + l * kLdb] = ca ? dev_conj(v) : v;
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-BATCHLAS_UNROLL_FULL
-                    for (int l = 0; l < NB; ++l) a[l] = sB[r + l * kLdb];
-                    it.barrier(sycl::access::fence_space::local_space);
+                    device::l3::stage_storage<kTpm>(tt, device::Ext<NB>{}, device::Ext<NB>{}, live, Ab, lda, false, ca, k, m,
+                                            [&](int l, int rr) -> D& { return sB[rr + l * kLdb]; });
+                    ex.barrier();
+                    device::load(a, [&](int l) { return sB[r + l * kLdb]; });
+                    ex.barrier();
                 } else {
-BATCHLAS_UNROLL_FULL
-                    for (int l = 0; l < NB; ++l) {
+                    device::load(a, [&](int l) {
                         D v{};
                         if (live && r < m && l < k) v = Ab[r + l * lda];
-                        a[l] = v;
-                    }
+                        return v;
+                    });
                 }
 
                 // op(B) into sB[l + c * kLdb], walked in STORAGE order so the global
-                // read is coalesced either way; zero outside \f$k \times n\f$.
-                for (int e = tt; e < NB * NB; e += kTpm) {
-                    const int s0 = e % NB, s1 = e / NB;
-                    const int l = tb ? s1 : s0;
-                    const int c = tb ? s0 : s1;
-                    D v{};
-                    if (live && l < k && c < n) v = Bb[s0 + s1 * ldb];
-                    sB[l + c * kLdb] = cb ? dev_conj(v) : v;
-                }
-                it.barrier(sycl::access::fence_space::local_space);
+                // read is coalesced either way; zero outside k x n.
+                device::l3::stage_storage<kTpm>(tt, device::Ext<NB>{}, device::Ext<NB>{}, live, Bb, ldb, tb, cb, k, n,
+                                        [&](int l, int c) -> D& { return sB[l + c * kLdb]; });
+                ex.barrier();
 
-                D acc[kCpt];
-BATCHLAS_UNROLL_FULL
-                for (int j = 0; j < kCpt; ++j) acc[j] = D{};
-                // Sequential (not nested) loops of kLc l each: one complex loop over all 64 l is
-                // past LLVM's pragma unroll threshold, so a[] went to the stack (512 B). A macro: a
-                // lambda per chunk put 160-184 B of stack on every bucket, real ones included.
-#define BATCHLAS_SMALL_DOT(L0)                                                                  \
-    BATCHLAS_UNROLL_FULL                                                                        \
-    for (int l = (L0); l < (L0) + kLc; ++l) {                                                   \
-        if (l >= k) continue; /* uniform; `continue` keeps the unroll, so a[] stays put */       \
-        BATCHLAS_UNROLL_FULL                                                                    \
-        for (int j = 0; j < kCpt; ++j) sycl_device::fma_acc(acc[j], a[l], sB[l + (c0 + j) * kLdb]); \
-    }
-                BATCHLAS_SMALL_DOT(0)
-                if constexpr (NB / kLc > 1) {
-                    BATCHLAS_SMALL_DOT(kLc)
-                    BATCHLAS_SMALL_DOT(2 * kLc)
-                    BATCHLAS_SMALL_DOT(3 * kLc)
-                }
-#undef BATCHLAS_SMALL_DOT
+                // acc(j) := op(A)(r, :) op(B)(:, c0 + j) in kLc-wide unrolled chunks: one complex loop
+                // over all 64 l is past LLVM's pragma unroll threshold, so a[] went to the stack (512 B).
+                device::Frag<D, kCpt> acc;
+                device::fill(acc, D{});
+                device::l3::gemv_t_frag<kLc, Ops>(acc, a, [&](int l, int j) { return sB[l + (c0 + j) * kLdb]; }, k);
 
                 if (live && r < m) {
                     D* const Cb = c_ptr + bi * sc;
 BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < kCpt; ++j) {
                         const int c = c0 + j;
-                        if (c < n) {
-                            D* const dst = Cb + r + c * ldc;
-                            if constexpr (kCx) {
-                                D out = sycl_device::dev_mul(alpha_d, acc[j]);
-                                if (!beta_zero) sycl_device::fma_acc(out, beta_d, *dst);
-                                *dst = out;
-                            } else {
-                                *dst = beta_zero ? alpha_d * acc[j] : alpha_d * acc[j] + beta_d * *dst;
-                            }
-                        }
+                        if (c < n) device::store_epi<device::epi::MulMac, Ops>(alpha_d, acc[j], device::MaybeZero<D>{beta_d, beta_zero}, *(Cb + r + c * ldc));
                     }
                 }
             });
@@ -190,7 +158,7 @@ BATCHLAS_UNROLL_FULL
     return ctx.get_event();
 }
 
-template <typename T, int NB, bool PrefetchC>
+template <typename Scalar, int NB, bool PrefetchC>
 class GemmSmallTiledKernel;
 
 // NN, \f$32 < \max(m, n, k) \le\f$ kSmallTiledMaxDim: one matrix per work-group, A
@@ -199,17 +167,16 @@ class GemmSmallTiledKernel;
 // With \f$\beta \ne 0\f$ the lane reads its C tile BEFORE the barrier so that latency
 // overlaps the staging; at \f$\beta = 0\f$ that prefetch is compiled out, because
 // its registers cost more than it saves. evidence: docs/perf/gemm.md#the-small-tiled-kernel
-inline constexpr int kSmallTiledMaxDim = 56;
 template <int NB>
 inline constexpr std::int64_t kSmallTiledSlmElems = std::int64_t(2) * NB * (NB + 4);
 
-template <typename T, int NB, bool PrefetchC>
+template <typename Scalar, int NB, bool PrefetchC>
 Event launch_small_tiled(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A,
-                         const MatrixView<T, MatrixFormat::Dense>& B,
-                         const MatrixView<T, MatrixFormat::Dense>& C,
-                         T alpha, T beta, int m, int n, int k, const std::uint8_t* mask) {
-    using V4 = sycl_gemm::Vec4<T>;
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                         Scalar alpha, Scalar beta, int m, int n, int k, const std::uint8_t* mask) {
+    using V4 = device::l3::Vec4<Scalar>;
     constexpr int kTr = NB / 4;          // lanes per row and per column of 4x4 tiles
     constexpr int kWg = kTr * kTr;
     constexpr int kLd = NB + 4;          // keeps the V4 reads 16-byte aligned
@@ -217,57 +184,50 @@ Event launch_small_tiled(Queue& ctx,
     static_assert(2 * NB * kLd == kSmallTiledSlmElems<NB>, "choice.hh's bytes");
 
     const int batch = static_cast<int>(A.batch_size());
-    const T* a_ptr = A.data_ptr();
-    const T* b_ptr = B.data_ptr();
-    T* c_ptr = C.data_ptr();
+    const Scalar* a_ptr = A.data_ptr();
+    const Scalar* b_ptr = B.data_ptr();
+    Scalar* c_ptr = C.data_ptr();
     const std::ptrdiff_t lda = A.ld(), ldb = B.ld(), ldc = C.ld();
     const std::ptrdiff_t sa = A.stride(), sb = B.stride(), sc = C.stride();
-    const bool beta_zero = (beta == T(0));
+    const bool beta_zero = (beta == Scalar(0));
 
     ctx->submit([&](sycl::handler& h) {
-        sycl::local_accessor<T, 1> slm(sycl::range<1>(static_cast<std::size_t>(2 * NB * kLd)), h);
-        batchlas::impl::parallel_for<GemmSmallTiledKernel<T, NB, PrefetchC>>(h,
+        sycl::local_accessor<Scalar, 1> slm(sycl::range<1>(static_cast<std::size_t>(2 * NB * kLd)), h);
+        batchlas::impl::parallel_for<GemmSmallTiledKernel<Scalar, NB, PrefetchC>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) * kWg),
                               sycl::range<1>(kWg)),
             [=](sycl::nd_item<1> it) {
                 const int t = static_cast<int>(it.get_local_id(0));
                 const std::ptrdiff_t bi = static_cast<std::ptrdiff_t>(it.get_group(0));
-                if (sycl_gemm::item_off(mask, bi)) return;  // one item per work-group: before the barrier
+                if (ops::gemm::item_off(mask, bi)) return;  // one item per work-group: before the barrier
                 const int kp = (k + 3) & ~3;
-                T* const sA = &slm[0];           // sA[l * kLd + r]
-                T* const sB = sA + NB * kLd;     // sB[c * kLd + l]
-                const T* const Ab = a_ptr + bi * sa;
-                const T* const Bb = b_ptr + bi * sb;
-                T* const Cb = c_ptr + bi * sc;
+                Scalar* const sA = &slm[0];           // sA[l * kLd + r]
+                Scalar* const sB = sA + NB * kLd;     // sB[c * kLd + l]
+                const Scalar* const Ab = a_ptr + bi * sa;
+                const Scalar* const Bb = b_ptr + bi * sb;
+                Scalar* const Cb = c_ptr + bi * sc;
                 // Storage order, so both reads are coalesced; zero-padded.
-                for (int e = t; e < NB * kp; e += kWg) {
-                    const int r = e % NB, l = e / NB;
-                    sA[l * kLd + r] = (r < m && l < k) ? Ab[r + l * lda] : T(0);
-                }
-                for (int e = t; e < kp * NB; e += kWg) {
-                    const int l = e % kp, c = e / kp;
-                    sB[c * kLd + l] = (l < k && c < n) ? Bb[l + c * ldb] : T(0);
-                }
+                device::l3::stage_storage<kWg>(t, device::Ext<NB>{}, device::Dyn{kp}, true, Ab, lda, false, false, m, k,
+                                       [&](int r, int l) -> Scalar& { return sA[l * kLd + r]; });
+                device::l3::stage_storage<kWg>(t, device::Dyn{kp}, device::Ext<NB>{}, true, Bb, ldb, false, false, k, n,
+                                       [&](int l, int c) -> Scalar& { return sB[c * kLd + l]; });
                 const int tr = t % kTr, tc = t / kTr;
-                T prior[4][4];
+                Scalar prior[4][4];
                 if constexpr (PrefetchC) {
 BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < 4; ++j) {
 BATCHLAS_UNROLL_FULL
                         for (int i = 0; i < 4; ++i) {
                             const int r = tr * 4 + i, c = tc * 4 + j;
-                            prior[i][j] = (r < m && c < n) ? Cb[r + c * ldc] : T(0);
+                            prior[i][j] = (r < m && c < n) ? Cb[r + c * ldc] : Scalar(0);
                         }
                     }
                 }
-                it.barrier(sycl::access::fence_space::local_space);
+                it.barrier(sycl::access::fence_space::local_space);  // WG 144 / 196: not a device::WorkGroup
 
-                T acc[4][4];
-BATCHLAS_UNROLL_FULL
-                for (int i = 0; i < 4; ++i) {
-BATCHLAS_UNROLL_FULL
-                    for (int j = 0; j < 4; ++j) acc[i][j] = T(0);
-                }
+                // acc += A(:, l) B(l, :) on the lane's 4x4 tile, four l per 16-byte read of each operand.
+                device::Tile<Scalar, 4, 4> acc;
+                device::fill(acc, Scalar(0));
                 for (int l0 = 0; l0 < kp; l0 += 4) {
                     V4 bv[4];
 BATCHLAS_UNROLL_FULL
@@ -277,11 +237,9 @@ BATCHLAS_UNROLL_FULL
 BATCHLAS_UNROLL_FULL
                     for (int ll = 0; ll < 4; ++ll) {
                         const V4 av = *reinterpret_cast<const V4*>(&sA[(l0 + ll) * kLd + tr * 4]);
-BATCHLAS_UNROLL_FULL
-                        for (int i = 0; i < 4; ++i) {
-BATCHLAS_UNROLL_FULL
-                            for (int j = 0; j < 4; ++j) acc[i][j] += av[i] * bv[j][ll];
-                        }
+                        const Scalar a4[4] = {av[0], av[1], av[2], av[3]};
+                        const Scalar b4[4] = {bv[0][ll], bv[1][ll], bv[2][ll], bv[3][ll]};
+                        device::l3::outer_mac(acc, a4, b4);
                     }
                 }
 
@@ -292,12 +250,11 @@ BATCHLAS_UNROLL_FULL
                     for (int i = 0; i < 4; ++i) {
                         const int r = tr * 4 + i;
                         if (r < m && c < n) {
-                            T* const dst = Cb + r + c * ldc;
-                            if constexpr (PrefetchC) {
-                                *dst = alpha * acc[i][j] + beta * prior[i][j];
-                            } else {
-                                *dst = beta_zero ? alpha * acc[i][j] : alpha * acc[i][j] + beta * *dst;
-                            }
+                            Scalar* const dst = Cb + r + c * ldc;
+                            // acc.v, not acc(i, j): a direct operator() call in the kernel lambda
+                            // would become SemaSYCL's force-inlined "body" (scripts/check_kernel_entry_calls.py).
+                            if constexpr (PrefetchC) *dst = alpha * acc.v[i][j] + beta * prior[i][j];
+                            else device::store_epi<device::epi::MulMac, device::arith::Fma>(alpha, acc.v[i][j], device::MaybeZero<Scalar>{beta, beta_zero}, *dst);
                         }
                     }
                 }
@@ -306,55 +263,56 @@ BATCHLAS_UNROLL_FULL
     return ctx.get_event();
 }
 
-template <typename T, int NB>
+template <typename Scalar, int NB>
 Event small_tiled(Queue& ctx,
-                  const MatrixView<T, MatrixFormat::Dense>& A,
-                  const MatrixView<T, MatrixFormat::Dense>& B,
-                  const MatrixView<T, MatrixFormat::Dense>& C,
-                  T alpha, T beta, int m, int n, int k, const std::uint8_t* mask) {
-    if (beta == T(0)) {
-        return launch_small_tiled<T, NB, false>(ctx, A, B, C, alpha, beta, m, n, k, mask);
+                  const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                  const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                  Scalar alpha, Scalar beta, int m, int n, int k, const std::uint8_t* mask) {
+    if (beta == Scalar(0)) {
+        return launch_small_tiled<Scalar, NB, false>(ctx, A, B, C, alpha, beta, m, n, k, mask);
     }
-    return launch_small_tiled<T, NB, true>(ctx, A, B, C, alpha, beta, m, n, k, mask);
+    return launch_small_tiled<Scalar, NB, true>(ctx, A, B, C, alpha, beta, m, n, k, mask);
 }
 
-template <typename T, int NB>
-Event launch_small_batched_leg(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                               const MatrixView<T, MatrixFormat::Dense>& B, const MatrixView<T, MatrixFormat::Dense>& C,
-                               T alpha, T beta, Transpose transA, Transpose transB, int m, int n, int k,
+template <typename Scalar, int NB>
+Event launch_small_batched_leg(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                               const MatrixView<Scalar, MatrixFormat::Dense>& B, const MatrixView<Scalar,
+                               MatrixFormat::Dense>& C,
+                               Scalar alpha, Scalar beta, Transpose transA, Transpose transB, int m, int n, int k,
                                const std::uint8_t* mask) {
-    if (mask) return launch_small_batched<T, NB, true>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k, mask);
-    return launch_small_batched<T, NB, false>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k, nullptr);
+    if (mask) return launch_small_batched<Scalar, NB, true>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k, mask);
+    return launch_small_batched<Scalar, NB, false>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k, nullptr);
 }
 
-template <typename T>
+template <typename Scalar>
 Event small_batched(Queue& ctx,
-                    const MatrixView<T, MatrixFormat::Dense>& A,
-                    const MatrixView<T, MatrixFormat::Dense>& B,
-                    const MatrixView<T, MatrixFormat::Dense>& C,
-                    T alpha, T beta, Transpose transA, Transpose transB,
+                    const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                    const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                    const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                    Scalar alpha, Scalar beta, Transpose transA, Transpose transB,
                     int m, int n, int k) {
     const int max_dim = m > n ? (m > k ? m : k) : (n > k ? n : k);
-    const std::uint8_t* mask = sycl_gemm::item_mask(A, B, C);
-    if constexpr (std::is_same_v<T, float>) {
+    const std::uint8_t* mask = ops::gemm::item_mask(A, B, C);
+    if constexpr (std::is_same_v<Scalar, float>) {
         if (transA == Transpose::NoTrans && transB == Transpose::NoTrans && max_dim > 32 &&
             max_dim <= kSmallTiledMaxDim) {
-            return max_dim <= 48 ? small_tiled<T, 48>(ctx, A, B, C, alpha, beta, m, n, k, mask)
-                                 : small_tiled<T, 56>(ctx, A, B, C, alpha, beta, m, n, k, mask);
+            return max_dim <= 48 ? small_tiled<Scalar, 48>(ctx, A, B, C, alpha, beta, m, n, k, mask)
+                                 : small_tiled<Scalar, 56>(ctx, A, B, C, alpha, beta, m, n, k, mask);
         }
     }
     switch (small_bucket(max_dim)) {
-    case 8:
-        return launch_small_batched_leg<T, 8>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k, mask);
-    case 16:
-        return launch_small_batched_leg<T, 16>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k, mask);
-    case 32:
-        return launch_small_batched_leg<T, 32>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k, mask);
-    default:
-        if constexpr (kSmallMaxDimFor<T> >= 64)
-            return launch_small_batched_leg<T, 64>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k, mask);
-        else throw ::batchlas::internal_error("gemm small: max(m, n, k) above this scalar's ceiling reached the kernel");
+        case 8:
+            return launch_small_batched_leg<Scalar, 8>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k, mask);
+        case 16:
+            return launch_small_batched_leg<Scalar, 16>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k, mask);
+        case 32:
+            return launch_small_batched_leg<Scalar, 32>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k, mask);
+        default:
+            if constexpr (kSmallMaxDimFor<Scalar> >= 64)
+                return launch_small_batched_leg<Scalar, 64>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k, mask);
+            else throw ::batchlas::internal_error("gemm small: max(m, n, k) above this scalar's ceiling reached the kernel");
     }
 }
 
-}  // namespace batchlas::sycl_gemm_small
+}  // namespace batchlas::ops::gemm

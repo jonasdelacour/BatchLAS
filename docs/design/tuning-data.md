@@ -106,8 +106,8 @@ files (common, its own, `kernel-deps`), hash v2:
   `kernels=`/`family_kernels=` against the sources now. A table whose `tiers=` counts no
   deep, coarse, calibrate, preview or custom row (all converted/prior/transcribed) is never stale,
   whatever hashes its header names; a missing or unparsable `tiers=` is checked.
-- Shared device headers (`src/sycl/kernel_attrs.hh`, `src/sycl/sscp_target.hh`,
-  `src/kernels/common/sg_partition/` and `include/batchlas/util/group-collectives.hh`) sit in a spec's common section, once,
+- Shared device headers (`include/batchlas/device/detail/kernel_attrs.hh`, `include/batchlas/device/detail/sscp_target.hh`,
+  `include/batchlas/device/detail/sg_partition/` and `include/batchlas/util/group-collectives.hh`) sit in a spec's common section, once,
   wherever its sources include them; `tune_tests` (`SharedKernelHeadersAreCommonInEverySpec`)
   follows the includes and checks it.
 

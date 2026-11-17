@@ -12,9 +12,8 @@
 #include <src/linalg-impl.hh>
 #include <src/sycl/device_scalar.hh>
 #include <src/ops/gemm/gemm_kernels.hh>
-#include <src/ops/gemm/kernels/copy_async.hh>
-#include <src/ops/gemm/kernels/register_64x64_k16_wide.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <src/ops/gemm/kernels/register_64x64_k16_wide.hh>  // level3/copy_async.hh
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -24,7 +23,11 @@
 #include <cstdint>
 #include <type_traits>
 
-namespace batchlas::sycl_gemm {
+namespace batchlas::ops::gemm {
+
+using batchlas::device::l3::copy_async_commit;
+using batchlas::device::l3::copy_async_wait;
+using batchlas::device::l3::copy_async_zfill;
 
 // One row of the wide-scalar transposed dispatch table, in the shape RegTile
 // has for the float family. Structural, so it can be an NTTP.
@@ -39,7 +42,7 @@ struct WideTile {
     int Stages = 1;                         // shared-memory stages: og::wide_stages
 };
 
-template <typename T, int M, int N, int K, int TTM, int TTN, int OA, int OB, int Stages, bool Vec, bool Split,
+template <typename Scalar, int M, int N, int K, int TTM, int TTN, int OA, int OB, int Stages, bool Vec, bool Split,
           int Async>
 class GemmWideTransposedKernel;
 
@@ -216,12 +219,12 @@ BATCHLAS_UNROLL_FULL
 // identity, so ConjTrans and Trans instantiate each other. A real scalar
 // compiles only the ConjTrans builds (choice.hh wide_serves); a complex one
 // compiles Trans and ConjTrans apart and must match exactly.
-template <typename T>
+template <typename Scalar>
 inline bool wide_trans_matches(Transpose requested, Transpose instantiated) {
     if (requested == instantiated) {
         return true;
     }
-    if constexpr (is_std_complex_v<T>) {
+    if constexpr (is_std_complex_v<Scalar>) {
         return false;
     } else {
         const bool both_transposing = requested != Transpose::NoTrans &&
@@ -236,21 +239,21 @@ inline bool wide_trans_matches(Transpose requested, Transpose instantiated) {
 // tiles (double and complex<double>), whose registers sit at the two-group cap already.
 // evidence: docs/perf/gemm.md#gemm-wp-k-pipelined-staging-for-the-transposed-wide-tiles
 // Async > 0: that many cp.async stages instead (one barrier per slab, Async - 1 slabs in flight).
-template <typename T, WideTile P, bool VecLoads, bool Split, int Async = 0>
+template <typename Scalar, WideTile P, bool VecLoads, bool Split, int Async = 0>
 Event launch_wide_transposed_leg(Queue& ctx,
-                                 const MatrixView<T, MatrixFormat::Dense>& A,
-                                 const MatrixView<T, MatrixFormat::Dense>& B,
-                                 const MatrixView<T, MatrixFormat::Dense>& C,
-                                 T alpha,
-                                 T beta,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& B,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>& C,
+                                 Scalar alpha,
+                                 Scalar beta,
                                  const char* trace,
                                  WideSplit split) {
     BATCHLAS_KERNEL_TRACE_SCOPE(trace);
 
     using namespace wide_transposed;
 
-    using D = typename DevMap<T>::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    using D = typename DevMap<Scalar>::type;
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
 
     constexpr int TileM = P.M;
     constexpr int TileN = P.N;
@@ -355,7 +358,7 @@ Event launch_wide_transposed_leg(Queue& ctx,
         __builtin_memcpy(&alpha_d, &alpha, sizeof(D));
         __builtin_memcpy(&beta_d, &beta, sizeof(D));
 
-        batchlas::impl::parallel_for<GemmWideTransposedKernel<T, TileM, TileN, TileK, TTM, TTN,
+        batchlas::impl::parallel_for<GemmWideTransposedKernel<Scalar, TileM, TileN, TileK, TTM, TTN,
                                                 static_cast<int>(P.OpA),
                                                 static_cast<int>(P.OpB), Stages, VecLoads, Split, Async>>(h,
             sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
@@ -656,31 +659,32 @@ BATCHLAS_UNROLL_FULL
 // =2 forces the register prefetch) and both bases are 8-byte aligned (alignof is 4). Two stages:
 // three and four lost occupancy; float's 4-byte copies cost 16-45 registers and ran slower.
 // evidence: docs/perf/gemm.md#gemm-wp-x-copy-async-stages-for-the-transposed-wide-tiles
-template <typename T, WideTile P, bool Split = false>
-Event launch_wide_transposed(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                             const MatrixView<T, MatrixFormat::Dense>& B, const MatrixView<T, MatrixFormat::Dense>& C,
-                             T alpha, T beta, const char* trace, WideSplit split = {},
+template <typename Scalar, WideTile P, bool Split = false>
+Event launch_wide_transposed(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                             const MatrixView<Scalar, MatrixFormat::Dense>& B, const MatrixView<Scalar,
+                             MatrixFormat::Dense>& C,
+                             Scalar alpha, Scalar beta, const char* trace, WideSplit split = {},
                              const char* trace_async = nullptr, const char* trace_async_vec = nullptr) {
-    if constexpr (std::is_same_v<T, std::complex<float>>) {
+    if constexpr (std::is_same_v<Scalar, std::complex<float>>) {
         constexpr int Async = 2;
         constexpr int Threads = (P.M / P.TTM) * (P.N / P.TTN);
-        constexpr std::size_t bytes = std::size_t(Async) * P.K * (P.M + P.N) * sizeof(T);
+        constexpr std::size_t bytes = std::size_t(Async) * P.K * (P.M + P.N) * sizeof(Scalar);
         const int forced = batchlas::settings().geometry.gemm_wide_stages;
-        auto whole = [](const T* p) { return reinterpret_cast<std::uintptr_t>(p) % sizeof(T) == 0; };
+        auto whole = [](const Scalar* p) { return reinterpret_cast<std::uintptr_t>(p) % sizeof(Scalar) == 0; };
         if (!BATCHLAS_SYCL_IMPL_ACPP && forced != 2 &&
             ctx.device().cuda_compute_capability() >= (forced == 3 ? 80 : 120) && whole(A.data_ptr()) &&
             whole(B.data_ptr()) && std::max(A.ld(), B.ld()) <= INT_MAX / 128 &&
             resident::device_slm_budget(impl::local_mem_bytes(ctx->get_device(), Threads)) >= bytes) {
-            if (wide64_v2_vec_loads<T>(A, B))
-                return launch_wide_transposed_leg<T, P, true, Split, Async>(
+            if (wide64_v2_vec_loads<Scalar>(A, B))
+                return launch_wide_transposed_leg<Scalar, P, true, Split, Async>(
                     ctx, A, B, C, alpha, beta, trace_async_vec ? trace_async_vec : trace, split);
-            return launch_wide_transposed_leg<T, P, false, Split, Async>(ctx, A, B, C, alpha, beta,
-                                                                         trace_async ? trace_async : trace, split);
+            return launch_wide_transposed_leg<Scalar, P, false, Split, Async>(ctx, A, B, C, alpha, beta,
+                                                                              trace_async ? trace_async : trace, split);
         }
     }
-    if (wide64_v2_vec_loads<T>(A, B))
-        return launch_wide_transposed_leg<T, P, true, Split>(ctx, A, B, C, alpha, beta, trace, split);
-    return launch_wide_transposed_leg<T, P, false, Split>(ctx, A, B, C, alpha, beta, trace, split);
+    if (wide64_v2_vec_loads<Scalar>(A, B))
+        return launch_wide_transposed_leg<Scalar, P, true, Split>(ctx, A, B, C, alpha, beta, trace, split);
+    return launch_wide_transposed_leg<Scalar, P, false, Split>(ctx, A, B, C, alpha, beta, trace, split);
 }
 
-}  // namespace batchlas::sycl_gemm
+}  // namespace batchlas::ops::gemm

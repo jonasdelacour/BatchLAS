@@ -30,7 +30,7 @@ template <typename T>
 UnifiedVector<T> make_unified_vector(std::initializer_list<T> values) {
     UnifiedVector<T> out;
     out.reserve(values.size());
-    for (const auto &value : values) {
+    for (const auto& value : values) {
         out.push_back(value);
     }
     return out;
@@ -64,22 +64,22 @@ struct SweepCase {
         unsigned seed = 0;
 };
 
-template <typename T>
-Matrix<T, MatrixFormat::Dense> make_identity_matrix(int n, int batch = 1) {
-    Matrix<T, MatrixFormat::Dense> eye(n, n, batch);
+template <typename Scalar>
+Matrix<Scalar, MatrixFormat::Dense> make_identity_matrix(int n, int batch = 1) {
+    Matrix<Scalar, MatrixFormat::Dense> eye(n, n, batch);
     for (int b = 0; b < batch; ++b) {
         for (int j = 0; j < n; ++j) {
             for (int i = 0; i < n; ++i) {
-                eye(i, j, b) = (i == j) ? T(1) : T(0);
+                eye(i, j, b) = (i == j) ? Scalar(1) : Scalar(0);
             }
         }
     }
     return eye;
 }
 
-template <typename T>
-double inverse_residual_frobenius(const MatrixView<T, MatrixFormat::CSR>& A,
-                                  const MatrixView<T, MatrixFormat::Dense>& approx_inverse) {
+template <typename Scalar>
+double inverse_residual_frobenius(const MatrixView<Scalar, MatrixFormat::CSR>& A,
+                                  const MatrixView<Scalar, MatrixFormat::Dense>& approx_inverse) {
     const int n = A.rows();
     const int batch = A.batch_size();
     const auto row_offsets = A.row_offsets();
@@ -92,12 +92,12 @@ double inverse_residual_frobenius(const MatrixView<T, MatrixFormat::CSR>& A,
         const int val_base = b * A.matrix_stride();
         for (int col = 0; col < n; ++col) {
             for (int row = 0; row < n; ++row) {
-                T product = T(0);
+                Scalar product = Scalar(0);
                 for (int p = row_offsets[ro_base + row]; p < row_offsets[ro_base + row + 1]; ++p) {
                     const int k = col_indices[val_base + p];
                     product += values[val_base + p] * approx_inverse(k, col, b);
                 }
-                const T target = (row == col) ? T(1) : T(0);
+                const Scalar target = (row == col) ? Scalar(1) : Scalar(0);
                 const double error = static_cast<double>(std::abs(product - target));
                 sum_sq += error * error;
             }
@@ -106,8 +106,8 @@ double inverse_residual_frobenius(const MatrixView<T, MatrixFormat::CSR>& A,
     return std::sqrt(sum_sq);
 }
 
-template <typename T>
-T csr_entry(const MatrixView<T, MatrixFormat::CSR>& A, int row, int col, int batch = 0) {
+template <typename Scalar>
+Scalar csr_entry(const MatrixView<Scalar, MatrixFormat::CSR>& A, int row, int col, int batch = 0) {
     const auto row_offsets = A.row_offsets();
     const auto col_indices = A.col_indices();
     const auto values = A.data();
@@ -118,9 +118,8 @@ T csr_entry(const MatrixView<T, MatrixFormat::CSR>& A, int row, int col, int bat
             return values[val_base + p];
         }
     }
-    return T(0);
+    return Scalar(0);
 }
-
 
 // Canonical 5-point 2D Laplacian on an m x m grid: the standard problem class
 // ILU preconditioning targets, and one where LOBPCG actually reaches tolerance
@@ -708,7 +707,6 @@ TEST_F(ILUKTests, SyevxInstrumentationAndPreconditioner) {
         return (count > 0) ? (sum / static_cast<float>(count)) : std::nanf("");
     };
 
-
     struct LevelAggregate {
         float ratio_sum = 0.0f;
         int ratio_count = 0;
@@ -1054,7 +1052,6 @@ Matrix<float, MatrixFormat::Dense> make_laplacian_2d_dense(int m, int batch) {
     return A;
 }
 
-
 // Where does computing k eigenpairs iteratively beat a full dense
 // eigendecomposition? syev returns the whole spectrum, syevx only the k smallest,
 // so this is the practical question of when to reach for which.
@@ -1337,10 +1334,9 @@ TEST_F(ILUKTests, DISABLED_PreconditionerAmortizationBenchmark) {
     }
 }
 
-
 TEST_F(ILUKTests, DISABLED_FactorLevelStructure) {
     struct Shape { int n; int batch; float density; };
-    const std::vector<Shape> shapes = {{256,1,0.02f},{1024,1,0.01f},{4096,1,0.003f}};
+    const std::vector<Shape> shapes = {{256, 1, 0.02f}, {1024, 1, 0.01f}, {4096, 1, 0.003f}};
     for (int level : {0, 1, 2}) {
         for (const auto& s : shapes) {
             auto csr = csr_generators::random_sparse_hermitian_csr<float>(s.n, s.density, s.batch, 1234u, 2.0f, true);
@@ -1364,9 +1360,9 @@ TEST_F(ILUKTests, DISABLED_FactorLevelStructure) {
             const int depthL = *std::max_element(lvlL.begin(), lvlL.end()) + 1;
             const int depthU = *std::max_element(lvlU.begin(), lvlU.end()) + 1;
             std::cout << "  level=" << level << " n=" << n << " lu_nnz=" << lu.nnz()
-                      << " nnz/row=" << (double)lu.nnz()/n
-                      << "  L_depth=" << depthL << " (avg " << (double)n/depthL << " rows/level)"
-                      << "  U_depth=" << depthU << " (avg " << (double)n/depthU << " rows/level)\n";
+                      << " nnz/row=" << static_cast<double>(lu.nnz())/n
+                      << "  L_depth=" << depthL << " (avg " << static_cast<double>(n)/depthL << " rows/level)"
+                      << "  U_depth=" << depthU << " (avg " << static_cast<double>(n)/depthU << " rows/level)\n";
         }
     }
 }

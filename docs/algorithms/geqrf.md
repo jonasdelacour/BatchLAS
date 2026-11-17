@@ -85,7 +85,7 @@ T_{1:j-1,\,j} = -\tau_j\, V_{:,1:j-1}^H v_j, \qquad
 T_{1:j-1,\,j} \leftarrow T_{1:j-1,1:j-1}\, T_{1:j-1,\,j}, \qquad T_{jj} = \tau_j .
 \f]
 
-- The two steps are [`src/kernels/common/larft_wy.hh:92-104`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/kernels/common/larft_wy.hh#L92-L104) and [`:107-115`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/kernels/common/larft_wy.hh#L107-L115); one work-group per
+- The two steps are [`src/kernels/common/larft_wy.hh:91-103`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/kernels/common/larft_wy.hh#L92-L104) and [`:107-115`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/kernels/common/larft_wy.hh#L107-L115); one work-group per
   matrix. \f$\tau_j = 0\f$ sets \f$T_{jj} = 0\f$ and leaves column \f$j\f$ at its zero fill ([`:73-79`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/kernels/common/larft_wy.hh#L73-L79), [`:84-90`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/kernels/common/larft_wy.hh#L84-L90)).
 - `pack_v_panel_batched` writes \f$V\f$ from the factored \f$A\f$: unit diagonal, zeros above ([`:275-281`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/kernels/common/larft_wy.hh#L275-L281)).
 
@@ -116,20 +116,20 @@ form has a bound of the same form by its own analysis [2, §19.5].
 
 ## geqrf: kernels and routing
 
-`tuned/geqrf.<device>.txt` ranks the routes; `can_run` ([`src/ops/geqrf/can_run.hh:28-44`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/geqrf/can_run.hh#L28-L44)) admits the
+`tuned/geqrf.<device>.txt` ranks the routes; `can_run` ([`src/ops/geqrf/can_run.hh:28-45`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/geqrf/can_run.hh#L28-L44)) admits the
 correct ones. No route takes a heterogeneous batch; native routes need a GPU and sub-group size 32.
 
 | Route | `can_run` adds | Kernel and mapping |
 | --- | --- | --- |
 | `tiny` | \f$m = n \le\f$ `geqrf_tiny_max_n_for_slm` (\f$\le 32\f$) | one matrix per partition of \f$N \in \{8, 16, 32\}\f$ lanes; lane \f$i\f$ holds row \f$i\f$ in registers |
-| `cta` | `geqrf_cta_fits`: \f$mn\f$ scalars fit the occupancy-scaled local memory | `geqr2_panel_device` on the matrix in local memory; a work-group per matrix, or a sub-group when \f$m, n \le 32\f$ and two or more fit a work-group ([`geqrf_cta.cc:83-97`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/geqrf/kernels/geqrf_cta.cc#L83-L97)) |
-| `blocked` | `geqrf_blocked_available`, CTA tier present | panel leaf, `larft`, three routed GEMMs |
+| `cta` | `geqrf_cta_fits`: \f$mn\f$ scalars fit the occupancy-scaled local memory | `geqr2_panel_device` on the matrix in local memory; a work-group per matrix, or a sub-group when \f$m, n \le 32\f$ and two or more fit a work-group ([`geqrf_cta.cc:82-96`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/geqrf/kernels/geqrf_cta.cc#L83-L97)) |
+| `blocked` | CTA tier present | panel leaf, `larft`, three routed GEMMs |
 | `vendor` | a vendor library; masked batches only on NETLIB | `backend::geqrf_vendor` |
 
 - **`tiny`** reduces with XOR butterflies ([`src/ops/geqrf/kernels/geqrf_tiny_device.hh:23-39`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/geqrf/kernels/geqrf_tiny_device.hh#L23-L39)) and
   applies in column chunks: \f$y_k = \bar\tau \sum_r \bar v_r a_{rk}\f$ summed in row order, then
-  \f$a_{rk} \mathrel{-}= v_r y_k\f$ ([`src/ops/geqrf/kernels/geqrf_tiny.cc:205-251`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/geqrf/kernels/geqrf_tiny.cc#L205-L251)).
-- **`blocked` panel leaf** ([`src/ops/geqrf/kernels/geqrf_cta.cc:426-436`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/geqrf/kernels/geqrf_cta.cc#L426-L436)): *Register* for `double`
+  \f$a_{rk} \mathrel{-}= v_r y_k\f$ ([`src/ops/geqrf/kernels/geqrf_tiny.cc:204-250`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/geqrf/kernels/geqrf_tiny.cc#L205-L251)).
+- **`blocked` panel leaf** ([`src/ops/geqrf/kernels/geqrf_cta.cc:425-435`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/geqrf/kernels/geqrf_cta.cc#L426-L436)): *Register* for `double`
   panels of width \f$\le 16\f$, height \f$\le 128\f$ ([`:388-401`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/geqrf/kernels/geqrf_cta.cc#L388-L401)), one row per work-item
   ([`src/ops/geqrf/geqrf_panel_reg_device.hh:154-214`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/geqrf/geqrf_panel_reg_device.hh#L154-L214)); else *Resident* if the panel fits local
   memory (`geqrf_leaf_fits`); else *Global*, the same device function on global memory.
@@ -157,7 +157,7 @@ reflectors into blocks of width \f$n_b\f$, \f$Q = Q_1 Q_2 \cdots Q_p\f$ with
   table ([`:77-82`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/ormqr/ormqr.cc#L77-L82)); routes `blocked` (GPU) and `vendor` ([`:53-63`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/ormqr/ormqr.cc#L53-L63)); complex `Trans` throws before
   routing, use `ConjTrans` ([`:67-72`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/ormqr/ormqr.cc#L67-L72)).
 - `ormqx_cta` is not a route: `ormbr`, `gesvd` and `syev_cta` call it for square \f$n \le 32\f$ QR or
-  QL factors, one rank-1 update per reflector ([`src/ops/ormqr/kernels/ormqr_cta.cc:98-154`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/ormqr/kernels/ormqr_cta.cc#L98-L154); limit [`:559-560`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/ormqr/kernels/ormqr_cta.cc#L559-L560)).
+  QL factors, one rank-1 update per reflector ([`src/ops/ormqr/kernels/ormqr_cta.cc:95-151`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/ormqr/kernels/ormqr_cta.cc#L98-L154); limit [`:559-560`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/ormqr/kernels/ormqr_cta.cc#L559-L560)).
 
 ## orgqr: forming Q
 
@@ -169,7 +169,7 @@ Q_{:,1:n} = H_1 H_2 \cdots H_n \begin{bmatrix} I_n \\ 0 \end{bmatrix}.
 \f]
 
 - `blocked`: \f$C \leftarrow I_{m \times n}\f$, then the routed `ormqr` (Left, NoTrans), then
-  \f$A \leftarrow C\f$ ([`src/ops/orgqr/kernels/orgqr_blocked.cc:229-240`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/orgqr/kernels/orgqr_blocked.cc#L229-L240), [`:248`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/orgqr/kernels/orgqr_blocked.cc#L248), [`:261-273`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/orgqr/kernels/orgqr_blocked.cc#L261-L273));
+  \f$A \leftarrow C\f$ ([`src/ops/orgqr/kernels/orgqr_blocked.cc:230-241`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/orgqr/kernels/orgqr_blocked.cc#L229-L240), [`:248`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/orgqr/kernels/orgqr_blocked.cc#L248), [`:261-273`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/orgqr/kernels/orgqr_blocked.cc#L261-L273));
   \f$n_b\f$ as `geqrf` ([`:40-53`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/orgqr/kernels/orgqr_blocked.cc#L40-L53)).
 - Each block updates all \f$n\f$ columns of \f$C\f$; `zungqr` skips the zero block of \f$[I_n; 0]\f$.
 - `can_run` ([`src/ops/orgqr/orgqr.cc:41-54`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/orgqr/orgqr.cc#L41-L54)): `blocked` needs a GPU and \f$n \le m\f$; `vendor` a

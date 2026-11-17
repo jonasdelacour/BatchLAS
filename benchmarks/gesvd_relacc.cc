@@ -257,7 +257,7 @@ void run_gesvd_relacc(miniacc::State& state) {
                 // MatrixView::triangularize. That helper indexes `i*ld + j` while
                 // naming i the row, so on this library's COLUMN-major storage its
                 // uplo is inverted: triangularize(Uplo::Upper) keeps the LOWER
-                // triangle (src/matrix.cc:797-806). Using it here silently fed
+                // triangle (src/matrix.cc:794-803). Using it here silently fed
                 // the kernel geqrf's Householder reflectors instead of R -- the
                 // factorisation still succeeded, it just factored the wrong
                 // matrix, which showed up only as a singular-value mismatch
@@ -341,7 +341,7 @@ void run_gesvd_relacc(miniacc::State& state) {
     }
 }
 
-} // namespace
+}  // namespace
 
 template <typename Real, Backend B>
 void ACC_GESVD_RELACC_BATCHLAS(miniacc::State& state) {
@@ -376,4 +376,4 @@ void ACC_GESVD_RELACC_BLOCKED(miniacc::State& state) {
 BATCHLAS_ACC_CUDA(ACC_GESVD_RELACC_QR, GesvdRelAccSizes)
 BATCHLAS_ACC_CUDA(ACC_GESVD_RELACC_BLOCKED, GesvdRelAccSizes)
 
-MINI_ACC_MAIN()
+MINI_ACC_MAIN();

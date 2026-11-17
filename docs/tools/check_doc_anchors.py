@@ -24,7 +24,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 sys.path.insert(0, os.path.join(REPO, ".github", "ci"))
 import check_evidence_anchors as evidence  # noqa: E402
 
-COMPOUND = re.compile(r'<compoundname>([^<]+)</compoundname>')
+COMPOUND = re.compile(r"<compoundname>([^<]+)</compoundname>")
 LOCATION = re.compile(r'<location file="([^"]+)"')
 SECTION = re.compile(r'<sect\d id="([^"]+)"')
 

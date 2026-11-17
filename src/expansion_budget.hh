@@ -20,18 +20,18 @@
 namespace batchlas::backend::detail {
 
 // Every element is written, so the caller's ld is irrelevant: pack, pad to 16 bytes for packet loads.
-template <typename T>
+template <typename Scalar>
 int expanded_ld(int n) {
-    constexpr int elements_per_packet = std::max<int>(1, 16 / sizeof(T));
+    constexpr int elements_per_packet = std::max<int>(1, 16 / sizeof(Scalar));
     return ::batchlas::detail::ceil_div(n, elements_per_packet) * elements_per_packet;
 }
 
-template <typename T>
+template <typename Scalar>
 std::size_t expanded_workspace_bytes(Queue& ctx, int n, int batch) {
     auto sizer = BumpAllocator::measuring();
-    sizer.allocate<T>(ctx, static_cast<std::size_t>(expanded_ld<T>(n)) *
-                               static_cast<std::size_t>(n) *
-                               static_cast<std::size_t>(batch));
+    sizer.allocate<Scalar>(ctx, static_cast<std::size_t>(expanded_ld<Scalar>(n)) *
+                                    static_cast<std::size_t>(n) *
+                                    static_cast<std::size_t>(batch));
     return sizer.required_bytes();
 }
 
@@ -47,13 +47,13 @@ inline std::size_t expansion_budget_bytes(const Queue& ctx) {
 // Three hard ceilings, not tuned: the batch in grid z (expand_mirrored, the folds), the
 // int-linearised SYCL range (2^31 elements of the PADDED expanded_ld x n x batch scratch) and
 // expansion_budget_bytes. max_grid_z is select::Device::max_groups_yz (CUDA 65535, Metal unbounded).
-template <typename T>
+template <typename Scalar>
 inline bool expansion_fits(const Queue& ctx, int n, int batch, std::size_t bytes,
                            std::int64_t max_grid_z = ::batchlas::ops::symm::kMaxGridBatch) {
     if (batch > max_grid_z) {
         return false;
     }
-    const std::size_t elements = static_cast<std::size_t>(expanded_ld<T>(n)) *
+    const std::size_t elements = static_cast<std::size_t>(expanded_ld<Scalar>(n)) *
                                  static_cast<std::size_t>(n) *
                                  static_cast<std::size_t>(batch);
     if (elements > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
@@ -64,16 +64,17 @@ inline bool expansion_fits(const Queue& ctx, int n, int batch, std::size_t bytes
 
 // Items per launch of a chunked expansion: the most (at most batch) whose scratch passes
 // expansion_fits; 0 only when a single item does not, the one shape a chunked family refuses.
-template <typename T>
+template <typename Scalar>
 inline int expansion_chunk(Queue& ctx, int n, int batch, std::int64_t max_grid_z) {
-    const std::size_t per_item = static_cast<std::size_t>(expanded_ld<T>(n)) * static_cast<std::size_t>(n);
+    const std::size_t per_item = static_cast<std::size_t>(expanded_ld<Scalar>(n)) * static_cast<std::size_t>(n);
     if (per_item == 0 || batch <= 0) return std::max(batch, 0);
-    const std::size_t by_bytes = expansion_budget_bytes(ctx) / (per_item * sizeof(T));
+    const std::size_t by_bytes = expansion_budget_bytes(ctx) / (per_item * sizeof(Scalar));
     const std::size_t by_range = static_cast<std::size_t>(std::numeric_limits<int>::max()) / per_item;
     std::size_t c = std::min({static_cast<std::size_t>(batch), static_cast<std::size_t>(std::max<std::int64_t>(
                                   max_grid_z, 0)), by_bytes, by_range});
     // The allocator's alignment padding can push the last item over: back off until it fits.
-    while (c > 0 && !expansion_fits<T>(ctx, n, int(c), expanded_workspace_bytes<T>(ctx, n, int(c)), max_grid_z)) --c;
+    while (c > 0 && !expansion_fits<Scalar>(ctx, n, int(c), expanded_workspace_bytes<Scalar>(ctx, n, int(c)),
+                                            max_grid_z)) --c;
     return static_cast<int>(c);
 }
 

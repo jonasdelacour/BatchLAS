@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Correctness suite for the chunked sub-group partition layer
-// (src/kernels/common/sg_partition/): SubGroupPartition<P, Masked> and every
+// (include/batchlas/device/detail/sg_partition/): SubGroupPartition<P, Masked> and every
 // collective of its front end, on whatever backend the device pass selects.
 //
 // Every kernel launches kNumWg work-groups of kSgPerWg sub-groups, so a
@@ -29,9 +29,9 @@
 
 #include <batchlas/util/group-invoke.hh>
 
-#include <src/kernels/common/sg_partition/sg_partition.hh>
+#include <batchlas/device/detail/sg_partition/sg_partition.hh>
 #include <src/sycl/impl.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <algorithm>
 #include <complex>
@@ -285,11 +285,11 @@ bool type_runnable() {
 inline bool vote_pred(uint32_t P, uint32_t chunk, uint32_t lid) {
     const uint32_t mode = chunk % 5u, odd = P - 1u - (chunk / 5u) % P;
     switch (mode) {
-    case 0: return (mix(chunk * P + lid) & 1u) != 0u;
-    case 1: return true;
-    case 2: return false;
-    case 3: return lid == odd;
-    default: return lid != odd;
+        case 0: return (mix(chunk * P + lid) & 1u) != 0u;
+        case 1: return true;
+        case 2: return false;
+        case 3: return lid == odd;
+        default: return lid != odd;
     }
 }
 
@@ -799,4 +799,4 @@ void isolation_all() {
 TEST(SgPartition, ChunkIsolationSG16) { isolation_all<16>(); }
 TEST(SgPartition, ChunkIsolationSG32) { isolation_all<32>(); }
 
-} // namespace
+}  // namespace

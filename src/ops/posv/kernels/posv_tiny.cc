@@ -9,16 +9,20 @@
 // transpose: at step i, lane i broadcasts rA[0..i-1] and lane r keeps element c == r;
 // N(N-1)/2 shuffles, independent of nrhs. evidence: docs/perf/potrf.md#posv-the-backward-solve-costs-a-transpose
 
-#include <src/kernels/common/solve_native.hh>
+#include <src/ops/posv/posv_native.hh>
+#include <src/kernels/common/info_target.hh>
+#include <src/kernels/common/launch.hh>
 
 #include <src/ops/potrf/potrf_native.hh>
+#include <batchlas/device/lapack/potrf.hh>
+#include <batchlas/device/sg_partition.hh>
 #include <src/kernels/common/tiny_device.hh>
 
 #include <src/queue.hh>
 #include <src/util/resident_capacity.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/util/batch_mask.hh>
-#include <src/sycl/kernel_attrs.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 
 #include <batchlas/error.hh>
 #include <batchlas/util/mempool.hh>
@@ -32,18 +36,12 @@
 namespace batchlas {
 
 // At namespace scope: a kernel name must not name an internal-linkage entity.
-template <typename T, int N, int NC, int NR, int MinBlocks, bool Masked>
+template <typename Scalar, int N, int NC, int NR, int MinBlocks, bool Masked>
 class PosvTinyKernel;
 
-namespace sycl_posv {
+namespace ops::posv {
 
 namespace {
-
-namespace tn = ::batchlas::tiny_native;
-namespace sd = ::batchlas::sycl_device;
-
-constexpr int kTinyWg = tn::kTinyWgSize;
-static_assert(kTinyWg == kPosvTinyWgSize, "src/ops/posv/posv.cc's can_run reads kPosvTinyWgSize");
 
 // A launch ABORT, not a slowdown, so it is encoded to fail at COMPILE time. Probed worst is
 // 255 (cdouble N=16 NR=4), the ISA ceiling, and that cell SPILLS.
@@ -52,14 +50,14 @@ constexpr int kWorstRegsPerThread = 255;
 // The bound is per SUB-PARTITION: 64 lanes is 2 warps in one of the four, 1 x 32 x 256 =
 // 8,192 of its 16,384. evidence: docs/perf/lu.md#the-register-cap-that-binds-is-per-sub-partition
 // Probe: scripts/register_probe.sh out.log '' batchlas_extensions_posv (a cta probe has no tiny kernel).
-static_assert(resident::sm89_fits(kWorstRegsPerThread, kTinyWg),
+static_assert(resident::sm89_fits(kWorstRegsPerThread, resident::kTinyWgSize),
               "re-run scripts/register_probe.sh before raising the tiny work-group size");
 
 // The same flat compile-time ceiling potrf_tiny carries, for the same reason: the tier
 // allocates no local memory, so no budget walk applies to it.
-template <typename T>
+template <typename Scalar>
 constexpr int tiny_cap() {
-    return std::is_same_v<T, std::complex<double>> ? 16 : 32;
+    return std::is_same_v<Scalar, std::complex<double>> ? 16 : 32;
 }
 
 // The RHS ladder is {1, 2, 4}; every RHS loop stops at nrhs, see gesv_tiny.cc.
@@ -77,15 +75,15 @@ constexpr int tiny_rhs_bucket(int nrhs) {
 // evidence: docs/perf/potrf.md#the-posv-local-memory-transpose
 // Masked: the batch mask folds into `live`, a template so the unmasked instance is the kernel as
 // it was (the runtime fold cost 4.3% on complex<float> n = 16, nrhs = 4 at batch 32768).
-template <typename T, int N, int NC, int NR, int Mpw, int MinBlocks, bool Slm, bool Masked>
+template <typename Scalar, int N, int NC, int NR, int Mpw, int MinBlocks, bool Slm, bool Masked>
 struct PosvTinyBody {
-    using DM = sycl_device::DevMap<T>;
+    using DM = sycl_device::DevMap<Scalar>;
     using D = typename DM::type;
     using R = typename DM::real;
     static constexpr bool real_diag = DM::is_complex;
-    using R4 = tn::tiny_r4<R>;
+    using R4 = tiny_native::tiny_r4<R>;
     static constexpr int kCpx = static_cast<int>(sizeof(D) / sizeof(R));
-    static constexpr int kW = tn::tiny_r4_width<D>();
+    static constexpr int kW = tiny_native::tiny_r4_width<D>();
     static constexpr int kNV = (N + kW - 1) / kW;   // vectors per buffer: one per lane
     D* ap;
     D* bp;
@@ -97,14 +95,31 @@ struct PosvTinyBody {
     const std::uint8_t* mask;          // the batch mask, null when unmasked
     sycl::local_accessor<R4, 1> slm;   // 2 phases x 2 parities x Mpw; one element when !Slm
 
-    BATCHLAS_REQD_SG_SIZE(32) BATCHLAS_LAUNCH_BOUNDS(kTinyWg, MinBlocks)
+    // b into rB (zero past nrhs), rX zeroed. A function, not a loop in operator(): an
+    // always_inline call (potf2_lower) right after a loop is spliced into the loop's exit
+    // block, which clang places AHEAD of the loop body, and every block of the kernel moves.
+    BATCHLAS_DEVICE_INLINE void load_rhs(D (&rB)[NR], D (&rX)[NR], const D* Bg, int lane, bool row_live) const {
+BATCHLAS_UNROLL_FULL
+        for (int k = 0; k < NR; ++k) {
+            // A BRANCH, not a `?:` over a 16-byte aggregate; see tiny_device.hh.
+            D v = D{};
+            if (row_live && k < nrhs) {
+                v = Bg[static_cast<std::ptrdiff_t>(lane) +
+                       static_cast<std::ptrdiff_t>(k) * ldbp];
+            }
+            rB[k] = v;
+            rX[k] = D{};
+        }
+    }
+
+    BATCHLAS_REQD_SG_SIZE(32) BATCHLAS_LAUNCH_BOUNDS(resident::kTinyWgSize, MinBlocks)
     void operator()(sycl::nd_item<1> it) const {
         constexpr int kMpw = Mpw;
         const auto sg = it.get_sub_group();
         const auto part = make_partition<N>(sg);
         const int wg_id = static_cast<int>(it.get_group_linear_id());
         const int lane = static_cast<int>(part.get_local_linear_id());
-        const int pidx = tn::tiny_partition_id(sg, part);
+        const int pidx = tiny_native::tiny_partition_id(sg, part);
         const int prob_id = wg_id * kMpw + pidx;
 
         // NO EARLY RETURN: tiny_device.hh's third invariant.
@@ -121,96 +136,27 @@ struct PosvTinyBody {
         // Upper is a LOAD TRANSFORM, not a second algorithm: A = U^H U is the
         // same recurrence on S(i,c) = conj(A(c,i)), so everything below reads
         // "lane r holds row r of L" whichever triangle the caller owns.
-        D rA[NC];
+        device::Frag<D, NC> rA;
         if (upper) {
-            tn::tiny_load_upper<D, NC>(rA, Ag, lda, lane, row_live, real_diag);
+            device::detail::reg_load_upper<D, NC>(rA.v, Ag, lda, lane, row_live, real_diag);
         } else {
-            tn::tiny_load_lower<D, NC>(rA, Ag, lda, lane, row_live, real_diag);
+            device::detail::reg_load_lower<D, NC>(rA.v, Ag, lda, lane, row_live, real_diag);
         }
 
         D rB[NR];   // b, then y
         D rX[NR];   // y on the pivot lane, then x
-BATCHLAS_UNROLL_FULL
-        for (int k = 0; k < NR; ++k) {
-            // A BRANCH, not a `?:` over a 16-byte aggregate; see tiny_device.hh.
-            D v = D{};
-            if (row_live && k < nrhs) {
-                v = Bg[static_cast<std::ptrdiff_t>(lane) +
-                       static_cast<std::ptrdiff_t>(k) * ldbp];
-            }
-            rB[k] = v;
-            rX[k] = D{};
-        }
+        load_rhs(rB, rX, Bg, lane, row_live);
 
-        bool alive = live;
-        int32_t linfo = 0;
-
-        // --- 1. potrf_tiny's recurrence. The order guard is a `continue`, never a
-        // `break`: a runtime break defeats the unroll at N >= 16, after which rA[j] is a
-        // dynamic index. Skipping the collectives is legal only because n is
-        // kernel-uniform (the entry point rejects a heterogeneous batch).
-BATCHLAS_UNROLL_FULL
-        for (int j = 0; j < NC; ++j) {
-            if (j >= n) continue;
-            const bool col_live = (j < n);
-            const R akk = select_from_group(part, sd::dev_real(rA[j]),
-                                            static_cast<uint32_t>(j));
-            // `!(akk > 0)`, not `akk <= 0`, so NaN is rejected too, as LAPACK does.
-            const bool bad = !(akk > R(0));
-            if (alive && col_live && bad) {
-                linfo = j + 1;   // 1-based; sticky, so FIRST FAILURE WINS
-                alive = false;
-            }
-            // Every failure effect is a value substitution, never control flow:
-            // `alive` is partition-uniform but NOT sub-group-uniform.
-            const bool act = alive && col_live;
-            const R dkk = act ? sycl::sqrt(akk) : R(1);
-            const R rinv = R(1) / dkk;   // NOT rsqrt: rsqrt.approx is not the reference
-
-            rA[j] = tn::tiny_select(
-                act,
-                tn::tiny_select(lane == j, sd::dev_from_real<D>(dkk),
-                                sd::dev_mul_real(rA[j], rinv)),
-                rA[j]);
-
-            // Column j of L to every lane: each lane stores ITS element, one barrier,
-            // vector loads. Double-buffered by parity like getrf_tiny's pivot row.
-            if constexpr (Slm) {
-                R4* const sp = &slm[((j & 1) * kMpw + pidx) * kNV];
-                R* const rp = reinterpret_cast<R*>(sp);
-                if constexpr (kCpx == 2) {
-                    rp[2 * lane] = rA[j].re;
-                    rp[2 * lane + 1] = rA[j].im;
-                } else {
-                    rp[lane] = rA[j];
-                }
-                sycl::group_barrier(sg);
-BATCHLAS_UNROLL_FULL
-                for (int v = 0; v < kNV; ++v) {
-                    if ((v + 1) * kW <= j + 1) continue;
-                    if (v * kW >= n || v * kW >= NC) continue;
-                    const R4 x = sp[v];
-BATCHLAS_UNROLL_FULL
-                    for (int e = 0; e < kW; ++e) {
-                        const int k = v * kW + e;
-                        if (k <= j || k >= NC || k >= n) continue;
-                        const D vk = tn::tiny_r4_get<D, R>(x, e);
-                        const D upd = sd::dev_sub(rA[k], sd::dev_mul(rA[j], sd::dev_conj(vk)));
-                        rA[k] = tn::tiny_select(act && k < n && k <= lane, upd, rA[k]);
-                    }
-                }
-            } else {
-BATCHLAS_UNROLL_FULL
-                for (int k = j + 1; k < NC; ++k) {
-                    if (k >= n) continue;
-                    const D vk = tn::tiny_bcast<D>(part, rA[j], static_cast<uint32_t>(k));
-                    const D upd = sd::dev_sub(rA[k], sd::dev_mul(rA[j], sd::dev_conj(vk)));
-                    // `k <= lane` keeps rA[k] for k > lane exactly zero for the
-                    // kernel's whole life, which is what makes the padding inert and
-                    // what both solves below rely on.
-                    rA[k] = tn::tiny_select(act && k < n && k <= lane, upd, rA[k]);
-                }
-            }
+        // --- 1. potrf_tiny's recurrence. Columns >= n skip their collectives (OrderGuard::Skip),
+        // legal only because n is kernel-uniform (the entry point rejects a heterogeneous
+        // batch). Slm: column j of L through local memory, double-buffered by parity.
+        int32_t linfo;
+        if constexpr (Slm) {
+            linfo = device::detail::potf2_reg<D, N, NC, device::detail::OrderGuard::Skip>(
+                device::wrap(part), rA, n, live, device::alg::BcastSlm<kMpw, sycl::local_accessor<R4, 1>>{slm, pidx});
+        } else {
+            linfo = device::detail::potf2_reg<D, N, NC, device::detail::OrderGuard::Skip>(device::wrap(part), rA, n, live,
+                                                                                              device::alg::BcastShuffle{});
         }
 
         // --- 2. forward solve L y = b, right-looking. L(r, i) is rA[i] on lane r,
@@ -218,14 +164,14 @@ BATCHLAS_UNROLL_FULL
 BATCHLAS_UNROLL_FULL
         for (int i = 0; i < NC; ++i) {
             if (i >= n) continue;
-            const D lii = tn::tiny_bcast<D>(part, rA[i], static_cast<uint32_t>(i));
-            const bool zero = sd::dev_is_zero(lii);
-            const D rc = sd::dev_recip(lii);
-            const bool use_mul = !zero && sd::dev_isfinite(rc) && !sd::dev_is_zero(rc);
+            const D lii = tiny_native::tiny_bcast<D>(part, rA[i], static_cast<uint32_t>(i));
+            const bool zero = sycl_device::dev_is_zero(lii);
+            const D rc = sycl_device::dev_recip(lii);
+            const bool use_mul = !zero && sycl_device::dev_isfinite(rc) && !sycl_device::dev_is_zero(rc);
 BATCHLAS_UNROLL_FULL
             for (int k = 0; k < NR; ++k) {
                 if (k >= nrhs) continue;   // kernel-uniform
-                const D bi = tn::tiny_bcast<D>(part, rB[k], static_cast<uint32_t>(i));
+                const D bi = tiny_native::tiny_bcast<D>(part, rB[k], static_cast<uint32_t>(i));
                 // A non-positive-definite leading minor is reported through
                 // `info` and LAPACK leaves X undefined; zero is chosen over the
                 // inf a bare divide would write, so a residual check reports the
@@ -233,14 +179,14 @@ BATCHLAS_UNROLL_FULL
                 // BRANCH on partition-uniform flags: a select pays the divide always.
                 D yi = D{};
                 if (use_mul) {
-                    yi = sd::dev_mul(bi, rc);
+                    yi = sycl_device::dev_mul(bi, rc);
                 } else if (!zero) {
-                    yi = sd::dev_div(bi, lii);
+                    yi = sycl_device::dev_div(bi, lii);
                 }
                 // Lane i writes rX, never rB: it is this step's shuffle source.
-                rX[k] = tn::tiny_select(lane == i, yi, rX[k]);
-                const D upd = sd::dev_sub(rB[k], sd::dev_mul(rA[i], yi));
-                rB[k] = tn::tiny_select(lane > i, upd, rB[k]);
+                rX[k] = tiny_native::tiny_select(lane == i, yi, rX[k]);
+                const D upd = sycl_device::dev_sub(rB[k], sycl_device::dev_mul(rA[i], yi));
+                rB[k] = tiny_native::tiny_select(lane > i, upd, rB[k]);
             }
         }
 
@@ -275,40 +221,40 @@ BATCHLAS_UNROLL_FULL
 BATCHLAS_UNROLL_FULL
                 for (int c = 0; c < NC; ++c) {
                     if (c >= i) continue;   // compile-time once both loops are unrolled
-                    const D v = tn::tiny_bcast<D>(part, rA[c], static_cast<uint32_t>(i));
-                    lir = tn::tiny_select(c == lane, v, lir);
+                    const D v = tiny_native::tiny_bcast<D>(part, rA[c], static_cast<uint32_t>(i));
+                    lir = tiny_native::tiny_select(c == lane, v, lir);
                 }
             }
 
-            const D lii = tn::tiny_bcast<D>(part, rA[i], static_cast<uint32_t>(i));
-            const D dii = sd::dev_conj(lii);   // real in exact arithmetic; not assumed
-            const bool zero = sd::dev_is_zero(dii);
-            const D rc = sd::dev_recip(dii);
-            const bool use_mul = !zero && sd::dev_isfinite(rc) && !sd::dev_is_zero(rc);
+            const D lii = tiny_native::tiny_bcast<D>(part, rA[i], static_cast<uint32_t>(i));
+            const D dii = sycl_device::dev_conj(lii);   // real in exact arithmetic; not assumed
+            const bool zero = sycl_device::dev_is_zero(dii);
+            const D rc = sycl_device::dev_recip(dii);
+            const bool use_mul = !zero && sycl_device::dev_isfinite(rc) && !sycl_device::dev_is_zero(rc);
 
 BATCHLAS_UNROLL_FULL
             for (int k = 0; k < NR; ++k) {
                 if (k >= nrhs) continue;   // kernel-uniform
-                const D yi = tn::tiny_bcast<D>(part, rX[k], static_cast<uint32_t>(i));
+                const D yi = tiny_native::tiny_bcast<D>(part, rX[k], static_cast<uint32_t>(i));
                 D xi = D{};
                 if (use_mul) {
-                    xi = sd::dev_mul(yi, rc);
+                    xi = sycl_device::dev_mul(yi, rc);
                 } else if (!zero) {
-                    xi = sd::dev_div(yi, dii);
+                    xi = sycl_device::dev_div(yi, dii);
                 }
                 // Lane i is the source of rX[k] and of every rA read above, and
                 // writes only rB; lanes below i update rX in place.
-                rB[k] = tn::tiny_select(lane == i, xi, rB[k]);
-                const D upd = sd::dev_sub(rX[k], sd::dev_mul(sd::dev_conj(lir), xi));
-                rX[k] = tn::tiny_select(lane < i, upd, rX[k]);
+                rB[k] = tiny_native::tiny_select(lane == i, xi, rB[k]);
+                const D upd = sycl_device::dev_sub(rX[k], sycl_device::dev_mul(sycl_device::dev_conj(lir), xi));
+                rX[k] = tiny_native::tiny_select(lane < i, upd, rX[k]);
             }
         }
 
         D* __restrict Aout = ap + static_cast<std::ptrdiff_t>(b) * stride_a;
         if (upper) {
-            tn::tiny_store_upper<D, NC>(rA, Aout, lda, lane, row_live);
+            device::detail::reg_store_upper<D, NC>(rA.v, Aout, lda, lane, row_live);
         } else {
-            tn::tiny_store_lower<D, NC>(rA, Aout, lda, lane, row_live);
+            device::detail::reg_store_lower<D, NC>(rA.v, Aout, lda, lane, row_live);
         }
 
         if (row_live) {
@@ -326,30 +272,30 @@ BATCHLAS_UNROLL_FULL
 };
 
 // The local-memory reads are for the 32-bit types at N >= 16, where they were measured.
-template <typename T, int N>
+template <typename Scalar, int N>
 constexpr bool posv_tiny_slm() {
-    return (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>) && N >= 16;
+    return (std::is_same_v<Scalar, float> || std::is_same_v<Scalar, std::complex<float>>) && N >= 16;
 }
 
-template <typename T, int N, int NC, int NR, int MinBlocks, bool Masked>
+template <typename Scalar, int N, int NC, int NR, int MinBlocks, bool Masked>
 Event posv_tiny_launch_b(Queue& ctx,
-                         T* a_ptr, int lda, int stride_a,
-                         T* b_ptr, int ldb, int stride_b,
+                         Scalar* a_ptr, int lda, int stride_a,
+                         Scalar* b_ptr, int ldb, int stride_b,
                          bool upper, int n, int nrhs, int batch, int32_t* info_ptr,
                          const std::uint8_t* mask) {
-    using DM = sycl_device::DevMap<T>;
+    using DM = sycl_device::DevMap<Scalar>;
     using D = typename DM::type;
-    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
-    static_assert(tn::tiny_n_is_legal(N), "the tiny ladder is {8, 16, 32}");
+    static_assert(sizeof(D) == sizeof(Scalar), "device scalar must be layout-compatible");
+    static_assert(tiny_native::tiny_n_is_legal(N), "the tiny ladder is {8, 16, 32}");
     static_assert(NR == 1 || NR == 2 || NR == kPosvTinyMaxRhs, "the RHS ladder is {1, 2, 4}");
     static_assert(NC <= N && NC % 2 == 0, "the column bucket is even and within the lanes");
 
     constexpr int kMpw = resident::pack_matrices_per_wg(
         /*bytes_per_matrix=*/1u, N, /*wg_slm_budget_bytes=*/~std::size_t(0),
-        kTinyWg, kTinyWg, /*max_pack=*/kTinyWg / N);
-    static_assert(kMpw * N == kTinyWg, "the tiny launch must fill its work-group exactly");
-    constexpr bool kSlm = posv_tiny_slm<T, N>();
-    using Body = PosvTinyBody<T, N, NC, NR, kMpw, MinBlocks, kSlm, Masked>;
+        resident::kTinyWgSize, resident::kTinyWgSize, /*max_pack=*/resident::kTinyWgSize / N);
+    static_assert(kMpw * N == resident::kTinyWgSize, "the tiny launch must fill its work-group exactly");
+    constexpr bool kSlm = posv_tiny_slm<Scalar, N>();
+    using Body = PosvTinyBody<Scalar, N, NC, NR, kMpw, MinBlocks, kSlm, Masked>;
 
     const int num_wg = (batch + kMpw - 1) / kMpw;
     const std::size_t slm_elems = kSlm ? std::size_t(4 * kMpw * Body::kNV) : 1;
@@ -360,36 +306,36 @@ Event posv_tiny_launch_b(Queue& ctx,
             static_cast<std::ptrdiff_t>(ldb), static_cast<std::ptrdiff_t>(stride_b),
             upper, n, nrhs, batch, info_ptr, mask,
             sycl::local_accessor<typename Body::R4, 1>(sycl::range<1>(slm_elems), h)};
-        batchlas::impl::parallel_for<PosvTinyKernel<T, N, NC, NR, MinBlocks, Masked>>(h,
+        batchlas::impl::parallel_for<PosvTinyKernel<Scalar, N, NC, NR, MinBlocks, Masked>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) *
-                                             static_cast<std::size_t>(kTinyWg)),
-                              sycl::range<1>(static_cast<std::size_t>(kTinyWg))),
+                                             static_cast<std::size_t>(resident::kTinyWgSize)),
+                              sycl::range<1>(static_cast<std::size_t>(resident::kTinyWgSize))),
             body);
     });
     return ctx.get_event();
 }
 
 // The column bucket: {12, 16} under N = 16 and {20, 24, 28, 32} under N = 32.
-template <typename T, int N>
+template <typename Scalar, int N>
 constexpr bool posv_nc_legal(int nc) {
-    if constexpr (!posv_tiny_slm<T, N>()) return nc == N;
+    if constexpr (!posv_tiny_slm<Scalar, N>()) return nc == N;
     return N == 16 ? (nc == 12 || nc == 16) : (nc == 20 || nc == 24 || nc == 28 || nc == 32);
 }
 inline int posv_nc_of(int n, int N) {
     if (N == 16) return n <= 12 ? 12 : 16;
-    if (N == 32) return n <= 20 ? 20 : tn::tiny_col_bucket(n, 4);
+    if (N == 32) return n <= 20 ? 20 : tiny_native::tiny_col_bucket(n, 4);
     return N;
 }
 
 // The launch bound per (type, N, NC, NR), each the argmin of a batch-32768 sweep over
 // {8, 12, 16}; float is flat within 2% and takes 16 throughout. N = 8 keeps the earlier
 // table. evidence: docs/perf/potrf.md#the-posv-local-memory-transpose
-template <typename T, int N, int NC, int NR>
+template <typename Scalar, int N, int NC, int NR>
 constexpr int posv_tiny_min_blocks() {
-    if constexpr (std::is_same_v<T, float>) {
+    if constexpr (std::is_same_v<Scalar, float>) {
         if constexpr (N == 8) return NR == 1 ? 1 : 16;
         return 16;
-    } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+    } else if constexpr (std::is_same_v<Scalar, std::complex<float>>) {
         if constexpr (N == 8) return NR == 1 ? 16 : 1;
         if constexpr (N == 16) return (NR == 4 || (NR == 2 && NC == 16)) ? 12 : 16;
         if constexpr (NC >= 28 || (NC == 24 && NR == 4)) return 8;
@@ -399,11 +345,11 @@ constexpr int posv_tiny_min_blocks() {
     }
 }
 
-template <typename T, int N, int NC, int NR, bool Masked>
-Event posv_tiny_launch_nc(Queue& ctx, T* a_ptr, int lda, int stride_a, T* b_ptr, int ldb,
+template <typename Scalar, int N, int NC, int NR, bool Masked>
+Event posv_tiny_launch_nc(Queue& ctx, Scalar* a_ptr, int lda, int stride_a, Scalar* b_ptr, int ldb,
                           int stride_b, bool upper, int n, int nrhs, int batch,
                           int32_t* info_ptr, const std::uint8_t* mask) {
-    return posv_tiny_launch_b<T, N, NC, NR, posv_tiny_min_blocks<T, N, NC, NR>(), Masked>(
+    return posv_tiny_launch_b<Scalar, N, NC, NR, posv_tiny_min_blocks<Scalar, N, NC, NR>(), Masked>(
         ctx, a_ptr, lda, stride_a, b_ptr, ldb, stride_b, upper, n, nrhs, batch, info_ptr, mask);
 }
 
@@ -433,27 +379,21 @@ Event posv_tiny_launch(Queue& ctx,
                                             upper, n, nrhs, batch, info_ptr, mask);
 }
 
-Span<int32_t> posv_tiny_layout(Queue& ctx, BumpAllocator& pool, int batch) {
-    return pool.allocate<int32_t>(ctx, static_cast<std::size_t>(batch));
-}
-
 }  // namespace
 
-template <typename T>
+template <typename Scalar>
 int posv_tiny_max_n() {
-    return tiny_cap<T>();
+    return tiny_cap<Scalar>();
 }
 
-template <typename T>
+template <typename Scalar>
 std::size_t posv_tiny_buffer_size(Queue& ctx,
-                                  const MatrixView<T, MatrixFormat::Dense>& A,
-                                  const MatrixView<T, MatrixFormat::Dense>& B) {
+                                  const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                  const MatrixView<Scalar, MatrixFormat::Dense>& B) {
     static_cast<void>(B);
     const int batch = static_cast<int>(A.batch_size());
     if (batch < 1) return 0;
-    return workspace_bytes([&](BumpAllocator& p) {
-        return posv_tiny_layout(ctx, p, batch);
-    });
+    return detail::info_scratch_bytes(ctx, batch);
 }
 
 // Every can_run gate is re-applied here; direct callers reach this without the selector.
@@ -468,10 +408,7 @@ Event posv_tiny_dispatch(Queue& ctx,
     const int nrhs = static_cast<int>(B.cols());
     const int batch = static_cast<int>(A.batch_size());
 
-    if (A.rows() != A.cols()) {
-        throw batchlas::invalid_argument("posv_tiny: A must be square");
-    }
-    if (n < 1 || nrhs < 1 || batch < 1) {
+    if (nrhs < 1) {
         throw batchlas::invalid_argument("posv_tiny: degenerate extents");
     }
     if (B.rows() != A.rows()) {
@@ -480,24 +417,8 @@ Event posv_tiny_dispatch(Queue& ctx,
     if (B.batch_size() != A.batch_size()) {
         throw batchlas::invalid_argument("posv_tiny: A and B must share a batch size");
     }
-    if (A.is_heterogeneous() || B.is_heterogeneous()) {
-        throw batchlas::invalid_argument("posv_tiny: heterogeneous batch is not supported");
-    }
-    const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU) {
-        throw batchlas::invalid_argument("posv_tiny: GPU queues only");
-    }
-    if (!dev.supports_sub_group_size(32)) {
-        // Enumerated, never MAX_SUB_GROUP_SIZE >= 32, which reports entry [0].
-        throw batchlas::unsupported(
-            "posv_tiny: device does not offer sub-group size 32, which the kernel requires");
-    }
-    if (static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE)) < kTinyWg) {
-        throw batchlas::unsupported(
-            "posv_tiny: the device's maximum work-group size is below the tier's " +
-            std::to_string(kTinyWg));
-    }
-    const int bucket = tn::tiny_bucket_ge(n);
+    native::require_launchable(ctx, "posv_tiny", A, {.square = true, .min_wg = resident::kTinyWgSize}, B);
+    const int bucket = tiny_native::tiny_bucket_ge(n);
     if (bucket < 1 || bucket > tiny_cap<T>()) {
         throw batchlas::unsupported(
             "posv_tiny: order " + std::to_string(n) +
@@ -512,10 +433,7 @@ Event posv_tiny_dispatch(Queue& ctx,
     }
 
     BumpAllocator pool(workspace);
-    // An empty or short caller span means "not requested" and draws pool scratch.
-    Span<int32_t> info = (info_out.size() >= static_cast<std::size_t>(batch))
-                             ? info_out
-                             : posv_tiny_layout(ctx, pool, batch);
+    Span<int32_t> info = detail::info_target(ctx, pool, info_out, static_cast<std::size_t>(batch));
 
     const bool upper = (uplo == Uplo::Upper);
     const std::uint8_t* const mask = detail::mask_ptr(detail::call_mask("posv", A, B));
@@ -576,5 +494,5 @@ BATCHLAS_POSV_TINY_INSTANTIATE(std::complex<double>)
 
 #undef BATCHLAS_POSV_TINY_INSTANTIATE
 
-}  // namespace sycl_posv
+}  // namespace ops::posv
 }  // namespace batchlas
