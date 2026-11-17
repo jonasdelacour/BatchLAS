@@ -63,7 +63,7 @@ void configure_steady_gemm(minibench::State& state, TimerFactory&& timer_factory
     state.SetKernel(std::function<void()>(kernel_once));
     state.SetTimedKernelMs(timer_factory(q, kernel_once));
     state.SetBatchEndWait(q);
-    state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * m * n * k), minibench::Rate);
+    state.SetMetric("GFLOPS", gemm_gflop(m, n, k, batch), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / static_cast<double>(batch)) * 1e6, minibench::Reciprocal);
 }
 
