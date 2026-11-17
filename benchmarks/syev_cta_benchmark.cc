@@ -37,10 +37,6 @@ inline void SyevCtaBenchSizesNetlib(Benchmark* b) {
     SyevCtaBenchSizes(b);
 }
 
-inline Uplo parse_uplo(int v) {
-    return (v == 0) ? Uplo::Lower : Uplo::Upper;
-}
-
 // CTA SYEV-like benchmark (CUDA/ROCm/MKL GPU backends)
 template <typename Scalar, Backend B>
 void BM_SYEV_CTA(minibench::State& state) {

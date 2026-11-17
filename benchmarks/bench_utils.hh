@@ -131,3 +131,14 @@
 inline batchlas::JobType parse_jobz(int v) {
     return (v == 0) ? batchlas::JobType::NoEigenVectors : batchlas::JobType::EigenVectors;
 }
+
+// uplo argument of the syev benchmarks: 0 = Lower, anything else (1) = Upper.
+inline batchlas::Uplo parse_uplo(int v) {
+    return (v == 0) ? batchlas::Uplo::Lower : batchlas::Uplo::Upper;
+}
+
+// jobu/jobvh argument of the gesvd cta/vendor benchmarks: 0 = None, anything else (1) = All.
+// gesvd_blocked_benchmark keeps its own parse_job, which also maps 2 to Thin.
+inline batchlas::SvdVectors parse_svd_job(int v) {
+    return (v == 0) ? batchlas::SvdVectors::None : batchlas::SvdVectors::All;
+}
