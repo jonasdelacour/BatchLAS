@@ -19,7 +19,7 @@ namespace batchlas {
 // is all ScopedEnvVar needs.
 namespace detail {
 BATCHLAS_API void reload_settings();
-}
+}  // namespace detail
 
 /// @brief True when `v` is exactly one of `1`, `true`, `TRUE`, `on`, `ON`.
 /// @param[in] v the variable's value (`std::getenv(...)`), not its name; `nullptr` means unset

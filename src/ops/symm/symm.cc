@@ -35,18 +35,18 @@ namespace ops::symm {
 
 using select::overloaded;
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
 template <Backend B>
 inline constexpr bool kExpandWired = select::native_gpu_backend<B> || B == Backend::ROCM;
 // ROCm's vendor arm symmetrizes a real copy (MatrixView::symmetrize is real-only).
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 inline constexpr bool kVendorWired =
-    select::has_library<B>(spec.vendor) && !(B == Backend::ROCM && !std::is_floating_point_v<T>);
+    select::has_library<B>(spec.vendor) && !(B == Backend::ROCM && !std::is_floating_point_v<Scalar>);
 
-template <typename T>
-select::Key key_of(const MV<T>& C) {
+template <typename Scalar>
+select::Key key_of(const MV<Scalar>& C) {
     return {{"form", form_of(C.rows(), C.cols())}, {"m", C.rows()}, {"n", C.cols()}, {"batch", C.batch_size()}};
 }
 
@@ -57,9 +57,9 @@ select::Key key_of(const MV<T>& C) {
 // BATCHLAS_EXPAND_MAX_BYTES / quarter-of-memory budget) and grid z holds its batch, so the launch
 // chunks the batch and only an item whose own scratch does not fit is refused. Mirror chunks the
 // batch too; its terms are the launch (256 lanes, two slabs of local memory, the row tiles in grid y).
-template <Backend B, typename T>
-bool can_run(const SymmChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
-             const MV<T>& C) {
+template <Backend B, typename Scalar>
+bool can_run(const SymmChoice& c, const select::Device& d, Queue& q, const MV<Scalar>& A, const MV<Scalar>& Bm,
+             const MV<Scalar>& C) {
     // Mirror and Expand honour a batch mask; the vendor's per-item loop cannot skip an item.
     const bool masked = batchlas::detail::any_batch_mask(A, Bm, C);
     constexpr bool kWired = kExpandWired<B>;
@@ -68,55 +68,58 @@ bool can_run(const SymmChoice& c, const select::Device& d, Queue& q, const MV<T>
                         C.cols() >= 1 && A.batch_size() >= 1;
     return std::visit(overloaded{
         [&](Mirror) {
-            return native && d.slm_budget_for(mirror::kWg) >= mirror::slm_bytes<T>() &&
-                   (C.rows() + mirror::tile<T>() - 1) / mirror::tile<T>() <= d.max_groups_yz;
+            return native && d.slm_budget_for(mirror::kWg) >= mirror::slm_bytes<Scalar>() &&
+                   (C.rows() + mirror::tile<Scalar>() - 1) / mirror::tile<Scalar>() <= d.max_groups_yz;
         },
-        [&](Expand) { return native && backend::detail::expansion_chunk<T>(q, A.rows(), 1, d.max_groups_yz) >= 1; },
-        [&](Vendor) { return kVendorWired<B, T> && d.has_vendor && homogeneous && !masked; },
+        [&](Expand) { return native && backend::detail::expansion_chunk<Scalar>(q, A.rows(), 1,
+                                                                                d.max_groups_yz) >= 1; },
+        [&](Vendor) { return kVendorWired<B, Scalar> && d.has_vendor && homogeneous && !masked; },
     }, c);
 }
 
 // rocBLAS has no symm wrapper: ROCm's vendor arm symmetrizes a copy of A and calls the public
 // gemm, with none of expand's batch or scratch limits. The copy dies here, so the call waits.
-template <Backend B, typename T>
-Event symmetrize_gemm(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta, Side side,
+template <Backend B, typename Scalar>
+Event symmetrize_gemm(Queue& q, const MV<Scalar>& A, const MV<Scalar>& Bm, const MV<Scalar>& C, Scalar alpha,
+                      Scalar beta, Side side,
                       Uplo uplo) {
-    Matrix<T, MatrixFormat::Dense> full(A.rows(), A.cols(), A.batch_size());
-    MV<T>::copy(q, full, A).wait();
+    Matrix<Scalar, MatrixFormat::Dense> full(A.rows(), A.cols(), A.batch_size());
+    MV<Scalar>::copy(q, full, A).wait();
     full.symmetrize(q, uplo).wait();
     if (side == Side::Left)
-        (void)gemm<B, T>(q, full, Bm, C, alpha, beta, Transpose::NoTrans, Transpose::NoTrans,
-                         ComputePrecision::Default);
+        (void)gemm<B, Scalar>(q, full, Bm, C, alpha, beta, Transpose::NoTrans, Transpose::NoTrans,
+                              ComputePrecision::Default);
     else
-        (void)gemm<B, T>(q, Bm, full, C, alpha, beta, Transpose::NoTrans, Transpose::NoTrans,
-                         ComputePrecision::Default);
+        (void)gemm<B, Scalar>(q, Bm, full, C, alpha, beta, Transpose::NoTrans, Transpose::NoTrans,
+                              ComputePrecision::Default);
     q.wait();
     return q.create_event_after_external_work();
 }
 
-template <Backend B, typename T>
-Event launch(Queue& q, const SymmChoice& c, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta,
+template <Backend B, typename Scalar>
+Event launch(Queue& q, const SymmChoice& c, const MV<Scalar>& A, const MV<Scalar>& Bm, const MV<Scalar>& C,
+             Scalar alpha, Scalar beta,
              Side side, Uplo uplo) {
     return std::visit(overloaded{
         [&](Mirror) -> Event {
             if constexpr (kExpandWired<B>)
-                return sycl_symm::symm_mirror<T, /*Herm=*/false>(q, A, Bm, C, alpha, beta, side, uplo,
-                                                                 level3::grid_chunk<B>(q));
+                return ops::symm::symm_mirror<Scalar, /*Herm=*/false>(q, A, Bm, C, alpha, beta, side, uplo,
+                                                                      level3::grid_chunk<B>(q));
             else
                 throw batchlas::internal_error("symm: mirror is wired for GPU backends only");  // can_run refuses it
         },
         [&](Expand) -> Event {
             if constexpr (kExpandWired<B>)
-                return level3::expand_gemm<B, T, /*Conjugate=*/false>(q, A, Bm, C, alpha, beta, side, uplo);
+                return level3::expand_gemm<B, Scalar, /*Conjugate=*/false>(q, A, Bm, C, alpha, beta, side, uplo);
             else
                 throw batchlas::internal_error("symm: expand is wired for GPU backends only");  // can_run refuses it
         },
         [&](Vendor) -> Event {
-            if constexpr (B == Backend::ROCM && kVendorWired<B, T>)
-                return symmetrize_gemm<B, T>(q, A, Bm, C, alpha, beta, side, uplo);
-            else if constexpr (B != Backend::ROCM && kVendorWired<B, T>)
-                return backend::symm_vendor<B, T>(q, A, Bm, C, alpha, beta, side, uplo);
-            else select::no_vendor<B, T>(spec);
+            if constexpr (B == Backend::ROCM && kVendorWired<B, Scalar>)
+                return symmetrize_gemm<B, Scalar>(q, A, Bm, C, alpha, beta, side, uplo);
+            else if constexpr (B != Backend::ROCM && kVendorWired<B, Scalar>)
+                return backend::symm_vendor<B, Scalar>(q, A, Bm, C, alpha, beta, side, uplo);
+            else select::no_vendor<B, Scalar>(spec);
         },
     }, c);
 }

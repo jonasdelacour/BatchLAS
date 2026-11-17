@@ -24,16 +24,16 @@ namespace ops::potrf {
 
 using select::overloaded;
 
-template <typename T>
-select::Key key_of(const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
+template <typename Scalar>
+select::Key key_of(const MatrixView<Scalar, MatrixFormat::Dense>& A, Uplo uplo) {
     return {{"uplo", uplo == Uplo::Lower ? "L" : "U"}, {"n", A.rows()}, {"batch", A.batch_size()}};
 }
 
 // Correctness only (R3): false means the driver would throw or answer wrongly. Each clause
 // is the argument check at the top of that driver's *_dispatch. The vendor factors each item at
 // the storage order, so no family takes a heterogeneous batch (known-defects #12).
-template <typename T>
-bool can_run(const PotrfChoice& c, const select::Device& d, const MatrixView<T, MatrixFormat::Dense>& A,
+template <typename Scalar>
+bool can_run(const PotrfChoice& c, const select::Device& d, const MatrixView<Scalar, MatrixFormat::Dense>& A,
              Uplo uplo) {
     // Every native family honours a batch mask; the vendor's batched call cannot skip an item.
     const bool masked = detail::any_batch_mask(A);
@@ -42,96 +42,96 @@ bool can_run(const PotrfChoice& c, const select::Device& d, const MatrixView<T, 
     const bool native = d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && n >= 1 && A.batch_size() >= 1;
     return std::visit(overloaded{
         [&](Tiny) {
-            return native && n <= sycl_potrf::potrf_tiny_max_n<T>() &&
-                   d.max_wg >= sycl_potrf::kPotrfTinyWgSize;
+            return native && n <= ops::potrf::potrf_tiny_max_n<Scalar>() &&
+                   d.max_wg >= resident::kTinyWgSize;
         },
-        [&](Cta) { return native && n <= sycl_potrf::potrf_cta_max_n_for_slm<T>(budget); },
+        [&](Cta) { return native && n <= ops::potrf::potrf_cta_max_n_for_slm<Scalar>(budget); },
         [&](const Lpanel& l) {
             // 0 for a panel width this scalar type does not instantiate.
             return native && uplo == Uplo::Lower &&
-                   n <= sycl_potrf::potrf_lpanel_max_n_for_slm<T>(budget, d.max_wg,
-                                                                  resident::kMinBlocksPerSm, l.panel);
+                   n <= ops::potrf::potrf_lpanel_max_n_for_slm<Scalar>(budget, d.max_wg,
+                                                                       resident::kMinBlocksPerSm, l.panel);
         },
         [&](Blocked) {
             // Either triangle; its leaf is the CTA kernel, so CTA must hold at least order 1.
-            return native && sycl_potrf::potrf_blocked_available<T>() &&
-                   sycl_potrf::potrf_cta_max_n_for_slm<T>(budget) >= 1;
+            return native &&
+                   ops::potrf::potrf_cta_max_n_for_slm<Scalar>(budget) >= 1;
         },
         [&](Vendor) { return d.has_vendor && !A.is_heterogeneous() && !masked; },
     }, c);
 }
 
-template <Backend B, typename T>
-Event launch(Queue& q, const PotrfChoice& c, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo,
+template <Backend B, typename Scalar>
+Event launch(Queue& q, const PotrfChoice& c, const MatrixView<Scalar, MatrixFormat::Dense>& A, Uplo uplo,
              Span<std::byte> ws, Span<int32_t> info) {
-    using MV = MatrixView<T, MatrixFormat::Dense>;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     return std::visit(overloaded{
-        [&](Tiny) { return sycl_potrf::potrf_tiny_dispatch<T>(q, A, uplo, ws, info); },
-        [&](Cta) { return sycl_potrf::potrf_cta_dispatch<T>(q, A, uplo, ws, info); },
+        [&](Tiny) { return ops::potrf::potrf_tiny_dispatch<Scalar>(q, A, uplo, ws, info); },
+        [&](Cta) { return ops::potrf::potrf_cta_dispatch<Scalar>(q, A, uplo, ws, info); },
         [&](const Lpanel& l) {
-            return sycl_potrf::potrf_lpanel_dispatch<T>(q, A, uplo, ws, info, resident::kMinBlocksPerSm,
-                                                        l.panel);
+            return ops::potrf::potrf_lpanel_dispatch<Scalar>(q, A, uplo, ws, info, resident::kMinBlocksPerSm,
+                                                             l.panel);
         },
         [&](Blocked) {
             // The public gemm and trsm: each child decides its own kernel.
-            return sycl_potrf::potrf_blocked_dispatch<T>(
+            return ops::potrf::potrf_blocked_dispatch<Scalar>(
                 q, A, uplo, ws, info,
-                [](Queue& c, const MV& a, const MV& b, const MV& r, T alpha, T beta, Transpose ta,
-                   Transpose tb, ComputePrecision p) { return gemm<B, T>(c, a, b, r, alpha, beta, ta, tb, p); },
-                [](Queue& c, const MV& a, const MV& b, T alpha, Side s, Uplo u, Transpose t, Diag dg) {
-                    return trsm<B, T>(c, a, b, alpha, s, u, t, dg);
+                [](Queue& c, const MV& a, const MV& b, const MV& r, Scalar alpha, Scalar beta, Transpose ta,
+                   Transpose tb, ComputePrecision p) { return gemm<B, Scalar>(c, a, b, r, alpha, beta, ta, tb, p); },
+                [](Queue& c, const MV& a, const MV& b, Scalar alpha, Side s, Uplo u, Transpose t, Diag dg) {
+                    return trsm<B, Scalar>(c, a, b, alpha, s, u, t, dg);
                 });
         },
         [&](Vendor) -> Event {
             if constexpr (select::has_library<B>(spec.vendor))
-                return backend::potrf_vendor<B, T>(q, A, uplo, ws, info);
-            else select::no_vendor<B, T>(spec);
+                return backend::potrf_vendor<B, Scalar>(q, A, uplo, ws, info);
+            else select::no_vendor<B, Scalar>(spec);
         },
     }, c);
 }
 
 // Exactly the chosen family's need (R5). Pure: no launch, no data read.
-template <Backend B, typename T>
-std::size_t workspace(Queue& q, const PotrfChoice& c, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
+template <Backend B, typename Scalar>
+std::size_t workspace(Queue& q, const PotrfChoice& c, const MatrixView<Scalar, MatrixFormat::Dense>& A, Uplo uplo) {
     return std::visit(overloaded{
-        [&](Tiny) { return sycl_potrf::potrf_tiny_buffer_size<T>(q, A); },
-        [&](Cta) { return sycl_potrf::potrf_cta_buffer_size<T>(q, A); },
-        [&](const Lpanel&) { return sycl_potrf::potrf_lpanel_buffer_size<T>(q, A); },
-        [&](Blocked) { return sycl_potrf::potrf_blocked_buffer_size<T>(q, A, uplo); },
+        [&](Tiny) { return ops::potrf::potrf_tiny_buffer_size<Scalar>(q, A); },
+        [&](Cta) { return ops::potrf::potrf_cta_buffer_size<Scalar>(q, A); },
+        [&](const Lpanel&) { return ops::potrf::potrf_lpanel_buffer_size<Scalar>(q, A); },
+        [&](Blocked) { return ops::potrf::potrf_blocked_buffer_size<Scalar>(q, A, uplo); },
         [&](Vendor) -> std::size_t {
             if constexpr (select::has_library<B>(spec.vendor))
-                return backend::potrf_vendor_buffer_size<B, T>(q, A, uplo);
-            else select::no_vendor<B, T>(spec);
+                return backend::potrf_vendor_buffer_size<B, Scalar>(q, A, uplo);
+            else select::no_vendor<B, Scalar>(spec);
         },
     }, c);
 }
 
 }  // namespace ops::potrf
 
-template <Backend B, typename T>
-Event potrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, Span<std::byte> workspace,
+template <Backend B, typename Scalar>
+Event potrf(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, Uplo uplo, Span<std::byte> workspace,
             Span<int32_t> info) {
-    potrf_validate_params<T>(A, uplo);
+    potrf_validate_params<Scalar>(A, uplo);
     (void)detail::call_mask("potrf", A);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // uplo is part of the coverage key; never inferred.
     const coverage::Shape shape{.m = A.rows(), .n = A.rows(), .k = A.rows(), .batch = A.batch_size(), .uplo = uplo};
-    return select::run<B, T>(
-        ops::potrf::spec, ctx, ops::potrf::key_of(A, uplo), ops::potrf::candidates<T>(),
-        [&](const auto& c, const auto& d) { return ops::potrf::can_run<T>(c, d, A, uplo); }, shape, {},
-        [&](const auto& c) { return ops::potrf::launch<B, T>(ctx, c, A, uplo, workspace, info); });
+    return select::run<B, Scalar>(
+        ops::potrf::spec, ctx, ops::potrf::key_of(A, uplo), ops::potrf::candidates<Scalar>(),
+        [&](const auto& c, const auto& d) { return ops::potrf::can_run<Scalar>(c, d, A, uplo); }, shape, {},
+        [&](const auto& c) { return ops::potrf::launch<B, Scalar>(ctx, c, A, uplo, workspace, info); });
 }
 
-template <Backend B, typename T>
-size_t potrf_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
-    potrf_validate_params<T>(A, uplo);
+template <Backend B, typename Scalar>
+size_t potrf_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, Uplo uplo) {
+    potrf_validate_params<Scalar>(A, uplo);
     (void)detail::call_mask("potrf_buffer_size", A);
     if (A.batch_size() == 0) return 0;
-    const auto c = select::pick<B, T>(
-        ops::potrf::spec, ctx, ops::potrf::key_of(A, uplo), ops::potrf::candidates<T>(),
-        [&](const auto& k, const auto& d) { return ops::potrf::can_run<T>(k, d, A, uplo); });
-    return ops::potrf::workspace<B, T>(ctx, c, A, uplo);
+    const auto c = select::pick<B, Scalar>(
+        ops::potrf::spec, ctx, ops::potrf::key_of(A, uplo), ops::potrf::candidates<Scalar>(),
+        [&](const auto& k, const auto& d) { return ops::potrf::can_run<Scalar>(k, d, A, uplo); });
+    return ops::potrf::workspace<B, Scalar>(ctx, c, A, uplo);
 }
 
 #define POTRF_INSTANTIATE(B_, fp) \

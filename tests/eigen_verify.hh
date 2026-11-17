@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
+#pragma once
 // Eigen checks shared by the syev tests: orthonormal V and ||AV - V diag(w)|| (MatrixView statics)
 // (orthogonality_rotations, eigen_residual), and eigenvalues against LAPACKE (values).
-#pragma once
 
 #include <tests/test_utils.hh>
 

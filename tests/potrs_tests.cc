@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // potrs (solve with a Cholesky factor), a routed op with two families: `fused` (both substitutions in
 // one launch, B in SLM) and `trsm` (two public trsm calls). Residuals through batchlas::verify on graded
 // SPD inputs, each family pinned and checked reached (coverage rows), the fused ceilings straddled and
@@ -52,15 +53,15 @@ using C = ps::PotrsChoice;
 using Pin = select::ScopedPin<C>;
 using ts::Live;
 
-template <typename T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename Scalar>
+using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
 // A0 (the whole Hermitian A) and B0 packed, one item when the batch is identical; a and b in padded,
 // poisoned storage (A ld n + 3, stride + 5; B ld n + 2, stride + 7), a holding A0's uplo triangle.
-template <typename T>
+template <typename Scalar>
 struct Sys {
     Uplo uplo;
-    Matrix<T> A0, B0, a, b;
+    Matrix<Scalar> A0, B0, a, b;
 };
 
 // The outermost potrs trace line for whatever `run` calls, and the choice it names.
@@ -106,7 +107,7 @@ protected:
     bool fits(int n, int nrhs) { return ps::fused_fits<T>(dev(), n, nrhs); }
     // The largest n the fused solve takes at nrhs = 8, from the device's own SLM budget.
     int fused_ceiling_n() {
-        return static_cast<int>(sycl_getrs::getrs_fused_max_rhs_elems<T>(static_cast<size_t>(dev().slm_budget)) / 8);
+        return static_cast<int>(ops::getrs::getrs_fused_max_rhs_elems<T>(static_cast<size_t>(dev().slm_budget)) / 8);
     }
 
     // cond > 1: a graded spectrum of that condition; identical: every item is one drawn item.

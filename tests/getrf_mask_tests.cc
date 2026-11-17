@@ -51,23 +51,23 @@ std::string label(const Shape& s) {
 
 using test_support::spread;
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct Problem {
     Queue& q;
     Shape s;
-    Matrix<T> A;
+    Matrix<Scalar> A;
     UnifiedVector<std::int64_t> piv;
     UnifiedVector<std::int32_t> info;
 
     Problem(Queue& queue, const Shape& shape)
-        : q(queue), s(shape), A(test_support::padded<T>(s.m, s.n, s.batch)),
+        : q(queue), s(shape), A(test_support::padded<Scalar>(s.m, s.n, s.batch)),
           piv(std::size_t(std::min(s.m, s.n)) * s.batch), info(std::size_t(s.batch)) {}
 
     // NETLIB writes int64 pivots; every native family packs 1-based int32 in the span's first half.
     static constexpr bool kInt64Pivots = B == Backend::NETLIB;
 
     void fill() {
-        T* p = A.data_ptr();
+        Scalar* p = A.data_ptr();
         const std::size_t per = std::size_t(A.stride()), ld = std::size_t(A.ld());
         for (std::size_t b = 0; b < std::size_t(s.batch); ++b)
             for (std::size_t j = 0; j < std::size_t(s.n); ++j)
@@ -75,7 +75,8 @@ struct Problem {
                     const std::size_t item = s.identical ? 0 : b, e = i + j * ld;
                     // Item 5 has a zero third column: info = 3 there (an active item in the masks).
                     const bool zero = !s.identical && b == 5 && j == 2;
-                    p[b * per + e] = zero ? T(0) : MatrixView<T>::make(spread(item, e, 1), spread(item, e, 2));
+                    p[b * per + e] = zero ? Scalar(0) : MatrixView<Scalar>::make(spread(item, e, 1),
+                                                                                 spread(item, e, 2));
                 }
     }
     mc::Case make_case() {
@@ -87,16 +88,16 @@ struct Problem {
         // Auto, and blocked's trsm and gemm, take the vendor unmasked and a native family masked.
         c.masked_reference = (s.spelling == "auto" || s.spelling == "blocked") && (B == Backend::CUDA || B == Backend::ROCM);
         c.prepare = [this] {
-            std::fill_n(A.data_ptr(), std::size_t(A.stride()) * s.batch, test_support::poison<T>());
+            std::fill_n(A.data_ptr(), std::size_t(A.stride()) * s.batch, test_support::poison<Scalar>());
             fill();
             std::fill(piv.begin(), piv.end(), std::int64_t(0x5A5A5A5A5A5A5A5A));
             std::fill(info.begin(), info.end(), std::int32_t(-77));
         };
         c.call = [this](Span<const std::uint8_t> mask, Span<std::byte> ws) {
-            getrf<B, T>(q, A.view().with_batch_mask(mask), piv.to_span(), ws, info.to_span());
+            getrf<B, Scalar>(q, A.view().with_batch_mask(mask), piv.to_span(), ws, info.to_span());
         };
         c.buffer_size = [this](Span<const std::uint8_t> mask) {
-            return getrf_buffer_size<B, T>(q, A.view().with_batch_mask(mask));
+            return getrf_buffer_size<B, Scalar>(q, A.view().with_batch_mask(mask));
         };
         c.outputs = [this] {
             const std::size_t mn = std::size_t(std::min(s.m, s.n));
@@ -129,13 +130,13 @@ protected:
     // Packed work-group width of the tiny partitions (64 lanes / the lane bucket N) and of cta.
     static int tiny_items(int n) { return 64 / (n <= 4 ? 4 : n <= 8 ? 8 : n <= 16 ? 16 : 32); }
     int cta_items(int m, int n) {
-        return int(sycl_getrf::getrf_cta_debug_launch<T>(*this->ctx, m, n) & 0xFFFFu);
+        return int(ops::getrf::getrf_cta_debug_launch<T>(*this->ctx, m, n) & 0xFFFFu);
     }
     std::size_t slm_budget() const {
         return resident::device_slm_budget(this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
     }
-    int cta_cap() const { return sycl_getrf::getrf_cta_max_n_for_slm<T>(slm_budget()); }
-    bool cta_fits(int m, int n) const { return sycl_getrf::getrf_cta_fits_rect<T>(m, n, slm_budget()); }
+    int cta_cap() const { return ops::getrf::getrf_cta_max_n_for_slm<T>(slm_budget()); }
+    bool cta_fits(int m, int n) const { return ops::getrf::getrf_cta_fits_rect<T>(m, n, slm_budget()); }
 };
 
 using Types = typename test_utils::backend_types<test_support::Config>::type;
@@ -154,7 +155,7 @@ TYPED_TEST(GetrfMask, EveryFamilyLeavesInactiveItemsUntouched) {
     }
     using T = typename TestFixture::T;
     for (int n : {3, 7, 13, 29}) {
-        if (n > sycl_getrf::getrf_tiny_max_n<T>()) continue;
+        if (n > ops::getrf::getrf_tiny_max_n<T>()) continue;
         this->check({"tiny", n, n, 24, TestFixture::tiny_items(n)});
     }
     // The advertised ceiling, a packed small order, and both m x n orientations where they fit.
@@ -171,7 +172,7 @@ TYPED_TEST(GetrfMask, SaturatingBatchIsBitIdentical) {
     if (!this->device()) GTEST_SKIP() << "tiny and cta are device families";
     this->check({"tiny", 8, 8, 1024, 8, true});
     using T = typename TestFixture::T;
-    if (17 <= sycl_getrf::getrf_tiny_max_n<T>()) this->check({"tiny", 17, 17, 1024, 2, true});
+    if (17 <= ops::getrf::getrf_tiny_max_n<T>()) this->check({"tiny", 17, 17, 1024, 2, true});
     const int n = std::min(24, this->cta_cap());
     this->check({"cta", n, n, 1024, this->cta_items(n, n), true});
 }

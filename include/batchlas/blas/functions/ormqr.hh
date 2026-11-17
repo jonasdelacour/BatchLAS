@@ -26,35 +26,34 @@ namespace batchlas {
 // Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
 // src/util/template-instantiations.hh. Keep in sync with the declarations below.
 namespace sig {
-template <typename T>
+template <typename Scalar>
 using ormqr = Event(Queue&,
-                    const MatrixView<T, MatrixFormat::Dense>&,
-                    const MatrixView<T, MatrixFormat::Dense>&,
-                    Side, Transpose, Span<T>, Span<std::byte>,
+                    const MatrixView<Scalar, MatrixFormat::Dense>&,
+                    const MatrixView<Scalar, MatrixFormat::Dense>&,
+                    Side, Transpose, Span<Scalar>, Span<std::byte>,
                     int32_t);
 
-template <typename T>
+template <typename Scalar>
 using ormqr_buffer_size = size_t(Queue&,
-                                 const MatrixView<T, MatrixFormat::Dense>&,
-                                 const MatrixView<T, MatrixFormat::Dense>&,
-                                 Side, Transpose, Span<T>,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                 const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                 Side, Transpose, Span<Scalar>,
                                  int32_t);
 
 // The vendor signatures deliberately drop the block-size hint (a WY panel width
 // means nothing to a vendor kernel), so they are spelled out, not aliased.
-template <typename T>
+template <typename Scalar>
 using ormqr_vendor = Event(Queue&,
-                           const MatrixView<T, MatrixFormat::Dense>&,
-                           const MatrixView<T, MatrixFormat::Dense>&,
-                           Side, Transpose, Span<T>, Span<std::byte>);
+                           const MatrixView<Scalar, MatrixFormat::Dense>&,
+                           const MatrixView<Scalar, MatrixFormat::Dense>&,
+                           Side, Transpose, Span<Scalar>, Span<std::byte>);
 
-template <typename T>
+template <typename Scalar>
 using ormqr_vendor_buffer_size = size_t(Queue&,
-                                        const MatrixView<T, MatrixFormat::Dense>&,
-                                        const MatrixView<T, MatrixFormat::Dense>&,
-                                        Side, Transpose, Span<T>);
+                                        const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                        const MatrixView<Scalar, MatrixFormat::Dense>&,
+                                        Side, Transpose, Span<Scalar>);
 }  // namespace sig
-
 
 /// @brief Batched multiplication by the orthogonal/unitary Q from geqrf().
 ///
@@ -64,7 +63,7 @@ using ormqr_vendor_buffer_size = size_t(Queue&,
 /// overwritten with
 /// \f$ \mathrm{op}(Q)\, C \f$ (`Side::Left`) or \f$ C\, \mathrm{op}(Q) \f$
 /// (`Side::Right`), where \f$ \mathrm{op}(Q) \f$ is Q for `NoTrans` and
-/// \f$ Q^H \f$ for `ConjTrans` (\f$ Q^T \f$ for real T, where `Trans` means the
+/// \f$ Q^H \f$ for `ConjTrans` (\f$ Q^T \f$ for real Scalar, where `Trans` means the
 /// same). Q is never formed.
 ///
 /// The kernel (the blocked WY apply on a GPU queue, or the vendor library) is
@@ -75,7 +74,7 @@ using ormqr_vendor_buffer_size = size_t(Queue&,
 /// out-of-order @p ctx the work runs on an internal in-order queue that first
 /// waits for everything already submitted to @p ctx.
 /// @tparam B  backend; the backend-deducing overload takes it from `ctx.backend()`
-/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @tparam Scalar  scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param[in]     ctx              queue the kernels are enqueued on
 /// @param[in]     A                batch of \f$m \times n\f$ geqrf() outputs holding the reflectors;
 ///                                 not modified
@@ -93,20 +92,20 @@ using ormqr_vendor_buffer_size = size_t(Queue&,
 ///      `Side::Right`, and A and C share a batch size
 /// @pre `tau.size() >= k * batch` (checked by the option overloads)
 /// @throws batchlas::workspace_error if @p workspace is smaller than the chosen kernel needs
-/// @throws batchlas::invalid_argument for `Transpose::Trans` with complex T (use
+/// @throws batchlas::invalid_argument for `Transpose::Trans` with complex Scalar (use
 ///         `ConjTrans`), and on non-conforming operands (blocked kernel)
 /// @throws batchlas::NoRouteError if no native kernel can run (e.g. a CPU queue) and
 ///         the vendor library was not built in
 /// @see OrmqrOptions
 /// @ingroup api_qr
 // Defined in src/ops/ormqr/ormqr.cc, which picks the kernel (flat selection).
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event ormqr(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A,
-                         const MatrixView<T, MatrixFormat::Dense>& C,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                         const MatrixView<Scalar, MatrixFormat::Dense>& C,
                          Side side,
                          Transpose trans,
-                         Span<T> tau,
+                         Span<Scalar> tau,
                          Span<std::byte> workspace,
                          int32_t block_size_hint = 0);
 
@@ -124,16 +123,16 @@ BATCHLAS_API Event ormqr(Queue& ctx,
 /// @param[in] block_size_hint  the call's WY panel width hint (0 = tuning table)
 /// @return bytes to pass as the `workspace` span of ormqr()
 /// @ingroup api_qr_lowlevel
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t ormqr_buffer_size(Queue& ctx,
-                                      const MatrixView<T, MatrixFormat::Dense>& A,
-                                      const MatrixView<T, MatrixFormat::Dense>& C,
+                                      const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                      const MatrixView<Scalar, MatrixFormat::Dense>& C,
                                       Side side,
                                       Transpose trans,
-                                      Span<T> tau,
+                                      Span<Scalar> tau,
                                       int32_t block_size_hint = 0);
 
-} // namespace batchlas
+}  // namespace batchlas
 
 namespace batchlas::backend {
 
@@ -148,13 +147,13 @@ namespace batchlas::backend {
 ///                           on return
 /// @return event of the last enqueued kernel
 /// @ingroup api_dispatch
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API Event ormqr_vendor(Queue& ctx,
-                                const MatrixView<T, MatrixFormat::Dense>& A,
-                                const MatrixView<T, MatrixFormat::Dense>& C,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& C,
                                 Side side,
                                 Transpose trans,
-                                Span<T> tau,
+                                Span<Scalar> tau,
                                 Span<std::byte> workspace);
 
 /// @brief Workspace query of the vendor arm of ormqr().
@@ -166,16 +165,15 @@ BATCHLAS_API Event ormqr_vendor(Queue& ctx,
 /// @param[in] tau    the call's reflector scalars; contents not read
 /// @return bytes to pass as the `workspace` span of backend::ormqr_vendor()
 /// @ingroup api_dispatch
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 BATCHLAS_API size_t ormqr_vendor_buffer_size(Queue& ctx,
-                                             const MatrixView<T, MatrixFormat::Dense>& A,
-                                             const MatrixView<T, MatrixFormat::Dense>& C,
+                                             const MatrixView<Scalar, MatrixFormat::Dense>& A,
+                                             const MatrixView<Scalar, MatrixFormat::Dense>& C,
                                              Side side,
                                              Transpose trans,
-                                             Span<T> tau);
+                                             Span<Scalar> tau);
 
-} // namespace batchlas::backend
-
+}  // namespace batchlas::backend
 
 namespace batchlas {
 

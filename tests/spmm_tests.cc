@@ -27,9 +27,9 @@ using namespace batchlas;
 // fixture would compare the kernel against a garbage A.
 // evidence: docs/perf/spmm.md#spmm-correctness-findings
 
-template <typename T, Backend B>
+template <typename Scalar, Backend B>
 struct TestConfig {
-    using ScalarType = T;
+    using ScalarType = Scalar;
     static constexpr Backend BackendVal = B;
 };
 
@@ -38,22 +38,22 @@ using MyTypes = typename test_utils::backend_types<TestConfig>::type;
 namespace {
 
 // Magnitudes in [-1, 1], so a long reduction does not cancel.
-template <typename T>
-T spmm_cov_value(int seed) {
-    using R = typename batchlas::base_type<T>::type;
+template <typename Scalar>
+Scalar spmm_cov_value(int seed) {
+    using R = typename batchlas::base_type<Scalar>::type;
     const R re = static_cast<R>(std::sin(0.7 * seed + 0.3));
     const R im = static_cast<R>(std::cos(1.3 * seed + 1.1));
-    if constexpr (test_utils::is_complex<T>::value) {
-        return T(re, im);
+    if constexpr (test_utils::is_complex<Scalar>::value) {
+        return Scalar(re, im);
     } else {
         (void)im;
         return re;
     }
 }
 
-template <typename T>
-bool spmm_is_finite(const T& v) {
-    if constexpr (test_utils::is_complex<T>::value) {
+template <typename Scalar>
+bool spmm_is_finite(const Scalar& v) {
+    if constexpr (test_utils::is_complex<Scalar>::value) {
         return std::isfinite(v.real()) && std::isfinite(v.imag());
     } else {
         return std::isfinite(v);

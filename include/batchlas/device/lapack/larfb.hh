@@ -1,0 +1,109 @@
+// SPDX-License-Identifier: MIT
+#pragma once
+// LAPACK xLARFB (DIRECT = Forward, STOREV = Columnwise): apply the block reflector H = I - V T V^H
+// of larft to C from the left or the right, on the in-group Level 3 (level3/group.hh): two gemms
+// and a trmm over the work-group's tiles, one matrix per work-group, everything in global memory
+// but the L3 stage (ws.local). larfb_from_panel is the WY step the blocked QR ops share (geqrf's
+// trailing update, every block of ormqr / orgqr): pack V from geqrf's storage, larft, larfb.
+
+#include <cstddef>
+#include <type_traits>
+
+#include <batchlas/blas/enums.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/lapack/larft.hh>
+#include <batchlas/device/level3/group.hh>
+
+namespace batchlas::device {
+
+namespace detail {
+// The L3 configuration of a QR tier::Blocked<NB, Alg>: Alg itself when it is an l3::cfg preset,
+// else RegTiled<Scalar, 32, 32, 8, 2, 2> (256 items, the in-group L3 tests' tile).
+template <class Alg, class Scalar> struct larfb_cfg_of {
+    using type = l3::cfg::RegTiled<Scalar, 32, 32, 8, 2, 2>;
+};
+template <l3::Config Alg, class Scalar> struct larfb_cfg_of<Alg, Scalar> {
+    static_assert(std::is_same_v<typename Alg::value_type, Scalar>,
+                  "larfb: the tier's l3 Cfg is for another scalar type");
+    using type = Alg;
+};
+}  // namespace detail
+
+template <class Alg, class Scalar> using larfb_cfg_t = typename detail::larfb_cfg_of<Alg, Scalar>::type;
+
+/// The QR family's default WY block width, the host blocked routes' (16 for double, else 32).
+template <class Scalar> constexpr int larfb_default_nb() { return std::is_same_v<Scalar, double> ? 16 : 32; }
+
+/// Elements of larfb's global work for C (m x n) and k reflectors: W1 and W2, k x n (Left) or
+/// m x k (Right).
+template <Side SD> constexpr std::size_t larfb_work_elems(int m, int n, int k) {
+    const std::size_t q = static_cast<std::size_t>(SD == Side::Left ? (n > 0 ? n : 0) : (m > 0 ? m : 0));
+    return 2 * static_cast<std::size_t>(k > 0 ? k : 0) * q;
+}
+
+namespace detail {
+// The executor a blocked QR op runs on: a WorkGroup of Cfg::threads items in 32-wide sub-groups
+// (larft's gemv packs over 32 lanes).
+template <class Cfg, class Ex> BATCHLAS_DEVICE_INLINE constexpr void larfb_check_ex() {
+    static_assert(is_work_group_v<Ex>, "larfb: the executor is a WorkGroup<WG, 32>");
+    static_assert(Ex::size == Cfg::threads, "larfb: the WorkGroup has the tier's l3 Cfg::threads items");
+    static_assert(Ex::sg_size == 32, "larfb: sub-group size 32 (larft)");
+}
+}  // namespace detail
+
+/// @brief ?LARFB (Forward, Columnwise) in a kernel: c := op(H) c (Left) or c op(H) (Right).
+///
+/// H = I - V T V^H; op(H) = H for NoTrans, H^H for ConjTrans (Trans on a real T). v (k columns,
+/// m rows for Left, n for Right) has its unit diagonal and zero upper triangle STORED, as larft
+/// takes it; t is k x k upper (its strict lower is not read). W1 = V^H C, W2 = op(T) W1, C -= V W2
+/// (Left; Right: W1 = C V, W2 = W1 op(T), C -= W2 V^H). Collective over a WorkGroup of
+/// Cfg::threads items; inputs visible on entry, c visible on return. Operands: l3::Global, a
+/// global Mat or device::item.
+/// @param ws  ws.local: the L3 stage (l3::smem_bytes<Cfg>()); ws.global: W1 then W2, packed,
+///            larfb_work_elems<SD>(m, n, k) elements of Cfg::value_type
+template <Side SD, Transpose TR, Direct DR, class Cfg, class Ex, class MV, class MT, class MC>
+    requires l3::Config<Cfg>
+BATCHLAS_DEVICE_INLINE void larfb(const Ex& ex, const MV& v, const MT& t, const MC& c, const Workspace& ws) {
+    static_assert(DR == Direct::Forward, "larfb: Direct::Forward (larft's only direction)");
+    using T = typename Cfg::value_type;
+    T* const work = carve_global(ws, WsSlot<T>{WsSpace::Global, 0, 0});
+    static_assert(!(Arith<T>::is_complex && TR == Transpose::Trans), "larfb: complex Trans is not H^H; use ConjTrans");
+    constexpr Transpose OT = TR == Transpose::NoTrans ? Transpose::NoTrans : Transpose::ConjTrans;
+    const auto vg = l3::global_of(v);
+    const auto cg = l3::global_of(c);
+    const int k = vg.n, m = cg.m, n = cg.n;
+    if (k <= 0 || m <= 0 || n <= 0) return;  // uniform: before any barrier
+    if constexpr (SD == Side::Left) {
+        const l3::Global<T> w1{work, k, k, n}, w2{work + static_cast<std::ptrdiff_t>(k) * n, k, k, n};
+        gemm<Transpose::ConjTrans, Transpose::NoTrans, Cfg>(ex, One{}, vg, cg, Zero{}, w1, ws);
+        trmm_out<Side::Left, Uplo::Upper, OT, Diag::NonUnit, Cfg>(ex, One{}, t, w1, w2, ws);
+        gemm<Transpose::NoTrans, Transpose::NoTrans, Cfg>(ex, NegOne{}, vg, w2, One{}, cg, ws);
+    } else {
+        const l3::Global<T> w1{work, m, m, k}, w2{work + static_cast<std::ptrdiff_t>(m) * k, m, m, k};
+        gemm<Transpose::NoTrans, Transpose::NoTrans, Cfg>(ex, One{}, cg, vg, Zero{}, w1, ws);
+        trmm_out<Side::Right, Uplo::Upper, OT, Diag::NonUnit, Cfg>(ex, One{}, t, w1, w2, ws);
+        gemm<Transpose::NoTrans, Transpose::ConjTrans, Cfg>(ex, NegOne{}, w2, vg, One{}, cg, ws);
+    }
+}
+
+/// The WY step of reflectors i0 .. i0 + ib - 1 of geqrf's storage a (Q of order a.m): V :=
+/// a(i0 :, i0 : i0 + ib) unit lower with zeros above (vbuf, ld a.m - i0), T := larft(V,
+/// tau(i0 :)) (tbuf, ld ldt >= ib), then larfb<SD, TR> on c (a.m - i0 rows for Left, columns
+/// for Right), with larfb's ws. a's diagonal and upper triangle are not read. Collective; c
+/// visible on return.
+template <Side SD, Transpose TR, class Cfg, class Ex, class Scalar>
+BATCHLAS_DEVICE_INLINE void larfb_from_panel(const Ex& ex, const l3::Global<Scalar>& a, int i0, int ib, const Scalar* tau, const l3::Global<Scalar>& c,
+                                          Scalar* vbuf, Scalar* tbuf, int ldt, const Workspace& ws) {
+    const int mv = a.m - i0;
+    const auto panel = mat(a.p + i0 + static_cast<std::ptrdiff_t>(i0) * a.ld, mv, ib, a.ld);
+    const auto v = mat(vbuf, mv, ib, mv);
+    lacpy<Part::Lower, Transpose::NoTrans, alg::Walk, alg::EdgeNone, DiagFill::Unit>(ex, panel, v);
+    laset<Part::StrictUpper>(ex, Zero{}, Zero{}, v);
+    ex.barrier(Mem::Global);  // V complete before larft's gemv reads its columns
+    larft(ex, v, vec(tau + i0, ib), mat(tbuf, ib, ib, ldt));
+    ex.barrier(Mem::Global);  // T complete before the trmm stages it
+    larfb<SD, TR, Direct::Forward, Cfg>(ex, l3::Global<Scalar>{vbuf, mv, mv, ib}, l3::Global<Scalar>{tbuf, ldt, ib, ib},
+                                        c, ws);
+}
+
+}  // namespace batchlas::device

@@ -14,22 +14,24 @@
 
 namespace batchlas::ops::ormqr::detail {
 
-template <Backend B, typename T, typename... Args>  /// backend::ormqr_vendor. @throws NoRouteError without the library.
+template <Backend B, typename Scalar, typename... Args>  /// backend::ormqr_vendor. @throws NoRouteError without the library.
 Event ormqr_vendor_or_throw(Args&&... args) {
     if constexpr (!batchlas::select::factorization_vendor_available<B>) {
-        batchlas::select::throw_no_vendor_route<T>(batchlas::Op::ormqr, B, batchlas::select::kFactorizationLibrary<B>);
+        batchlas::select::throw_no_vendor_route<Scalar>(batchlas::Op::ormqr, B,
+                                                        batchlas::select::kFactorizationLibrary<B>);
     } else {
-        return batchlas::backend::ormqr_vendor<B, T>(std::forward<Args>(args)...);
+        return batchlas::backend::ormqr_vendor<B, Scalar>(std::forward<Args>(args)...);
     }
 }
 
-template <Backend B, typename T, typename... Args>  /// Its workspace size. @throws NoRouteError without the library.
+template <Backend B, typename Scalar, typename... Args>  /// Its workspace size. @throws NoRouteError without the library.
 std::size_t ormqr_vendor_buffer_size_or_throw(Args&&... args) {
     if constexpr (!batchlas::select::factorization_vendor_available<B>) {
-        batchlas::select::throw_no_vendor_route<T>(batchlas::Op::ormqr, B, batchlas::select::kFactorizationLibrary<B>);
+        batchlas::select::throw_no_vendor_route<Scalar>(batchlas::Op::ormqr, B,
+                                                        batchlas::select::kFactorizationLibrary<B>);
     } else {
-        return batchlas::backend::ormqr_vendor_buffer_size<B, T>(std::forward<Args>(args)...);
+        return batchlas::backend::ormqr_vendor_buffer_size<B, Scalar>(std::forward<Args>(args)...);
     }
 }
 
-} // namespace batchlas::ops::ormqr::detail
+}  // namespace batchlas::ops::ormqr::detail

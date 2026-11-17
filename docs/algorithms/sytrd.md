@@ -9,7 +9,7 @@ the two-stage path (`sytrd_sy2sb` + `sytrd_sb2st_hh`) goes through a band of wid
 chases bulges [4]. Measurements: @ref perf_sytrd and @ref perf_syev.
 
 Indices are 1-based (the code is 0-based); \f$u\f$ is the unit roundoff. Only `Uplo::Lower` is
-implemented: `syev` mirrors `Upper` input into Lower first ([`src/ops/syev/kernels/uplo_mirror.cc:39-47`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/kernels/uplo_mirror.cc#L39-L47)).
+implemented: `syev` mirrors `Upper` input into Lower first ([`src/ops/syev/kernels/uplo_mirror.cc:38-46`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/kernels/uplo_mirror.cc#L39-L47)).
 
 ## sytrd: the Householder similarity step
 
@@ -56,11 +56,11 @@ real, \f$\tau\f$ complex [7]). The diagonal unitary
 gives \f$D^H T D = T_r\f$ with off-diagonal \f$|t_i|\f$. If \f$T_r = Z \Lambda Z^T\f$, the
 eigenvectors of \f$T\f$ are \f$D Z\f$.
 
-- One-stage, complex only: \f$D\f$ [`src/ops/syev/kernels/syev_blocked.cc:205-228`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/kernels/syev_blocked.cc#L205-L228),
+- One-stage, complex only: \f$D\f$ [`src/ops/syev/kernels/syev_blocked.cc:203-226`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/kernels/syev_blocked.cc#L205-L228),
   \f$Z \leftarrow D Z\f$ [`:287-304`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/kernels/syev_blocked.cc#L287-L304).
 - Two-stage, every type: `sytrd_sb2st_hh` stores \f$|t_i|\f$ and the signed \f$t_i\f$
-  ([`src/ops/syev/sytrd/sytrd_sb2st_hh.cc:427-430`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_sb2st_hh.cc#L427-L430)), so real data get a sign vector \f$D\f$.
-  \f$D\f$ [`src/kernels/common/two_stage_common.hh:59-91`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/kernels/common/two_stage_common.hh#L59-L91), \f$Z \leftarrow D Z\f$ [`:121-147`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/kernels/common/two_stage_common.hh#L121-L147).
+  ([`src/ops/syev/sytrd/sytrd_sb2st_hh.cc:426-429`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_sb2st_hh.cc#L427-L430)), so real data get a sign vector \f$D\f$.
+  \f$D\f$ [`src/kernels/common/two_stage_common.hh:58-90`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/kernels/common/two_stage_common.hh#L59-L91), \f$Z \leftarrow D Z\f$ [`:121-147`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/kernels/common/two_stage_common.hh#L121-L147).
 
 ## sytrd: the LATRD panel and the lazy rank-2k update
 
@@ -73,7 +73,7 @@ columns' share of the update:
 a_i \leftarrow a_i - V_{:,1:i-1} W_{i,1:i-1}^H - W_{:,1:i-1} V_{i,1:i-1}^H
 \f]
 
-([`src/ops/syev/sytrd/latrd_lower_panel.cc:270-297`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/latrd_lower_panel.cc#L270-L297)). The reflector is generated ([`:302-357`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/latrd_lower_panel.cc#L302-L357)), and
+([`src/ops/syev/sytrd/latrd_lower_panel.cc:269-296`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/latrd_lower_panel.cc#L270-L297)). The reflector is generated ([`:302-357`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/latrd_lower_panel.cc#L302-L357)), and
 \f$w_i\f$ is formed against the not-yet-updated \f$A\f$:
 
 \f[
@@ -93,24 +93,24 @@ half of the \f$\tfrac43 n^3\f$ flops [3].
 
 | Piece | Variant | Where chosen |
 | --- | --- | --- |
-| \f$n \le 32\f$, sub-group 32 | `sytrd_cta` (above) | [`sytrd_blocked.cc:656-660`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_blocked.cc#L656-L660) |
-| \f$n \le 64\f$, non-native backend, float (any type if forced), \f$n(n{+}1)\f$ fit in local memory | local-memory `sytd2` | [`sytrd_blocked.cc:662-700`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_blocked.cc#L662-L700) |
-| panel | one work-group per matrix; grid kernel when \f$m \ge\f$ `latrd_grid_min_n` (768) and more than one group fits | [`latrd_lower_panel.cc:61-65`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/latrd_lower_panel.cc#L61-L65), [`1097-1102`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/latrd_lower_panel.cc#L1097-L1102) |
-| trailing \f$n_2 \le 128\f$ | fused into the panel ([`latrd_lower_panel.cc:444-469`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/latrd_lower_panel.cc#L444-L469)) or `update_vw_lower_small_legacy` ([`sytrd_blocked.cc:120-172`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_blocked.cc#L120-L172)) | [`sytrd_blocked.cc:739`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_blocked.cc#L739), [`:758-763`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_blocked.cc#L758-L763) |
+| \f$n \le 32\f$, sub-group 32 | `sytrd_cta` (above) | [`sytrd_blocked.cc:659-663`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_blocked.cc#L656-L660) |
+| \f$n \le 64\f$, non-native backend, float (any type if forced), \f$n(n{+}1)\f$ fit in local memory | local-memory `sytd2` | [`sytrd_blocked.cc:665-700`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_blocked.cc#L662-L700) |
+| panel | one work-group per matrix; grid kernel when \f$m \ge\f$ `latrd_grid_min_n` (768) and more than one group fits | [`latrd_lower_panel.cc:60-64`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/latrd_lower_panel.cc#L61-L65), [`1097-1102`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/latrd_lower_panel.cc#L1097-L1102) |
+| trailing \f$n_2 \le 128\f$ | fused into the panel ([`latrd_lower_panel.cc:443-468`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/latrd_lower_panel.cc#L444-L469)) or `update_vw_lower_small_legacy` ([`sytrd_blocked.cc:120-173`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_blocked.cc#L120-L172)) | [`sytrd_blocked.cc:739`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_blocked.cc#L739), [`:758-763`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_blocked.cc#L758-L763) |
 | trailing \f$n_2 > 128\f$ | `syr2k`/`her2k` (float, cfloat with a batched route), else two `gemm` | [`sytrd_blocked.cc:764-812`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_blocked.cc#L764-L812) |
 
 `restore_tridiag_lower` copies \f$d\f$ out and writes the stored \f$t_i\f$ back to both
-off-diagonals ([`sytrd_blocked.cc:554-561`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_blocked.cc#L554-L561)).
+off-diagonals ([`sytrd_blocked.cc:557-564`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_blocked.cc#L554-L561)).
 
 ## sytrd: dense to band (sy2sb)
 
 Stage 1 [4], [8] reduces \f$A\f$ to a band of semibandwidth \f$k_d\f$ (default 32, clamped to
-\f$n-1\f$; [`src/kernels/common/two_stage_common.hh:29-36`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/kernels/common/two_stage_common.hh#L29-L36)). For \f$i = 1, 1{+}k_d, \dots\f$, with
+\f$n-1\f$; [`src/kernels/common/two_stage_common.hh:28-35`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/kernels/common/two_stage_common.hh#L29-L36)). For \f$i = 1, 1{+}k_d, \dots\f$, with
 panel width \f$p_k = \min(k_d, n-i-k_d+1)\f$:
 
 1. QR of the block below the band, \f$A(i{+}k_d{:}n,\, i{:}i{+}p_k{-}1) = Q R\f$, with
    \f$Q = I - V \mathcal{T} V^H\f$ in compact WY form [6]
-   ([`src/ops/syev/sytrd/sytrd_sy2sb.cc:439`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_sy2sb.cc#L439); \f$\mathcal{T}\f$ by `larft`, [`:286-288`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_sy2sb.cc#L286-L288)).
+   ([`src/ops/syev/sytrd/sytrd_sy2sb.cc:438`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_sy2sb.cc#L439); \f$\mathcal{T}\f$ by `larft`, [`:286-288`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_sy2sb.cc#L286-L288)).
 2. Two-sided update \f$A_{22} \leftarrow Q^H A_{22} Q\f$, \f$A_{22} = A(i{+}k_d{:}n, i{+}k_d{:}n)\f$,
    reading the lower triangle only:
 
@@ -132,7 +132,7 @@ The reflectors of \f$Q_1\f$ stay in \f$A(k_d{+}1{:}n, 1{:}n{-}k_d)\f$.
 ## sytrd: band to tridiagonal by bulge chasing (sb2st)
 
 Stage 2 [4], [9] annihilates one column per sweep \f$s = 1, \dots, n-2\f$ with reflectors of length
-\f$\le k_d\f$, the `xSB2ST_KERNELS` sequence [10] ([`src/ops/syev/sytrd/sytrd_sb2st_hh.cc:391-412`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_sb2st_hh.cc#L391-L412)):
+\f$\le k_d\f$, the `xSB2ST_KERNELS` sequence [10] ([`src/ops/syev/sytrd/sytrd_sb2st_hh.cc:390-411`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_sb2st_hh.cc#L391-L412)):
 
 ```text
 r = [s+1, s+kd]
@@ -145,7 +145,7 @@ while the next block J = [r_end+1, r_end+kd] exists:
     r = J
 ```
 
-\f$\tau\f$ is real (`larfg`, [`sytrd_sb2st_hh.cc:363`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_sb2st_hh.cc#L363)), so the diagonal-block update is the rank-2
+\f$\tau\f$ is real (`larfg`, [`sytrd_sb2st_hh.cc:362`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_sb2st_hh.cc#L363)), so the diagonal-block update is the rank-2
 step of the first section ([`:252-300`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_sb2st_hh.cc#L252-L300)).
 
 - The bulge reaches \f$k_d\f$ rows below the band, so the working band holds \f$2k_d\f$
@@ -156,9 +156,8 @@ step of the first section ([`:252-300`](https://github.com/jonasdelacour/BatchLA
   not from pipelined sweeps as in [4].
 
 `sytrd_sb2st` is the Givens chase (`xSBTRD` [11]; Schwarz [12], Kaufman [13]): `lartg`/`largv`
-([`src/ops/syev/sytrd/sytrd_sb2st.cc:263-275`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_sb2st.cc#L263-L275)) and `lar2v` ([`:348-357`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_sb2st.cc#L348-L357)) per sweep. It discards
-\f$Q_2\f$, so `syev` uses it only for eigenvalues, under `BATCHLAS_SYEV_TWO_STAGE_CHASE=givens`
-([`two_stage_common.hh:42-45`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/kernels/common/two_stage_common.hh#L42-L45)). The public `sytrd_band_reduction` (successive band reduction [14])
+([`src/ops/syev/sytrd/sytrd_sb2st.cc:262-274`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_sb2st.cc#L263-L275)) and `lar2v` ([`:348-357`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_sb2st.cc#L348-L357)) per sweep. It discards
+\f$Q_2\f$, so `syev` does not call it: both modes use the Householder chase. The public `sytrd_band_reduction` (successive band reduction [14])
 is not called by `syev`.
 
 ## sytrd: eigenvector back-transformation
@@ -170,10 +169,10 @@ applied right to left, never formed:
 - \f$Z \leftarrow Q_2 Z\f$, \f$Q_2 = H_1 \cdots H_m\f$, \f$H_m\f$ first, each step
   \f$z \leftarrow z - \tau v (v^H z)\f$. Reflectors of one sweep act on disjoint rows and commute,
   so a sweep is one wave of concurrent updates ([`sytrd_sb2st_hh.hh:85-106`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_sb2st_hh.hh#L85-L106),
-  [`sytrd_sb2st_hh.cc:530-557`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_sb2st_hh.cc#L530-L557)).
+  [`sytrd_sb2st_hh.cc:529-556`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/sytrd/sytrd_sb2st_hh.cc#L530-L557)).
 - \f$Z(k_d{+}1{:}n, :) \leftarrow Q_1 Z(k_d{+}1{:}n, :)\f$ by blocked `ormqr` on the stage-1
   reflectors in place ([`src/ops/syev/kernels/syev_two_stage.cc:341-361`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/kernels/syev_two_stage.cc#L341-L361)). One-stage: the same with
-  the reflectors in \f$A(2{:}n, 1{:}n{-}1)\f$ ([`syev_blocked.cc:82-96`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/kernels/syev_blocked.cc#L82-L96), [`:307-330`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/kernels/syev_blocked.cc#L307-L330)).
+  the reflectors in \f$A(2{:}n, 1{:}n{-}1)\f$ ([`syev_blocked.cc:81-95`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/kernels/syev_blocked.cc#L82-L96), [`:307-330`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/syev/kernels/syev_blocked.cc#L307-L330)).
 
 Route selection between `cta`, `blocked` and `two_stage` is documented in @ref algo_syev.
 

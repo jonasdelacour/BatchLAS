@@ -115,13 +115,11 @@ inline void BandReductionBenchSizesNetlib(Benchmark* b) {
     }
 }
 
-} // namespace
-
 // Unified benchmark:
 // - mode=phase (default): run one sweep only
 // - mode=sequence: run a sequence of sweep configurations
-template <typename T, Backend B>
-static void BM_BAND_REDUCTION(minibench::State& state) {
+template <typename Scalar, Backend B>
+void BM_BAND_REDUCTION(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t kd = state.range(1);
     const size_t batch = state.range(2);
@@ -135,12 +133,12 @@ static void BM_BAND_REDUCTION(minibench::State& state) {
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B, /*in_order=*/true);
 
     // Create input band matrix (kd+1 rows, n columns, in lower-band format)
-    auto ab_in = Matrix<T>::Random(kd + 1, n, /*hermitian=*/false, batch, /*seed=*/2027);
+    auto ab_in = Matrix<Scalar>::Random(kd + 1, n, /*hermitian=*/false, batch, /*seed=*/2027);
 
-    using Real = typename base_type<T>::type;
+    using Real = typename base_type<Scalar>::type;
     auto d = Vector<Real>::zeros(n, batch);
     auto e = Vector<Real>::zeros(n - 1, batch);
-    auto tau = Vector<T>::zeros(n - 1, batch);
+    auto tau = Vector<Scalar>::zeros(n - 1, batch);
 
     SytrdBandReductionParams params;
     if (g_mode == BandReductionMode::Phase) {
@@ -164,7 +162,7 @@ static void BM_BAND_REDUCTION(minibench::State& state) {
                                                                    ab_in,
                                                                    VectorView<Real>(d),
                                                                    VectorView<Real>(e),
-                                                                   VectorView<T>(tau),
+                                                                   VectorView<Scalar>(tau),
                                                                    uplo,
                                                                    kd,
                                                                    params);
@@ -180,6 +178,8 @@ static void BM_BAND_REDUCTION(minibench::State& state) {
     state.SetMetric("GFLOPS", total_flops * 1e-9, minibench::Rate);
     state.SetMetric("T(µs)/matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
 }
+
+}  // namespace
 
 // Register benchmarks
 BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_BAND_REDUCTION, BandReductionBenchSizes);

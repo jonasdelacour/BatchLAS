@@ -70,13 +70,13 @@ void apply_sy2sb_reflectors_to_trailing(Queue& ctx,
     }
 }
 
-template <typename T, Backend B>
+template <typename Real, Backend B>
 struct SytrdSy2sbConfig {
-    using ScalarType = T;
+    using ScalarType = Real;
     static constexpr Backend BackendVal = B;
 };
 
-} // namespace
+}  // namespace
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 using SytrdSy2sbTestTypes = ::testing::Types<SytrdSy2sbConfig<float, Backend::CUDA>, SytrdSy2sbConfig<double, Backend::CUDA>>;

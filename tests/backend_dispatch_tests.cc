@@ -284,20 +284,20 @@ std::unique_ptr<Queue> fp64less_gpu_queue() {
 
 // Host-filled SPD matrix (diagonally dominant), with a poison value in the
 // unreferenced triangle so a launch that did run would show up.
-template <typename T>
-Matrix<T, MatrixFormat::Dense> spd_matrix(int n, int batch) {
-    Matrix<T, MatrixFormat::Dense> m(n, n, batch);
+template <typename Scalar>
+Matrix<Scalar, MatrixFormat::Dense> spd_matrix(int n, int batch) {
+    Matrix<Scalar, MatrixFormat::Dense> m(n, n, batch);
     auto v = m.view();
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i)
                 v.data_ptr()[b * v.stride() + j * v.ld() + i] =
-                    i == j ? T(n + 2) : T(0.25 / (1 + i + j));
+                    i == j ? Scalar(n + 2) : Scalar(0.25 / (1 + i + j));
     return m;
 }
 
-template <typename T>
-bool unchanged(const Matrix<T, MatrixFormat::Dense>& a, const Matrix<T, MatrixFormat::Dense>& b) {
+template <typename Scalar>
+bool unchanged(const Matrix<Scalar, MatrixFormat::Dense>& a, const Matrix<Scalar, MatrixFormat::Dense>& b) {
     const auto va = a.view(), vb = b.view();
     for (int k = 0; k < va.stride() * va.batch_size(); ++k)
         if (va.data_ptr()[k] != vb.data_ptr()[k]) return false;

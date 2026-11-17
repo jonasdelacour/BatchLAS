@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 """Sequential (un-pipelined) Householder SB2ST schedule + reflector store.
 

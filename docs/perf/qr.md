@@ -14,7 +14,7 @@ Native QR families (`geqrf`: `tiny`, `cta`, `blocked`; `orgqr` and `ormqr`: `blo
 
 | op | families (`choice.hh`, tie-break order) | `can_run` (correctness only) |
 |---|---|---|
-| `geqrf` | `tiny`, `cta`, `blocked`, `vendor` | native: no batch mask, `d.is_gpu && d.has_sg32`, homogeneous, `m, n, batch >= 1`; `tiny` adds `m == n && n <= geqrf_tiny_max_n_for_slm<T>(budget)`; `cta` is `geqrf_cta_fits<T>(m, n, budget)`; `blocked` needs `geqrf_blocked_available<T>()` and `geqrf_cta_max_elems_for_slm<T>(budget) >= 1`; `vendor` is `d.has_vendor` and homogeneous (`src/ops/geqrf/can_run.hh`) |
+| `geqrf` | `tiny`, `cta`, `blocked`, `vendor` | native: no batch mask, `d.is_gpu && d.has_sg32`, homogeneous, `m, n, batch >= 1`; `tiny` adds `m == n && n <= geqrf_tiny_max_n_for_slm<T>(budget)`; `cta` is `geqrf_cta_fits<T>(m, n, budget)`; `blocked` needs `geqrf_cta_max_elems_for_slm<T>(budget) >= 1`; `vendor` is `d.has_vendor` and homogeneous (`src/ops/geqrf/can_run.hh`) |
 | `orgqr` | `blocked`, `vendor` | `blocked`: GPU, homogeneous, `n <= m`; `vendor`: `d.has_vendor`, homogeneous (`src/ops/orgqr/orgqr.cc`) |
 | `ormqr` | `blocked`, `vendor` | not complex `Trans` (thrown earlier by `throw_if_undefined`), homogeneous A and C, GPU / vendor; no batch term ([defect 16](../design/known-defects.md#defect-16-blocked-qr-past-the-grid)) |
 
@@ -103,6 +103,10 @@ A resident-leaf launch asking for exactly 49,152 B of local memory fails in the 
 
 A phase-preserving `larfg` sign in place of LAPACK's real beta left every residual green: still a valid QR, not the one `ormqr`, `orgqr`, `sy2sb`, netlib and cuSOLVER expect. `ConventionMatchesReferenceLapackWithoutAVendor` (independent host `xGEQR2`) guards it vendor-free; `NativeFactorMatchesTheVendorElementwise` with a vendor. `zgeqr2` applies `conj(tau)`, invisible on real types. Elementwise `dF` against the vendor is \f$3 \times 10^{-6}\f$ / \f$8 \times 10^{-15}\f$ / \f$2 \times 10^{-6}\f$ / \f$4 \times 10^{-15}\f$ (float / double / cfloat / cdouble); `dtau` is 3-6x looser.
 
+### tau is checked by backward error, not elementwise
+
+`tau`'s forward error against the vendor follows the reduction order, not the reflector's quality. Over 96 seeds of the drop-in test's shapes (CUDA, 4090) the worst `dtau` is 257 eps on the legacy `geqr2` body (float 96 x 96; 2-4 of 96 seeds over the old single-seed 128-eps bound per type) and 527 eps on the core `larfg` / `larf<Left, arith::Fma>` body (cdouble 96 x 96); medians agree within 1.1x and neither body is the closer one on most seeds. `NativeFactorMatchesTheVendorElementwise` therefore judges accuracy by the native factor's backward error and orthogonality (`check_one`: \f$\|A - QR\|_F / \|A\|_F\f$ and \f$\|Q^H Q - I\|\f$ at the fixture's \f$(m + k)\,\epsilon\f$ bounds) and keeps only an elementwise `dtau` sanity bound of 1024 eps (16x the factor's 64 eps), about 2x above both maxima. A convention break moves `tau` by O(1) and stays red. Breaks in core `larfg`: LAPACK's beta sign flipped consistently turns `dF` and `dtau` red on every shape and type (the residuals stay green on all but one shape); `conj(tau)` turns complex red; `tau` scaled by \f$1 + 2^{-8}\f$ turns the backward error, the orthogonality and `dtau` red on every type.
+
 ### The `orgqr_buffer_size` latent defect
 
 A zero native workspace is a legitimate answer (the CTA tier reports it), so the size query must not treat 0 as "no native tier". It returns exactly the chosen family's need; a native call must never be sized by the batch-linear vendor workspace.
@@ -151,7 +155,7 @@ geqrf and orgqr lose at every percent (the parts under-fill the trailing gemms).
 2. **The CTA/blocked crossover is a single occupancy target, not a per-type area**: it lands 4-28% below the measured crossover; worst cell cfloat \f$128 \times 48\f$, where CTA is 1.925x faster but the fit sends it to `blocked` ([what the clamp costs](#settling-the-target-on-the-tall-panels)). Fix: a retune timing `cta` against `blocked` on the tall grid.
 3. **cfloat 97..110 is extrapolated; cdouble has no measured cell above \f$n = 64\f$.** The capacity (cfloat 76, cdouble 54) sends both bands to `blocked`.
 4. **`geqrf_panel_wg(n, max_wg)` never looks at `m`**: at double \f$n = 64\f$ at least 193 of 256 work-items idle through a 256-wide reduction; that kernel is 100% of GPU time in the worst `geqrf` loss (0.53x).
-5. **`larft_forward_columnwise_wg_legacy`** is 15-20% of GPU time (float \f$n = 1024\f$, cdouble \f$n = 256\f$) for about \f$1/60\f$ of the GEMM's arithmetic (serial T-update on `lid == 0`); `larft` plus `pack_v` is about 20-22%.
+5. **`larft_forward_columnwise_wg_legacy`** (the former serial body, since replaced by the device LA `larft`) was 15-20% of GPU time (float \f$n = 1024\f$, cdouble \f$n = 256\f$) for about \f$1/60\f$ of the GEMM's arithmetic (serial T-update on `lid == 0`); `larft` plus `pack_v` is about 20-22%.
 6. **`ormqr`'s width ladder is float-only and keyed on `A.rows()`** (`block_size()` in `ormqr.cc`, `tuning_params.hh`), costing 1.11-1.55x for the other types ([block-width evidence](#block-width-evidence)); a derived leg, so no table retune fixes it.
 7. **The `!dev_is_zero(r)` half of the reciprocal guard is untested** (needs `alpha - beta` to overflow, input about \f$10^{308}\f$).
 8. **`geqrf_buffer_size_bound`** reserves the blocked layout even where `cta` runs (168 MB float, 671 MB cdouble at \f$n = 64\f$ batch 8192); sizing W1/W2 on `n - nb` took about 28% off. Per-call host overhead of the eigen drivers' ~500 `geqrf` calls per \f$n = 1024\f$ solve is unmeasured.
@@ -206,7 +210,7 @@ What the clamp costs: crossovers sit at float \f$n = 64\f$ between \f$m = 192\f$
 
 `geqrf_cta_fits` is the tier's predicate (occupancy-scaled); `geqrf_leaf_fits` is residency at the whole budget. `geqrf_panel_factorize` and the blocked driver use the latter, so no blocked panel loses residency to the occupancy target, and only the resident leaf can reach the 48 KB hole.
 
-`geqr2_panel_device` is templated on `GeqrfScope`; under `SubGroup` (packed panels, `m <= 32 && n <= 32`) barriers and reductions are sub-group butterflies (`geqrf_sg_max`, `geqrf_sg_sum`), 1.2-5.0x faster.
+`geqr2_panel_device` is templated on `device::Scope`; under `Scope::Sub` (packed panels, `m <= 32 && n <= 32`) barriers and reductions are sub-group butterflies (`geqrf_sg_max`, `geqrf_sg_sum`), 1.2-5.0x faster.
 
 ## The tiny tier (WP6 / P1): square n <= 32 in registers {#the-tiny-tier-wp6--p1-square-n--32-in-registers}
 
@@ -351,15 +355,11 @@ Vendor-free and under a `native` pin, the rows rank `tiny` second after `vendor`
 
 ## QR: the shared WY machinery in larft_wy.hh
 
-`src/kernels/common/larft_wy.hh` holds `larft` (the \f$i_b \times i_b\f$ T factor, Forward/Columnwise) and `pack_v` (the unit-lower V panel), shared by `ormqr_blocked.cc`, `geqrf` and `sytrd_sy2sb.cc`.
+`src/kernels/common/larft_wy.hh` holds `larft` (the \f$i_b \times i_b\f$ T factor, Forward/Columnwise) and `pack_v` (the unit-lower V panel), shared by `ormqr_blocked.cc`, `geqrf_blocked.cc`, `ormbr.cc` and `sytrd_sy2sb.cc`.
 
 ### larft_wy.hh: why the WY helpers are shared
 
-One copy serves every caller. The legacy manual-reduction `larft` is the default; the device-BLAS one is reached only through `ormqr`'s `BATCHLAS_ORMQR_IMPL`.
-
-### larft_wy.hh: UseDevice is a template parameter
-
-A runtime `bool` instantiated both implementations per `(Tag, T, WG)` (32 dead entry functions, 9 s of device link). Callers passing a literal use the `_t` form.
+One copy serves every caller; `larft` is the device LA `device::larft` (`include/batchlas/device/lapack/larft.hh`). It needs 32-wide sub-groups; elsewhere `larft_forward_columnwise_batched` throws `batchlas::unsupported`.
 
 ### larft_wy.hh: pack_v indexes the row fastest
 

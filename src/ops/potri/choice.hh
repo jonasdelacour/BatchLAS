@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /// @file
@@ -13,7 +14,7 @@
 
 namespace batchlas::ops::potri {
 
-struct Cta : select::NoFields<"cta"> {};  ///< sycl_potri::potri_cta: trtri + lauum in local memory, one launch
+struct Cta : select::NoFields<"cta"> {};  ///< ops::potri::potri_cta: trtri + lauum in local memory, one launch
 /// LAPACK's blocked trtri then lauum: the CTA kernel on the \f$nb \times nb\f$ diagonal blocks, public trmm, gemm and herk/syrk.
 struct Blocked {
     int nb = 64;  ///< diagonal block order; the CTA kernel must hold one block
@@ -27,9 +28,9 @@ struct Blocked {
 using PotriChoice = std::variant<Cta, Blocked>;
 
 // Tie-break order (§6.3): cta first; nb = 128 for float only. evidence: docs/perf/potri.md#potri-selection
-template <class T>
+template <class Scalar>
 constexpr auto candidates() {
-    if constexpr (std::is_same_v<T, float>)
+    if constexpr (std::is_same_v<Scalar, float>)
         return std::array<PotriChoice, 3>{Cta{}, Blocked{64}, Blocked{128}};
     else
         return std::array<PotriChoice, 2>{Cta{}, Blocked{64}};

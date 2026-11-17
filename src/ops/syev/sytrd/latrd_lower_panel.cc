@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-#include <batchlas/blas/device.hh>
+#include <batchlas/device.hh>
+#include <batchlas/device/lapack/sytrd.hh>
 #include <batchlas/util/group-collectives.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/matrix.hh>
@@ -25,14 +26,15 @@
 #include <string>
 #include <type_traits>
 #include <batchlas/settings.hh>
+#include <batchlas/tuning_params.hh>
 
 namespace batchlas {
 
 namespace {
 
-enum class LatrdImpl { Legacy, Device, Grid };
+enum class LatrdImpl { Legacy, Grid };
 
-// BATCHLAS_LATRD_IMPL: unset/other -> Legacy, "device" -> Device, "grid" -> Grid.
+// BATCHLAS_LATRD_IMPL: unset/other -> Legacy, "grid" -> Grid.
 // Re-read on every call, never cached: a static would pin the first answer and
 // make an in-process A/B vacuous.
 // evidence: docs/perf/sytrd.md#sytrd-the-latrd-implementation-selector
@@ -40,12 +42,9 @@ inline LatrdImpl latrd_impl() {
     const char* v = batchlas::settings().selection.latrd_impl.get();
     if (!v) return LatrdImpl::Legacy;
     const std::string s(v);
-    if (s == "device") return LatrdImpl::Device;
     if (s == "grid") return LatrdImpl::Grid;
     return LatrdImpl::Legacy;
 }
-
-inline bool use_device_latrd() { return latrd_impl() == LatrdImpl::Device; }
 
 // Smallest n at which the multi-work-group panel is worth its grid barrier (five
 // device-scope syncs per panel column). A knob, not a formula: the crossover is a
@@ -65,88 +64,30 @@ inline bool use_grid_latrd(int64_t n) {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers used by the legacy kernel
-// ---------------------------------------------------------------------------
-
-// acc += a * b, and acc += conj(a) * b, in explicit real arithmetic: std::complex *
-// carries an Annex G isnan branch plus __mulsc3 call that stops the symv keeping
-// loads in flight. Product first, then add: the same association as the `acc += a * b`
-// it replaces, so results do not move. Real types take the plain multiply-add.
-// evidence: docs/perf/sytrd.md#sytrd-complex-multiply-in-the-latrd-symv
-template <typename U>
-inline void mac(U& acc, const U& a, const U& b) {
-    if constexpr (detail::is_complex<U>::value) {
-        using R = typename U::value_type;
-        const R ar = a.real(), ai = a.imag();
-        const R br = b.real(), bi = b.imag();
-        const R pr = ar * br - ai * bi;
-        const R pi = ar * bi + ai * br;
-        acc = U(acc.real() + pr, acc.imag() + pi);
-    } else {
-        acc += a * b;
-    }
-}
-
-// acc += conj(a) * b == (ar - i.ai)(br + i.bi)
-template <typename U>
-inline void mac_conj(U& acc, const U& a, const U& b) {
-    if constexpr (detail::is_complex<U>::value) {
-        using R = typename U::value_type;
-        const R ar = a.real(), ai = a.imag();
-        const R br = b.real(), bi = b.imag();
-        const R pr = ar * br + ai * bi;
-        const R pi = ar * bi - ai * br;
-        acc = U(acc.real() + pr, acc.imag() + pi);
-    } else {
-        acc += a * b;
-    }
-}
-
-// APPLIED TO THE SYMV ONLY, DELIBERATELY. Converting every other complex multiply in
-// this kernel made the panel 1.16x slower (register pressure). Do not "finish the
-// job" without re-measuring.
-// evidence: docs/perf/sytrd.md#sytrd-complex-multiply-in-the-latrd-symv
-
-// ---------------------------------------------------------------------------
-// Helper used by the device kernel
-// ---------------------------------------------------------------------------
-
-template <typename T>
-inline T hermitian_diagonal(const T& value) {
-    return value;
-}
-
-template <typename Real>
-inline std::complex<Real> hermitian_diagonal(const std::complex<Real>& value) {
-    return std::complex<Real>(value.real(), Real(0));
-}
-
-// ---------------------------------------------------------------------------
 // Kernel name tags — "Legacy" variants so both paths can coexist.
 // ---------------------------------------------------------------------------
-template <typename T, int WG, bool FuseTrailingUpdate> class LatrdLowerPanelKernelLegacy;
-template <typename T, int WG, bool FuseTrailingUpdate> class LatrdLowerPanelKernel;
-template <typename T, int WG, bool FuseTrailingUpdate> class LatrdLowerPanelKernelGrid;
+template <typename Scalar, int WG, bool FuseTrailingUpdate> class LatrdLowerPanelKernelLegacy;
+template <typename Scalar, int WG, bool FuseTrailingUpdate> class LatrdLowerPanelKernelGrid;
 
 // ---------------------------------------------------------------------------
 // Grid-path helpers
 // ---------------------------------------------------------------------------
 
-template <typename T>
-inline T pack_real(typename base_type<T>::type x) {
-    if constexpr (detail::is_complex<T>::value) {
-        return T(x, typename base_type<T>::type(0));
+template <typename Scalar>
+inline Scalar pack_real(typename base_type<Scalar>::type x) {
+    if constexpr (detail::is_complex<Scalar>::value) {
+        return Scalar(x, typename base_type<Scalar>::type(0));
     } else {
-        return T(x);
+        return Scalar(x);
     }
 }
 
-template <typename T>
-inline typename base_type<T>::type unpack_real(const T& x) {
-    if constexpr (detail::is_complex<T>::value) {
+template <typename Scalar>
+inline typename base_type<Scalar>::type unpack_real(const Scalar& x) {
+    if constexpr (detail::is_complex<Scalar>::value) {
         return x.real();
     } else {
-        return static_cast<typename base_type<T>::type>(x);
+        return static_cast<typename base_type<Scalar>::type>(x);
     }
 }
 
@@ -220,228 +161,58 @@ inline void* acquire_grid_scratch(Queue& q, size_t bytes) {
 // ---------------------------------------------------------------------------
 // Legacy kernel: manual group-reduction inner loops
 // ---------------------------------------------------------------------------
-template <typename T, int WG, bool FuseTrailingUpdate>
+template <typename Scalar, int WG, bool FuseTrailingUpdate>
 Event latrd_lower_panel_batched_wg_legacy(Queue& q,
-                                          const MatrixView<T, MatrixFormat::Dense>& a,
-                                          const VectorView<T>& e,
-                                          const VectorView<T>& tau,
-                                          const MatrixView<T, MatrixFormat::Dense>& w,
+                                          const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                                          const VectorView<Scalar>& e,
+                                          const VectorView<Scalar>& tau,
+                                          const MatrixView<Scalar, MatrixFormat::Dense>& w,
                                           const std::uint8_t* mask) {
     constexpr int wg = WG;
+    // Bytes per work-item, so the cap scales with WG (the panels shrink from WG 256 to 64).
+    // evidence: docs/perf/sytrd.md#sytrd-the-latrd-lower-panel-on-device-la-an-accepted-miss
+    const std::ptrdiff_t slm_floor =
+        static_cast<std::ptrdiff_t>(tuning::latrd_lower_panel_slm_floor<Scalar>(a.rows(), a.batch_size())) * wg;
 
     (void)q->submit([&](sycl::handler& h) {
-        KernelMatrixView<T, MatrixFormat::Dense> A_view(a.data_ptr(), a.rows(), a.cols(), a.ld(), a.stride(), a.batch_size());
-        KernelMatrixView<T, MatrixFormat::Dense> W_view(w.data_ptr(), w.rows(), w.cols(), w.ld(), w.stride(), w.batch_size());
+        KernelMatrixView<Scalar, MatrixFormat::Dense> A_view(a.data_ptr(), a.rows(), a.cols(), a.ld(), a.stride(), a.batch_size());
+        KernelMatrixView<Scalar, MatrixFormat::Dense> W_view(w.data_ptr(), w.rows(), w.cols(), w.ld(), w.stride(), w.batch_size());
 
-        VectorView<T> E_view = e;
-        VectorView<T> TAU_view = tau;
+        VectorView<Scalar> E_view = e;
+        VectorView<Scalar> TAU_view = tau;
 
         const int n = A_view.rows();
         const int batch = A_view.batch_size();
         const int ib = W_view.cols();
 
-        auto v_local   = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(n)), h);
-        auto wcol_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(n)), h);
-        auto vip_local  = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(ib)), h);
-        auto wip_local  = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(ib)), h);
+        auto v_local   = sycl::local_accessor<Scalar, 1>(sycl::range<1>(static_cast<size_t>(n)), h);
+        // Pad wcol_local so the four accessors total >= slm_floor bytes (occupancy cap; tuning_params.hh).
+        const std::ptrdiff_t pad = (slm_floor + static_cast<std::ptrdiff_t>(sizeof(Scalar)) - 1) /
+                                       static_cast<std::ptrdiff_t>(sizeof(Scalar)) - n - 2 * ib;
+        const size_t wcol_elems = static_cast<size_t>(std::max<std::ptrdiff_t>(n, pad));
+        auto wcol_local = sycl::local_accessor<Scalar, 1>(sycl::range<1>(wcol_elems), h);
+        auto vip_local  = sycl::local_accessor<Scalar, 1>(sycl::range<1>(static_cast<size_t>(ib)), h);
+        auto wip_local  = sycl::local_accessor<Scalar, 1>(sycl::range<1>(static_cast<size_t>(ib)), h);
 
-        batchlas::impl::parallel_for<LatrdLowerPanelKernelLegacy<T, WG, FuseTrailingUpdate>>(h,
+        batchlas::impl::parallel_for<LatrdLowerPanelKernelLegacy<Scalar, WG, FuseTrailingUpdate>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * wg), sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
                 const int b = static_cast<int>(it.get_group_linear_id());
                 if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: before the first barrier
 
-                const int lid = static_cast<int>(it.get_local_linear_id());
-                const sycl::group<1> g = it.get_group();
+                const device::WorkGroup<WG> ex{it};
 
                 auto Ab = A_view.batch_item(b);
                 auto Wb = W_view.batch_item(b);
-
-                for (int i = 0; i < ib; ++i) {
-                    if (i >= n - 1) break;
-
-                    if (lid < i) {
-                        const int p = lid;
-                        vip_local[p] = (i == p + 1) ? T(1) : Ab(i, p);
-                        wip_local[p] = Wb(i, p);
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    if (lid == 0) {
-                        T aii = Ab(i, i);
-                        for (int p = 0; p < i; ++p) {
-                            const T vip = vip_local[p];
-                            const T wip = wip_local[p];
-                            aii -= vip * batchlas::device::detail::conj(wip) + wip * batchlas::device::detail::conj(vip);
-                        }
-                        Ab(i, i) = aii;
-                    }
-
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        T val = Ab(r, i);
-                        for (int p = 0; p < i; ++p) {
-                            const T wip = wip_local[p];
-                            const T vip = vip_local[p];
-
-                            T vrp = T(0);
-                            if (r == p + 1) {
-                                vrp = T(1);
-                            } else if (r > p + 1) {
-                                vrp = Ab(r, p);
-                            }
-
-                            const T wrp = Wb(r, p);
-                            val -= vrp * batchlas::device::detail::conj(wip) + wrp * batchlas::device::detail::conj(vip);
-                        }
-                        Ab(r, i) = val;
-                    }
-                    it.barrier(sycl::access::fence_space::global_space);
-
-                    using Real = typename base_type<T>::type;
-
-                    const int x0 = i + 2;
-                    Real sumsq = Real(0);
-                    for (int r = x0 + lid; r < n; r += wg) {
-                        sumsq += detail::abs2_if_complex(Ab(r, i));
-                    }
-                    sumsq = batchlas::device::detail::reduce_sum_group(g, sumsq);
-
-                    T alpha = T(0);
-                    if (lid == 0 && i + 1 < n) {
-                        alpha = Ab(i + 1, i);
-                    }
-                    alpha = batchlas::portable::group_broadcast(g, alpha);
-
-                    T tau_i = T(0);
-                    T beta = alpha;
-                    T scale = T(0);
-
-                    if (lid == 0) {
-                        const Real xnorm = sycl::sqrt(sumsq);
-                        if constexpr (detail::is_complex<T>::value) {
-                            if (xnorm == Real(0) && alpha.imag() == Real(0)) {
-                                tau_i = T(0);
-                                beta = alpha;
-                                scale = T(0);
-                            } else {
-                                const Real alpha_abs = sycl::hypot(alpha.real(), alpha.imag());
-                                const Real beta_abs = sycl::hypot(alpha_abs, xnorm);
-                                const T alpha_sign = (alpha_abs == Real(0)) ? T(1) : (alpha / alpha_abs);
-                                beta = -alpha_sign * T(beta_abs);
-                                tau_i = (beta - alpha) / beta;
-                                scale = T(1) / (alpha - beta);
-                            }
-                        } else {
-                            if (xnorm == Real(0)) {
-                                tau_i = T(0);
-                                beta = alpha;
-                                scale = T(0);
-                            } else {
-                                beta = -detail::sign_nonzero(alpha) * T(sycl::hypot(static_cast<Real>(alpha), xnorm));
-                                tau_i = (beta - alpha) / beta;
-                                scale = T(1) / (alpha - beta);
-                            }
-                        }
-
-                        E_view(i, b) = beta;
-                        TAU_view(i, b) = tau_i;
-                        Ab(i + 1, i) = T(1);
-                    }
-
-                    tau_i = batchlas::portable::group_broadcast(g, tau_i);
-                    scale = batchlas::portable::group_broadcast(g, scale);
-
-                    if (tau_i != T(0)) {
-                        for (int r = x0 + lid; r < n; r += wg) {
-                            Ab(r, i) *= scale;
-                        }
-                    }
-                    it.barrier(sycl::access::fence_space::global_space);
-
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        v_local[r] = (r == i + 1) ? T(1) : Ab(r, i);
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    const int col = i;
-
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        // Symmetric mat-vec: acc = sum_c Ah(r,c) * v(c), where
-                        // Ah(r,c) is Ab(r,c) for c <= r and conj(Ab(c,r)) for c > r.
-                        // Ascending c crosses c == r once, so splitting the loop there
-                        // keeps the accumulation order (bit-identical) and removes the
-                        // per-element branch. Memory-latency bound: keep loads in flight.
-                        // evidence: docs/perf/sytrd.md#sytrd-rejected-latrd-symv-loop-shapes
-                        const int c_split = sycl::min(r, n - 1);
-
-                        T acc = T(0);
-
-                        // c in [i+1, r]: walk row r of the lower triangle.
-                        // Consecutive threads hold consecutive r, so each step is a
-                        // coalesced access across the warp.
-                        #pragma unroll 4
-                        for (int c = i + 1; c <= c_split; ++c) {
-                            mac(acc, Ab(r, c), v_local[c]);
-                        }
-
-                        // c in (r, n): walk column r of the lower triangle.
-                        // Contiguous per thread, so successive iterations reuse the
-                        // same cache lines.
-                        #pragma unroll 4
-                        for (int c = c_split + 1; c < n; ++c) {
-                            mac_conj(acc, Ab(c, r), v_local[c]);
-                        }
-
-                        wcol_local[r] = acc;
-                    }
-
-                    for (int p = 0; p < i; ++p) {
-                        const int pc = p;
-
-                        T gamma_partial = T(0);
-                        T delta_partial = T(0);
-                        for (int c = i + 1 + lid; c < n; c += wg) {
-                            const T vc = v_local[c];
-
-                            gamma_partial += batchlas::device::detail::conj(Wb(c, pc)) * vc;
-
-                            const T vcp = (c == p + 1) ? T(1) : ((c > p + 1) ? Ab(c, p) : T(0));
-                            delta_partial += batchlas::device::detail::conj(vcp) * vc;
-                        }
-                        const T gamma = batchlas::device::detail::reduce_sum_group(g, gamma_partial);
-                        const T delta = batchlas::device::detail::reduce_sum_group(g, delta_partial);
-
-                        for (int r = i + 1 + lid; r < n; r += wg) {
-                            const T vrp = (r == p + 1) ? T(1) : ((r > p + 1) ? Ab(r, p) : T(0));
-                            const T wrp = Wb(r, pc);
-                            wcol_local[r] -= vrp * gamma + wrp * delta;
-                        }
-                    }
-
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        wcol_local[r] *= tau_i;
-                    }
-
-                    T dot_partial = T(0);
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        const T vr = v_local[r];
-                        dot_partial += batchlas::device::detail::conj(vr) * wcol_local[r];
-                    }
-                    const T dot = batchlas::device::detail::reduce_sum_group(g, dot_partial);
-
-                    const T alpha2 = T(-0.5) * tau_i * dot;
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        const T vr = v_local[r];
-                        wcol_local[r] += alpha2 * vr;
-                    }
-
-                    for (int r = i + 1 + lid; r < n; r += wg) {
-                        Wb(r, col) = wcol_local[r];
-                    }
-                    it.barrier(sycl::access::fence_space::global_space);
-                }
+                // Thin launcher: the panel body of device::sytrd<Lower, tier::Blocked<NB>> (latrd_lower_run).
+                device::detail::latrd_lower_run<WG>(ex, Ab, Wb, n, ib, util::get_raw_ptr(v_local), util::get_raw_ptr(wcol_local),
+                                                      vip_local, wip_local, [&](int i, const Scalar& beta, const Scalar& tau_i) BATCHLAS_DEVICE_BODY {
+                                                          E_view(i, b) = beta;
+                                                          TAU_view(i, b) = tau_i;
+                                                      });
 
                 if constexpr (FuseTrailingUpdate) {
+                    const int lid = static_cast<int>(it.get_local_linear_id());
                     const int j2 = ib;
                     const int n2 = n - j2;
                     for (int lin = lid; lin < n2 * n2; lin += wg) {
@@ -451,19 +222,19 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
 
                         const int rr = j2 + r;
                         const int cc = j2 + c;
-                        T acc = T(0);
+                        Scalar acc = Scalar(0);
                         for (int k = 0; k < ib; ++k) {
-                            const T vrk = (rr == k + 1) ? T(1) : ((rr > k + 1) ? Ab(rr, k) : T(0));
-                            const T vck = (cc == k + 1) ? T(1) : ((cc > k + 1) ? Ab(cc, k) : T(0));
-                            const T wrk = Wb(rr, k);
-                            const T wck = Wb(cc, k);
-                            acc += vrk * batchlas::device::detail::conj(wck) + wrk * batchlas::device::detail::conj(vck);
+                            const Scalar vrk = (rr == k + 1) ? Scalar(1) : ((rr > k + 1) ? Ab(rr, k) : Scalar(0));
+                            const Scalar vck = (cc == k + 1) ? Scalar(1) : ((cc > k + 1) ? Ab(cc, k) : Scalar(0));
+                            const Scalar wrk = Wb(rr, k);
+                            const Scalar wck = Wb(cc, k);
+                            acc += vrk * batchlas::device::conj(wck) + wrk * batchlas::device::conj(vck);
                         }
 
-                        T a_rc = Ab(rr, cc) - acc;
-                        if constexpr (detail::is_complex<T>::value) {
+                        Scalar a_rc = Ab(rr, cc) - acc;
+                        if constexpr (detail::is_complex<Scalar>::value) {
                             if (rr == cc) {
-                                a_rc = T(a_rc.real(), typename T::value_type(0));
+                                a_rc = Scalar(a_rc.real(), typename Scalar::value_type(0));
                             }
                         }
                         Ab(rr, cc) = a_rc;
@@ -487,12 +258,12 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
 //   5. at the end of the column                  (next column reads row i+1 of W)
 // evidence: docs/perf/sytrd.md#sytrd-the-latrd-grid-kernel-and-its-co-residency-cap
 // ---------------------------------------------------------------------------
-template <typename T, int WG, bool FuseTrailingUpdate>
+template <typename Scalar, int WG, bool FuseTrailingUpdate>
 Event latrd_lower_panel_batched_wg_grid(Queue& q,
-                                        const MatrixView<T, MatrixFormat::Dense>& a,
-                                        const VectorView<T>& e,
-                                        const VectorView<T>& tau,
-                                        const MatrixView<T, MatrixFormat::Dense>& w,
+                                        const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                                        const VectorView<Scalar>& e,
+                                        const VectorView<Scalar>& tau,
+                                        const MatrixView<Scalar, MatrixFormat::Dense>& w,
                                         int groups,
                                         const std::uint8_t* mask) {
     constexpr int wg = WG;
@@ -511,22 +282,22 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
     const size_t bar_words = static_cast<size_t>(batch_host) * 2u;
     size_t bar_bytes = bar_words * sizeof(GridBarrierWord);
     bar_bytes = (bar_bytes + 255u) & ~static_cast<size_t>(255u);
-    const size_t red_bytes = static_cast<size_t>(batch_host) * red_per_matrix * sizeof(T);
+    const size_t red_bytes = static_cast<size_t>(batch_host) * red_per_matrix * sizeof(Scalar);
 
     std::byte* scratch = static_cast<std::byte*>(acquire_grid_scratch(q, bar_bytes + red_bytes));
     GridBarrierWord* bar_base = reinterpret_cast<GridBarrierWord*>(scratch);
-    T* red_base_ptr = reinterpret_cast<T*>(scratch + bar_bytes);
+    Scalar* red_base_ptr = reinterpret_cast<Scalar*>(scratch + bar_bytes);
 
     auto zero_ev = q->memset(bar_base, 0, bar_words * sizeof(GridBarrierWord));
 
     (void)q->submit([&](sycl::handler& h) {
         h.depends_on(zero_ev);
 
-        KernelMatrixView<T, MatrixFormat::Dense> A_view(a.data_ptr(), a.rows(), a.cols(), a.ld(), a.stride(), a.batch_size());
-        KernelMatrixView<T, MatrixFormat::Dense> W_view(w.data_ptr(), w.rows(), w.cols(), w.ld(), w.stride(), w.batch_size());
+        KernelMatrixView<Scalar, MatrixFormat::Dense> A_view(a.data_ptr(), a.rows(), a.cols(), a.ld(), a.stride(), a.batch_size());
+        KernelMatrixView<Scalar, MatrixFormat::Dense> W_view(w.data_ptr(), w.rows(), w.cols(), w.ld(), w.stride(), w.batch_size());
 
-        VectorView<T> E_view = e;
-        VectorView<T> TAU_view = tau;
+        VectorView<Scalar> E_view = e;
+        VectorView<Scalar> TAU_view = tau;
 
         const int n = n_host;
         const int batch = batch_host;
@@ -534,20 +305,20 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
         const int G = G_host;
         const size_t red_stride = red_per_matrix;
         GridBarrierWord* bar_all = bar_base;
-        T* red_all = red_base_ptr;
+        Scalar* red_all = red_base_ptr;
 
-        auto v_local    = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(n)), h);
-        auto wcol_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(n)), h);
-        auto vip_local  = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(std::max(ib_host, 1))), h);
-        auto wip_local  = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(std::max(ib_host, 1))), h);
-        auto gam_local  = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(std::max(ib_host, 1))), h);
-        auto del_local  = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(std::max(ib_host, 1))), h);
+        auto v_local    = sycl::local_accessor<Scalar, 1>(sycl::range<1>(static_cast<size_t>(n)), h);
+        auto wcol_local = sycl::local_accessor<Scalar, 1>(sycl::range<1>(static_cast<size_t>(n)), h);
+        auto vip_local  = sycl::local_accessor<Scalar, 1>(sycl::range<1>(static_cast<size_t>(std::max(ib_host, 1))), h);
+        auto wip_local  = sycl::local_accessor<Scalar, 1>(sycl::range<1>(static_cast<size_t>(std::max(ib_host, 1))), h);
+        auto gam_local  = sycl::local_accessor<Scalar, 1>(sycl::range<1>(static_cast<size_t>(std::max(ib_host, 1))), h);
+        auto del_local  = sycl::local_accessor<Scalar, 1>(sycl::range<1>(static_cast<size_t>(std::max(ib_host, 1))), h);
 
-        batchlas::impl::parallel_for<LatrdLowerPanelKernelGrid<T, WG, FuseTrailingUpdate>>(h,
+        batchlas::impl::parallel_for<LatrdLowerPanelKernelGrid<Scalar, WG, FuseTrailingUpdate>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * static_cast<size_t>(G) * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
-                using Real = typename base_type<T>::type;
+                using Real = typename base_type<Scalar>::type;
 
                 const int glid = static_cast<int>(it.get_group_linear_id());
                 const int b = glid / G;
@@ -556,16 +327,17 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                 const int gg = glid - b * G;
                 const int lid = static_cast<int>(it.get_local_linear_id());
                 const sycl::group<1> g = it.get_group();
+                const batchlas::device::WorkGroup<WG> ex{it};
 
                 auto Ab = A_view.batch_item(b);
                 auto Wb = W_view.batch_item(b);
 
                 GridBarrierWord* bar = bar_all + 2 * b;
-                T* red = red_all + static_cast<size_t>(b) * red_stride;
-                T* red_gamma = red;
-                T* red_delta = red + static_cast<size_t>(G) * static_cast<size_t>(ib);
-                T* red_sumsq = red + 2u * static_cast<size_t>(G) * static_cast<size_t>(ib);
-                T* red_dot   = red_sumsq + G;
+                Scalar* red = red_all + static_cast<size_t>(b) * red_stride;
+                Scalar* red_gamma = red;
+                Scalar* red_delta = red + static_cast<size_t>(G) * static_cast<size_t>(ib);
+                Scalar* red_sumsq = red + 2u * static_cast<size_t>(G) * static_cast<size_t>(ib);
+                Scalar* red_dot   = red_sumsq + G;
 
                 for (int i = 0; i < ib; ++i) {
                     if (i >= n - 1) break;
@@ -579,38 +351,13 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                     const int slo = sycl::max(rlo, i + 2);   // reflector tail start
 
                     for (int p = lid; p < i; p += wg) {
-                        vip_local[p] = (i == p + 1) ? T(1) : Ab(i, p);
+                        vip_local[p] = (i == p + 1) ? Scalar(1) : Ab(i, p);
                         wip_local[p] = Wb(i, p);
                     }
                     it.barrier(sycl::access::fence_space::local_space);
 
-                    if (gg == 0 && lid == 0) {
-                        T aii = Ab(i, i);
-                        for (int p = 0; p < i; ++p) {
-                            const T vip = vip_local[p];
-                            const T wip = wip_local[p];
-                            aii -= vip * batchlas::device::detail::conj(wip) + wip * batchlas::device::detail::conj(vip);
-                        }
-                        Ab(i, i) = aii;
-                    }
-
-                    // ---- column update over this group's rows -----------------
-                    for (int r = rlo + lid; r < rhi; r += wg) {
-                        T val = Ab(r, i);
-                        for (int p = 0; p < i; ++p) {
-                            const T wip = wip_local[p];
-                            const T vip = vip_local[p];
-                            T vrp = T(0);
-                            if (r == p + 1) {
-                                vrp = T(1);
-                            } else if (r > p + 1) {
-                                vrp = Ab(r, p);
-                            }
-                            const T wrp = Wb(r, p);
-                            val -= vrp * batchlas::device::detail::conj(wip) + wrp * batchlas::device::detail::conj(vip);
-                        }
-                        Ab(r, i) = val;
-                    }
+                    // ---- column update: A(i, i) on group 0, this group's rows ----
+                    device::detail::latrd_col_update_run(Ab, Wb, vip_local, wip_local, i, gg == 0 && lid == 0, rlo, rhi, lid, wg);
 
                     // Write mapping [rlo+lid, rhi), read mapping [slo+lid, rhi): for gg == 0
                     // slo == rlo + 1, so item lid reads the row item lid+1 just wrote. Masked
@@ -622,54 +369,29 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                     for (int r = slo + lid; r < rhi; r += wg) {
                         sumsq += detail::abs2_if_complex(Ab(r, i));
                     }
-                    sumsq = batchlas::device::detail::reduce_sum_group(g, sumsq);
-                    if (lid == 0) red_sumsq[gg] = pack_real<T>(sumsq);
+                    sumsq = ex.group_reduce(sumsq);
+                    if (lid == 0) red_sumsq[gg] = pack_real<Scalar>(sumsq);
 
                     grid_barrier(it, bar, G);   // barrier 1
 
                     Real sumsq_total = Real(0);
                     for (int gi = 0; gi < G; ++gi) {
-                        sumsq_total += unpack_real<T>(red_sumsq[gi]);
+                        sumsq_total += unpack_real<Scalar>(red_sumsq[gi]);
                     }
 
                     // Every work-item recomputes the reflector from identical
                     // inputs, so no broadcast is needed and all groups agree.
                     // NOTE: Ab(i+1,i) must be read here, BEFORE group 0 replaces
                     // it with 1 (which happens after barrier 2).
-                    const T alpha = (i + 1 < n) ? Ab(i + 1, i) : T(0);
+                    const Scalar alpha = (i + 1 < n) ? Ab(i + 1, i) : Scalar(0);
 
-                    T tau_i = T(0);
-                    T beta = alpha;
-                    T scale = T(0);
-                    {
-                        const Real xnorm = sycl::sqrt(sumsq_total);
-                        if constexpr (detail::is_complex<T>::value) {
-                            if (xnorm == Real(0) && alpha.imag() == Real(0)) {
-                                tau_i = T(0);
-                                beta = alpha;
-                                scale = T(0);
-                            } else {
-                                const Real alpha_abs = sycl::hypot(alpha.real(), alpha.imag());
-                                const Real beta_abs = sycl::hypot(alpha_abs, xnorm);
-                                const T alpha_sign = (alpha_abs == Real(0)) ? T(1) : (alpha / alpha_abs);
-                                beta = -alpha_sign * T(beta_abs);
-                                tau_i = (beta - alpha) / beta;
-                                scale = T(1) / (alpha - beta);
-                            }
-                        } else {
-                            if (xnorm == Real(0)) {
-                                tau_i = T(0);
-                                beta = alpha;
-                                scale = T(0);
-                            } else {
-                                beta = -detail::sign_nonzero(alpha) * T(sycl::hypot(static_cast<Real>(alpha), xnorm));
-                                tau_i = (beta - alpha) / beta;
-                                scale = T(1) / (alpha - beta);
-                            }
-                        }
-                    }
+                    // xLARFG scalars, alg::PhaseN1 (a complex alpha reflects at the last column too).
+                    const auto h = device::larfg_scalars<device::alg::PhaseN1>(alpha, sycl::sqrt(sumsq_total), n - i - 1);
+                    const Scalar tau_i = h.tau;
+                    const Scalar beta = h.beta;
+                    const Scalar scale = h.scale;
 
-                    if (tau_i != T(0)) {
+                    if (tau_i != Scalar(0)) {
                         for (int r = slo + lid; r < rhi; r += wg) {
                             Ab(r, i) *= scale;
                         }
@@ -680,42 +402,46 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                     if (gg == 0 && lid == 0) {
                         E_view(i, b) = beta;
                         TAU_view(i, b) = tau_i;
-                        Ab(i + 1, i) = T(1);
+                        Ab(i + 1, i) = Scalar(1);
                     }
 
                     // Every group needs the whole reflector for the symv.
                     for (int c = base_r + lid; c < n; c += wg) {
-                        v_local[c] = (c == base_r) ? T(1) : Ab(c, i);
+                        v_local[c] = (c == base_r) ? Scalar(1) : Ab(c, i);
                     }
                     it.barrier(sycl::access::fence_space::local_space);
 
                     // ---- symmetric mat-vec over this group's rows -------------
+                    // ExplicitInline: the plain-inline explicit complex mac of the symv ONLY
+                    // (every other complex multiply here converted cost 1.16x, register pressure).
+                    // evidence: docs/perf/sytrd.md#sytrd-complex-multiply-in-the-latrd-symv
+                    using SymvAr = device::arith_t<device::arith::ExplicitInline, Scalar>;
                     for (int r = rlo + lid; r < rhi; r += wg) {
                         const int c_split = sycl::min(r, n - 1);
-                        T acc = T(0);
+                        Scalar acc = Scalar(0);
                         #pragma unroll 4
                         for (int c = base_r; c <= c_split; ++c) {
-                            mac(acc, Ab(r, c), v_local[c]);
+                            SymvAr::mac(acc, Ab(r, c), v_local[c]);
                         }
                         #pragma unroll 4
                         for (int c = c_split + 1; c < n; ++c) {
-                            mac_conj(acc, Ab(c, r), v_local[c]);
+                            SymvAr::mac_conj(acc, Ab(c, r), v_local[c]);
                         }
                         wcol_local[r] = acc;
                     }
 
                     // ---- gamma/delta partials ---------------------------------
                     for (int p = 0; p < i; ++p) {
-                        T gamma_partial = T(0);
-                        T delta_partial = T(0);
+                        Scalar gamma_partial = Scalar(0);
+                        Scalar delta_partial = Scalar(0);
                         for (int c = rlo + lid; c < rhi; c += wg) {
-                            const T vc = v_local[c];
-                            gamma_partial += batchlas::device::detail::conj(Wb(c, p)) * vc;
-                            const T vcp = (c == p + 1) ? T(1) : ((c > p + 1) ? Ab(c, p) : T(0));
-                            delta_partial += batchlas::device::detail::conj(vcp) * vc;
+                            const Scalar vc = v_local[c];
+                            gamma_partial += batchlas::device::conj(Wb(c, p)) * vc;
+                            const Scalar vcp = (c == p + 1) ? Scalar(1) : ((c > p + 1) ? Ab(c, p) : Scalar(0));
+                            delta_partial += batchlas::device::conj(vcp) * vc;
                         }
-                        gamma_partial = batchlas::device::detail::reduce_sum_group(g, gamma_partial);
-                        delta_partial = batchlas::device::detail::reduce_sum_group(g, delta_partial);
+                        gamma_partial = ex.group_reduce(gamma_partial);
+                        delta_partial = ex.group_reduce(delta_partial);
                         if (lid == 0) {
                             red_gamma[static_cast<size_t>(gg) * ib + p] = gamma_partial;
                             red_delta[static_cast<size_t>(gg) * ib + p] = delta_partial;
@@ -725,8 +451,8 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                     grid_barrier(it, bar, G);   // barrier 3
 
                     for (int p = lid; p < i; p += wg) {
-                        T gs = T(0);
-                        T ds = T(0);
+                        Scalar gs = Scalar(0);
+                        Scalar ds = Scalar(0);
                         for (int gi = 0; gi < G; ++gi) {
                             gs += red_gamma[static_cast<size_t>(gi) * ib + p];
                             ds += red_delta[static_cast<size_t>(gi) * ib + p];
@@ -737,11 +463,11 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                     it.barrier(sycl::access::fence_space::local_space);
 
                     for (int p = 0; p < i; ++p) {
-                        const T gamma = gam_local[p];
-                        const T delta = del_local[p];
+                        const Scalar gamma = gam_local[p];
+                        const Scalar delta = del_local[p];
                         for (int r = rlo + lid; r < rhi; r += wg) {
-                            const T vrp = (r == p + 1) ? T(1) : ((r > p + 1) ? Ab(r, p) : T(0));
-                            const T wrp = Wb(r, p);
+                            const Scalar vrp = (r == p + 1) ? Scalar(1) : ((r > p + 1) ? Ab(r, p) : Scalar(0));
+                            const Scalar wrp = Wb(r, p);
                             wcol_local[r] -= vrp * gamma + wrp * delta;
                         }
                     }
@@ -750,19 +476,19 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                         wcol_local[r] *= tau_i;
                     }
 
-                    T dot_partial = T(0);
+                    Scalar dot_partial = Scalar(0);
                     for (int r = rlo + lid; r < rhi; r += wg) {
-                        dot_partial += batchlas::device::detail::conj(v_local[r]) * wcol_local[r];
+                        dot_partial += batchlas::device::conj(v_local[r]) * wcol_local[r];
                     }
-                    dot_partial = batchlas::device::detail::reduce_sum_group(g, dot_partial);
+                    dot_partial = ex.group_reduce(dot_partial);
                     if (lid == 0) red_dot[gg] = dot_partial;
 
                     grid_barrier(it, bar, G);   // barrier 4
 
-                    T dot = T(0);
+                    Scalar dot = Scalar(0);
                     for (int gi = 0; gi < G; ++gi) dot += red_dot[gi];
 
-                    const T alpha2 = T(-0.5) * tau_i * dot;
+                    const Scalar alpha2 = Scalar(-0.5) * tau_i * dot;
                     for (int r = rlo + lid; r < rhi; r += wg) {
                         Wb(r, i) = wcol_local[r] + alpha2 * v_local[r];
                     }
@@ -782,19 +508,19 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
 
                         const int rr = j2 + r;
                         const int cc = j2 + c;
-                        T acc = T(0);
+                        Scalar acc = Scalar(0);
                         for (int k = 0; k < ib; ++k) {
-                            const T vrk = (rr == k + 1) ? T(1) : ((rr > k + 1) ? Ab(rr, k) : T(0));
-                            const T vck = (cc == k + 1) ? T(1) : ((cc > k + 1) ? Ab(cc, k) : T(0));
-                            const T wrk = Wb(rr, k);
-                            const T wck = Wb(cc, k);
-                            acc += vrk * batchlas::device::detail::conj(wck) + wrk * batchlas::device::detail::conj(vck);
+                            const Scalar vrk = (rr == k + 1) ? Scalar(1) : ((rr > k + 1) ? Ab(rr, k) : Scalar(0));
+                            const Scalar vck = (cc == k + 1) ? Scalar(1) : ((cc > k + 1) ? Ab(cc, k) : Scalar(0));
+                            const Scalar wrk = Wb(rr, k);
+                            const Scalar wck = Wb(cc, k);
+                            acc += vrk * batchlas::device::conj(wck) + wrk * batchlas::device::conj(vck);
                         }
 
-                        T a_rc = Ab(rr, cc) - acc;
-                        if constexpr (detail::is_complex<T>::value) {
+                        Scalar a_rc = Ab(rr, cc) - acc;
+                        if constexpr (detail::is_complex<Scalar>::value) {
                             if (rr == cc) {
-                                a_rc = T(a_rc.real(), typename T::value_type(0));
+                                a_rc = Scalar(a_rc.real(), typename Scalar::value_type(0));
                             }
                         }
                         Ab(rr, cc) = a_rc;
@@ -807,187 +533,7 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
 }
 
 // ---------------------------------------------------------------------------
-// Device-BLAS kernel: uses device::hemv, dotc, axpy, scal, copy, her2k
-// ---------------------------------------------------------------------------
-template <typename T, int WG, bool FuseTrailingUpdate>
-Event latrd_lower_panel_batched_wg_device(Queue& q,
-                                          const MatrixView<T, MatrixFormat::Dense>& a,
-                                          const VectorView<T>& e,
-                                          const VectorView<T>& tau,
-                                          const MatrixView<T, MatrixFormat::Dense>& w,
-                                          const std::uint8_t* mask) {
-    constexpr int wg = WG;
-    const int n = a.rows();
-    const int batch = a.batch_size();
-    const int ib = w.cols();
-    const auto launch = batchlas::device::make_group_launch_info(wg);
-    std::size_t workspace_elements = 0;
-
-    if (batch > 0 && n > 1) {
-        const int extent = n - 1;
-        workspace_elements = std::max(
-            workspace_elements,
-            batchlas::device::hemv_workspace_elements<T,
-                batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower>(launch, extent));
-
-        if constexpr (FuseTrailingUpdate) {
-            if (n > ib) {
-                const int trailing_extent = n - ib;
-                workspace_elements = std::max(
-                    workspace_elements,
-                    batchlas::device::her2k_workspace_elements<T,
-                        batchlas::device::DeviceBlasPolicy::Subgroup16,
-                        Uplo::Lower, Transpose::NoTrans>(launch, trailing_extent, ib));
-            }
-        }
-    }
-
-    (void)q->submit([&](sycl::handler& h) {
-        auto A_view = a.kernel_view();
-        auto W_view = w.kernel_view();
-
-        VectorView<T> E_view = e;
-        VectorView<T> TAU_view = tau;
-
-        auto v_local    = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(n)), h);
-        auto wcol_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(n)), h);
-        auto vip_local  = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(ib)), h);
-        auto wip_local  = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(ib)), h);
-        sycl::local_accessor<T, 1> workspace(sycl::range<1>(std::max<std::size_t>(workspace_elements, 1)), h);
-
-        batchlas::impl::parallel_for<LatrdLowerPanelKernel<T, WG, FuseTrailingUpdate>>(h,
-            sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * wg), sycl::range<1>(wg)),
-            [=](sycl::nd_item<1> it) {
-                const int b = static_cast<int>(it.get_group_linear_id());
-                if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: before the first barrier
-
-                const int lid = static_cast<int>(it.get_local_linear_id());
-                const sycl::group<1> g = it.get_group();
-                T* v_ptr        = util::get_raw_ptr(v_local);
-                T* wcol_ptr     = util::get_raw_ptr(wcol_local);
-                T* vip_ptr      = util::get_raw_ptr(vip_local);
-                T* wip_ptr      = util::get_raw_ptr(wip_local);
-                T* workspace_ptr = workspace_elements == 0
-                    ? static_cast<T*>(nullptr)
-                    : util::get_raw_ptr(workspace);
-
-                auto Ab = A_view.batch_item(b);
-                auto Wb = W_view.batch_item(b);
-
-                for (int i = 0; i < ib; ++i) {
-                    if (i >= n - 1) break;
-                    const int tail = n - (i + 1);
-                    auto a_col_tail  = Ab(Slice(i + 1, SliceEnd()), i);
-                    auto v_tail      = VectorView<T>(v_ptr + i + 1, tail);
-                    auto wcol_tail   = VectorView<T>(wcol_ptr + i + 1, tail);
-
-                    if (i > 0) {
-                        auto vip_view = VectorView<T>(vip_ptr, i);
-                        auto wip_view = VectorView<T>(wip_ptr, i);
-                        batchlas::device::copy(g, Ab(i, Slice(0, i)), vip_view);
-                        batchlas::device::copy(g, Wb(i, Slice(0, i)), wip_view);
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    if (i > 0) {
-                        const auto vip_view = VectorView<T>(vip_ptr, i);
-                        const auto wip_view = VectorView<T>(wip_ptr, i);
-                        const T panel_dot = batchlas::device::dotc(g, vip_view, wip_view);
-                        if (lid == 0) {
-                            Ab(i, i) = hermitian_diagonal(
-                                Ab(i, i) - panel_dot - batchlas::device::detail::conj(panel_dot));
-                        }
-                    }
-
-                    if (i > 0) {
-                        it.barrier(sycl::access::fence_space::local_space);
-                        for (int p = 0; p < i; ++p) {
-                            auto v_prev = Ab(Slice(i + 1, SliceEnd()), p);
-                            auto w_prev = Wb(Slice(i + 1, SliceEnd()), p);
-                            batchlas::device::hadamard(g, a_col_tail,
-                                [&](T x, T v, T wv) {
-                                    return x
-                                        - batchlas::device::detail::conj(wip_ptr[p]) * v
-                                        - batchlas::device::detail::conj(vip_ptr[p]) * wv;
-                                },
-                                a_col_tail, v_prev, w_prev);
-                        }
-                    }
-                    it.barrier(sycl::access::fence_space::global_space);
-
-                    const int x0 = i + 2;
-                    T alpha_i = i + 1 < n ? Ab(i + 1, i) : T(0);
-                    const T tau_i = detail::larfg(g, alpha_i, Ab(Slice(x0, SliceEnd()), i));
-                    if (lid == 0) {
-                        E_view(i, b)   = alpha_i;
-                        TAU_view(i, b) = tau_i;
-                        Ab(i + 1, i)   = T(1);
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    if (lid == 0) {
-                        v_ptr[i + 1] = T(1);
-                    }
-                    if (x0 < n) {
-                        batchlas::device::copy(g, Ab(Slice(x0, SliceEnd()), i),
-                                               VectorView<T>(v_ptr + x0, n - x0));
-                    }
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    auto trailing_view = KernelMatrixView<T, MatrixFormat::Dense>(
-                        Ab.data() + (i + 1) + (i + 1) * Ab.ld(),
-                        tail, tail, Ab.ld());
-                    batchlas::device::hemv<batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower>(
-                        g, trailing_view, v_tail, wcol_tail, T(1), T(0), static_cast<T*>(nullptr));
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    for (int p = 0; p < i; ++p) {
-                        const auto vp_tail = Ab(Slice(i + 1), p);
-                        const auto wp_tail = Wb(Slice(i + 1), p);
-                        const auto gamma   = batchlas::device::dotc(g, wp_tail, v_tail);
-                        const auto delta   = batchlas::device::dotc(g, vp_tail, v_tail);
-                        for (int r = i + 1 + lid; r < n; r += wg) {
-                            wcol_local[r] -= vp_tail(r - (i + 1)) * gamma
-                                           + wp_tail(r - (i + 1)) * delta;
-                        }
-                    }
-
-                    it.barrier(sycl::access::fence_space::local_space);
-                    batchlas::device::scal(g, wcol_tail, tau_i);
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    const T dot    = batchlas::device::dotc(g, v_tail, wcol_tail);
-                    const T alpha2 = T(-0.5) * tau_i * dot;
-                    batchlas::device::axpy(g, v_tail, wcol_tail, alpha2);
-                    it.barrier(sycl::access::fence_space::local_space);
-
-                    batchlas::device::copy(g, wcol_tail, Wb(Slice(i + 1, SliceEnd()), i));
-                    it.barrier(sycl::access::fence_space::global_space);
-                }
-
-                if constexpr (FuseTrailingUpdate) {
-                    const int j2 = ib;
-                    const int n2 = n - j2;
-                    if (n2 > 0) {
-                        batchlas::device::her2k<batchlas::device::DeviceBlasPolicy::Subgroup16,
-                                                Uplo::Lower, Transpose::NoTrans>(
-                            g,
-                            Ab(Slice(j2), Slice(0, ib)),
-                            Wb(Slice(j2), Slice(0, ib)),
-                            Ab(Slice(j2), Slice(j2)),
-                            T(-1), T(1),
-                            workspace_ptr);
-                    }
-                }
-            });
-    });
-
-    return q.get_event();
-}
-
-// ---------------------------------------------------------------------------
-// Dispatcher: selects legacy or device path based on use_device_latrd().
-// Legacy supports WG = 64/128/256; device additionally supports WG = 512.
+// Dispatcher: the legacy kernel (WG = 64/128/256) or the grid kernel.
 // ---------------------------------------------------------------------------
 // Chooses (G, wg) for the grid path. Co-residency is the hard constraint: the
 // software grid barrier deadlocks unless all batch*G work-groups are resident, so
@@ -1047,20 +593,20 @@ inline GridLaunch choose_grid_launch(Queue& q, int n, int batch) {
     return out;
 }
 
-template <typename T>
+template <typename Scalar>
 Event latrd_lower_panel_batched_grid_dispatch(Queue& q,
-                                              const MatrixView<T, MatrixFormat::Dense>& a,
-                                              const VectorView<T>& e,
-                                              const VectorView<T>& tau,
-                                              const MatrixView<T, MatrixFormat::Dense>& w,
+                                              const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                                              const VectorView<Scalar>& e,
+                                              const VectorView<Scalar>& tau,
+                                              const MatrixView<Scalar, MatrixFormat::Dense>& w,
                                               bool fuse_trailing_update,
                                               const GridLaunch& gl,
                                               const std::uint8_t* mask) {
     auto call = [&](auto wg_tag) {
         constexpr int WG = decltype(wg_tag)::value;
         if (fuse_trailing_update)
-            return latrd_lower_panel_batched_wg_grid<T, WG, true>(q, a, e, tau, w, gl.groups, mask);
-        return latrd_lower_panel_batched_wg_grid<T, WG, false>(q, a, e, tau, w, gl.groups, mask);
+            return latrd_lower_panel_batched_wg_grid<Scalar, WG, true>(q, a, e, tau, w, gl.groups, mask);
+        return latrd_lower_panel_batched_wg_grid<Scalar, WG, false>(q, a, e, tau, w, gl.groups, mask);
     };
     if (gl.wg <= 32)  return call(std::integral_constant<int, 32>{});
     if (gl.wg <= 64)  return call(std::integral_constant<int, 64>{});
@@ -1068,63 +614,46 @@ Event latrd_lower_panel_batched_grid_dispatch(Queue& q,
     return call(std::integral_constant<int, 256>{});
 }
 
-template <typename T>
+template <typename Scalar>
 Event latrd_lower_panel_batched(Queue& q,
-                                const MatrixView<T, MatrixFormat::Dense>& a,
-                                const VectorView<T>& e,
-                                const VectorView<T>& tau,
-                                const MatrixView<T, MatrixFormat::Dense>& w,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                                const VectorView<Scalar>& e,
+                                const VectorView<Scalar>& tau,
+                                const MatrixView<Scalar, MatrixFormat::Dense>& w,
                                 int32_t wg_hint,
                                 bool fuse_trailing_update) {
     const int n = a.rows();
-    const bool use_device = use_device_latrd();
     const std::uint8_t* mask =
         ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("latrd_lower_panel", a, e, tau, w));
 
     auto call_legacy = [&](auto wg_tag) {
         constexpr int WG = decltype(wg_tag)::value;
         if (fuse_trailing_update)
-            return latrd_lower_panel_batched_wg_legacy<T, WG, true>(q, a, e, tau, w, mask);
-        return latrd_lower_panel_batched_wg_legacy<T, WG, false>(q, a, e, tau, w, mask);
-    };
-    auto call_device = [&](auto wg_tag) {
-        constexpr int WG = decltype(wg_tag)::value;
-        if (fuse_trailing_update)
-            return latrd_lower_panel_batched_wg_device<T, WG, true>(q, a, e, tau, w, mask);
-        return latrd_lower_panel_batched_wg_device<T, WG, false>(q, a, e, tau, w, mask);
+            return latrd_lower_panel_batched_wg_legacy<Scalar, WG, true>(q, a, e, tau, w, mask);
+        return latrd_lower_panel_batched_wg_legacy<Scalar, WG, false>(q, a, e, tau, w, mask);
     };
 
     if (use_grid_latrd(n)) {
         const GridLaunch gl = choose_grid_launch(q, n, a.batch_size());
         if (gl.groups > 1) {
-            return latrd_lower_panel_batched_grid_dispatch<T>(q, a, e, tau, w, fuse_trailing_update, gl, mask);
+            return latrd_lower_panel_batched_grid_dispatch<Scalar>(q, a, e, tau, w, fuse_trailing_update, gl, mask);
         }
         // G == 1: fall through to the legacy kernel verbatim.
     }
 
-    if (use_device) {
-        if (wg_hint == 64)  return call_device(std::integral_constant<int, 64>{});
-        if (wg_hint == 128) return call_device(std::integral_constant<int, 128>{});
-        if (wg_hint == 256) return call_device(std::integral_constant<int, 256>{});
-        if (n <= 64)  return call_device(std::integral_constant<int, 64>{});
-        if (n <= 128) return call_device(std::integral_constant<int, 128>{});
-        if (n <= 256) return call_device(std::integral_constant<int, 256>{});
-        return call_device(std::integral_constant<int, 512>{});
-    } else {
-        if (wg_hint == 64)  return call_legacy(std::integral_constant<int, 64>{});
-        if (wg_hint == 128) return call_legacy(std::integral_constant<int, 128>{});
-        if (wg_hint == 256) return call_legacy(std::integral_constant<int, 256>{});
-        if (n <= 64)  return call_legacy(std::integral_constant<int, 64>{});
-        if (n <= 128) return call_legacy(std::integral_constant<int, 128>{});
-        return call_legacy(std::integral_constant<int, 256>{});
-    }
+    if (wg_hint == 64)  return call_legacy(std::integral_constant<int, 64>{});
+    if (wg_hint == 128) return call_legacy(std::integral_constant<int, 128>{});
+    if (wg_hint == 256) return call_legacy(std::integral_constant<int, 256>{});
+    if (n <= 64)  return call_legacy(std::integral_constant<int, 64>{});
+    if (n <= 128) return call_legacy(std::integral_constant<int, 128>{});
+    return call_legacy(std::integral_constant<int, 256>{});
 }
 
-template <typename T>
-inline void validate_latrd_lower_panel_panel_dims(const MatrixView<T, MatrixFormat::Dense>& a,
-                                                  const VectorView<T>& e,
-                                                  const VectorView<T>& tau,
-                                                  const MatrixView<T, MatrixFormat::Dense>& w) {
+template <typename Scalar>
+inline void validate_latrd_lower_panel_panel_dims(const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                                                  const VectorView<Scalar>& e,
+                                                  const VectorView<Scalar>& tau,
+                                                  const MatrixView<Scalar, MatrixFormat::Dense>& w) {
     if (a.rows() != a.cols()) {
         throw batchlas::invalid_argument("latrd_lower_panel(panel): A must be square");
     }
@@ -1149,11 +678,11 @@ inline void validate_latrd_lower_panel_panel_dims(const MatrixView<T, MatrixForm
     }
 }
 
-template <typename T>
-inline void validate_latrd_lower_panel_dims(const MatrixView<T, MatrixFormat::Dense>& a,
-                                            const VectorView<T>& e,
-                                            const VectorView<T>& tau,
-                                            const MatrixView<T, MatrixFormat::Dense>& w,
+template <typename Scalar>
+inline void validate_latrd_lower_panel_dims(const MatrixView<Scalar, MatrixFormat::Dense>& a,
+                                            const VectorView<Scalar>& e,
+                                            const VectorView<Scalar>& tau,
+                                            const MatrixView<Scalar, MatrixFormat::Dense>& w,
                                             int32_t j0,
                                             int32_t ib) {
     if (a.rows() != a.cols()) {
@@ -1183,38 +712,38 @@ inline void validate_latrd_lower_panel_dims(const MatrixView<T, MatrixFormat::De
     }
 }
 
-} // namespace
+}  // namespace
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event latrd_lower_panel(Queue& ctx,
-                        const MatrixView<T, MatrixFormat::Dense>& a_panel_in,
-                        const VectorView<T>& e_panel_out,
-                        const VectorView<T>& tau_panel_out,
-                        const MatrixView<T, MatrixFormat::Dense>& w_panel_in,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& a_panel_in,
+                        const VectorView<Scalar>& e_panel_out,
+                        const VectorView<Scalar>& tau_panel_out,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& w_panel_in,
                         int32_t wg_hint,
                         bool fuse_trailing_update) {
     (void)::batchlas::detail::call_mask("latrd_lower_panel", a_panel_in, e_panel_out, tau_panel_out, w_panel_in);
     (void)B;
     validate_latrd_lower_panel_panel_dims(a_panel_in, e_panel_out, tau_panel_out, w_panel_in);
 
-    auto& a   = const_cast<MatrixView<T, MatrixFormat::Dense>&>(a_panel_in);
-    auto& e   = const_cast<VectorView<T>&>(e_panel_out);
-    auto& tau = const_cast<VectorView<T>&>(tau_panel_out);
-    auto& w   = const_cast<MatrixView<T, MatrixFormat::Dense>&>(w_panel_in);
+    auto& a   = const_cast<MatrixView<Scalar, MatrixFormat::Dense>&>(a_panel_in);
+    auto& e   = const_cast<VectorView<Scalar>&>(e_panel_out);
+    auto& tau = const_cast<VectorView<Scalar>&>(tau_panel_out);
+    auto& w   = const_cast<MatrixView<Scalar, MatrixFormat::Dense>&>(w_panel_in);
 
     if (w.cols() == 0) {
         return ctx.get_event();
     }
 
-    return latrd_lower_panel_batched<T>(ctx, a, e, tau, w, wg_hint, fuse_trailing_update);
+    return latrd_lower_panel_batched<Scalar>(ctx, a, e, tau, w, wg_hint, fuse_trailing_update);
 }
 
-template <Backend B, typename T>
+template <Backend B, typename Scalar>
 Event latrd_lower_panel(Queue& ctx,
-                        const MatrixView<T, MatrixFormat::Dense>& a_in,
-                        const VectorView<T>& e_out,
-                        const VectorView<T>& tau_out,
-                        const MatrixView<T, MatrixFormat::Dense>& w_in,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& a_in,
+                        const VectorView<Scalar>& e_out,
+                        const VectorView<Scalar>& tau_out,
+                        const MatrixView<Scalar, MatrixFormat::Dense>& w_in,
                         int32_t j0,
                         int32_t ib,
                         int32_t wg_hint,
@@ -1223,16 +752,16 @@ Event latrd_lower_panel(Queue& ctx,
     (void)B;
     validate_latrd_lower_panel_dims(a_in, e_out, tau_out, w_in, j0, ib);
 
-    auto& a   = const_cast<MatrixView<T, MatrixFormat::Dense>&>(a_in);
-    auto& e   = const_cast<VectorView<T>&>(e_out);
-    auto& tau = const_cast<VectorView<T>&>(tau_out);
-    auto& w   = const_cast<MatrixView<T, MatrixFormat::Dense>&>(w_in);
+    auto& a   = const_cast<MatrixView<Scalar, MatrixFormat::Dense>&>(a_in);
+    auto& e   = const_cast<VectorView<Scalar>&>(e_out);
+    auto& tau = const_cast<VectorView<Scalar>&>(tau_out);
+    auto& w   = const_cast<MatrixView<Scalar, MatrixFormat::Dense>&>(w_in);
 
     auto a_panel   = a({j0, SliceEnd()}, {j0, SliceEnd()});
     auto e_panel   = e(Slice(j0, j0 + ib));
     auto tau_panel = tau(Slice(j0, j0 + ib));
     auto w_panel   = w({j0, SliceEnd()}, {0, ib});
-    return latrd_lower_panel<B, T>(ctx, a_panel, e_panel, tau_panel, w_panel, wg_hint, fuse_trailing_update);
+    return latrd_lower_panel<B, Scalar>(ctx, a_panel, e_panel, tau_panel, w_panel, wg_hint, fuse_trailing_update);
 }
 
 #define LATRD_LOWER_PANEL_INSTANTIATE(back, fp) \
@@ -1259,4 +788,4 @@ BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(LATRD_LOWER_PANEL_INSTANTIATE)
 
 #undef LATRD_LOWER_PANEL_INSTANTIATE
 
-} // namespace batchlas
+}  // namespace batchlas
