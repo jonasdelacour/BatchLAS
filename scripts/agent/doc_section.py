@@ -20,13 +20,9 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
-EXPLICIT_ID = re.compile(r"\s*\{#([A-Za-z0-9_.-]+)\}\s*$")
-
-
-def slug(text):
-    text = re.sub(r"`|\*\*|\[|\]\([^)]*\)", "", text).strip().lower()
-    return re.sub(r"\s", "-", re.sub(r"[^\w\s-]", "", text))
+sys.path.insert(0, os.path.join(ROOT, ".github", "ci"))
+# The CI checker's slug is the interface cited anchors must match; share it, never re-derive it.
+from check_evidence_anchors import EXPLICIT_ID, HEADING, slugify as slug  # noqa: E402
 
 
 def headings(lines):
