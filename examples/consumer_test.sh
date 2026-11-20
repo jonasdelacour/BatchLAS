@@ -270,5 +270,40 @@ else
     fail "REGRESSION: the consumer example no longer builds with BATCHLAS_NO_GLOBAL_NAMES defined; something in the installed headers or in main.cc depends on a name BatchLAS exports into the global namespace (full log: ${ns_log})"
 fi
 
+# The same example without CMake: one compiler line from batchlas.pc, run with the install
+# prefix off the loader path, so the .pc's -rpath (not LD_LIBRARY_PATH) finds libbatchlas.
+pc_file="$(find "${prefix}" -name batchlas.pc -path '*/pkgconfig/*' | head -n 1)"
+[[ -n "${pc_file}" ]] || fail "no batchlas.pc under ${prefix} -- see batchlas_install_pkgconfig in cmake/BatchLASPackaging.cmake"
+pkg_config="${PKG_CONFIG:-pkg-config}"
+if command -v "${pkg_config}" >/dev/null 2>&1; then
+    pc_log="${log_dir}/pkgconfig.log"
+    pc_exe="${work_dir}/hello_pkgconfig"
+    export PKG_CONFIG_PATH="$(dirname "${pc_file}")"
+    pc_flags="$("${pkg_config}" --cflags --libs batchlas)" || fail "pkg-config cannot read ${pc_file}"
+    echo "${compiler} main.cc ${pc_flags}" >"${pc_log}"
+    # shellcheck disable=SC2086 # pc_flags is a flag list
+    "${compiler}" "${example_dir}/main.cc" ${pc_flags} -o "${pc_exe}" >>"${pc_log}" 2>&1 || {
+        tail -n 40 "${pc_log}" >&2
+        fail "pkg-config consumer build failed (full log: ${pc_log})"
+    }
+    if [[ "$(uname -s)" == Darwin ]]; then
+        pc_env=(env -u DYLD_LIBRARY_PATH)
+    else
+        pc_env=(env LD_LIBRARY_PATH="${sycl_lib_dir}")
+    fi
+    "${pc_env[@]}" "${pc_exe}" >>"${pc_log}" 2>&1
+    pc_rc=$?
+    if [[ ${pc_rc} -eq ${SKIP} ]]; then
+        say "pkg-config probe: built; run skipped (no usable device)"
+    elif [[ ${pc_rc} -ne 0 ]] || ! grep -q 'PASS' "${pc_log}"; then
+        tail -n 40 "${pc_log}" >&2
+        fail "pkg-config consumer exited ${pc_rc} without PASS (full log: ${pc_log})"
+    else
+        say "pkg-config probe: CLEAN -- built from 'pkg-config --cflags --libs batchlas' alone, ran without the prefix on the loader path"
+    fi
+else
+    say "pkg-config probe: skipped (${pkg_config} not found)"
+fi
+
 say "PASS"
 exit 0

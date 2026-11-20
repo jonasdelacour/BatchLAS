@@ -43,6 +43,7 @@ cmake_install.cmake
 compile_commands.json
 CTestTestfile.cmake
 Makefile
+!/Makefile
 install_manifest.txt
 _deps/
 

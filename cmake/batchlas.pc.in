@@ -1,0 +1,18 @@
+# pkg-config file for an installed BatchLAS (cmake/BatchLASPackaging.cmake).
+#   $(pkg-config --variable=cxx batchlas) main.cc $(pkg-config --cflags --libs batchlas)
+# Cflags/Libs carry the SYCL flags and device targets the library was built with, so
+# kernels a consumer writes itself run on the same devices. Use the same compiler.
+prefix=${pcfiledir}/@BATCHLAS_PC_PREFIX_FROM_PCDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+cxx=@CMAKE_CXX_COMPILER@
+sycl_impl=@BATCHLAS_SYCL_IMPL_RESOLVED@
+sycl_targets=@BATCHLAS_SYCL_TARGETS_STRING@
+sycl_flags=@BATCHLAS_PC_SYCL_FLAGS@
+
+Name: BatchLAS
+Description: Batched dense and sparse linear algebra for SYCL
+URL: https://github.com/jonasdelacour/BatchLAS
+Version: @PROJECT_VERSION@
+Cflags: -std=c++20 -I${includedir} ${sycl_flags}@BATCHLAS_PC_EXTRA_CFLAGS@
+Libs: -L${libdir} -Wl,-rpath,${libdir}@BATCHLAS_PC_RPATHS@ @BATCHLAS_PC_LIBS@ ${sycl_flags}
