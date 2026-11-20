@@ -522,16 +522,26 @@ TEST(TunedTables, EveryOpShipsATableForEveryDtypeOnEveryShippedDevice) {
 // Every sm_120 table is generated from the deep tiered run's ledger (tuned/README.md): the source
 // names the committed ledger file and every dtype has timed rows (untimed rows are the old
 // transcription kept only where the deep lattice measured nothing near, e.g. beyond the 2048
-// dimension cap).
+// dimension cap). One exemption: an op re-generated after the deep run on its FP32 dtypes alone
+// keeps transcribed FP64 rows on a GPU whose FP64 rate is 1/64 of FP32, where FP64 is not tuned
+// (agent-guide §10; gemm, 383c6261, tuned/README.md "The sm_120 deep tables").
 TEST(TunedTables, Sm120TablesAreDeepLedgerTablesNamingTheirLedger) {
     // The complex-symmetric symm/syrk/syr2k rows (2026-10-22) postdate the deep run: transcribed only.
     const std::set<std::string> real_only{"symm", "syrk", "syr2k"};
+    const std::string device = "sm_120";
+    // FP64:FP32 throughput 1:64 (GeForce / RTX PRO parts); sm_80, sm_90 and sm_100 are 1:2.
+    const std::set<std::string> fp64_1_to_64{"sm_86", "sm_89", "sm_120"};
+    const std::set<std::string> fp64_deferred_ops{"gemm"};
     for (const char* op : {"potrf", "posv", "trsm", "gemm", "gemv", "geqrf", "orgqr", "ormqr", "getrf", "getrs",
                            "getri", "gesv", "gesvd", "spmm", "syev", "symm", "syrk", "syr2k", "trmm"})
         for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
             if (dt[0] == 'c' && real_only.count(op)) continue;
-            const sel::Table& t = embedded(op, dt, "sm_120");
-            EXPECT_EQ(t.source, "ledger:benchmarks/results/tuning/ledger/" + std::string(op) + ".sm_120.jsonl") << t.file;
+            const sel::Table& t = embedded(op, dt, device);
+            EXPECT_EQ(t.source, "ledger:benchmarks/results/tuning/ledger/" + std::string(op) + "." + device + ".jsonl")
+                << t.file;
+            EXPECT_FALSE(t.rows.empty()) << t.file << " " << dt;
+            const bool fp64 = std::string(dt) == "double" || std::string(dt) == "cdouble";
+            if (fp64 && fp64_1_to_64.count(device) && fp64_deferred_ops.count(op)) continue;
             std::size_t timed = 0;
             for (const auto& row : t.rows) timed += row.timed;
             EXPECT_GT(timed, 0u) << t.file << " " << dt;
