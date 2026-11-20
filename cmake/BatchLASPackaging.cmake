@@ -185,7 +185,11 @@ function(batchlas_install_pkgconfig component_targets)
         # (the same mitigation the batchlas facade carries in src/CMakeLists.txt).
         set(BATCHLAS_PC_LIBS "-Wl,--no-as-needed")
         foreach(_t IN LISTS component_targets)
-            list(APPEND BATCHLAS_PC_LIBS "-l$<TARGET_FILE_BASE_NAME:${_t}>")
+            # batchlas_blas is INTERFACE: no file to link.
+            get_target_property(_type ${_t} TYPE)
+            if(_type MATCHES "^(SHARED|STATIC)_LIBRARY$")
+                list(APPEND BATCHLAS_PC_LIBS "-l$<TARGET_FILE_BASE_NAME:${_t}>")
+            endif()
         endforeach()
         list(JOIN BATCHLAS_PC_LIBS " " BATCHLAS_PC_LIBS)
     else()
