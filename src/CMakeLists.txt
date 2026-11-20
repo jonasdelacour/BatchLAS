@@ -53,13 +53,23 @@ set(BATCHLAS_OBJECT_LIBS
     batchlas_extra_obj
     batchlas_sycl_obj
 )
-# GPU-only device-code clusters: compiled and device-linked without the CPU SYCL target.
-set(BATCHLAS_NO_CPU_OBJECT_LIBS
-    batchlas_extensions_cta_obj
-    batchlas_extensions_posv_obj
-    batchlas_extensions_gesv_obj
-    batchlas_extensions_level3_obj
-)
+# GPU-only device-code clusters: compiled and device-linked without the CPU SYCL target. A
+# vendor-free host runs their kernels (BATCHLAS_HAS_HOST_NATIVE, src/select/vendor.hh
+# native_backend), so there every library keeps its CPU image and the list is empty.
+set(BATCHLAS_NO_CPU_OBJECT_LIBS "")
+if(NOT BATCHLAS_HAS_HOST_NATIVE)
+    set(BATCHLAS_NO_CPU_OBJECT_LIBS
+        batchlas_extensions_cta_obj
+        batchlas_extensions_posv_obj
+        batchlas_extensions_gesv_obj
+        batchlas_extensions_level3_obj
+    )
+endif()
+# The component (.so) of each such library device-links with the same targets as its objects.
+set(_batchlas_no_cpu_component "")
+if(NOT BATCHLAS_HAS_HOST_NATIVE)
+    set(_batchlas_no_cpu_component NO_CPU_TARGETS)
+endif()
 
 if(TARGET batchlas_backends_cuda_obj)
     list(APPEND BATCHLAS_OBJECT_LIBS batchlas_backends_cuda_obj)
@@ -198,9 +208,10 @@ target_sources(batchlas_selection_obj PRIVATE ops/gesv/gesv.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/gesvd/gesvd.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/spmm/spmm.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/syev/syev.cc)
-# The level-3 seven carry their own native kernels, and every native arm's can_run needs d.is_gpu,
-# so they build GPU-only (BATCHLAS_NO_CPU_OBJECT_LIBS) in a library of their own: their CPU images
-# were 590 of the backends link's 713 CPU-seconds and could never launch.
+# The level-3 seven carry their own native kernels, and with a host netlib every native arm's
+# can_run needs a GPU (select::natives_run_on), so they build GPU-only (BATCHLAS_NO_CPU_OBJECT_LIBS)
+# in a library of their own: their CPU images were 590 of the backends link's 713 CPU-seconds and
+# could never launch. A vendor-free host launches them, so there the library keeps its CPU image.
 # evidence: docs/developer/agent-guide.md section 7 (Build Performance)
 target_sources(batchlas_extensions_level3_obj PRIVATE ops/symm/symm.cc ops/hemm/hemm.cc ops/herk/herk.cc)
 target_sources(batchlas_extensions_level3_obj PRIVATE ops/her2k/her2k.cc ops/syrk/syrk.cc ops/syr2k/syr2k.cc)
@@ -367,25 +378,25 @@ batchlas_configure_component(batchlas_extensions_stedc)
 add_library(batchlas_extensions_cta SHARED
     $<TARGET_OBJECTS:batchlas_extensions_cta_obj>
 )
-batchlas_configure_component(batchlas_extensions_cta NO_CPU_TARGETS)
+batchlas_configure_component(batchlas_extensions_cta ${_batchlas_no_cpu_component})
 
 # src/ops/CMakeLists.txt, EXTENSIONS_POSV_SOURCES: one tiny-tier TU each, split from cta.
 add_library(batchlas_extensions_posv SHARED
     $<TARGET_OBJECTS:batchlas_extensions_posv_obj>
 )
-batchlas_configure_component(batchlas_extensions_posv NO_CPU_TARGETS)
+batchlas_configure_component(batchlas_extensions_posv ${_batchlas_no_cpu_component})
 
 add_library(batchlas_extensions_gesv SHARED
     $<TARGET_OBJECTS:batchlas_extensions_gesv_obj>
 )
-batchlas_configure_component(batchlas_extensions_gesv NO_CPU_TARGETS)
+batchlas_configure_component(batchlas_extensions_gesv ${_batchlas_no_cpu_component})
 
 # ops/{symm,hemm,herk,her2k,syrk,syr2k,trmm}.cc from backends and trsm's kernels from sycl (see above
-# and src/ops/CMakeLists.txt): GPU-only.
+# and src/ops/CMakeLists.txt): GPU-only unless BATCHLAS_HAS_HOST_NATIVE.
 add_library(batchlas_extensions_level3 SHARED
     $<TARGET_OBJECTS:batchlas_extensions_level3_obj>
 )
-batchlas_configure_component(batchlas_extensions_level3 NO_CPU_TARGETS)
+batchlas_configure_component(batchlas_extensions_level3 ${_batchlas_no_cpu_component})
 
 add_library(batchlas_util SHARED
     $<TARGET_OBJECTS:batchlas_util_obj>

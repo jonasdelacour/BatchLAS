@@ -70,6 +70,40 @@ and SYCL). With cuBLAS present the answer is `true` for every type on CUDA. The 
 than where those kernels run vendor-free; widening it changes ortho's and ormqr's choices, which are
 unmeasured.
 
+### The host-native gate
+
+A vendor-free build's host queue (`Backend::NETLIB` with no LAPACKE/CBLAS) runs BatchLAS's own
+kernels, the ones the GPU runs; nothing is skipped and no host reference code is added.
+
+- CMake derives `BATCHLAS_HAS_HOST_NATIVE` = host backend AND a CPU SYCL target AND NOT
+  (`BATCHLAS_HAS_LAPACKE` AND `BATCHLAS_HAS_CBLAS`) (`cmake/BatchLASDependencies.cmake`) and emits
+  it in `backend_config.h`; the header-only default is 0 (`include/batchlas/config.hh`).
+- With it set, `BATCHLAS_NO_CPU_OBJECT_LIBS` in `src/CMakeLists.txt` is empty, so cta, posv, gesv
+  and level3 keep their CPU images. Only vendor-free builds pay that link time.
+- `select::native_backend<B>` (compile time) is `native_gpu_backend<B> || (B == NETLIB &&
+  kHostNative)`. `select::natives_run_on(d)` (run time) is `d.is_gpu || (kHostNative &&
+  !d.has_vendor)`.
+- With netlib present (full and Metal builds) `kHostNative` is 0. `native_backend` is then
+  `native_gpu_backend` and `natives_run_on(d)` is `d.is_gpu`, so the routing of those builds cannot
+  change. gemm, gemv and spmm keep their older rule `d.is_gpu || !d.has_vendor` (`gemm.cc`),
+  because their kernels have a CPU image in every build.
+
+An op adopts the gate in its `src/ops/<op>/<op>.cc` and changes both halves together. If only one
+half changes, the op either compiles a route that `can_run` never admits, or admits a family whose
+launch throws `internal_error`. The worked example is `syrk.cc`:
+
+```cpp
+// can_run
+const bool native = select::native_backend<B> && select::natives_run_on(d) && homogeneous && ...;
+// launch, each native arm
+if constexpr (select::native_backend<B>) return <native kernel>; else throw batchlas::internal_error(...);
+```
+
+trsm's kernels are not templated on the backend, so trsm changes only the run-time half. That
+covers its `can_run` and the alpha == 0 mask refusal in `trsm.cc`. Adopted so far: syrk, herk,
+syr2k, her2k, symm, hemm, trmm and trsm. To verify an op, read its `BATCHLAS_COVERAGE_OUT`
+`reached` rows on `NETLIB` in a vendor-free tree.
+
 ## Vendor independence: headers keyed on the library axis
 
 The math-library includes in `src/linalg-impl.hh` (`<cublas_v2.h>`, `<cusparse.h>`,

@@ -63,6 +63,12 @@
 #cmakedefine01 BATCHLAS_HAS_LAPACKE
 #cmakedefine01 BATCHLAS_HAS_CBLAS
 
+// The host runs BatchLAS's native kernels: a host backend, a CPU SYCL target and NOT (LAPACKE and
+// CBLAS), i.e. a vendor-free build (cmake/BatchLASDependencies.cmake). Then the GPU-only kernel libraries get CPU images too (src/CMakeLists.txt,
+// BATCHLAS_NO_CPU_OBJECT_LIBS) and select::native_backend<NETLIB> holds (src/select/vendor.hh).
+// 0 in every build with netlib (full, Metal), whose host keeps netlib.
+#cmakedefine01 BATCHLAS_HAS_HOST_NATIVE
+
 // OPENBLAS_CORETYPE value that the configure-time BLAS health check found to be
 // required for the host BLAS to compute dgemm correctly (see
 // cmake/BatchLASBlasHealthCheck.cmake). Empty when nothing was needed or the
