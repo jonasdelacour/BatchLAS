@@ -14,7 +14,7 @@
 #include <cstdint>
 #include <type_traits>
 
-#include <batchlas/blas/extensions.hh>  // SteqrShiftStrategy
+#include <batchlas/blas/enums.hh>  // SteqrShiftStrategy
 #include <batchlas/device.hh>
 #include <batchlas/device/sg_partition.hh>
 #include <batchlas/device/detail/sg_partition/sg_partition.hh>

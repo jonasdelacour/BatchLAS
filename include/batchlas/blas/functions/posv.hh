@@ -9,7 +9,7 @@
 // calls, src/ops/potrs/kernels/potrs_trsm.cc), and the documented contract below is exactly that composition.
 // evidence: docs/perf/potrf.md#the-fused-posv-tier
 
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <cstdint>
 #include <stdexcept>
 #include <string>

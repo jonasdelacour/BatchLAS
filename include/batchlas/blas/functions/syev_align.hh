@@ -5,7 +5,7 @@
 /// @brief Eigenvector continuity (syev_align): rotate a new eigenbasis onto a previous one.
 /// @ingroup api_eigen
 
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <cstddef>
 #include <cstdint>
 #include <limits>

@@ -8,7 +8,7 @@
 // No vendor family: cuSOLVER and rocSOLVER have no batched potri, so every route is native and
 // vendor-free. evidence: docs/perf/potri.md#potrs-and-potri
 
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <cstdint>
 #include <stdexcept>
 #include <string>

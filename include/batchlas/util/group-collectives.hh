@@ -14,7 +14,7 @@
 /// tree wholesale); the device BLAS headers include it. Not a stable interface.
 /// @ingroup api_internal_helpers
 
-#include <batchlas/backend_config.h>
+#include <batchlas/config.hh>
 
 #include <sycl/sycl.hpp>
 

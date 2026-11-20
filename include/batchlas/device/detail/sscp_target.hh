@@ -9,7 +9,7 @@
 
 #include <sycl/sycl.hpp>
 
-#include <batchlas/backend_config.h>
+#include <batchlas/config.hh>
 
 namespace batchlas::sycl_impl {
 

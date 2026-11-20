@@ -16,7 +16,7 @@
 /// the Queue's context. Everything here is single-threaded in the same sense as Queue.
 /// @ingroup api_core
 // Kept out of the umbrella for compile time. evidence: docs/design/build-performance.md#build-performance-the-umbrella-header-excludes-device-code
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <sycl/sycl.hpp>
 
 #include <batchlas/util/sycl-device-queue.hh>

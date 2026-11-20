@@ -5,7 +5,7 @@
 /// @brief Batched solve with LU factors from getrf (getrs) and its workspace query.
 /// @ingroup api_factorizations
 
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <stdexcept>
 #include <string>
 

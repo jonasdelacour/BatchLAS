@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <stdexcept>
 #include <optional>
 #include <type_traits>
@@ -12,8 +12,6 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/extensions.hh>
-
-#include <batchlas/backend_config.h>
 
 #include <batchlas/blas/queue-dispatch.hh>
 

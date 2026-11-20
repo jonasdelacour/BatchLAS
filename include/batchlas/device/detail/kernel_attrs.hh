@@ -3,7 +3,7 @@
 // Kernel attributes and loop pragmas; on DPC++ each expands to exactly the spelling it replaced.
 #include <batchlas/device/detail/sscp_target.hh>   // batchlas::sycl_impl::on_ptx(), target_arch()
 
-#include <batchlas/backend_config.h>
+#include <batchlas/config.hh>
 
 #if BATCHLAS_SYCL_IMPL_ACPP
 

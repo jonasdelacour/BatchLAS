@@ -15,7 +15,7 @@
 #include <cstdint>
 #include <type_traits>
 
-#include <batchlas/blas/extensions.hh>  // SteqrShiftStrategy
+#include <batchlas/blas/enums.hh>  // SteqrShiftStrategy
 #include <batchlas/device.hh>
 #include <batchlas/device/launch.hh>
 #include <batchlas/device/lapack/ormqr.hh>

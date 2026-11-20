@@ -8,7 +8,7 @@
 /// stable interface.
 /// @ingroup api_internal_helpers
 
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>

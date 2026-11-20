@@ -5,7 +5,7 @@
 /// @brief Matrix functions of symmetric/Hermitian matrices (syfn): \f$ F = V f(\Lambda) V^H \f$.
 /// @ingroup api_eigen
 
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <cstddef>
 #include <cstdint>
 #include <limits>

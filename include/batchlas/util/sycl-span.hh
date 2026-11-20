@@ -4,7 +4,7 @@
 #include <iterator>
 #include <array>
 #include <type_traits>
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 
 /// @file

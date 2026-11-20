@@ -107,6 +107,34 @@ neither variable.
   -fsycl-targets=...` itself, plus `"SHELL:${BatchLAS_SYCL_BACKEND_OPTIONS}"` when the package's
   targets are plain `nvptx64-nvidia-cuda` (otherwise your kernels build for sm_75).
 
+### The device API without building BatchLAS {#the-device-api-without-building-batchlas}
+
+The in-kernel API (`<batchlas/device.hh>`, `<batchlas/device/...>`, @ref design_device_la) is
+header-only. Point the compiler at a checkout and add your usual SYCL flags; nothing is
+configured, installed or linked:
+
+```bash
+git clone https://github.com/jonasdelacour/BatchLAS.git
+clang++ -fsycl -fsycl-targets=nvidia_gpu_sm_89 -std=c++20 -I BatchLAS/include my_kernel.cc  # DPC++
+acpp --acpp-targets=generic -std=c++20 -I BatchLAS/include my_kernel.cc                       # AdaptiveCpp
+```
+
+`<batchlas/config.hh>` uses a build's or install's generated configuration when one is on the
+include path, and otherwise derives it from the SYCL implementation's headers
+(`BATCHLAS_HEADER_ONLY` is then 1). Override any value with `-D`:
+
+| Macro | Header-only default | Set it when |
+| --- | --- | --- |
+| `BATCHLAS_DEVICE_NO_VECTOR_TYPES` | `0` | `1` for AdaptiveCpp's Metal target (Apple GPUs) |
+| `BATCHLAS_SYCL_IMPL_ACPP` | `1` under AdaptiveCpp, else `0` | never, normally |
+| `BATCHLAS_ACPP_SLM_OPTIN` | `0` | your AdaptiveCpp takes the local-memory opt-in (library builds probe it) |
+
+AdaptiveCpp kernels that multiply or divide `std::complex` also need
+`-include BatchLAS/src/sycl/annexg_complex.hh` (an install has it at
+`<prefix>/include/batchlas/acpp/annexg_complex.hh`). The host API (`<batchlas.hh>`, `Queue`,
+`Matrix`) still needs the built library. `device_header_only_tests` builds `examples/device/` and
+every public device header this way.
+
 ## Devices and queues
 
 A `Queue` names the device, carries the backend, owns a workspace arena and orders the work.

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 
 #include <complex>
 #include <concepts>
@@ -358,6 +358,13 @@ inline constexpr std::string_view to_string(Side v) {
     }
     return "Side(?)";
 }
+
+/// @brief Shift used by the CTA STEQR's implicit QR/QL steps. @see @ref algo_steqr
+// Here, not in extensions.hh, so the device STEQR/SYEV headers need no host API.
+enum class SteqrShiftStrategy {
+    Lapack = 0,     ///< LAPACK-style implicit shift (the stable dsteqr formulation).
+    Wilkinson = 1,  ///< Wilkinson shift computed from the trailing \f$2 \times 2\f$ block.
+};
 
 /// @brief Order in which eigenvalues (and their vectors) are returned.
 enum class SortOrder {

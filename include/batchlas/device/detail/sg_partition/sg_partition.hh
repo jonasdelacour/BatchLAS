@@ -24,7 +24,7 @@
 #include <cstring>
 #include <type_traits>
 
-#include <batchlas/backend_config.h>
+#include <batchlas/config.hh>
 
 #include <batchlas/device/detail/kernel_attrs.hh>
 

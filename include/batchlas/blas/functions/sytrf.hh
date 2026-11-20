@@ -8,7 +8,7 @@
 // sytrf and sytrs are routed ops (src/ops/sytrf/, src/ops/sytrs/; BATCHLAS_SYTRF_ROUTE,
 // BATCHLAS_SYTRS_ROUTE). evidence: docs/perf/sytrf.md
 
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
