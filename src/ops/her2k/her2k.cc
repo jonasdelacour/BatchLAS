@@ -31,20 +31,20 @@ Event launch(Queue& q, const Her2kChoice& c, const MV<Scalar>& A, const MV<Scala
              float_t<Scalar> beta, Uplo uplo, Transpose transA) {
     return std::visit(select::overloaded{
         [&](Triangular) -> Event {
-            if constexpr (select::native_gpu_backend<B> && std::is_same_v<Scalar, std::complex<float>>)
+            if constexpr (select::native_backend<B> && std::is_same_v<Scalar, std::complex<float>>)
                 return level3::for_each_chunk(q, C.batch_size(), level3::grid_chunk<B>(q), [&](int f, int n) {
                     return backend::detail::syr2k_triangular_tiles<Scalar, /*Conjugate=*/true>(
                         q, level3::batch_range(A, f, n), level3::batch_range(Bm, f, n), level3::batch_range(C, f, n),
                         alpha, Scalar(beta), uplo, transA);
                 });
             else
-                throw batchlas::internal_error("her2k: triangular is a complex<float> native-GPU kernel");  // can_run refuses
+                throw batchlas::internal_error("her2k: triangular is a complex<float> native kernel");  // can_run refuses
         },
         [&](Fold) -> Event {
-            if constexpr (select::native_gpu_backend<B> || B == Backend::ROCM)
+            if constexpr (select::native_backend<B> || B == Backend::ROCM)
                 return level3::gemm_fold<B, Scalar, /*TwoSided=*/true>(q, A, Bm, C, alpha, beta, uplo, transA);
             else
-                throw batchlas::internal_error("her2k: fold is wired for GPU backends only");  // can_run refuses it
+                throw batchlas::internal_error("her2k: fold is wired for native backends and ROCm only");  // can_run refuses it
         },
         [&](Vendor) -> Event {
             if constexpr (B != Backend::ROCM && select::has_library<B>(spec.vendor))

@@ -41,7 +41,8 @@ select::Key key_of(const MV<Scalar>& A, const MV<Scalar>& C, Transpose transA) {
     return {{"n", C.rows()}, {"k", inner<Scalar>(A, transA)}, {"batch", C.batch_size()}};
 }
 
-// Correctness only (R3). The kernel is portable SYCL wired for CUDA and SYCL (design D6), any real Scalar. One launch covers the batch with a single (n, k, ld, stride), so no
+// Correctness only (R3). The kernel is portable SYCL wired for CUDA, SYCL and a vendor-free NETLIB
+// (design D6), any real Scalar. One launch covers the batch with a single (n, k, ld, stride), so no
 // heterogeneous operand. A real ConjTrans is Trans, folded by the launch, so it is no term. The
 // launch chunks the batch (grid z); the tile-count term is grid y's own limit. Every vendor loop (cuBLAS,
 // rocBLAS, netlib) runs each item at the top-level (n, k), a wrong answer for a heterogeneous
@@ -57,7 +58,7 @@ bool can_run(const Syr2kChoice& c, const select::Device& d, const MV<Scalar>& A,
     const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
     return std::visit(overloaded{
         [&](Triangular) {
-            return select::native_gpu_backend<B> && d.is_gpu && d.max_wg >= 256 &&
+            return select::native_backend<B> && select::natives_run_on(d) && d.max_wg >= 256 &&
                    d.slm_budget >= triangular_slm_bytes<Scalar>() &&
                    homogeneous && n >= 1 && k >= 1 && batch >= 1 &&
                    side * (side + 1) / 2 <= d.max_groups_yz;
@@ -73,7 +74,7 @@ Event launch(Queue& q, const Syr2kChoice& c, const MV<Scalar>& A, const MV<Scala
     return std::visit(overloaded{
         [&](Triangular) -> Event {
             // Instantiated only where can_run can admit it, so no other (B, Scalar) compiles the kernel.
-            if constexpr (select::native_gpu_backend<B> && !std::is_same_v<Scalar, std::complex<double>>) {
+            if constexpr (select::native_backend<B> && !std::is_same_v<Scalar, std::complex<double>>) {
                 const Transpose t = transA == Transpose::ConjTrans ? Transpose::Trans : transA;  // real Scalar
                 return level3::for_each_chunk(q, C.batch_size(), level3::grid_chunk<B>(q), [&](int f, int n) {
                     return backend::detail::syr2k_triangular_tiles<Scalar>(q, level3::batch_range(A, f, n),

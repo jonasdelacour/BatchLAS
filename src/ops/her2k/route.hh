@@ -43,13 +43,13 @@ bool can_run(const Her2kChoice& c, const select::Device& d, Queue& q, const MV<S
     return std::visit(select::overloaded{
         [&](Triangular) {
             const std::int64_t n = C.rows(), side = (n + 127) / 128;  // 128-wide tiles, T(T+1)/2 of them
-            return select::native_gpu_backend<B> && std::is_same_v<Scalar, std::complex<float>> && d.is_gpu &&
-                   homogeneous && n >= 1 && C.batch_size() >= 1 &&
+            return select::native_backend<B> && std::is_same_v<Scalar, std::complex<float>> &&
+                   select::natives_run_on(d) && homogeneous && n >= 1 && C.batch_size() >= 1 &&
                    d.max_wg >= kTriangularWg && d.slm_budget >= triangular_slm_bytes<Scalar>() &&
                    side * (side + 1) / 2 <= d.max_groups_yz;
         },
         [&](Fold) {
-            return (select::native_gpu_backend<B> || B == Backend::ROCM) && d.is_gpu && homogeneous &&
+            return (select::native_backend<B> || B == Backend::ROCM) && select::natives_run_on(d) && homogeneous &&
                    d.max_wg >= kFoldWg && C.rows() >= 1 && C.batch_size() >= 1 &&
                    backend::detail::expansion_chunk<Scalar>(q, C.rows(), 1, d.max_groups_yz) >= 1;
         },

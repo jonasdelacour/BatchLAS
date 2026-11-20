@@ -47,7 +47,8 @@ select::Key key_of(const MV<Scalar>& A, const MV<Scalar>& C, Transpose transA) {
 // Correctness only (R3). Every family runs each item at the top-level (n, k), so none takes a
 // heterogeneous operand. The natives are chunked over the batch (grid z), Fold also over its
 // scratch budget, so Fold refuses only an item whose own n x n product does not fit. Gram is
-// portable SYCL wired for CUDA and SYCL; Fold runs over the public gemm, so ROCm too.
+// portable SYCL wired for CUDA, SYCL and a vendor-free NETLIB; Fold runs over the public gemm, so
+// ROCm too.
 template <Backend B, typename Scalar>
 bool can_run(const HerkChoice& c, const select::Device& d, Queue& q, const MV<Scalar>& A, const MV<Scalar>& C,
              Transpose transA) {
@@ -55,21 +56,22 @@ bool can_run(const HerkChoice& c, const select::Device& d, Queue& q, const MV<Sc
     const bool masked = batchlas::detail::any_batch_mask(A, C);
     const std::int64_t n = C.rows(), k = inner<Scalar>(A, transA);
     const bool homogeneous = !A.is_heterogeneous() && !C.is_heterogeneous();
-    const bool gpu = d.is_gpu && homogeneous && n >= 1 && C.batch_size() >= 1;
+    // A GPU, or a vendor-free host (natives_run_on); each arm keeps its compile gate.
+    const bool runs = select::natives_run_on(d) && homogeneous && n >= 1 && C.batch_size() >= 1;
     return std::visit(overloaded{
         [&](Gram) {
-            return select::native_gpu_backend<B> && gpu && k >= 1 &&
+            return select::native_backend<B> && runs && k >= 1 &&
                    backend::detail::syrk_gram_supported<Scalar>(A, C, transA, /*conjugated=*/true) &&
                    d.max_wg >= gram_threads(n) && d.slm_budget >= gram_slm_bytes<Scalar>(n);
         },
         [&](Triangular) {
             const std::int64_t side = (n + backend::detail::kTriangularTile - 1) / backend::detail::kTriangularTile;
-            return select::native_gpu_backend<B> && std::is_same_v<Scalar, std::complex<float>> && gpu && k >= 1 &&
+            return select::native_backend<B> && std::is_same_v<Scalar, std::complex<float>> && runs && k >= 1 &&
                    d.max_wg >= kTriangularWg && d.slm_budget >= triangular_slm_bytes<Scalar>() &&
                    side * (side + 1) / 2 <= d.max_groups_yz;
         },
         [&](Fold) {
-            return (select::native_gpu_backend<B> || B == Backend::ROCM) && gpu && d.max_wg >= kFoldWg &&
+            return (select::native_backend<B> || B == Backend::ROCM) && runs && d.max_wg >= kFoldWg &&
                    backend::detail::expansion_chunk<Scalar>(q, int(n), 1, d.max_groups_yz) >= 1;
         },
         [&](Vendor) { return B != Backend::ROCM && d.has_vendor && homogeneous && !masked; },
@@ -82,30 +84,30 @@ Event launch(Queue& q, const HerkChoice& c, const MV<Scalar>& A, const MV<Scalar
              Uplo uplo, Transpose transA) {
     return std::visit(overloaded{
         [&](Gram) -> Event {
-            if constexpr (select::native_gpu_backend<B>)
+            if constexpr (select::native_backend<B>)
                 return level3::for_each_chunk(q, C.batch_size(), level3::grid_chunk<B>(q), [&](int first, int count) {
                     return backend::detail::syrk_gram_tiles<Scalar, /*Conjugate=*/true>(
                         q, level3::batch_range(A, first, count), level3::batch_range(C, first, count), Scalar(alpha),
                         Scalar(beta), uplo, transA);
                 });
             else
-                throw batchlas::internal_error("herk: gram is wired for native GPU backends only");  // can_run refuses it
+                throw batchlas::internal_error("herk: gram is wired for native backends only");  // can_run refuses it
         },
         [&](Triangular) -> Event {
-            if constexpr (select::native_gpu_backend<B> && std::is_same_v<Scalar, std::complex<float>>)
+            if constexpr (select::native_backend<B> && std::is_same_v<Scalar, std::complex<float>>)
                 return level3::for_each_chunk(q, C.batch_size(), level3::grid_chunk<B>(q), [&](int first, int count) {
                     return backend::detail::syrk_triangular_tiles<Scalar, /*Conjugate=*/true>(
                         q, level3::batch_range(A, first, count), level3::batch_range(C, first, count), Scalar(alpha),
                         Scalar(beta), uplo, transA);
                 });
             else
-                throw batchlas::internal_error("herk: triangular is a complex<float> native-GPU kernel");  // can_run refuses
+                throw batchlas::internal_error("herk: triangular is a complex<float> native kernel");  // can_run refuses
         },
         [&](Fold) -> Event {
-            if constexpr (select::native_gpu_backend<B> || B == Backend::ROCM)
+            if constexpr (select::native_backend<B> || B == Backend::ROCM)
                 return level3::gemm_fold<B, Scalar, /*TwoSided=*/false>(q, A, A, C, Scalar(alpha), beta, uplo, transA);
             else
-                throw batchlas::internal_error("herk: fold is wired for GPU backends only");  // can_run refuses it
+                throw batchlas::internal_error("herk: fold is wired for native backends and ROCm only");  // can_run refuses it
         },
         [&](Vendor) -> Event {
             if constexpr (B != Backend::ROCM && select::has_library<B>(spec.vendor))
