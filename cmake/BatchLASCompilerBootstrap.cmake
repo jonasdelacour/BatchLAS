@@ -53,7 +53,11 @@ elseif((NOT DEFINED CMAKE_CXX_COMPILER AND "$ENV{CXX}" MATCHES "(^|/)(acpp|syclc
         endif()
     endif()
 elseif(NOT DEFINED CMAKE_CXX_COMPILER)
-    find_program(SYCL_LS sycl-ls)
+    # PATH first; then the usual install prefixes, so a bare `make` / `cmake -B build`
+    # finds an unsourced DPC++ (self-built CUDA one, oneAPI) instead of the system c++.
+    find_program(SYCL_LS sycl-ls PATHS
+        /opt/dpcpp-cuda/bin "$ENV{ONEAPI_ROOT}/compiler/latest/bin"
+        /opt/intel/oneapi/compiler/latest/bin)
     if(SYCL_LS)
         get_filename_component(_BATCHLAS_SYCL_BIN_DIR "${SYCL_LS}" DIRECTORY)
         find_program(DPCPP_COMPILER

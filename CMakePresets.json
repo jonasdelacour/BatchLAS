@@ -155,6 +155,19 @@
         "BATCHLAS_MONOLITHIC_LIBRARY": "ON",
         "BATCHLAS_ALLOW_UNSAFE_ENV": "OFF"
       }
+    },
+    {
+      "name": "release-metal",
+      "displayName": "Release (macOS Metal)",
+      "description": "release on macOS: the acpp-metal toolchain (Apple GPU through AdaptiveCpp, one dylib) built Release with no tests or benchmarks. The root Makefile's default preset on macOS.",
+      "inherits": "acpp-metal",
+      "binaryDir": "${sourceDir}/build-release-metal",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "BATCHLAS_BUILD_TESTS": "OFF",
+        "BATCHLAS_BUILD_BENCHMARKS": "OFF",
+        "BATCHLAS_ALLOW_UNSAFE_ENV": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -225,6 +238,13 @@
     {
       "name": "release",
       "configurePreset": "release",
+      "targets": [
+        "batchlas"
+      ]
+    },
+    {
+      "name": "release-metal",
+      "configurePreset": "release-metal",
       "targets": [
         "batchlas"
       ]

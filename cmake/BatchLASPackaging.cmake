@@ -148,4 +148,58 @@ function(batchlas_install_package)
         "${PROJECT_BINARY_DIR}/BatchLASConfigVersion.cmake"
         DESTINATION "${BATCHLAS_INSTALL_CMAKEDIR}"
     )
+
+    batchlas_install_pkgconfig("${_batchlas_component_targets}")
+endfunction()
+
+# batchlas.pc for builds without CMake. Unlike BatchLASConfig.cmake it applies the SYCL
+# flags and device targets itself: pkg-config has no opt-in, and a consumer kernel built
+# without the library's -fsycl-targets has no image for its devices. The prefix is
+# ${pcfiledir}-relative, so a moved install still resolves.
+function(batchlas_install_pkgconfig component_targets)
+    file(RELATIVE_PATH BATCHLAS_PC_PREFIX_FROM_PCDIR
+        "/p/${CMAKE_INSTALL_LIBDIR}/pkgconfig" "/p")
+    string(REGEX REPLACE "/$" "" BATCHLAS_PC_PREFIX_FROM_PCDIR "${BATCHLAS_PC_PREFIX_FROM_PCDIR}")
+
+    set(BATCHLAS_PC_EXTRA_CFLAGS "")
+    set(BATCHLAS_PC_RPATHS "")
+    if(BATCHLAS_SYCL_IMPL_ACPP)
+        list(JOIN BATCHLAS_SYCL_CONSUMER_OPTIONS " " BATCHLAS_PC_SYCL_FLAGS)
+        set(BATCHLAS_PC_EXTRA_CFLAGS " -include\${includedir}/batchlas/acpp/annexg_complex.hh")
+    else()
+        set(BATCHLAS_PC_SYCL_FLAGS "-fsycl")
+        if(BATCHLAS_SYCL_TARGETS_STRING)
+            string(APPEND BATCHLAS_PC_SYCL_FLAGS " -fsycl-targets=${BATCHLAS_SYCL_TARGETS_STRING}")
+        endif()
+        if(BATCHLAS_SYCL_BACKEND_OPTION_STRING)
+            string(APPEND BATCHLAS_PC_SYCL_FLAGS " ${BATCHLAS_SYCL_BACKEND_OPTION_STRING}")
+        endif()
+        # -fsycl links libsycl without an rpath; without this every run needs LD_LIBRARY_PATH.
+        if(BATCHLAS_SYCL_RUNTIME_DIR)
+            set(BATCHLAS_PC_RPATHS " -Wl,-rpath,${BATCHLAS_SYCL_RUNTIME_DIR}")
+        endif()
+    endif()
+
+    if(component_targets)
+        # The split components have undeclared sibling edges; --as-needed drops some
+        # (the same mitigation the batchlas facade carries in src/CMakeLists.txt).
+        set(BATCHLAS_PC_LIBS "-Wl,--no-as-needed")
+        foreach(_t IN LISTS component_targets)
+            # batchlas_blas is INTERFACE: no file to link.
+            get_target_property(_type ${_t} TYPE)
+            if(_type MATCHES "^(SHARED|STATIC)_LIBRARY$")
+                list(APPEND BATCHLAS_PC_LIBS "-l$<TARGET_FILE_BASE_NAME:${_t}>")
+            endif()
+        endforeach()
+        list(JOIN BATCHLAS_PC_LIBS " " BATCHLAS_PC_LIBS)
+    else()
+        set(BATCHLAS_PC_LIBS "-l$<TARGET_FILE_BASE_NAME:batchlas>")
+    endif()
+
+    configure_file("${PROJECT_SOURCE_DIR}/cmake/batchlas.pc.in"
+        "${PROJECT_BINARY_DIR}/batchlas.pc.configured" @ONLY)
+    file(GENERATE OUTPUT "${PROJECT_BINARY_DIR}/batchlas.pc"
+        INPUT "${PROJECT_BINARY_DIR}/batchlas.pc.configured")
+    install(FILES "${PROJECT_BINARY_DIR}/batchlas.pc"
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig")
 endfunction()

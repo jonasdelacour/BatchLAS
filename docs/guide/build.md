@@ -37,6 +37,21 @@ tested by hand, or untested.
 Other NVIDIA architectures should work (the build targets the detected GPU). `main` has known test
 failures: compare against `tests/known-failures.txt`, not `ctest`'s exit code.
 
+## Quick start: make {#guide_build_make}
+
+```bash
+make                           # configure once + build the release library (build-release/)
+make install PREFIX=~/.local   # then install; DESTDIR is honoured
+make check                     # install to a scratch prefix, build and run examples/consumer
+```
+
+The root `Makefile` only calls the presets below: `PRESET=` picks one (default `release`,
+`release-metal` on macOS; the tree is `build-<preset>`), `CMAKE_ARGS=` adds configure arguments,
+`JOBS=` overrides the parallelism (Linux default: one job per 8 GB of available memory, capped at
+the core count; macOS: one per core). Configure prints the compiler
+and SYCL targets it chose and warns when an NVIDIA GPU is present but no CUDA target is.
+`make help`, `make reconfigure`, `make uninstall`, `make distclean`.
+
 ## Presets
 
 ```bash
@@ -58,6 +73,7 @@ Each preset builds into `build-<preset>` beside `build/`.
 | `release` | `Release`, one shared library, no tests |
 | `acpp`, `acpp-tests` | built with AdaptiveCpp (`--acpp-targets=generic`) ([SYCL implementations](../design/sycl-implementations.md)) |
 | `acpp-metal`, `acpp-metal-tests` | macOS Apple GPU ([below](#macos-apple-gpu-through-adaptivecpp-metal)) |
+| `release-metal` | `acpp-metal` built `Release`, no tests: the `make` default on macOS |
 
 `BATCHLAS_ALLOW_UNSAFE_ENV` is `ON` in every preset except `cuda` and `release`. Test presets run
 `ctest` serially. The pre-push gate is `scripts/gate.sh` (a `dev-tests` tree plus a vendor-free
