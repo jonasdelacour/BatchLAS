@@ -658,8 +658,9 @@ Event gesvdj_cta(Queue& ctx,
             "(see gesvdj_cta_max_dim)");
     }
 
-    if (!ctx.device().supports_sub_group_size(32)) {
-        throw batchlas::unsupported("gesvdj_cta: device does not support subgroup size 32 required for CTA kernels.");
+    // This TU builds without CPU targets, and the OpenCL CPU offers sub-group size 32.
+    if (ctx.device().type != DeviceType::GPU || !ctx.device().supports_sub_group_size(32)) {
+        throw batchlas::unsupported("gesvdj_cta: needs a GPU with subgroup size 32 (the CTA kernels have no CPU image).");
     }
 
     const bool transposed = (m < n);
