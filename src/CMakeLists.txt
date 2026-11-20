@@ -54,21 +54,15 @@ set(BATCHLAS_OBJECT_LIBS
     batchlas_sycl_obj
 )
 # GPU-only device-code clusters: compiled and device-linked without the CPU SYCL target. A
-# vendor-free host runs their kernels (BATCHLAS_HAS_HOST_NATIVE, src/select/vendor.hh
-# native_backend), so there every library keeps its CPU image and the list is empty.
-set(BATCHLAS_NO_CPU_OBJECT_LIBS "")
-if(NOT BATCHLAS_HAS_HOST_NATIVE)
-    set(BATCHLAS_NO_CPU_OBJECT_LIBS
-        batchlas_extensions_cta_obj
-        batchlas_extensions_posv_obj
-        batchlas_extensions_gesv_obj
-        batchlas_extensions_level3_obj
-    )
-endif()
+# vendor-free host runs the cta and level3 kernels (BATCHLAS_HAS_HOST_NATIVE, src/select/vendor.hh
+# native_backend), so there those two keep their CPU images. posv and gesv hold only the
+# register-resident tiny tiers, which no host route launches; their CPU AOT ran over 30 min.
+set(BATCHLAS_NO_CPU_OBJECT_LIBS batchlas_extensions_posv_obj batchlas_extensions_gesv_obj)
 # The component (.so) of each such library device-links with the same targets as its objects.
-set(_batchlas_no_cpu_component "")
+set(_batchlas_host_native_no_cpu "")
 if(NOT BATCHLAS_HAS_HOST_NATIVE)
-    set(_batchlas_no_cpu_component NO_CPU_TARGETS)
+    list(APPEND BATCHLAS_NO_CPU_OBJECT_LIBS batchlas_extensions_cta_obj batchlas_extensions_level3_obj)
+    set(_batchlas_host_native_no_cpu NO_CPU_TARGETS)
 endif()
 
 if(TARGET batchlas_backends_cuda_obj)
@@ -378,25 +372,25 @@ batchlas_configure_component(batchlas_extensions_stedc)
 add_library(batchlas_extensions_cta SHARED
     $<TARGET_OBJECTS:batchlas_extensions_cta_obj>
 )
-batchlas_configure_component(batchlas_extensions_cta ${_batchlas_no_cpu_component})
+batchlas_configure_component(batchlas_extensions_cta ${_batchlas_host_native_no_cpu})
 
 # src/ops/CMakeLists.txt, EXTENSIONS_POSV_SOURCES: one tiny-tier TU each, split from cta.
 add_library(batchlas_extensions_posv SHARED
     $<TARGET_OBJECTS:batchlas_extensions_posv_obj>
 )
-batchlas_configure_component(batchlas_extensions_posv ${_batchlas_no_cpu_component})
+batchlas_configure_component(batchlas_extensions_posv NO_CPU_TARGETS)
 
 add_library(batchlas_extensions_gesv SHARED
     $<TARGET_OBJECTS:batchlas_extensions_gesv_obj>
 )
-batchlas_configure_component(batchlas_extensions_gesv ${_batchlas_no_cpu_component})
+batchlas_configure_component(batchlas_extensions_gesv NO_CPU_TARGETS)
 
 # ops/{symm,hemm,herk,her2k,syrk,syr2k,trmm}.cc from backends and trsm's kernels from sycl (see above
 # and src/ops/CMakeLists.txt): GPU-only unless BATCHLAS_HAS_HOST_NATIVE.
 add_library(batchlas_extensions_level3 SHARED
     $<TARGET_OBJECTS:batchlas_extensions_level3_obj>
 )
-batchlas_configure_component(batchlas_extensions_level3 ${_batchlas_no_cpu_component})
+batchlas_configure_component(batchlas_extensions_level3 ${_batchlas_host_native_no_cpu})
 
 add_library(batchlas_util SHARED
     $<TARGET_OBJECTS:batchlas_util_obj>

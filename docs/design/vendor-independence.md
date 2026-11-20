@@ -78,8 +78,11 @@ kernels, the ones the GPU runs; nothing is skipped and no host reference code is
 - CMake derives `BATCHLAS_HAS_HOST_NATIVE` = host backend AND a CPU SYCL target AND NOT
   (`BATCHLAS_HAS_LAPACKE` AND `BATCHLAS_HAS_CBLAS`) (`cmake/BatchLASDependencies.cmake`) and emits
   it in `backend_config.h`; the header-only default is 0 (`include/batchlas/config.hh`).
-- With it set, `BATCHLAS_NO_CPU_OBJECT_LIBS` in `src/CMakeLists.txt` is empty, so cta, posv, gesv
-  and level3 keep their CPU images. Only vendor-free builds pay that link time.
+- With it set, cta and level3 leave `BATCHLAS_NO_CPU_OBJECT_LIBS` (`src/CMakeLists.txt`) and keep
+  their CPU images. Only vendor-free builds pay that link time. posv and gesv stay GPU-only. They
+  hold only the register-resident tiny tiers: no host route launches those, and their CPU AOT ran
+  for over 30 minutes. An op that wants a tiny tier on the host must first take its library off
+  the list.
 - `select::native_backend<B>` (compile time) is `native_gpu_backend<B> || (B == NETLIB &&
   kHostNative)`. `select::natives_run_on(d)` (run time) is `d.is_gpu || (kHostNative &&
   !d.has_vendor)`.
