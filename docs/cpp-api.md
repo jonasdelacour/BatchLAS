@@ -72,7 +72,7 @@ The package warns when `CMAKE_CXX_COMPILER` differs from the recorded one;
 cmake_minimum_required(VERSION 3.21)
 project(my_app CXX)
 set(CMAKE_CXX_STANDARD 20)
-find_package(BatchLAS CONFIG REQUIRED)        # no COMPONENTS
+find_package(BatchLAS 1.0 CONFIG REQUIRED)    # any 1.x; no COMPONENTS
 add_executable(my_app main.cc)
 target_link_libraries(my_app PRIVATE BatchLAS::batchlas)
 ```
@@ -134,6 +134,40 @@ AdaptiveCpp kernels that multiply or divide `std::complex` also need
 `<prefix>/include/batchlas/acpp/annexg_complex.hh`). The host API (`<batchlas.hh>`, `Queue`,
 `Matrix`) still needs the built library. `device_header_only_tests` builds `examples/device/` and
 every public device header this way.
+
+## Versioning and compatibility {#versioning-and-compatibility}
+
+BatchLAS follows [Semantic Versioning](https://semver.org): within one major version, code
+written against the covered surface below keeps compiling, and a program linked against an earlier
+1.x keeps running against a later 1.x built with the same compiler (the same-compiler rule above).
+A minor release only adds; a patch release only fixes. Nothing checks the ABI mechanically yet:
+the promise is kept by review.
+
+| Query | Gives |
+| --- | --- |
+| `<batchlas/version.hh>` (included by `<batchlas.hh>`, header-only) | `BATCHLAS_VERSION_MAJOR`, `_MINOR`, `_PATCH`, `BATCHLAS_VERSION_STRING` |
+| `find_package(BatchLAS 1.0 CONFIG)` | any installed 1.x at or above 1.0; refuses 0.x and 2.x. `BatchLAS_VERSION` is the full number |
+| `pkg-config --modversion batchlas` | the full number |
+| `batchlas.__version__` (Python) | the full number of the library the module was built with |
+| the SONAME | the major: `libbatchlas*.so.1`, `libbatchlas*.1.dylib` |
+
+**Covered:** `<batchlas.hh>` and the API it declares in `namespace batchlas`; the headers under
+`<batchlas/blas/>`; `<batchlas/error.hh>` (the exception types and what they derive from);
+`<batchlas/settings.hh>`; `<batchlas/version.hh>`; the device API, `<batchlas/device.hh>` and
+`<batchlas/device/...>` (the documented signatures, not `device/detail/`); the names the Python
+module `batchlas` and `batchlas.linalg` export.
+
+**Not covered** (may change in any release, minor or patch):
+
+- `<batchlas/internal/...>`: installed because public headers include them, not API.
+- `<batchlas/util/minibench*.hh>` and the benchmark tooling.
+- `<batchlas/tuning_params.hh>` and the contents of the tuned tables: which route runs, and with it
+  the speed and the last bits of a result, can change in any release.
+- The `BATCHLAS_*` tuning environment variables and the `BATCHLAS_<OP>_ROUTE` route spellings (a pin
+  that no longer names a route throws; @ref design_environment lists them).
+
+Anything not listed as covered is outside the promise. The ROCm backend is unsupported (code paths
+only; never built or run).
 
 ## Devices and queues
 
