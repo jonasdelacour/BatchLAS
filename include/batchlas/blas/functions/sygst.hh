@@ -8,7 +8,7 @@
 // No cuSOLVER family: cuSOLVER 13.2 has no public ?sygst. The vendor family is LAPACKE on the host.
 // evidence: docs/perf/sygvd.md#sygvd-routes
 
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <cstdint>
 #include <string>
 

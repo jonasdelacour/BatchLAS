@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #include <cassert>
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 

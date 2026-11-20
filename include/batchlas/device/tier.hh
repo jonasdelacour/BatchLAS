@@ -24,7 +24,7 @@
 
 #include <sycl/sycl.hpp>
 
-#include <batchlas/backend_config.h>
+#include <batchlas/config.hh>
 #include <batchlas/device/core.hh>
 #include <batchlas/device/workspace.hh>
 #include <batchlas/error.hh>

@@ -25,7 +25,7 @@
 // error.hh first, so every header that reaches a Queue sees the exception hierarchy; it is
 // dependency-free, so this cannot form a cycle.
 #include <batchlas/error.hh>
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <batchlas/util/workspace.hh>
 #include <batchlas/blas/enums.hh>
 

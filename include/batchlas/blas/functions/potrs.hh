@@ -9,7 +9,7 @@
 // calls, chosen by tuned/potrs.<device>.txt; posv's `cta` and `blocked` pin the same two solves.
 // evidence: docs/perf/potrs.md#potrs-selection
 
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <cstdint>
 #include <stdexcept>
 #include <string>

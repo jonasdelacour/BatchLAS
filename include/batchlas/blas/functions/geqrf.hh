@@ -5,7 +5,7 @@
 /// @brief Batched Householder QR factorization (geqrf) and its workspace query.
 /// @ingroup api_qr
 
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <stdexcept>
 #include <string>
 

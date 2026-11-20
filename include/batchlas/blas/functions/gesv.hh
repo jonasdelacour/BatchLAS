@@ -9,7 +9,7 @@
 // routed composition getrf; getrs, and the documented contract is exactly that.
 // evidence: docs/perf/lu.md#the-fused-gesv-tier
 
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <cstdint>
 #include <stdexcept>
 #include <string>

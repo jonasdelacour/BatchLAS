@@ -17,7 +17,7 @@
 // evidence: docs/design/environment.md#environment-move-the-string-not-the-parser
 
 #include <batchlas/error.hh>
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <array>
 #include <cstddef>
 #include <optional>

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <complex>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -1042,12 +1042,6 @@ BATCHLAS_API size_t stein_buffer_size(Queue& ctx,
                                       size_t k,
                                       size_t batch_size,
                                       SteinParams<Real> params);
-
-/// @brief Shift used by the CTA STEQR's implicit QR/QL steps. @see @ref algo_steqr
-enum class SteqrShiftStrategy {
-    Lapack = 0,     ///< LAPACK-style implicit shift (the stable dsteqr formulation).
-    Wilkinson = 1,  ///< Wilkinson shift computed from the trailing \f$2 \times 2\f$ block.
-};
 
 /// @brief Parameters for steqr() and steqr_cta(), and for stedc()'s leaf solves.
 template <typename Scalar>

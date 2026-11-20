@@ -15,7 +15,7 @@
 #include <optional>
 #include <span>
 #include <vector>
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>

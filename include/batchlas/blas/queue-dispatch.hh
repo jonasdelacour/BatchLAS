@@ -7,7 +7,7 @@
 #include <type_traits>
 #include <utility>
 
-#include <batchlas/backend_config.h>
+#include <batchlas/config.hh>
 #include <batchlas/blas/enums.hh>
 #include <batchlas/settings.hh>
 #include <batchlas/blas/matrix.hh>

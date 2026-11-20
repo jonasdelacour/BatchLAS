@@ -24,7 +24,7 @@
 #include <stdexcept>
 #include <string>
 
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 
 namespace batchlas {
 

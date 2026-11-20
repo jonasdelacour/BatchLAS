@@ -5,7 +5,7 @@
 /// @brief Batched formation of Q from geqrf reflectors (orgqr/ungqr) and its workspace query.
 /// @ingroup api_qr
 
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <stdexcept>
 #include <string>
 

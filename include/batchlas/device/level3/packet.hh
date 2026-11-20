@@ -10,7 +10,7 @@
 
 #include <sycl/sycl.hpp>
 
-#include <batchlas/backend_config.h>
+#include <batchlas/config.hh>
 
 namespace batchlas::device::l3 {
 
