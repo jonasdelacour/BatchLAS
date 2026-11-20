@@ -6,7 +6,8 @@
 ///
 /// Header-only use (`-I <checkout>/include`, nothing configured or linked) gets defaults from the
 /// SYCL implementation's own headers. Each macro can be overridden with `-D`; Metal needs
-/// `-DBATCHLAS_DEVICE_NO_VECTOR_TYPES=1`. @see @ref guide_cpp_api_device_header_only
+/// `-DBATCHLAS_DEVICE_NO_VECTOR_TYPES=1`. Details: docs/cpp-api.md, "The device API without
+/// building BatchLAS".
 /// @ingroup api_config
 
 #if __has_include(<batchlas/backend_config.h>)

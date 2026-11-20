@@ -93,6 +93,11 @@ ctx.wait();                                          // nothing is readable befo
 
 Matrices are column-major in device-accessible (USM) memory.
 
+The in-kernel API (`batchlas::device`: BLAS and LAPACK called from your own kernels) needs no
+build at all: `-I BatchLAS/include` plus your SYCL flags
+([header-only use](../docs/cpp-api.md#the-device-api-without-building-batchlas),
+[examples/device/](../examples/device/)).
+
 - Toolchain, presets, CMake options, tests, benchmarks, Python, macOS:
   [building guide](../docs/guide/build.md).
 - The API contract and the consumer recipe: [C++ API](../docs/cpp-api.md); a runnable outside
