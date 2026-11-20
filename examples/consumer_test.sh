@@ -275,35 +275,42 @@ fi
 pc_file="$(find "${prefix}" -name batchlas.pc -path '*/pkgconfig/*' | head -n 1)"
 [[ -n "${pc_file}" ]] || fail "no batchlas.pc under ${prefix} -- see batchlas_install_pkgconfig in cmake/BatchLASPackaging.cmake"
 pkg_config="${PKG_CONFIG:-pkg-config}"
+pc_skipped=""
 if command -v "${pkg_config}" >/dev/null 2>&1; then
-    pc_log="${log_dir}/pkgconfig.log"
+    pc_log="${log_dir}/pkgconfig-build.log"
+    pc_run_log="${log_dir}/pkgconfig-run.log"
     pc_exe="${work_dir}/hello_pkgconfig"
-    export PKG_CONFIG_PATH="$(dirname "${pc_file}")"
+    PKG_CONFIG_PATH="$(dirname "${pc_file}")"
+    export PKG_CONFIG_PATH
     pc_flags="$("${pkg_config}" --cflags --libs batchlas)" || fail "pkg-config cannot read ${pc_file}"
-    echo "${compiler} main.cc ${pc_flags}" >"${pc_log}"
+    echo "${compiler} ${example_dir}/main.cc ${pc_flags} -o ${pc_exe}" >"${pc_log}"
     # shellcheck disable=SC2086 # pc_flags is a flag list
     "${compiler}" "${example_dir}/main.cc" ${pc_flags} -o "${pc_exe}" >>"${pc_log}" 2>&1 || {
         tail -n 40 "${pc_log}" >&2
         fail "pkg-config consumer build failed (full log: ${pc_log})"
     }
+    # Linux keeps the compiler's lib dir (never the prefix): DPC++ dlopens its UR adapters
+    # (libur_adapter_cuda.so) by name, and without it the program finds no device.
     if [[ "$(uname -s)" == Darwin ]]; then
         pc_env=(env -u DYLD_LIBRARY_PATH)
     else
         pc_env=(env LD_LIBRARY_PATH="${sycl_lib_dir}")
     fi
-    "${pc_env[@]}" "${pc_exe}" >>"${pc_log}" 2>&1
+    # The run gets its own log: the build log quotes main.cc, which contains "PASS".
+    "${pc_env[@]}" "${pc_exe}" >"${pc_run_log}" 2>&1
     pc_rc=$?
     if [[ ${pc_rc} -eq ${SKIP} ]]; then
         say "pkg-config probe: built; run skipped (no usable device)"
-    elif [[ ${pc_rc} -ne 0 ]] || ! grep -q 'PASS' "${pc_log}"; then
-        tail -n 40 "${pc_log}" >&2
-        fail "pkg-config consumer exited ${pc_rc} without PASS (full log: ${pc_log})"
+    elif [[ ${pc_rc} -ne 0 ]] || ! grep -q 'PASS' "${pc_run_log}"; then
+        tail -n 40 "${pc_run_log}" >&2
+        fail "pkg-config consumer exited ${pc_rc} without PASS (full log: ${pc_run_log})"
     else
         say "pkg-config probe: CLEAN -- built from 'pkg-config --cflags --libs batchlas' alone, ran without the prefix on the loader path"
     fi
 else
-    say "pkg-config probe: skipped (${pkg_config} not found)"
+    say "pkg-config probe: SKIPPED (${pkg_config} not found; set PKG_CONFIG to its path)"
+    pc_skipped=" (pkg-config probe skipped)"
 fi
 
-say "PASS"
+say "PASS${pc_skipped}"
 exit 0
