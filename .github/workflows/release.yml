@@ -1,0 +1,80 @@
+# Source-only GitHub Release on a pushed v* tag.
+#
+# The notes are the tag's section of docs/changelog.md, extracted by
+# .github/ci/release_notes.py; the assets are GitHub's own "Source code" zip and
+# tar.gz, so nothing is built or uploaded. Those archives carry Git LFS pointer
+# files, not contents, under benchmarks/results/ unless the repository setting
+# "Include Git LFS objects in archives" is on; the library, tests and docs build
+# without them.
+#
+# release_notes.py refuses a tag that is not vX.Y.Z (v1.1.0-rc1 included), that
+# disagrees with project(BatchLAS VERSION) in CMakeLists.txt or with
+# include/batchlas/version.hh, or whose changelog section is missing, undated,
+# [YANKED], empty or uses @ref. A refused tag fails the `notes` job and
+# publishes nothing.
+#
+# Two jobs, the same split as ci.yml's docs/docs-deploy: `notes` runs
+# repository code with a read-only token; `publish` holds the write token and
+# runs no repository code (no checkout), only gh on the notes artifact.
+# Re-running the workflow edits the existing release instead of failing.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  notes:
+    name: Notes from docs/changelog.md
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The extractor still reads the changelog
+        run: python3 .github/ci/release_notes.py --self-test
+      - name: Tag, CMake version, version.hh and changelog agree
+        run: python3 .github/ci/release_notes.py --check "$GITHUB_REF_NAME"
+      - name: Extract the notes
+        # Relative links in docs/changelog.md resolve against docs/ at the tag.
+        run: >-
+          python3 .github/ci/release_notes.py "$GITHUB_REF_NAME"
+          --link-base "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME"
+          > "$RUNNER_TEMP/notes.md"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}/notes.md
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: GitHub Release
+    needs: notes
+    runs-on: ubuntu-latest
+    # Job-level: the write token exists in this job only.
+    permissions:
+      contents: write
+    concurrency:
+      group: release-${{ github.ref_name }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}/notes
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NOTES: ${{ runner.temp }}/notes/notes.md
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" --notes-file "$NOTES"
+          else
+            gh release create "$GITHUB_REF_NAME" --verify-tag \
+              --title "BatchLAS ${GITHUB_REF_NAME#v}" \
+              --notes-file "$NOTES"
+          fi
