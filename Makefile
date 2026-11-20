@@ -27,13 +27,14 @@ CMAKE ?= cmake
 CMAKE_ARGS ?=
 BUILD_DIR := build-$(PRESET)
 
-# A cold DPC++ build peaks above 14 GB per translation unit (the release preset was
-# OOM-killed at -j8 on a 125 GB box), so Linux gets one job per 24 GB of RAM. The
-# AdaptiveCpp TUs on macOS are ~300 MB each: one job per core.
+# Linux: one job per 8 GB of available memory, capped at the core count. A cold release
+# build measured 0.64 GB peak clang RSS (DPC++ CUDA, 2026-11-20); the margin covers older
+# toolchains, whose heavy TUs OOM'd at -j8 (CMakePresets.json `release`), and a shared box.
+# The AdaptiveCpp TUs on macOS are ~300 MB each: one job per core.
 ifeq ($(UNAME_S),Darwin)
 JOBS ?= $(shell sysctl -n hw.ncpu)
 else
-JOBS ?= $(shell n=$$(( $$(awk '/MemTotal/ {print $$2}' /proc/meminfo) / 25165824 )); \
+JOBS ?= $(shell n=$$(( $$(awk '/MemAvailable/ {print $$2}' /proc/meminfo) / 8388608 )); \
 	c=$$(nproc); [ $$n -lt 1 ] && n=1; [ $$n -gt $$c ] && n=$$c; echo $$n)
 endif
 

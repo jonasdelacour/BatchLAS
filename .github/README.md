@@ -73,6 +73,7 @@ or from anything else through pkg-config:
 ```bash
 export PKG_CONFIG_PATH="$HOME/inst/lib/pkgconfig"
 $(pkg-config --variable=cxx batchlas) main.cc $(pkg-config --cflags --libs batchlas) -o my_app
+LD_LIBRARY_PATH=/opt/dpcpp-cuda/lib ./my_app   # DPC++ finds its device adapters there; acpp needs nothing
 ```
 
 ```cpp

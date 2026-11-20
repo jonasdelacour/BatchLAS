@@ -47,8 +47,8 @@ make check                     # install to a scratch prefix, build and run exam
 
 The root `Makefile` only calls the presets below: `PRESET=` picks one (default `release`,
 `release-metal` on macOS; the tree is `build-<preset>`), `CMAKE_ARGS=` adds configure arguments,
-`JOBS=` overrides the parallelism (Linux default: one job per 24 GB of RAM, because a cold DPC++
-compile peaks above 14 GB per translation unit; macOS: one per core). Configure prints the compiler
+`JOBS=` overrides the parallelism (Linux default: one job per 8 GB of available memory, capped at
+the core count; macOS: one per core). Configure prints the compiler
 and SYCL targets it chose and warns when an NVIDIA GPU is present but no CUDA target is.
 `make help`, `make reconfigure`, `make uninstall`, `make distclean`.
 

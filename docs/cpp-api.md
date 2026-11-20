@@ -95,7 +95,10 @@ $(pkg-config --variable=cxx batchlas) main.cc $(pkg-config --cflags --libs batch
 
 Unlike the CMake package, its `Cflags`/`Libs` carry `-std=c++20`, the SYCL flags and the device
 targets the library was built with (your own kernels then run on the same devices; a later
-`-std=c++23` wins), and an rpath to `<prefix>/lib` and the DPC++ runtime.
+`-std=c++23` wins), and an rpath to `<prefix>/lib` and the DPC++ runtime. DPC++ still loads its
+device adapters (`libur_adapter_cuda.so`) from `LD_LIBRARY_PATH`: without
+`LD_LIBRARY_PATH=/opt/dpcpp-cuda/lib` the program starts and finds no device. AdaptiveCpp needs
+neither variable.
 
 - `BatchLAS::batchlas` is the only target. On Linux it propagates `-Wl,--no-as-needed`; keep it if
   you override the link line.
