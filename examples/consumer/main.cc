@@ -70,6 +70,10 @@ float& at(const View& v, int i, int j, int b) {
 static_assert(std::is_base_of_v<std::runtime_error, batchlas::NoRouteError>);
 
 int main() try {
+    // <batchlas.hh> brings <batchlas/version.hh>; consumer_test.sh compares this line with the
+    // installed package version.
+    std::printf("batchlas version = %s\n", BATCHLAS_VERSION_STRING);
+
     // Owning, USM-backed operands. (rows, cols, batch_size) packs them: ld is
     // kN and stride is kN * kN, which the printout at the end confirms.
     Matrix<float, MatrixFormat::Dense> A(kN, kN, kBatch);

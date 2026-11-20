@@ -26,7 +26,12 @@ if(NOT DEFINED CMAKE_CXX_STANDARD)
 endif()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(BatchLAS CONFIG REQUIRED)
+# 1.0 accepts every 1.x install from 1.0.0 up (SameMajorVersion) and refuses 0.x and 2.x.
+# consumer_test.sh configures this again asking for the next major and for an older one and
+# requires find_package to refuse both.
+set(BATCHLAS_CONSUMER_REQUIRE_VERSION 1.0 CACHE STRING "Version passed to find_package(BatchLAS)")
+find_package(BatchLAS ${BATCHLAS_CONSUMER_REQUIRE_VERSION} CONFIG REQUIRED)
+message(STATUS "BatchLAS package version ${BatchLAS_VERSION} (${BatchLAS_DIR})")
 
 add_executable(hello_batched_gemm main.cc)
 target_link_libraries(hello_batched_gemm PRIVATE BatchLAS::batchlas)
