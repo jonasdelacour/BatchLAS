@@ -54,13 +54,15 @@ inline bool gesvd_use_blocked_gebrd(int32_t n, GesvdNativeMode mode) {
 using ops::gesvd::GesvdBidiagSolver;
 using ops::gesvd::gesvd_bidiag_solver;
 
-// True when the Blocked path solves the bidiagonal problem DIRECTLY (bdsdc or
-// bdsqr) rather than through the tridiagonal of B^T B. Both direct solvers write
-// the bidiagonal singular vectors themselves, so the eigenvector scratch and the
-// tridiagonal solver workspace are not allocated on those paths.
-inline bool gesvd_direct_bidiag(GesvdNativeMode mode) {
-    return mode == GesvdNativeMode::Blocked
-        && gesvd_bidiag_solver() != GesvdBidiagSolver::NormalEquations;
+// True when the bidiagonal problem is solved DIRECTLY (bdsdc or bdsqr) rather
+// than through the tridiagonal of B^T B, in both modes: the normal equations form
+// u_i = B v_i / sigma_i, so U's orthogonality error grows as eps * kappa^2
+// (defect 18), and CTA mode keeps only its gebrd_cta / ormqx_cta ends. Both direct
+// solvers write the bidiagonal singular vectors themselves, so the eigenvector
+// scratch and the tridiagonal solver workspace are not allocated on those paths.
+// BATCHLAS_GESVD_BIDIAG=normal still selects the normal equations.
+inline bool gesvd_direct_bidiag() {
+    return gesvd_bidiag_solver() != GesvdBidiagSolver::NormalEquations;
 }
 
 // A thin tall U forces a direct bidiagonal solve, deliberately overriding
@@ -69,7 +71,7 @@ inline bool gesvd_direct_bidiag(GesvdNativeMode mode) {
 // k-column U. The override reads only the arguments, so buffer_size and the
 // run path cannot disagree about which path runs.
 inline bool gesvd_direct_bidiag(GesvdNativeMode mode, bool thin_tall_u) {
-    return gesvd_direct_bidiag(mode) || (mode == GesvdNativeMode::Blocked && thin_tall_u);
+    return gesvd_direct_bidiag() || (mode == GesvdNativeMode::Blocked && thin_tall_u);
 }
 
 inline bool gesvd_stage_profile_enabled() {
@@ -956,8 +958,8 @@ Event gesvd_native_impl(Queue& ctx,
         });
 
         // ---- Bidiagonal SVD ----
-        // Direct solve on B itself; the else branch (CTA mode, =normal) forms
-        // B^T B and squares kappa.
+        // Direct solve on B itself; the else branch (BATCHLAS_GESVD_BIDIAG=normal)
+        // forms B^T B and squares kappa.
         // evidence: docs/perf/gesvd.md#gesvd-defect-a-the-normal-equations-square-kappa
         // Direct solvers write only the leading k x k of U and V^H; U's columns
         // k..m-1 are seeded to I and completed by the back-transform, since

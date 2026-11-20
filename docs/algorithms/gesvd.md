@@ -18,7 +18,7 @@ below, \f$m \ge n\f$. Native routes need a GPU, a homogeneous batch, \f$m, n \ge
 | Route | Method | `can_run` ([`gesvd.cc`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/gesvd/gesvd.cc)) |
 |---|---|---|
 | `jacobi` | one-sided Jacobi | [`:L87-L90`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/gesvd/gesvd.cc#L87-L90): sub-group 32, not Hermitian, \f$\max(m,n) \le\f$ largest \f$C \in \{64, \dots, 4\}\f$ fitting local memory ([`gesvd_native.hh:L35-L38`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/gesvd/gesvd_native.hh#L35-L38)) |
-| `cta` | `gebrd_cta` (square) or unblocked `gebrd`, then \f$B^TB\f$; Hermitian: `syev_cta` | [`:L91-L94`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/gesvd/gesvd.cc#L91-L94): sub-group 32, \f$\max(m,n) \le 32\f$, not thin, real or Hermitian square |
+| `cta` | `gebrd_cta` (square) or unblocked `gebrd`, then the bidiagonal solver `BATCHLAS_GESVD_BIDIAG` names, as `blocked`; Hermitian: `syev_cta` | [`:L91-L94`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/gesvd/gesvd.cc#L91-L94): sub-group 32, \f$\max(m,n) \le 32\f$, not thin, real or Hermitian square |
 | `blocked` | blocked `gebrd` if \f$k \ge\f$ `gesvd_blocked_gebrd_min` (default 1, [`gesvd_blocked.cc:L46-L50`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/gesvd/kernels/gesvd_blocked.cc#L46-L50)); `BATCHLAS_GESVD_BIDIAG` = `bdsdc` (default) \| `bdsqr` \| `normal` ([`gesvd_native.hh:L45-L55`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/gesvd/gesvd_native.hh#L45-L55)); `ormbr`. Hermitian: `syev_blocked` | [`:L95-L99`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/gesvd/gesvd.cc#L95-L99): Hermitian \f$\Rightarrow\f$ square, mask honoured |
 | `vendor` | solver library (no \f$A^H\f$ swap) | [`:L100`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/gesvd/gesvd.cc#L100) |
 
@@ -99,11 +99,12 @@ unreduced block \f$B(l{:}r, l{:}r)\f$. Let \f$M = \max_j(|d_j|, |e_j|)\f$.
   \f$V^T\f$, then a left one into \f$U\f$ ([`:L242-L280`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/gesvd/bdsqr/bdsqr.cc#L242-L280)), top to bottom even for \f$\mu = 0\f$.
 - **Finish:** \f$d_i < 0\f$ flips row \f$i\f$ of \f$V^T\f$; sort descending ([`:L288-L317`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/gesvd/bdsqr/bdsqr.cc#L288-L317)).
 
-## gesvd: the normal-equations path (cta)
+## gesvd: the normal-equations path
 
-Used by `cta`, and by `blocked` under `normal` except for complex input or a thin \f$U\f$ with
-\f$m > n\f$, which solve \f$B\f$ directly ([`src/ops/gesvd/kernels/gesvd_blocked.cc:L69-L71`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/gesvd/kernels/gesvd_blocked.cc#L69-L71),
-[`:L928`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/gesvd/kernels/gesvd_blocked.cc#L928)). From \f$B^TB = V_B\Sigma^2 V_B^T\f$:
+Used by `cta` and `blocked` only under `BATCHLAS_GESVD_BIDIAG=normal` (A/B), except for complex input
+or a thin \f$U\f$ with \f$m > n\f$, which solve \f$B\f$ directly ([`src/ops/gesvd/kernels/gesvd_blocked.cc:L69-L71`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/gesvd/kernels/gesvd_blocked.cc#L69-L71),
+[`:L928`](https://github.com/jonasdelacour/BatchLAS/blob/f37b12ee415cb887872c59b85cbd01a2d06586a3/src/ops/gesvd/kernels/gesvd_blocked.cc#L928)). Until 1.0.0 `cta` always took it, and
+\f$u_j = Bv_j/\sigma_j\f$ lost \f$U\f$'s orthogonality as \f$\varepsilon\kappa^2\f$ (defect 18). From \f$B^TB = V_B\Sigma^2 V_B^T\f$:
 \f[
 (B^TB)_{ii} = d_i^2 + e_{i-1}^2,\quad (B^TB)_{i,i+1} = d_i e_i,\qquad
 \sigma_j = \sqrt{\max(\lambda_{n+1-j}, 0)},\quad u_j = Bv_j/\sigma_j \ \text{if } \sigma_j > \varepsilon\sigma_1
