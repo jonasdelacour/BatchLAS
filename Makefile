@@ -47,7 +47,7 @@ $(CACHE):
 	@mkdir -p $(BUILD_DIR)
 	$(CMAKE) --preset $(PRESET) -DCMAKE_INSTALL_PREFIX=$(PREFIX) $(CMAKE_ARGS) 2>&1 \
 		| tee $(BUILD_DIR)/configure.log || { rm -f $(CACHE); exit 1; }
-	@targets=$$(sed -n 's/^-- Using SYCL targets: //p' $(BUILD_DIR)/configure.log | tail -n 1); \
+	@targets=$$(sed -nE 's/^-- Using (SYCL|AdaptiveCpp) targets: //p' $(BUILD_DIR)/configure.log | tail -n 1); \
 	compiler=$$(sed -n 's/^CMAKE_CXX_COMPILER:[A-Z]*=//p' $(CACHE)); \
 	echo "batchlas: compiler $$compiler"; \
 	echo "batchlas: SYCL targets $${targets:-(see $(BUILD_DIR)/configure.log)}"; \

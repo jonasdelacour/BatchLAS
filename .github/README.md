@@ -54,17 +54,25 @@ CPU-only), and optionally LAPACKE/CBLAS and the CUDA toolkit.
 
 ```bash
 git clone https://github.com/jonasdelacour/BatchLAS.git && cd BatchLAS
-cmake -S . -B build -DCMAKE_CXX_COMPILER=/opt/dpcpp-cuda/bin/clang++   # your SYCL compiler
-cmake --build build -j8                                                 # heavy TUs: keep -j low
-cmake --install build --prefix "$HOME/inst"
+make install PREFIX="$HOME/inst"     # release build; CMAKE_ARGS=-DCMAKE_CXX_COMPILER=... for another compiler
+make check                           # optional: build and run an outside consumer against the install
 ```
 
-Configure output must name your GPU (`Using SYCL targets: nvidia_gpu_sm_89`); `spir64_x86_64`
-alone means a CPU-only build. Consume it from CMake **with the same compiler**:
+`make` wraps the CMake presets (`make help`; the [building guide](../docs/guide/build.md) has the
+plain `cmake` route). It prints the compiler and SYCL targets it found: the line must name your GPU
+(`nvidia_gpu_sm_89`); `spir64_x86_64` alone means a CPU-only build. Consume the install **with the
+same compiler**, from CMake:
 
 ```cmake
 find_package(BatchLAS CONFIG REQUIRED)
 target_link_libraries(my_app PRIVATE BatchLAS::batchlas)
+```
+
+or from anything else through pkg-config:
+
+```bash
+export PKG_CONFIG_PATH="$HOME/inst/lib/pkgconfig"
+$(pkg-config --variable=cxx batchlas) main.cc $(pkg-config --cflags --libs batchlas) -o my_app
 ```
 
 ```cpp

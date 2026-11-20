@@ -43,6 +43,14 @@ and CBLAS; the CUDA backend the CUDA toolkit. CMake 3.17+ for BatchLAS, 3.21+ fo
 
 ```bash
 git clone https://github.com/jonasdelacour/BatchLAS.git && cd BatchLAS
+make install PREFIX="$HOME/inst"              # <prefix> below; `make help` lists the knobs
+```
+
+The root `Makefile` runs the `release` preset (`release-metal` on macOS) and finds a DPC++ on
+`PATH`, in `/opt/dpcpp-cuda` or in oneAPI's default prefix; `CMAKE_ARGS=-DCMAKE_CXX_COMPILER=...`
+picks another. The same build by hand:
+
+```bash
 cmake -S . -B build \
       -DCMAKE_CXX_COMPILER=/opt/dpcpp-cuda/bin/clang++ \
       -DCMAKE_BUILD_TYPE=RelWithDebInfo \
@@ -76,6 +84,18 @@ LD_LIBRARY_PATH=/opt/dpcpp-cuda/lib:<prefix>/lib ./build/my_app
 ```
 
 @ref consumer_example (`examples/consumer/`) is this project, runnable.
+
+Without CMake, the install's `lib/pkgconfig/batchlas.pc` gives the compiler and one line of flags:
+
+```bash
+export PKG_CONFIG_PATH=<prefix>/lib/pkgconfig
+$(pkg-config --variable=cxx batchlas) main.cc $(pkg-config --cflags --libs batchlas) -o my_app
+./my_app
+```
+
+Unlike the CMake package, its `Cflags`/`Libs` carry `-std=c++20`, the SYCL flags and the device
+targets the library was built with (your own kernels then run on the same devices; a later
+`-std=c++23` wins), and an rpath to `<prefix>/lib` and the DPC++ runtime.
 
 - `BatchLAS::batchlas` is the only target. On Linux it propagates `-Wl,--no-as-needed`; keep it if
   you override the link line.
