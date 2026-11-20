@@ -172,6 +172,15 @@ cmake --build build-acpp-metal-tests --target gemm_tests -j8
 ctest --preset acpp-metal-tests -R '^gemm_tests$'
 ```
 
+The patched toolchain is required. A stock AdaptiveCpp, or one missing a patch, builds BatchLAS
+without complaint, and the kernels then fail at their first launch, or compute wrong values. For
+example, without 0014 every complex<float> potrf, posv, potrs, potri, sygvd and ortho path, and
+the float `reg:`/`wide:` gemm tiles, fail MSL compilation with "assigning 'threadgroup void *' to
+'device void *'". The script refuses a checkout whose branch does not carry exactly the patches in
+the directory. When a patch is added or changed, re-run it with `ACPP_REAPPLY=1 SKIP_BREW=1` and
+clear `~/.acpp/apps`. No BatchLAS rebuild is needed for an emitter-only patch: kernels are
+translated at launch.
+
 Configure prints `Native SYCL GPU backend (Metal): TRUE; device fp64: OFF`. A full serial `ctest`
 takes about an hour (first-launch JIT); its failure ledger is
 `tests/known-failures-acpp-metal.txt`. macOS traps (adaptivity level, JIT cache, `DYLD_` paths,
