@@ -11,4 +11,5 @@
 /// (SYCL types); both need `-fsycl`.
 /// @ingroup api_reference
 
+#include <batchlas/version.hh>
 #include <batchlas/blas/linalg.hh>

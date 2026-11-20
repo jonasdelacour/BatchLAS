@@ -244,13 +244,12 @@ function(batchlas_configure_component target)
     # libbatchlas_*.so whose DT_SONAME was the same bare name, so two versions
     # could not coexist in one prefix, no distribution could package it, and an
     # ABI break was indistinguishable from a rebuild. VERSION gives the real
-    # file (libbatchlas_core.so.0.1.0), SOVERSION the DT_SONAME and the runtime
-    # symlink (.so.0), and CMake adds the .so devel symlink itself.
+    # file (libbatchlas_core.so.1.0.0), SOVERSION the DT_SONAME and the runtime
+    # symlink (.so.1), and CMake adds the .so devel symlink itself.
     #
-    # PROJECT_VERSION_MAJOR is 0 today, so every library is .so.0: that is the
-    # honest statement, not an oversight. SemVer promises nothing across 0.x
-    # minors, which is why the package version file is ExactVersion while the
-    # major stays 0 (see cmake/BatchLASPackaging.cmake).
+    # SOVERSION is the major: an ABI break covered by the 1.x promise bumps it,
+    # and the package version file (SameMajorVersion, cmake/BatchLASPackaging.cmake)
+    # draws the same line for find_package.
     set_target_properties(${target} PROPERTIES
         VERSION "${PROJECT_VERSION}"
         SOVERSION "${PROJECT_VERSION_MAJOR}"
