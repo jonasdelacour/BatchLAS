@@ -167,7 +167,9 @@ struct Entry {
     std::function<void(Pool<Scalar>&)> call;
     bool pinned = false;  ///< runs under a strict pin, so "cannot run this shape" is can_run's refusal
     std::function<void(Pool<Scalar>&)> prepare{};  ///< unmasked setup run before the snapshot (honouring checks)
-    std::vector<std::string> packed{};  ///< buffers passed as a flat span, items kN elements apart (wspan)
+    std::vector<std::string> packed{};  ///< buffers passed as a flat span, items packed_stride elements apart (wspan)
+    std::size_t packed_stride = kN;     ///< syevx's W: items neigs apart
+    bool active_exact = true;  ///< false: active items agree to a tolerance only (syevx_mask_tests bounds them)
 };
 
 // The host backend's natives yield to its BLAS, which cannot skip an item. A vendor-free host
@@ -270,12 +272,14 @@ void expect_honoured(Queue& q, const Entry<Scalar>& entry, Span<const std::uint8
         for (std::size_t i = 0; i < bufs.size(); ++i) {
             const std::string name = std::get<0>(bufs[i]);
             const bool packed = std::find(entry.packed.begin(), entry.packed.end(), name) != entry.packed.end();
-            // Every buffer holds kBatch equal items; a packed one kBatch items of kN elements, then a tail.
-            const std::size_t item = packed ? kN * (after[i].size() / Pool<Scalar>::vec_len()) : after[i].size() / kBatch;
+            // Every buffer holds kBatch equal items; a packed one kBatch items of packed_stride elements, then a tail.
+            const std::size_t item =
+                packed ? entry.packed_stride * (after[i].size() / Pool<Scalar>::vec_len()) : after[i].size() / kBatch;
             EXPECT_TRUE(std::equal(after[i].begin() + kBatch * item, after[i].end(), before[i].begin() + kBatch * item))
                 << name << " written past its last item";
             for (int b = 0; b < kBatch; ++b) {
                 const bool active = kAlternating[std::size_t(b)] != 0;
+                if (active && !entry.active_exact) continue;
                 const auto& ref = active ? want[i] : before[i];
                 EXPECT_EQ(std::memcmp(after[i].data() + b * item, ref.data() + b * item, item), 0)
                     << name << " item " << b << (active ? " differs from the unmasked call" : " was written");
@@ -561,6 +565,28 @@ std::vector<Entry<Scalar>> host_direct_entries() {
         });
         out.back().packed = {"w"};
     }
+    if constexpr (B == Backend::NETLIB) {  // the syevx arms over gemm and ortho (syevx_mask_tests)
+        const auto ev = JobType::EigenVectors;
+        const auto add_w = [&](const char* name, std::function<void(P&)> f) {
+            add(name, std::move(f));
+            out.back().packed = {"w"};
+            out.back().packed_stride = 2;  // neigs
+        };
+        if constexpr (!is_std_complex_v<Scalar>)
+            add_w("syevx_direct_subset", [=](P& p) {
+                syevx_direct_subset<B, Scalar, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), P::flat(p.m), 2, p.ws,
+                                                                    ev, p.mat(p.z), SyevxParams<Scalar>());
+            });
+        add_w("syevx_lobpcg", [=](P& p) {
+            syevx_lobpcg<B, Scalar, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z), SyevxParams<Scalar>());
+        });
+        add_w("syevx_filtered", [=](P& p) {
+            syevx_filtered<B, Scalar, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z), SyevxParams<Scalar>());
+        });
+        // Its batch filter degree folds over the active items, so they need not match the unmasked
+        // call bit for bit (complex<float> does not); syevx_mask_tests bounds them.
+        out.back().active_exact = false;
+    }
     return out;
 }
 
@@ -594,23 +620,9 @@ std::vector<Entry<Scalar>> direct_entries() {
         add("ormbr",
             [=](P& p) { ormbr<B, Scalar>(p.q, p.mat(p.a), p.vec(p.tau), p.mat(p.c), 'Q', Side::Left, N, p.ws); });
     }
-    // syevx and syevx_direct honour the mask (W4c): syevx_mask_tests holds their contract. LOBPCG and
-    // Filtered refuse it on the host backend (its gemm is the host BLAS); on a GPU they honour it with
-    // every ortho, Chol2 included (syevx_mask_tests).
-    // DirectSubset (real only) honours it on a device (lift 2).
-    if constexpr (B == Backend::NETLIB && !is_std_complex_v<Scalar>)
-        add("syevx_direct_subset", [=](P& p) {
-            syevx_direct_subset<B, Scalar, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), P::flat(p.m), 2, p.ws, ev,
-                                                                p.mat(p.z), SyevxParams<Scalar>());
-        });
-    if constexpr (B == Backend::NETLIB) {
-        add("syevx_lobpcg", [=](P& p) {
-            syevx_lobpcg<B, Scalar, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z), SyevxParams<Scalar>());
-        });
-        add("syevx_filtered", [=](P& p) {
-            syevx_filtered<B, Scalar, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z), SyevxParams<Scalar>());
-        });
-    }
+    // syevx and syevx_direct honour the mask (W4c): syevx_mask_tests holds their contract. LOBPCG,
+    // Filtered and DirectSubset (real only) sit in host_direct_entries: a host BLAS refuses them, a
+    // GPU and a vendor-free host honour the mask (syevx_mask_tests).
     // iluk_apply and iluk's device path honour the mask (W4c, tests/iluk_mask_tests.cc). This batch
     // takes the host path, which only the host backend's CPU queue can read a device-only mask on.
     if constexpr (B != Backend::NETLIB) {
