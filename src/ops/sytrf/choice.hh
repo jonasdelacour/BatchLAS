@@ -17,7 +17,8 @@ struct Wg : select::NoFields<"wg"> {};          ///< sytrf_wg_dispatch: one work
 struct Blocked : select::NoFields<"blocked"> {};  ///< sytrf_blocked_dispatch: ?lasyf panels + the public gemm, any n
 struct Vendor : select::NoFields<"vendor"> {};  ///< backend::sytrf_vendor: cuSOLVER ?sytrf per item, LAPACKE ?sytrf
 
-using SytrfChoice = std::variant<Cta, Wg, Blocked, Vendor>;  ///< natives: GPU, sub-group 32, homogeneous, not NETLIB
+/// natives: natives_run_on, sub-group 32, homogeneous; on NETLIB only in a vendor-free build
+using SytrfChoice = std::variant<Cta, Wg, Blocked, Vendor>;
 
 template <class Scalar>  /// Every compiled choice, once, in tie-break order (§6.3).
 constexpr auto candidates() { return select::all_of<SytrfChoice>(); }
