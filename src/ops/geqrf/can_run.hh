@@ -25,11 +25,13 @@ using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
 // Correctness only (R3): each clause is its driver's check. No family takes a heterogeneous batch; Cta and
 // Blocked take any m x n, Tiny only square; masked, natives or NETLIB. evidence: docs/perf/qr.md#geqrf-wide-shapes-m-less-than-n
+// The kernels take no backend parameter, so only the run-time half of the host-native gate applies
+// (as trsm). evidence: docs/design/vendor-independence.md#the-host-native-gate
 template <Backend B, typename Scalar>
 bool can_run(const GeqrfChoice& c, const select::Device& d, const MV<Scalar>& A) {
     const bool masked = detail::any_batch_mask(A);
     const std::int64_t m = A.rows(), n = A.cols();
-    const bool native = d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && m >= 1 && n >= 1 && A.batch_size() >= 1;
+    const bool native = select::natives_run_on(d) && d.has_sg32 && !A.is_heterogeneous() && m >= 1 && n >= 1 && A.batch_size() >= 1;
     const auto budget = static_cast<std::size_t>(d.slm_budget);
     return std::visit(overloaded{
         [&](Tiny) { return native && m == n && n <= ops::geqrf::geqrf_tiny_max_n_for_slm<Scalar>(budget); },

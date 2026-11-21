@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Native batched GEQRF, the TINY tier: square n <= 32 in registers per SubGroupPartition<N>. evidence: docs/perf/qr.md#the-tiny-tier-wp6--p1-square-n--32-in-registers
 
+#include <batchlas/backend_config.h>
+
 #include <src/ops/geqrf/geqrf_native.hh>
 #include <src/kernels/common/launch.hh>
 #include <src/ops/geqrf/kernels/geqrf_tiny_device.hh>
@@ -256,7 +258,8 @@ std::size_t geqrf_tiny_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFo
 template <typename Scalar>
 unsigned geqrf_tiny_debug_launch(Queue& ctx, int n) {
     const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU || !dev.supports_sub_group_size(32)) return 0u;
+    // The CPU image exists only in a vendor-free build (the cta library keeps its CPU targets there).
+    if ((dev.type != DeviceType::GPU && !BATCHLAS_HAS_HOST_NATIVE) || !dev.supports_sub_group_size(32)) return 0u;
     const std::size_t budget =
         resident::device_slm_budget(dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
     if (n < 1 || n > geqrf_tiny_max_n_for_slm<Scalar>(budget)) return 0u;

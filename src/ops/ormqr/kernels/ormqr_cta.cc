@@ -441,8 +441,10 @@ Event ormqx_cta(Queue& ctx,
     auto& tau = const_cast<VectorView<Scalar>&>(tau_in);
     auto& c = const_cast<MatrixView<Scalar, MatrixFormat::Dense>&>(c_in);
 
-    // GPU only: this TU builds without CPU targets, and the OpenCL CPU offers sub-group size 32.
-    if (ctx.device().type != DeviceType::GPU || !ctx.device().supports_sub_group_size(32)) {
+    // This TU's CPU image exists only in a vendor-free build (BATCHLAS_HAS_HOST_NATIVE keeps the cta
+    // library's CPU targets), and the OpenCL CPU offers sub-group size 32, so test the device type too.
+    const bool image = ctx.device().type == DeviceType::GPU || BATCHLAS_HAS_HOST_NATIVE;
+    if (!image || !ctx.device().supports_sub_group_size(32)) {
         throw batchlas::unsupported("ormqx_cta: needs a GPU with subgroup size 32 (the CTA kernels have no CPU image).");
     }
 

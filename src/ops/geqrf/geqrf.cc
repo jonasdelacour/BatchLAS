@@ -110,7 +110,7 @@ std::size_t geqrf_buffer_size_bound(Queue& ctx, const MatrixView<Scalar, MatrixF
     std::size_t need = 0;
     for (const auto& c : ops::geqrf::candidates<Scalar>()) {
         const bool vendor = select::family_of(c) == "vendor";
-        if (vendor ? d.has_vendor : d.is_gpu) need = std::max(need, ops::geqrf::workspace<Back,
+        if (vendor ? d.has_vendor : select::natives_run_on(d)) need = std::max(need, ops::geqrf::workspace<Back,
                                                               Scalar>(ctx, c, A, tau));
     }
     return need;
