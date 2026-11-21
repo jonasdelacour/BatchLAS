@@ -37,6 +37,11 @@ constexpr int diag_items_per_group(int kb) {
     return g < 1 ? 1 : g;
 }
 
+template <typename Scalar>  /// work-items of one work-group at order kb: kb per block, whole sub-groups of 32
+constexpr int diag_group_size(int kb) {
+    return (diag_items_per_group<Scalar>(kb) * kb + 31) / 32 * 32;
+}
+
 template <typename Scalar>  /// shared memory of one work-group at order kb, in whole 16-byte packs
 constexpr std::size_t diag_slm_bytes(int kb) {
     const std::size_t bytes = static_cast<std::size_t>(diag_items_per_group<Scalar>(kb)) * diag_item_elems<Scalar>(kb) * sizeof(Scalar);

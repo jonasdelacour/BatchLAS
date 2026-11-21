@@ -36,14 +36,14 @@ void launch_diag(Queue& ctx, D* ap, int lda, std::ptrdiff_t stride_a, const D* b
     const int kb = KB ? KB : kb_rt;
     const int ipw = diag_items_per_group<Scalar>(kb), ldf = diag_ldf<Scalar>(kb), lds = kb + 1;
     const int fper = kb * ldf, sper = kb * lds, groups = (batch + ipw - 1) / ipw;
-    const int wg = (ipw * kb + 31) / 32 * 32;
+    const int wg = diag_group_size<Scalar>(kb);
     const std::size_t packs = (static_cast<std::size_t>(ipw) * (fper + sper) + kVec<D> - 1) / kVec<D>;
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<Pack<D>, 1> slm(sycl::range<1>(packs), h);
         batchlas::impl::parallel_for<SygstDiagKernel<D, Inverse, KB>>(
             h, sycl::nd_range<1>(static_cast<std::size_t>(groups) * wg, wg), [=](sycl::nd_item<1> it) {
                 // The arguments name the captures in the hand kernel's order (its parameter order).
-                // I2: a masked item is a dead block, never loaded, computed or stored.
+                // I2: a masked item is a dead block, never loaded or stored.
                 device::sygs2_group<Inverse, KB>(
                     device::RtGroup<>{it}, static_cast<int>(it.get_local_id(0)), kb, lower, it.get_group(0), ipw,
                     reinterpret_cast<D*>(&slm[0]), fper,
