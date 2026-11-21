@@ -415,7 +415,7 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                     const Scalar alpha = (i + 1 < n) ? Ab(i + 1, i) : Scalar(0);
 
                     // xLARFG scalars, alg::PhaseN1 (a complex alpha reflects at the last column too).
-                    const auto h = device::larfg_scalars<device::alg::PhaseN1>(alpha, sycl::sqrt(sumsq_total), n - i - 1);
+                    const auto h = device::larfg_scalars<device::alg::PhaseN1>(alpha, sycl::sqrt(sumsq_total) * sycl::ldexp(Real(1), xexp), n - i - 1);
                     const Scalar tau_i = h.tau;
                     const Scalar beta = h.beta;
                     const Scalar scale = h.scale;
