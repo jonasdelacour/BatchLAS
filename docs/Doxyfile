@@ -57,7 +57,10 @@ HIDE_UNDOC_MEMBERS     = NO
 HIDE_UNDOC_CLASSES     = NO
 HIDE_FRIEND_COMPOUNDS  = YES
 INTERNAL_DOCS          = NO
-CASE_SENSE_NAMES       = SYSTEM
+# YES, not SYSTEM: on macOS SYSTEM escapes capitals (.github/README.md becomes
+# md__8github_2_r_e_a_d_m_e), so @ref md__8github_2README breaks there. No two
+# output files differ only in case (checked on the Linux site), so YES is safe.
+CASE_SENSE_NAMES       = YES
 SHOW_INCLUDE_FILES     = YES
 SORT_MEMBER_DOCS       = NO
 SORT_BRIEF_DOCS        = NO

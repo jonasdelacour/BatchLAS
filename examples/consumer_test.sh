@@ -198,11 +198,15 @@ say "consumer ran and the numbers are right"
 # ---------------------------------------------------------------------------
 # Phase 3b: one version everywhere, and find_package draws the major line.
 # The installed version.hh, the CMake package (BatchLAS_VERSION), the string the
-# consumer compiled in and the SONAME must agree. The example asked for 1.0 and
-# was accepted; asking for the next major must be refused (rules out
-# AnyNewerVersion-style "newer is fine"), and so must an older major's last minor
-# (rules out a version file that ignores the major). ExactVersion would already
-# have refused the example's "1.0" against "1.0.0".
+# consumer compiled in and the SONAME must agree. Then the probes that pin
+# SameMajorVersion against a MAJOR.MINOR.PATCH install:
+#   MAJOR.0 accepted (the example's own request): ExactVersion refuses it;
+#   (MAJOR-1).99 refused: AnyNewerVersion accepts it;
+#   MAJOR.(MINOR+1) and (MAJOR+1).0 refused: every CMake mode refuses both, so
+#   they only catch a hand-written version file that accepts too much.
+# SameMinorVersion passes all of them while MINOR is 0. The probes are first run
+# against CMake's own ExactVersion/AnyNewerVersion files, so a probe that stops
+# telling the modes apart turns this red.
 # ---------------------------------------------------------------------------
 version_hh="${prefix}/include/batchlas/version.hh"
 [[ -f "${version_hh}" ]] || fail "missing installed header: include/batchlas/version.hh"
@@ -222,8 +226,46 @@ if ! compgen -G "${prefix}/lib*/libbatchlas*.so.${hdr_major}" >/dev/null && \
    ! compgen -G "${prefix}/lib*/libbatchlas*.a" >/dev/null; then
     fail "no installed libbatchlas*.so.${hdr_major} / .${hdr_major}.dylib: the SONAME does not follow the major version"
 fi
-refuse_requests=("$((hdr_major + 1)).0")
+accept_request="${hdr_major}.0"
+grep -qx "BATCHLAS_CONSUMER_REQUIRE_VERSION:STRING=${accept_request}" "${consumer_build}/CMakeCache.txt" \
+    || fail "the example's find_package did not ask for ${accept_request} (see ${consumer_build}/CMakeCache.txt)"
+refuse_requests=("${hdr_major}.$(( $(hdr_part MINOR) + 1 ))" "$((hdr_major + 1)).0")
 [[ ${hdr_major} -gt 0 ]] && refuse_requests+=("$((hdr_major - 1)).99")
+
+# The probe set against CMake's own version files for this version.
+mode_script="${work_dir}/version-mode.cmake"
+cat >"${mode_script}" <<'EOF'
+include(CMakePackageConfigHelpers)
+write_basic_package_version_file("${OUT}" VERSION "${VER}" COMPATIBILITY "${MODE}")
+set(PACKAGE_FIND_VERSION "${REQ}")
+string(REPLACE "." ";" _parts "${REQ}")
+list(LENGTH _parts PACKAGE_FIND_VERSION_COUNT)
+list(GET _parts 0 PACKAGE_FIND_VERSION_MAJOR)
+list(GET _parts 1 PACKAGE_FIND_VERSION_MINOR)
+set(PACKAGE_FIND_VERSION_PATCH 0)
+include("${OUT}")
+message("compatible=${PACKAGE_VERSION_COMPATIBLE}")
+EOF
+mode_accepts() {
+    # $1 = COMPATIBILITY mode, $2 = request; exit 0 iff that mode's file accepts the request
+    local out
+    out="$("${cmake_bin}" -DMODE="$1" -DREQ="$2" -DVER="${hdr_version}" \
+        -DOUT="${work_dir}/version-$1.cmake" -P "${mode_script}" 2>&1)" \
+        || fail "cmake -P ${mode_script} (${1}, ${2}) failed: ${out}"
+    [[ "${out}" == *"compatible=TRUE"* ]]
+}
+mode_accepts SameMajorVersion "${accept_request}" \
+    || fail "probe self-check: SameMajorVersion refuses ${accept_request}"
+any_newer_caught=0
+for req in "${refuse_requests[@]}"; do
+    ! mode_accepts SameMajorVersion "${req}" || fail "probe self-check: SameMajorVersion accepts ${req}"
+    mode_accepts AnyNewerVersion "${req}" && any_newer_caught=1
+done
+! mode_accepts ExactVersion "${accept_request}" \
+    || fail "probe self-check: ExactVersion accepts ${accept_request}, so that probe cannot tell it apart"
+[[ ${hdr_major} -eq 0 || ${any_newer_caught} -eq 1 ]] \
+    || fail "probe self-check: AnyNewerVersion refuses all of ${refuse_requests[*]}, so no probe tells it apart"
+
 for req in "${refuse_requests[@]}"; do
     req_log="${log_dir}/configure-request-${req}.log"
     if configure_consumer "${work_dir}/build-request-${req}" \
@@ -237,7 +279,8 @@ for req in "${refuse_requests[@]}"; do
     }
 done
 say "version ${hdr_version}: version.hh, package, compiled string and SONAME agree;" \
-    "find_package accepts 1.0, refuses ${refuse_requests[*]}"
+    "find_package accepts ${accept_request}, refuses ${refuse_requests[*]}" \
+    "(probes checked against CMake's ExactVersion/AnyNewerVersion files)"
 
 # ---------------------------------------------------------------------------
 # Phase 4: the include-collision probe. Build the same example again with

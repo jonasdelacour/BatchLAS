@@ -32,7 +32,7 @@ tested by hand, or untested.
 | AdaptiveCpp multipass CUDA | AdaptiveCpp `develop` (25.10.0+), `BATCHLAS_ACPP_TARGETS=cuda:sm_89`, CUDA 12.8 | RTX 4090, `sm_89` | Built and tested; ledger `tests/known-failures-acpp-cuda.txt` ([multipass CUDA](../design/sycl-implementations.md#sycl-impl-cuda-aot)) |
 | Apple GPU | AdaptiveCpp + local patches, Homebrew `llvm@21`, macOS 27 | M5 Max, Metal | float and complex<float> on the GPU ([below](#macos-apple-gpu-through-adaptivecpp-metal)) |
 | CPU only | oneAPI `icpx` 2025.x | none | Builds; no NVIDIA support |
-| AMD / ROCm | — | — | Unsupported (code paths only): syntax-checked, never built or run |
+| AMD / ROCm | — | — | Unsupported (code paths only): no build or CI job compiles them, nothing runs them |
 | Windows | — | — | Untested |
 
 Other NVIDIA architectures should work (the build targets the detected GPU). `main` has known test

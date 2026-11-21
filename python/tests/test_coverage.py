@@ -337,15 +337,9 @@ def test_bdsqr_returns_the_bidiagonal_singular_values(dtype, sort_desc):
 
 
 @pytest.mark.parametrize("dtype", ALL)
-@pytest.mark.parametrize(
-    "uplo",
-    [
-        "lower",
-        pytest.param("upper", marks=pytest.mark.xfail(strict=True, reason=(
-            "syev_cta Upper reads the lower triangle: "
-            "docs/design/known-defects.md#defect-14-the-hermitian-drivers-read-the-unreferenced-triangle"))),
-    ],
-)
+# Upper guards defect 14's fix (sytrd_cta's tile load reads only the named triangle).
+# evidence: docs/design/known-defects.md#defect-14-the-hermitian-drivers-read-the-unreferenced-triangle
+@pytest.mark.parametrize("uplo", ["lower", "upper"])
 def test_syev_cta_eigenpairs(dtype, uplo):
     device = _require_gpu()
     rng = np.random.default_rng(12)
