@@ -91,6 +91,19 @@ inline typename base_type<Scalar>::type unpack_real(const Scalar& x) {
     }
 }
 
+// max(|re x|, |im x|): the magnitude larfg_lanes scales by.
+template <typename Scalar>
+inline typename base_type<Scalar>::type part_max(const Scalar& x) {
+    if constexpr (detail::is_complex<Scalar>::value) return sycl::fmax(sycl::fabs(x.real()), sycl::fabs(x.imag()));
+    else return sycl::fabs(x);
+}
+
+// e with 2^e <= m < 2^(e+1), clamped to [-120, 120]; 0 for m = 0 or not finite.
+template <typename Real>
+inline int pow2_exponent(Real m) {
+    return (m > Real(0) && sycl::isfinite(m)) ? sycl::clamp(static_cast<int>(sycl::ilogb(m)), -120, 120) : 0;
+}
+
 using GridBarrierWord = uint32_t;
 
 // Sense-reversing software grid barrier over the `groups` work-groups that share
@@ -277,8 +290,9 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
     //   delta partials : [G * ib]
     //   sumsq partials : [G]
     //   dot partials   : [G]
+    //   max |x| parts  : [G]   the sumsq partials' scales
     const size_t red_per_matrix =
-        static_cast<size_t>(G_host) * (2u * static_cast<size_t>(ib_host) + 2u);
+        static_cast<size_t>(G_host) * (2u * static_cast<size_t>(ib_host) + 3u);
     const size_t bar_words = static_cast<size_t>(batch_host) * 2u;
     size_t bar_bytes = bar_words * sizeof(GridBarrierWord);
     bar_bytes = (bar_bytes + 255u) & ~static_cast<size_t>(255u);
@@ -338,6 +352,7 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                 Scalar* red_delta = red + static_cast<size_t>(G) * static_cast<size_t>(ib);
                 Scalar* red_sumsq = red + 2u * static_cast<size_t>(G) * static_cast<size_t>(ib);
                 Scalar* red_dot   = red_sumsq + G;
+                Scalar* red_xmax  = red_dot + G;
 
                 for (int i = 0; i < ib; ++i) {
                     if (i >= n - 1) break;
@@ -365,18 +380,32 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                     it.barrier(sycl::access::fence_space::global_space);
 
                     // ---- sumsq partial (only over rows this group just wrote) --
+                    // Scaled by 2^-e_g, e_g the exponent of the group's max |x| (latrd_lower_run's
+                    // scaling), and re-scaled to the max over groups after barrier 1, so no square
+                    // under- or overflows. Powers of two: without either the bits are unchanged.
+                    Real mag = Real(0);
+                    for (int r = slo + lid; r < rhi; r += wg) mag = sycl::fmax(mag, part_max(Ab(r, i)));
+                    const Real gmax = sycl::reduce_over_group(g, mag, sycl::maximum<Real>());
+                    const Real gsc = sycl::ldexp(Real(1), -pow2_exponent(gmax));
                     Real sumsq = Real(0);
                     for (int r = slo + lid; r < rhi; r += wg) {
-                        sumsq += detail::abs2_if_complex(Ab(r, i));
+                        sumsq += detail::abs2_if_complex(Scalar(Ab(r, i) * gsc));
                     }
                     sumsq = ex.group_reduce(sumsq);
-                    if (lid == 0) red_sumsq[gg] = pack_real<Scalar>(sumsq);
+                    if (lid == 0) {
+                        red_sumsq[gg] = pack_real<Scalar>(sumsq);
+                        red_xmax[gg] = pack_real<Scalar>(gmax);
+                    }
 
                     grid_barrier(it, bar, G);   // barrier 1
 
+                    Real xmax = Real(0);
+                    for (int gi = 0; gi < G; ++gi) xmax = sycl::fmax(xmax, unpack_real<Scalar>(red_xmax[gi]));
+                    const int xexp = pow2_exponent(xmax);
                     Real sumsq_total = Real(0);
                     for (int gi = 0; gi < G; ++gi) {
-                        sumsq_total += unpack_real<Scalar>(red_sumsq[gi]);
+                        const int shift = 2 * (pow2_exponent(unpack_real<Scalar>(red_xmax[gi])) - xexp);
+                        sumsq_total += sycl::ldexp(unpack_real<Scalar>(red_sumsq[gi]), shift);
                     }
 
                     // Every work-item recomputes the reflector from identical

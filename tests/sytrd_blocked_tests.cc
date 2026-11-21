@@ -216,7 +216,8 @@ TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower33) {
 
 // The latrd panel's ||x|| when the squares of the entries leave the float range: the same
 // Hermitian matrix at 2^0 (control), 2^-70 and 2^-76 (squares near 2^-140 and 2^-152, subnormal
-// or zero). Legacy latrd pinned (the panel body latrd_lower_run on every device), padded storage.
+// or zero), padded storage. Both latrd paths pinned: legacy (the panel body latrd_lower_run) and
+// grid (3 work-groups at n = 96 on CUDA; Metal and the host never take it and run legacy).
 // BREAK (2026-11-21, apple_m5_max, Backend::SYCL float): latrd_lower_run's unscaled sum of
 // squares gives spectrum error 0.82 relative at both 2^-70 and 2^-76 (Metal flushes the
 // subnormal squares); the power-of-two scaled norm passes all three.
@@ -224,11 +225,12 @@ TYPED_TEST(SytrdBlockedTest, LatrdPanelNormSurvivesSquaresBelowTheNormalRange) {
     using Real = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
     const int n = 96, batch = 4, nb = 32;
-    ScopedEnvVar impl("BATCHLAS_LATRD_IMPL", "legacy");
     const Matrix<Real, MatrixFormat::Dense> R =
         Matrix<Real, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/20261121);
+    for (const char* latrd : {"legacy", "grid"})
     for (int scale_exp : {0, -70, -76}) {
-        SCOPED_TRACE(::testing::Message() << "entries scaled by 2^" << scale_exp);
+        ScopedEnvVar impl("BATCHLAS_LATRD_IMPL", latrd);
+        SCOPED_TRACE(::testing::Message() << "latrd " << latrd << ", entries scaled by 2^" << scale_exp);
         Matrix<Real, MatrixFormat::Dense> A0 = test_support::padded<Real>(n, n, batch);
         Matrix<Real, MatrixFormat::Dense> A = test_support::padded<Real>(n, n, batch);
         for (int b = 0; b < batch; ++b)
