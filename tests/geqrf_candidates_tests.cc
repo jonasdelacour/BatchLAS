@@ -182,8 +182,8 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        if (this->ctx->device().type != DeviceType::GPU && !(B == Backend::NETLIB && batchlas::select::kHostNative))
-            GTEST_SKIP() << "the native tiers run on a GPU or a vendor-free host";
+        // The table and coverage-row cases read GPU tables; GeqrfCandidatesCpu covers a vendor-free host.
+        if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native tiers are GPU kernels";
         if (!this->ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "no sub-group size 32";
     }
 

@@ -239,8 +239,8 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        if (this->ctx->device().type != DeviceType::GPU && !(B == Backend::NETLIB && batchlas::select::kHostNative))
-            GTEST_SKIP() << "the native family runs on a GPU or a vendor-free host";
+        // The table and coverage-row cases read GPU tables; OrmqrCandidatesCpu covers a vendor-free host.
+        if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native family is GPU-only";
     }
 
     // The limit oracle: the drivers' own refusals, not ormqr.cc's can_run. Complex Trans is

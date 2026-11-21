@@ -190,8 +190,8 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        if (this->ctx->device().type != DeviceType::GPU && !(B == Backend::NETLIB && batchlas::select::kHostNative))
-            GTEST_SKIP() << "the native driver runs on a GPU or a vendor-free host";
+        // The table and coverage-row cases read GPU tables; OrgqrCandidatesCpu covers a vendor-free host.
+        if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native driver is a GPU kernel";
     }
 
     Prob<T> prob(int m, int n, int batch, unsigned seed, int period = 0) {

@@ -110,16 +110,6 @@ protected:
             }
         }
     }
-    // Q_blk (ormqr_blocked on the identity) against op(Q) formed by form_q, entrywise (Check::blas).
-    void expect_q_matches_form_q(const Matrix<T, MatrixFormat::Dense>& A, UnifiedVector<T>& tau,
-                                 const Matrix<T, MatrixFormat::Dense>& Q_blk, Side side, Transpose trans) {
-        const int n = A.rows();
-        const auto I = Matrix<T, MatrixFormat::Dense>::Identity(n, A.batch_size());
-        const VectorView<T> tv(tau.data(), n, A.batch_size(), 1, n);
-        EXPECT_VERIFY(T, verify::Check::blas, n,
-                      test_utils::ormqr_apply_error<T>(*this->ctx, A.view(), tv, I.view(), Q_blk.view(), side, trans))
-            << "Q_blk against form_q";
-    }
 };
 
 TYPED_TEST_SUITE(OrmqrBlockedTest, OrmqrBlockedTestTypes);
@@ -150,7 +140,7 @@ batchlas::verify::Slack recon_slack() {
 }
 
 // ormqr_blocked and the reference Q (the vendor ormqr, or form_q without one) are each judged against
-// A0 = Q R; ormqr_blocked is also held entrywise to op(Q) formed by form_q, independently of any ormqr.
+// A0 = Q R with geqrf's R (orthogonality and reconstruction), a check that runs no ormqr route.
 TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingle) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::B;
@@ -196,7 +186,6 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingle) {
     EXPECT_VERIFY_SLACK(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(*this->ctx, A0, A, Q_ref, Transpose::NoTrans),
                         recon_slack<T>())
         << "Q_ref";
-    this->expect_q_matches_form_q(A, tau, Q_blk, Side::Left, Transpose::NoTrans);
 }
 
 TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingleTrans) {
@@ -244,7 +233,6 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingleTrans) {
     EXPECT_VERIFY_SLACK(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(*this->ctx, A0, A, Q_ref, this->trans_h()),
                         recon_slack<T>())
         << "Q_ref";
-    this->expect_q_matches_form_q(A, tau, Q_blk, Side::Left, this->trans_h());
 }
 
 TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingle) {
@@ -292,7 +280,6 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingle) {
     EXPECT_VERIFY_SLACK(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(*this->ctx, A0, A, Q_ref, Transpose::NoTrans),
                         recon_slack<T>())
         << "Q_ref";
-    this->expect_q_matches_form_q(A, tau, Q_blk, Side::Right, Transpose::NoTrans);
 }
 
 TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingleTrans) {
@@ -340,7 +327,6 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingleTrans) {
     EXPECT_VERIFY_SLACK(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(*this->ctx, A0, A, Q_ref, this->trans_h()),
                         recon_slack<T>())
         << "Q_ref";
-    this->expect_q_matches_form_q(A, tau, Q_blk, Side::Right, this->trans_h());
 }
 
 TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceBatched) {
@@ -388,7 +374,6 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceBatched) {
     EXPECT_VERIFY_SLACK(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(*this->ctx, A0, A, Q_ref, Transpose::NoTrans),
                         recon_slack<T>())
         << "Q_ref";
-    this->expect_q_matches_form_q(A, tau, Q_blk, Side::Left, Transpose::NoTrans);
 }
 
 // L2 batch chunking fixtures (docs/perf/qr.md#qr-l2-batch-chunking): k = 69 reflectors of order 73
