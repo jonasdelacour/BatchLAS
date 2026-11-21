@@ -88,6 +88,10 @@ and also checks nothing is installed at `<prefix>/include/{blas,util,internal}`.
 
 `consumer_test.sh` also requires the installed `<batchlas/version.hh>`, the package's
 `BatchLAS_VERSION`, the `batchlas version = ...` line the example prints and the libraries' SONAME
-major to agree. It configures the example again with `-DBATCHLAS_CONSUMER_REQUIRE_VERSION=2.0` and
-`=0.99` and fails unless `find_package` refuses both
+major to agree. The example's own request, 1.0, must be accepted (ExactVersion would refuse it). It
+then configures the example again with `-DBATCHLAS_CONSUMER_REQUIRE_VERSION=0.99`, `=1.1` and `=2.0`
+and fails unless `find_package` refuses all three: 0.99 is what AnyNewerVersion would accept, and
+1.1 and 2.0 catch a hand-written version file that accepts too much. Before that it runs the same
+requests against CMake's own ExactVersion and AnyNewerVersion files, so a probe that no longer tells
+the modes apart fails the test
 ([versioning and compatibility](../../docs/cpp-api.md#versioning-and-compatibility)).
