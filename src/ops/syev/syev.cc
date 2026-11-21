@@ -43,8 +43,9 @@ select::Key key_of(const MV<Scalar>& A, JobType jobz) {
 }
 
 // Correctness only (R3): false means the driver would throw or compute garbage. The native
-// drivers are GPU kernels on a GPU backend (a NETLIB instantiation would call netlib on device
-// memory) and need a square A with n >= 1; the small solvers add n <= 32 and a 32-wide
+// drivers run on a GPU backend, or on the NETLIB host of a vendor-free build (select::kHostNative
+// and natives_run_on; elsewhere a NETLIB instantiation would call netlib on device memory, and
+// the CTA kernels have no CPU image), and need a square A with n >= 1; the small solvers add n <= 32 and a 32-wide
 // sub-group, Blocked and TwoStage a batch >= 1 (the small drivers do not check it). Blocked and
 // TwoStage take Upper by mirroring into Lower (uplo_mirror.hh). Every family, the vendor included,
 // runs each item at the top-level order, so none takes a heterogeneous batch. Cta and CtaFused also
@@ -55,7 +56,9 @@ bool can_run(const SyevChoice& c, const select::Device& d, const MV<Scalar>& A) 
     const std::int64_t n = A.rows();
     const bool masked = batchlas::detail::any_batch_mask(A);
     const bool homogeneous = !A.is_heterogeneous();
-    const bool native = B != Backend::NETLIB && d.is_gpu && homogeneous && A.rows() == A.cols() && n >= 1;
+    // Auto (supports()) and the GPU backends pass the compile half; NETLIB only vendor-free.
+    const bool wired = B != Backend::NETLIB || select::kHostNative;
+    const bool native = wired && select::natives_run_on(d) && homogeneous && A.rows() == A.cols() && n >= 1;
     const bool small = native && n <= kSmallMaxN && d.has_sg32;
     const bool cta_steqr = small && B != Backend::ROCM;
     const bool large = native && A.batch_size() >= 1;
@@ -64,7 +67,8 @@ bool can_run(const SyevChoice& c, const select::Device& d, const MV<Scalar>& A) 
         [&](CtaFused) { return cta_steqr; },
         [&](Jacobi) { return small; },
         [&](Blocked) { return large; },
-        [&](TwoStage) { return large; },
+        // sy2sb runs the public geqrf and ormqr, which have no vendor-free host route.
+        [&](TwoStage) { return large && B != Backend::NETLIB; },
         [&](Vendor) { return d.has_vendor && homogeneous && (!masked || B == Backend::NETLIB); },
     }, c);
 }

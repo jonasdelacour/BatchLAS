@@ -425,10 +425,11 @@ Event sytrd_blocked_impl(Queue& ctx,
         throw batchlas::unsupported("sytrd_blocked: only Uplo::Lower is implemented");
     }
 
-    // sytrd_cta builds without CPU targets (NO_CPU_TARGETS), and the OpenCL CPU offers sub-group
-    // size 32, so only a GPU can run it (steqr.cc carries the same term).
+    // sytrd_cta has a CPU image only in a vendor-free build (BATCHLAS_HAS_HOST_NATIVE), and the
+    // OpenCL CPU offers sub-group size 32, so elsewhere only a GPU can run it (steqr.cc alike).
     if (n <= 32) {
-        if (ctx.device().type == DeviceType::GPU && ctx.device().supports_sub_group_size(32)) {
+        if ((BATCHLAS_HAS_HOST_NATIVE || ctx.device().type == DeviceType::GPU) &&
+            ctx.device().supports_sub_group_size(32)) {
             return sytrd_cta<B, Scalar>(ctx, A, D, E, TAU, uplo, Span<std::byte>(), /*cta_wg_size_multiplier=*/1);
         }
     }
