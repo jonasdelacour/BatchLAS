@@ -107,7 +107,7 @@ neither variable.
   -fsycl-targets=...` itself, plus `"SHELL:${BatchLAS_SYCL_BACKEND_OPTIONS}"` when the package's
   targets are plain `nvptx64-nvidia-cuda` (otherwise your kernels build for sm_75).
 
-### The device API without building BatchLAS {#the-device-api-without-building-batchlas}
+### The device API without building BatchLAS
 
 The in-kernel API (`<batchlas/device.hh>`, `<batchlas/device/...>`, @ref design_device_la) is
 header-only. Point the compiler at a checkout and add your usual SYCL flags; nothing is
@@ -135,7 +135,7 @@ AdaptiveCpp kernels that multiply or divide `std::complex` also need
 `Matrix`) still needs the built library. `device_header_only_tests` builds `examples/device/` and
 every public device header this way.
 
-## Versioning and compatibility {#versioning-and-compatibility}
+## Versioning and compatibility
 
 BatchLAS follows [Semantic Versioning](https://semver.org): within one major version, code
 written against the covered surface below keeps compiling, and a program linked against an earlier

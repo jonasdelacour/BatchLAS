@@ -254,7 +254,7 @@ is present is not a kernel that runs.
 | `scripts/check_kernel_entry_calls.py` | kernel bodies in files that include a public device LA header directly (and every file under `include/batchlas/device/`) call no local lambda or view `operator()` directly (the DPC++ SemaSYCL kernel-body quirk); a `BATCHLAS_DEVICE_BODY` callee or kernel body is the sanctioned invoker; ctest `kernel_entry_calls_tests` | flags the base `PotriCtaKernel` (`s`, `g_at`); its self-test plants four breaks, five sanctioned calls and a transitive-include file |
 | `BATCHLAS_SELECT_TRACE=1` | print each decision, its table and the runner-up | one line per call, indented under its parent op |
 
-## The vendor-free build {#vendor-free-status}
+## Vendor-free status
 
 | | vendor-free CUDA | Metal (AdaptiveCpp, Apple GPU) |
 |---|---|---|
