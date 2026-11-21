@@ -64,6 +64,7 @@
 #include <batchlas/util/env.hh>
 #include <batchlas/verify/tolerance.hh>
 #include <src/queue.hh>
+#include <src/select/vendor.hh>
 
 using namespace batchlas;
 using batchlas::verify::Check;
@@ -892,8 +893,8 @@ template <SvdVectors JU, SvdVectors JVT, Backend B, class T> void check_gesvd_bl
 TYPED_TEST(DeviceApiSvd, GesvdBlockedMatchesThePinnedHostBlockedRoute) {
     using T = typename TypeParam::ScalarType;
     constexpr Backend B = TestFixture::B;
-    if constexpr (B == Backend::NETLIB) {
-        GTEST_SKIP() << "the host blocked gesvd route is GPU-only";
+    if constexpr (B == Backend::NETLIB && !select::kHostNative) {  // vendor-free, blocked serves the host
+        GTEST_SKIP() << "beside netlib the host gesvd is LAPACKE's, no blocked route to pin";
     } else {
         if (!blocked_runs(this->q())) GTEST_SKIP() << "tier::Blocked needs sub-group size 32 and a work-group of 256";
         const std::pair<int, int> shapes[] = {{1, 1}, {17, 16}, {33, 33}, {48, 17}, {17, 48}};
