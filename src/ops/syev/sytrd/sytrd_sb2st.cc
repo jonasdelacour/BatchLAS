@@ -544,7 +544,7 @@ Event sytrd_sb2st(Queue& ctx,
 
     if (mode == Sb2stSubgroupMode::ForceOn && !can_use_subgroup) {
         throw batchlas::unsupported(
-            "sytrd_sb2st: BATCHLAS_SB2ST_SUBGROUP=1 requires kd<=32 and a device supporting sub_group_size=32");
+            "sytrd_sb2st: BATCHLAS_SB2ST_SUBGROUP=1 requires kd<=32 and a GPU supporting sub_group_size=32");
     }
 
     if (can_use_subgroup) {
