@@ -976,8 +976,9 @@ TYPED_TEST(BatchMaskEntries, SyevSupportQueriesIgnoreTheMask) {
               sd::syev_supports_two_stage<T>(q, A, Uplo::Lower));
 }
 
-// astype copies the mask on the host with no Queue: host-readable USM copies, a device-only or a foreign
-// (non-USM) mask is refused before any data is converted. Keyed on each mask's queried kind (RC5).
+// astype copies the mask on the host with no Queue: shared USM copies; a device-only or a foreign
+// (non-USM) mask is refused before any data is converted, unless its kind queried on the queue's
+// context reads host-readable (RC5: AdaptiveCpp's OpenMP device), and then it copies too.
 TYPED_TEST(BatchMaskEntries, AstypeCopiesOnlyAHostReadableUsmMask) {
     using T = typename TestFixture::ScalarType;
     Queue& q = *this->ctx;
@@ -986,19 +987,18 @@ TYPED_TEST(BatchMaskEntries, AstypeCopiesOnlyAHostReadableUsmMask) {
     for (int b = 0; b < kBatch; ++b) shared[b] = kAlternating[std::size_t(b)];
     const masked_contract::DeviceMask device(q, kAlternating);
     std::vector<std::uint8_t> foreign(kAlternating);
-    const Span<const std::uint8_t> host_copy(shared.data(), shared.size());
-    for (const auto m : {host_copy, device.span(), Span<const std::uint8_t>(foreign.data(), foreign.size())}) {
-        SCOPED_TRACE(usm_name(q, m));
-        if (!host_readable(q, m)) {
-            EXPECT_THROW((void)p.mat(p.a).with_batch_mask(m).template astype<T>(), batchlas::unsupported);
-            continue;
-        }
+    const auto expect_copied = [&](Span<const std::uint8_t> m) {
         const auto copied = p.mat(p.a).with_batch_mask(m).template astype<T>();
         ASSERT_TRUE(copied.has_batch_mask());
         EXPECT_NE(copied.batch_mask().data(), m.data()) << "astype aliased the mask instead of copying it";
         for (int b = 0; b < kBatch; ++b) EXPECT_EQ(copied.batch_mask()[b], kAlternating[std::size_t(b)]);
+    };
+    expect_copied(Span<const std::uint8_t>(shared.data(), shared.size()));
+    for (const auto m : {device.span(), Span<const std::uint8_t>(foreign.data(), foreign.size())}) {
+        SCOPED_TRACE(usm_name(q, m));
+        if (host_readable(q, m)) expect_copied(m);
+        else EXPECT_THROW((void)p.mat(p.a).with_batch_mask(m).template astype<T>(), batchlas::unsupported);
     }
-    EXPECT_TRUE(host_readable(q, host_copy)) << "a shared USM mask must read as host-readable";
 }
 
 }  // namespace
