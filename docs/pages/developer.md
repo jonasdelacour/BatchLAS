@@ -8,6 +8,7 @@ Process, tooling and working rules for contributors. @ref dev_agent_guide is the
 | --- | --- |
 | @subpage documentation_conventions "Documentation conventions" | Site build, where each kind of material goes, the anchor contract, API-doc style. |
 | @subpage dev_ci "Continuous integration" | CI jobs, what each guards, local equivalents. |
+| @subpage dev_releasing "Releasing" | Version bump points, the changelog section, the tag and what `release.yml` publishes. |
 | @subpage testing "Running the tests" | Test labels, scoping a run, the known-failures ledger, the fixture. |
 | @subpage benchviz "benchviz" | BatchLAS vs vendor benchmarking and figures. |
 | @subpage perf_regression "Performance regression evaluation" | The perf baseline harness. |
