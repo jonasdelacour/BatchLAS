@@ -777,12 +777,13 @@ TYPED_TEST(BatchMaskEntries, RoutedOpsRefuseADeviceOnlyMaskBeforeWriting) {
     EXPECT_GT(checked, 0) << "no routed op ran unmasked, so no refusal was checked";
 }
 
-// gemm runs a masked batch natively on a device backend, whichever operand carries the mask: C's
-// inactive items (0, 2) bit-identical, its active ones the unmasked call's, A and B unwritten.
+// gemm runs a masked batch natively on a device backend and on a vendor-free host, whichever
+// operand carries the mask: C's inactive items (0, 2) bit-identical, its active ones the unmasked
+// call's, A and B unwritten.
 TYPED_TEST(BatchMaskEntries, GemmRunsADeviceOnlyMaskNatively) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
-    if constexpr (B == Backend::NETLIB) GTEST_SKIP() << "the host backend's gemm is its BLAS, which refuses";
+    if constexpr (kHostBlas<B>) GTEST_SKIP() << "a host BLAS serves gemm and refuses the mask (RoutedOpsRefuse...)";
     Queue& q = *this->ctx;
     const masked_contract::DeviceMask mask(q, kAlternating);
     for (const auto& e : gemm_entries<T, B>()) {
@@ -817,8 +818,8 @@ TYPED_TEST(BatchMaskEntries, GemmRunsADeviceOnlyMaskNatively) {
     }
 }
 
-// The level-3 ops and spmm run a masked batch natively (spmm's direct on the host backend too),
-// pinned native, whichever operand carries the mask: the written operand's inactive items bit-identical, its active
+// The level-3 ops and spmm run a masked batch natively (beside a host BLAS only spmm's direct on
+// the host backend), pinned native, whichever operand carries the mask: the written operand's inactive items bit-identical, its active
 // ones the unmasked call's, every other operand unwritten.
 TYPED_TEST(BatchMaskEntries, Level3RunsADeviceOnlyMaskNatively) {
     using T = typename TestFixture::ScalarType;
@@ -826,7 +827,7 @@ TYPED_TEST(BatchMaskEntries, Level3RunsADeviceOnlyMaskNatively) {
     Queue& q = *this->ctx;
     const masked_contract::DeviceMask mask(q, kAlternating);
     for (const auto& e : level3_entries<T, B>()) {
-        if (B == Backend::NETLIB && e.name != "spmm") continue;
+        if (kHostBlas<B> && e.name != "spmm") continue;
         SCOPED_TRACE(e.name);
         // Native pins (gemm's for the families over it): Auto may give the unmasked call the vendor.
         const select::ScopedPin<std::monostate> pin(e.name, "native", select::StrictPin{});
@@ -963,12 +964,12 @@ TYPED_TEST(BatchMaskEntries, LinalgWrappersRefuseADeviceOnlyMask) {
 }
 
 // The syev capability queries answer from can_run, and every native family honours the mask (lift
-// 2): a masked view gets the unmasked view's answers.
+// 2): a masked view gets the unmasked view's answers. A vendor-free host answers for blocked.
 TYPED_TEST(BatchMaskEntries, SyevSupportQueriesIgnoreTheMask) {
     using T = typename TestFixture::ScalarType;
     namespace sd = ops::syev::detail;
     constexpr Backend B = TestFixture::BackendType;
-    if (B == Backend::NETLIB) GTEST_SKIP() << "no syev family serves the host backend";
+    if (kHostBlas<B>) GTEST_SKIP() << "a host with LAPACKE serves syev by its vendor loop: no native family to query";
     Queue& q = *this->ctx;
     const masked_contract::DeviceMask mask(q, kAlternating);
     Pool<T> plain(q, {}, this->ws());

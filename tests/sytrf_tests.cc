@@ -893,7 +893,7 @@ TYPED_TEST(SytrfTest, SytrsBlockedChunksKeepEachItemsPivots) {
 // BREAK: the old remainder-last loop gives trsm rows at batch 7 and 10.
 TYPED_TEST(SytrfTest, SytrsBlockedPartsSelectTheirTrsmAtOneBatch) {
     using T = typename TestFixture::T;
-    if constexpr (TestFixture::Bk == Backend::NETLIB) GTEST_SKIP() << "no native route on NETLIB";
+    if constexpr (!TestFixture::kNatives) GTEST_SKIP() << "no native route on a NETLIB queue with netlib linked";
     else {
         const int n = 45, batch = 24;
         const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "7");

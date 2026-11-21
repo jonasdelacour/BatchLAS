@@ -615,17 +615,13 @@ TYPED_TEST(GemmTest, HeterogeneousKZeroBetaZeroWritesZeros) {
                                   ScalarType(3), ScalarType(0));
 }
 
-// The homogeneous twin: batch > 1, k == 0, beta == 0 is not split per item, so on NETLIB it
-// reaches the vendor loop's own k == 0 branch. C is a padded sub-block of a NaN-filled buffer.
+// The homogeneous twin: batch > 1, k == 0, beta == 0 is not split per item. gemm.cc answers k == 0
+// before select (fill_zeros), every build and backend. C is a padded sub-block of a NaN-filled buffer.
+// BREAK: dropping gemm.cc's k == 0 fill leaves the NaNs (vendor-free: NoRouteError, no family takes k == 0).
 TYPED_TEST(GemmTest, HomogeneousKZeroBetaZeroWritesZeros) {
     using ScalarType = typename TestFixture::ScalarType;
     using Real = typename base_type<ScalarType>::type;
     using MV = MatrixView<ScalarType, MatrixFormat::Dense>;
-    constexpr Backend Ba = TestFixture::BackendType;
-    // No native gemm family takes k == 0, so vendor-free this shape has no route (NoRouteError).
-    constexpr bool kVendor = Ba == Backend::NETLIB ? bool(BATCHLAS_HAS_CBLAS)
-                           : Ba == Backend::ROCM ? bool(BATCHLAS_HAS_ROCBLAS) : bool(BATCHLAS_HAS_CUBLAS);
-    if (!kVendor) GTEST_SKIP() << "k == 0 is vendor-only";
     constexpr int batch = 3, m = 17, n = 11, ldc = m + 5, stride = ldc * n + 9;
     UnifiedVector<ScalarType> a(1), b(1), c(static_cast<size_t>(stride) * batch);
     for (auto& x : c) x = ScalarType(std::numeric_limits<Real>::quiet_NaN());
