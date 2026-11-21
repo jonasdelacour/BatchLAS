@@ -936,11 +936,13 @@ TYPED_TEST(TrsmCandidatesCpu, CpuQueueRunsNoNativeFamily) {
                 << select::to_string(c);
             expect_solved(*this->ctx, p, "cpu " + select::to_string(c));
         }
+        // The CPU borrows no GPU table (select.cc), so Auto takes trsm's first runnable candidate: cta (order 8).
         auto p = make_solve<T>(s);
-        EXPECT_NE(traced_choice([&] {
+        const std::string line = traced_line([&] {
             (void)trsm<B, T>(*this->ctx, p.A(), p.B(), p.alpha, s.side, s.uplo, s.trans, s.diag);
             this->ctx->wait();
-        }), "vendor");
+        });
+        EXPECT_NE(line.find(" -> cta  [last resort]"), std::string::npos) << line;
         expect_solved(*this->ctx, p, "cpu auto");
         return;
     }
