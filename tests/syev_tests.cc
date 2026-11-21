@@ -954,7 +954,8 @@ void expect_band_auto(Queue& ctx, GradedFills<Scalar>& fills, const std::vector<
         const std::string where = band_where(c.n, c.uplo, c.jobz);
         const std::string route = solve_graded_band<B, Scalar>(ctx, fills, c.n, 2, c.uplo, c.jobz, where);
         if (B == Backend::NETLIB) {
-            EXPECT_EQ(route.rfind("vendor", 0), 0u) << where << ": " << route;
+            // The vendor-free host has no table: blocked, its last resort (VendorFreeCpuRunsNativeRoutes).
+            EXPECT_EQ(route.rfind(kVendor ? "vendor" : "blocked", 0), 0u) << where << ": " << route;
         } else {
             EXPECT_EQ(route.find("last resort"), std::string::npos) << where << ": " << route;
             if (!kVendor) EXPECT_TRUE(route == "blocked" || route == "two_stage") << where << ": " << route;
