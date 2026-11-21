@@ -66,8 +66,10 @@ protected:
         if (!this->ctx) GTEST_SKIP() << "no queue";
         // The suite's own gate must mirror can_run(): enumerated sub-group support,
         // never MAX_SUB_GROUP_SIZE >= 32, which reports entry [0].
-        if (this->ctx->device().type != DeviceType::GPU) {
-            GTEST_SKIP() << "potrf_tiny is a GPU kernel";
+        // natives_run_on: a GPU, or a vendor-free host (kHostNative), whose CPU image holds the tier.
+        const bool host_native = BackendType == Backend::NETLIB && select::kHostNative;
+        if (this->ctx->device().type != DeviceType::GPU && !host_native) {
+            GTEST_SKIP() << "potrf_tiny runs on a GPU or a vendor-free host";
         }
         if (!this->ctx->device().supports_sub_group_size(32)) {
             GTEST_SKIP() << "device does not offer sub-group size 32";
