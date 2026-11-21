@@ -892,8 +892,8 @@ TYPED_TEST(GesvdCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     }
 }
 
-// On a CPU queue no native family can run: native pins throw and Auto is the vendor (LAPACKE),
-// or no route without one.
+// On a CPU queue jacobi and cta never run. With LAPACKE every native pin throws and Auto is the
+// vendor; vendor-free (select::kHostNative) blocked runs pinned and is Auto, solved.
 template <typename Config>
 class GesvdCandidatesCpu : public test_utils::BatchLASTest<Config> {};
 TYPED_TEST_SUITE(GesvdCandidatesCpu, Types);
@@ -913,16 +913,25 @@ TYPED_TEST(GesvdCandidatesCpu, CpuQueueRunsNoNativeFamily) {
                           Span<std::byte>(ws.data(), bytes), p.info.to_span());
         this->ctx->wait();
     };
+    constexpr bool host_native = B == Backend::NETLIB && batchlas::select::kHostNative;
     for (const C& c : gs::candidates<T>()) {
         if (std::holds_alternative<gs::Vendor>(c)) continue;
         auto p = make_svd<T>(s);
         const Pin pin("gesvd", c);
-        EXPECT_THROW(run(p), std::invalid_argument) << select::to_string(c);
+        if (host_native && std::holds_alternative<gs::Blocked>(c)) {
+            EXPECT_EQ(traced_choice([&] { run(p); }), "blocked");
+            expect_solved(p, "cpu blocked pinned");
+        } else {
+            EXPECT_THROW(run(p), std::invalid_argument) << select::to_string(c);
+        }
     }
     auto p = make_svd<T>(s);
     if constexpr (batchlas::select::solver_vendor_available<B>) {
         EXPECT_EQ(traced_choice([&] { run(p); }), "vendor");
         expect_solved(p, "cpu vendor");
+    } else if constexpr (host_native) {
+        EXPECT_EQ(traced_choice([&] { run(p); }), "blocked");
+        expect_solved(p, "cpu auto");
     } else {
         EXPECT_THROW(run(p), batchlas::NoRouteError);
     }

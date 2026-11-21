@@ -168,12 +168,15 @@ protected:
         return itype == 1 ? MV<T>::similarity_residual(q(), g.A0, Q, C, all) : MV<T>::similarity_residual(q(), C, Q, g.A0, all);
     }
 
-    // Whether can_run is documented false for a pinned sygst family on this backend: blocked off the
-    // GPU, vendor (LAPACKE) where it is not linked. Only these may skip; any other NoRouteError fails.
+    // Whether can_run is documented false for a pinned sygst family on this backend: blocked on a
+    // LAPACKE host (a vendor-free host runs it natively), vendor (LAPACKE) where it is not linked.
+    // Only these may skip; any other NoRouteError fails.
     static bool sygst_unreachable(const std::string& fam) {
         if (fam == "vendor") return !sygst_vendor_linked();
-        return BK == Backend::NETLIB && fam.rfind("blocked", 0) == 0;
+        return !kBlockedRuns && fam.rfind("blocked", 0) == 0;
     }
+    // sygst's blocked family runs on a GPU backend and on a vendor-free host (select::natives_run_on).
+    static constexpr bool kBlockedRuns = BK != Backend::NETLIB || select::kHostNative;
 
     // sygst under a pin with exactly the queried workspace; false on a NoRouteError, which is a
     // failure unless sygst_unreachable(fam).
@@ -242,7 +245,7 @@ TYPED_TEST(SygvdTest, SygstMatchesTheTwoSidedDefinition) {
 // Deliberate breaks and their red sets: docs/perf/sygvd.md#sygst-the-deliberate-breaks.
 TYPED_TEST(SygvdTest, SygstBlockedMatchesTheDefinitionAcrossBlockEdges) {
     using T = typename TestFixture::T;
-    if constexpr (TestFixture::BK == Backend::NETLIB) GTEST_SKIP() << "blocked is a GPU family";
+    if constexpr (!TestFixture::kBlockedRuns) GTEST_SKIP() << "blocked runs on a GPU or a vendor-free host";
     const double cond = std::is_same_v<batchlas::float_t<T>, float> ? 1e3 : 1e6;
     for (const std::string fam : {"blocked:nb=32", "blocked:nb=64", "blocked:nb=128", "blocked:nb=256"})
         for (int itype : {1, 2, 3})
@@ -268,7 +271,7 @@ TYPED_TEST(SygvdTest, SygstBlockedMatchesTheDefinitionAcrossBlockEdges) {
 TYPED_TEST(SygvdTest, SaturatingSygstBlockedIsBitIdenticalToItemZero) {
     using T = typename TestFixture::T;
     constexpr Backend BK = TestFixture::BK;
-    if constexpr (BK == Backend::NETLIB) GTEST_SKIP() << "blocked is a GPU family";
+    if constexpr (!TestFixture::kBlockedRuns) GTEST_SKIP() << "blocked runs on a GPU or a vendor-free host";
     for (const std::string fam : {"blocked:nb=32", "blocked:nb=64"})
         for (int itype : {1, 2})
             for (int n : {5, 16, 20, 40}) {
@@ -305,7 +308,7 @@ TYPED_TEST(SygvdTest, SaturatingSygstBlockedIsBitIdenticalToItemZero) {
 // Each pinned family is the one that ran: the coverage `reached` row of each call names its spelling.
 // One call per family (a row is per shape class and spelling), across the itypes and both triangles.
 TYPED_TEST(SygvdTest, CoverageRowNamesEachPinnedSygstFamily) {
-    if constexpr (TestFixture::BK == Backend::NETLIB) GTEST_SKIP() << "blocked is a GPU family";
+    if constexpr (!TestFixture::kBlockedRuns) GTEST_SKIP() << "blocked runs on a GPU or a vendor-free host";
     struct Run {
         int n, itype;
         Uplo uplo;
