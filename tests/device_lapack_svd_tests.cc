@@ -237,7 +237,7 @@ TYPED_TEST(DeviceApiSvd, GebrdCtaDeviceCallIsBitIdenticalToTheHostRoute) {
     if constexpr (device::Arith<T>::is_complex) {
         GTEST_SKIP() << "gebrd tier::Cta is real only (the throw is covered by WithTierPicksTheCtaWidthPerN)";
     } else if constexpr (B == Backend::NETLIB) {
-        GTEST_SKIP() << "the gebrd_cta host route has no CPU image (batchlas_extensions_cta is GPU-only)";
+        GTEST_SKIP() << "gebrd_cta is a GPU family: it refuses the host device (gebrd_cta.cc), vendor-free too";
     } else {
         if (!this->sg32()) GTEST_SKIP() << "gebrd tier::Cta needs sub-group size 32";
         for (int n : {1, 4, 5, 16, 17, 32}) {
