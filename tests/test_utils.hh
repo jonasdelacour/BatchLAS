@@ -33,6 +33,18 @@ inline constexpr const char* kSlmCappedReason =
     "acpp without BATCHLAS_ACPP_SLM_OPTIN: 48 KiB local memory per work-group (no CUDA opt-in)";
 #endif
 
+// The local memory a work-group of @p wg items may take, from the device's own queries:
+// LOCAL_MEM_SIZE less the 4 KiB reserve, plus the 8 B per missing work-item an Apple GPU's runtime
+// keeps for a group narrower than MAX_WORK_GROUP_SIZE. A test derives from it whether a pinned
+// family's staging fits (Metal: about 28 KiB), never from the family's can_run.
+inline std::int64_t slm_budget_for(const batchlas::Device& d, int wg) {
+    const auto local = static_cast<std::int64_t>(std::min<std::size_t>(
+        d.get_property(batchlas::DeviceProperty::LOCAL_MEM_SIZE), std::size_t{1} << 40));
+    const auto max_wg = static_cast<int>(d.get_property(batchlas::DeviceProperty::MAX_WORK_GROUP_SIZE));
+    const bool apple = d.type == batchlas::DeviceType::GPU && d.get_vendor() == batchlas::Vendor::APPLE;
+    return std::max<std::int64_t>(local - 4096, 0) + (apple ? 8 : 0) * std::max(0, max_wg - wg);
+}
+
 // True when Device::default_device() can name a device. With none visible it throws
 // std::out_of_range (vector::_M_range_check), so a fixture that builds a Queue skips on false.
 inline bool sycl_device_visible() {

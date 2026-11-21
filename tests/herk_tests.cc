@@ -272,7 +272,7 @@ TYPED_TEST(HerkTest, MatchesGemmReference) {
     const real_t alpha = real_t(0.9);
     const real_t beta = real_t(-0.35);
 
-    auto sweep = [&](const char* route) {
+    auto sweep = [&](const char* route, auto&& runs) {
     for (int n : {24, 32, 48, 64, 96, 128}) {
         for (auto transA : {Transpose::NoTrans, Transpose::ConjTrans}) {
             for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
@@ -297,6 +297,11 @@ TYPED_TEST(HerkTest, MatchesGemmReference) {
 
                 MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C, C0).wait();
 
+                if (!runs(n)) {
+                    EXPECT_THROW((herk<Ba, T>(*(this->ctx), A, C, alpha, beta, uplo, transA).wait()), batchlas::invalid_argument)
+                        << "route=" << route << " ran above the local memory budget at n=" << n;
+                    continue;
+                }
                 herk<Ba, T>(*(this->ctx), A, C, alpha, beta, uplo, transA).wait();
 
                 // Only the requested triangle is the answer; its conjugate half is not computed.
@@ -312,13 +317,21 @@ TYPED_TEST(HerkTest, MatchesGemmReference) {
     }
     };
 
-    sweep("default");
+    sweep("default", [](int) { return true; });
     if constexpr (Ba == Backend::CUDA || Ba == Backend::SYCL) {
         // The Gram kernel is not on herk's automatic path -- it loses to the
         // GEMM-plus-fold in complex -- so without pinning it the conjugation
         // this test exists to check would never run.
+        // It stages one [32][tile] operand (tile 32, 64, 128 by n) on L(L+1)/2 lanes rounded to 32,
+        // L = tile / 4 (tile / 8 at 128); over the device's local memory (complex<float> at the 128
+        // tile on Metal) the pin must refuse.
+        const auto gram_fits = [&](int n) {
+            const int tile = n <= 32 ? 32 : n <= 64 ? 64 : 128, lanes = tile / (tile == 128 ? 8 : 4);
+            return std::int64_t(32) * tile * std::int64_t(sizeof(T)) <=
+                   test_utils::slm_budget_for(this->ctx->device(), (lanes * (lanes + 1) / 2 + 31) / 32 * 32);
+        };
         ScopedEnvVar pin("BATCHLAS_HERK_ROUTE", "gram");
-        sweep("gram");
+        sweep("gram", gram_fits);
     }
 }
 

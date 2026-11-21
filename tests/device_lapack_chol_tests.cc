@@ -37,6 +37,7 @@
 #include <src/ops/posv/choice.hh>
 #include <src/ops/potrf/choice.hh>
 #include <src/ops/potri/choice.hh>
+#include <src/ops/potri/potri_native.hh>
 #include <src/ops/potrs/choice.hh>
 #include <src/select/select.hh>
 
@@ -449,12 +450,22 @@ template <class T, Uplo UL, class Tier> void potri_case(Dev& d, int n) {
     const auto ka = kview(da, p.s);
     run_blocked(d, kBatch, batchlas::device::buffer_size<batchlas::device::routine::potri<UL>, Tier, T>(n), info,
                 [=](const auto& ex, int b, const batchlas::device::Workspace& w) { return batchlas::device::potri<UL, Tier>(ex, batchlas::device::item(ka, b), w); });
-    const auto hinfo = host_potri(d, dah, p.s, UL);
+    // The host route holds one min(64, n) diagonal block in local memory. Over the device's budget
+    // (complex<float> at 64 on Metal) it is refused, and the planted-zero info and the residual below
+    // hold the device route alone.
+    const auto dev = d.ctx->device();
+    const bool host_runs = ops::potri::cta_fits(
+        std::min(64, n), ops::potri::kCtaTs<T>, sizeof(T), sizeof(real_of<T>),
+        static_cast<std::size_t>(test_utils::slm_budget_for(dev, 1 << 30)),
+        static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE)));
+    std::vector<std::int32_t> hinfo(kBatch, 0);
+    if (host_runs) hinfo = host_potri(d, dah, p.s, UL);
+    else EXPECT_THROW(host_potri(d, dah, p.s, UL), batchlas::invalid_argument) << "blocked:nb=64 ran above the budget";
     const auto got = d.down(da, factor.size()), host = d.down(dah, factor.size());
     const auto gi = d.down(info, kBatch);
     const std::string where = tag<T>("potri", UL, n, Tier::nb);
     int infobad = 0, imag = 0;
-    for (int b = 0; b < kBatch; ++b) infobad += gi[b] != hinfo[b] || gi[b] != (b % kPeriod == 1 ? n / 2 + 1 : 0);
+    for (int b = 0; b < kBatch; ++b) infobad += (host_runs && gi[b] != hinfo[b]) || gi[b] != (b % kPeriod == 1 ? n / 2 + 1 : 0);
     if constexpr (is_cplx<T>)
         for (int b : items)
             for (int i = 0; i < n; ++i) imag += got[p.s.at(b, i, i)].imag() != real_of<T>(0);
@@ -462,7 +473,7 @@ template <class T, Uplo UL, class Tier> void potri_case(Dev& d, int n) {
     EXPECT_EQ(imag, 0) << where << ": a diagonal element of A^-1 is not real";
     EXPECT_EQ(items_changed(got, factor, p.s, zero_items), 0) << where << ": a zero-diagonal item changed";
     EXPECT_EQ(outside_changed(got, factor, p.s, region_of(UL)), 0) << where << ": an element outside the stored triangle changed";
-    EXPECT_VERIFY(T, Check::solve, n, rel_diff(got, host, p.s, region_of(UL), items)) << where << ": vs the host blocked route";
+    if (host_runs) EXPECT_VERIFY(T, Check::solve, n, rel_diff(got, host, p.s, region_of(UL), items)) << where << ": vs the host blocked route";
     // ||A0 X - I|| / (||A0|| ||X||) with X the stored triangle mirrored.
     std::vector<T> mirrored = got;
     for (int b : items)

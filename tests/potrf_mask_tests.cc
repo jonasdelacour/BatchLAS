@@ -22,6 +22,7 @@
 #include <src/ops/potrf/choice.hh>
 #include <src/ops/potrf/potrf_native.hh>
 #include <src/ops/potri/choice.hh>
+#include <src/ops/potri/potri_native.hh>
 #include <src/ops/potrs/choice.hh>
 #include <src/select/vendor.hh>
 #include <tests/masked_contract.hh>
@@ -32,6 +33,7 @@
 #include <algorithm>
 #include <complex>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <span>
 #include <string>
@@ -168,11 +170,37 @@ protected:
     // The pinned spelling: potri's full flag rides in the shape's spelling ("cta:full=0").
     static std::string pin_of(const Shape& s) { return s.spelling.starts_with("cta:full") ? "cta" : s.spelling; }
 
+    // Whether s's pinned family holds its block in the device's local memory (LOCAL_MEM_SIZE less the
+    // 4 KiB reserve): potrf cta and potri cta the whole matrix, potri blocked one min(nb, n) block.
+    // Over it (complex<float> on Metal) the strict pin must be refused, which check() asserts.
+    bool fits(const Shape& s) const {
+        const auto dev = this->ctx->device();
+        const auto budget = static_cast<std::size_t>(test_utils::slm_budget_for(dev, 1 << 30));
+        const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+        const auto potri_block = [&](int m) {
+            return ops::potri::cta_fits(m, ops::potri::kCtaTs<T>, sizeof(T), sizeof(typename base_type<T>::type), budget, max_wg);
+        };
+        const std::string pin = pin_of(s);
+        int nb = 0;
+        if (s.op == Op::potrf && pin == "cta") return s.n <= ops::potrf::potrf_cta_max_n_for_slm<T>(budget);
+        if (s.op == Op::potri && pin == "cta") return potri_block(s.n);
+        if (s.op == Op::potri && std::sscanf(pin.c_str(), "blocked:nb=%d", &nb) == 1) return potri_block(std::min(nb, s.n));
+        return true;
+    }
+
     template <typename Choice>
     void check(const Shape& s, bool reach = true) {
         SCOPED_TRACE(label(s));
         Queue& q = *this->ctx;
         Problem<T, B> p(q, s);
+        if (!fits(s)) {
+            const select::ScopedPin<Choice> pin(op_name(s.op), pin_of(s), select::StrictPin{});
+            const mc::Case c = p.make_case();
+            UnifiedVector<std::byte> ws(std::size_t(1) << 22);
+            c.prepare();
+            EXPECT_THROW(c.call({}, ws.to_span()), batchlas::invalid_argument) << "ran above the local memory budget";
+            return;
+        }
         // A masked call never reaches the vendor, so the composites' children take a native family
         // in the unmasked reference too: the same route, bit for bit.
         using Pin = select::ScopedPin<std::monostate>;

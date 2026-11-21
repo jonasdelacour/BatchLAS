@@ -374,6 +374,33 @@ bool oracle_native(const C& c, Transpose ta, Transpose tb, int m, int n, int k) 
     }, c);
 }
 
+// Whether c's staging fits the device budget at all: a reg, wide or split-k row by its bytes; the
+// other families fit some shape on every GPU. A choice over it (Metal: the 20-40 KiB rows) runs no shape.
+template <typename Scalar>
+bool stages_fit(const C& c) {
+    return std::visit(overloaded{
+        [](const og::Reg& r) { return reg_row(r) == nullptr || reg_fits(*reg_row(r)); },
+        [](const og::Wide& w) { return wide_row(w) == nullptr || wide_fits<Scalar>(*wide_row(w)); },
+        [](const og::SplitK& sk) { return splitk_row(sk) == nullptr || wide_fits<Scalar>(*splitk_row(sk)); },
+        [](const auto&) { return true; },
+    }, c);
+}
+// 1 when c is a reg or wide row over the budget that would serve (ta, tb): a refused case, which the
+// floors written for CUDA's budget subtract.
+template <typename Scalar>
+int over_budget_serves(const C& c, Transpose ta, Transpose tb) {
+    if (const auto* r = std::get_if<og::Reg>(&c)) {
+        const RegRow* row = reg_row(*r);
+        return std::is_same_v<Scalar, float> && row && !reg_fits(*row) &&
+               std::find(row->forms.begin(), row->forms.end(), reg_form(ta, tb)) != row->forms.end();
+    }
+    if (const auto* w = std::get_if<og::Wide>(&c)) {
+        const WideRow* row = wide_row(*w);
+        return row && !wide_fits<Scalar>(*row) && wide_row_serves<Scalar>(*row, wide_form<Scalar>(ta, tb));
+    }
+    return 0;
+}
+
 // The kernel-trace name the pinned choice must launch; "" for the vendor (no SYCL kernel).
 // base8: the operands sit half a scalar past a 16-byte boundary (run_pinned_base8); stages: under
 // BATCHLAS_GEMM_WIDE_STAGES=stages (0: unset).
@@ -1331,7 +1358,7 @@ TYPED_TEST(GemmCandidates, RegScalarStagingEveryFormAtSaturatingBatch) {
                 for (Transpose tb : {kN, kT}) shapes.push_back({ta, tb, 136, 100, 45, lay});
             shapes.push_back({kT, kN, 130, 33, 100, lay});
         }
-        int ran = 0, tn_skinny = 0, nan_checked = 0, aligned = 0;
+        int ran = 0, tn_skinny = 0, nan_checked = 0, aligned = 0, aligned_fit = 0;
         auto check = [&](const C& c, Spec s) {
             if (!TestFixture::expect_runs(c, s)) return false;
             auto p = make_problem<T>(s);
@@ -1355,6 +1382,7 @@ TYPED_TEST(GemmCandidates, RegScalarStagingEveryFormAtSaturatingBatch) {
                     tn_skinny += sh.n == 33;
                 }
             if (!cfg.aligned_leg) continue;
+            aligned_fit += reg_fits(*reg_row(std::get<og::Reg>(c)));
             Spec s{kN, kN, 128, 128, 64, 1024, Layout::Packed};
             s.period = 7;
             s.seed = 9600u + cfg.u;
@@ -1366,7 +1394,7 @@ TYPED_TEST(GemmCandidates, RegScalarStagingEveryFormAtSaturatingBatch) {
         EXPECT_GE(ran, 40);
         EXPECT_GE(tn_skinny, 8);
         EXPECT_GE(nan_checked, 32);
-        EXPECT_GE(aligned, 2);
+        EXPECT_GE(aligned, std::min(2, aligned_fit)) << "aligned rows within the local memory budget: " << aligned_fit;
     }
 }
 
@@ -1833,7 +1861,7 @@ TYPED_TEST(GemmCandidates, BetaZeroKeepsNegativeZeroOnEveryNativeChoice) {
                     EXPECT_EQ(bad, 0) << name(c, s);
                     ++ran;
                 }
-        EXPECT_GT(ran, 0) << select::to_string(c) << " ran no case";
+        if (stages_fit<T>(c)) EXPECT_GT(ran, 0) << select::to_string(c) << " ran no case";
     }
 }
 
@@ -1860,7 +1888,7 @@ TYPED_TEST(GemmCandidates, CoalescedCEpilogueEveryTileAtSaturatingBatch) {
     shapes.push_back({200, 136, 8, Layout::OddLd, kWide16 ? 64 : 128, true});
     shapes.push_back({200, 136, 8, Layout::ItemSkew, kWide16 ? 64 : 1024, true});
     const std::pair<Transpose, Transpose> forms[] = {{kN, kN}, {kC, kN}, {kN, kC}, {kC, kC}};
-    int reg = 0, reg_expected = 0, wide = 0, nan_checked = 0;
+    int reg = 0, reg_expected = 0, wide = 0, nan_checked = 0, reg_over = 0, wide_over = 0, nan_over = 0;
     for (const C& c : og::candidates<T>()) {
         const bool is_reg = std::holds_alternative<og::Reg>(c);
         if (!is_reg && !std::holds_alternative<og::Wide>(c)) continue;
@@ -1878,6 +1906,7 @@ TYPED_TEST(GemmCandidates, CoalescedCEpilogueEveryTileAtSaturatingBatch) {
                 s.seed = 9700u + sh.m + static_cast<unsigned>(sh.layout);
                 if (row && std::is_same_v<T, float> && reg_fits(*row))
                     reg_expected += std::count(row->forms.begin(), row->forms.end(), reg_form(ta, tb)) > 0;
+                (is_reg ? reg_over : wide_over) += over_budget_serves<T>(c, ta, tb);
                 if (!TestFixture::expect_runs(c, s)) continue;
                 auto p = make_problem<T>(s);
                 this->run_pinned(c, p);
@@ -1889,6 +1918,7 @@ TYPED_TEST(GemmCandidates, CoalescedCEpilogueEveryTileAtSaturatingBatch) {
             for (auto [ta, tb] : forms) {
                 Spec s{ta, tb, 200, 136, 8, 3, lay};
                 s.beta_zero = s.nan_c = true;
+                nan_over += over_budget_serves<T>(c, ta, tb);
                 if (!TestFixture::expect_runs(c, s)) continue;
                 auto p = make_problem<T>(s);
                 this->run_pinned(c, p);
@@ -1902,10 +1932,11 @@ TYPED_TEST(GemmCandidates, CoalescedCEpilogueEveryTileAtSaturatingBatch) {
     // wide 14 + 4 x 24; double and complex<float> wide 14 + 4 x 24; complex<double> wide 4 x 24.
     if constexpr (std::is_same_v<T, float>) {
         EXPECT_EQ(reg, reg_expected);
-        EXPECT_GE(reg, g_slm_budget < 33792 ? 109 : g_slm_budget < 49920 ? 127 : 137);
+        EXPECT_GE(reg, std::min(g_slm_budget < 33792 ? 109 : g_slm_budget < 49920 ? 127 : 137, 137 - reg_over));
     }
-    EXPECT_GE(wide, kWide16 ? 96 : 110);
-    EXPECT_GE(nan_checked, 3 * 24);
+    // Below CUDA's budget (Metal) the floors lose exactly the refused rows' cases.
+    EXPECT_GE(wide, (kWide16 ? 96 : 110) - wide_over);
+    EXPECT_GE(nan_checked, 3 * 24 - nan_over);
 }
 
 // WP-E, the skinny wide tiles 64x32 and 32x64 (128 lanes) in every form they instantiate (complex
@@ -2001,7 +2032,14 @@ TYPED_TEST(GemmCandidates, SplitKEveryHostEveryFormAtSaturatingBatchAndSliceEdge
     }
     // 6 hosts x 3 slice counts over the (ta, tb) pairs. Complex: 128x32 and 32x128 four, 32x32 and
     // 16x16 nine, 64x32 and 32x64 six. Real (T folds to C, CC serving TT, TC, CT): 8, 8, then 9 each.
-    const int forms = kCx<T> ? 3 * (2 * 4 + 2 * 9 + 2 * 6) : 3 * (2 * 8 + 4 * 9);
+    // A host over the local memory budget (Metal: complex<float> 128x32, 32x128) runs none.
+    int forms = 0;
+    for (const C& c : og::candidates<T>())
+        if (const auto* sk = std::get_if<og::SplitK>(&c); sk && stages_fit<T>(c)) {
+            const bool tall = (sk->m == 128 && sk->n == 32) || (sk->m == 32 && sk->n == 128);
+            const bool skinny = (sk->m == 64 && sk->n == 32) || (sk->m == 32 && sk->n == 64);
+            forms += kCx<T> ? (tall ? 4 : skinny ? 6 : 9) : (tall ? 8 : 9);
+        }
     EXPECT_EQ(ran, 3 * legs * forms);
     EXPECT_EQ(nan_checked, legs * forms);
     EXPECT_EQ(repeated, legs * forms);
@@ -2722,7 +2760,22 @@ TYPED_TEST(GemmCandidates, ClassWordsAndSpellings) {
             want.push_back(w);
         }
     }
-    for (const auto& w : want)
+    for (const auto& w : want) {
+        // A wide or small spelling over the local memory budget (complex<float> on Metal) parses, and
+        // the pin then throws can_run's refusal.
+        const auto c = select::parse<og::GemmChoice>(w.spelling);
+        if (c && (!stages_fit<T>(*c) || (std::holds_alternative<og::Small>(*c) &&
+                                          !small_runs<T>(w.s.ta, w.s.tb, w.s.m, w.s.n, w.s.k)))) {
+            auto p = make_problem<T>(w.s);
+            const Pin pin("gemm", std::string_view(w.word));
+            try {
+                this->run(p);
+                ADD_FAILURE() << w.word << " ran above the local memory budget " << g_slm_budget;
+            } catch (const std::invalid_argument& e) {
+                EXPECT_NE(std::string(e.what()).find("cannot run this shape"), std::string::npos) << e.what();
+            }
+            continue;
+        }
         for (bool via_env : {false, true}) {
             auto p = make_problem<T>(w.s);
             select::testing::reset_warnings();
@@ -2736,6 +2789,7 @@ TYPED_TEST(GemmCandidates, ClassWordsAndSpellings) {
             EXPECT_EQ(got, w.spelling) << what;
             expect_gemm(*this->ctx, p, what);
         }
+    }
 }
 
 // §5.3: a ScopedPin wins over BATCHLAS_GEMM_ROUTE, and nested pins restore the outer one.
@@ -2776,6 +2830,8 @@ TYPED_TEST(GemmCandidates, AutoReadsEveryKeyField) {
     const ScopedEnvVar clear("BATCHLAS_GEMM_ROUTE", nullptr);
     const std::string dtype(select::dtype_name<T>());
     const std::string dev = select::device_of<TestFixture::B>(*this->ctx).key;
+    // The ConjTrans rows' winner: wide 64x64, or 32x32 where 64x64 is over the budget (complex<float> on Metal).
+    const std::string wide_c = wide_fits<T>(*wide_row(og::Wide{64, 64, 16})) ? "wide:m=64:n=64:k=16" : "wide:m=32:n=32:k=16";
     std::string rows =
         "ta=N tb=N layout=packed m=16 n=16 k=16 batch=128 | direct 1 | tiled 2\n"
         "ta=T tb=N layout=packed m=16 n=16 k=16 batch=128 | tiled 1 | direct 2\n"
@@ -2786,11 +2842,11 @@ TYPED_TEST(GemmCandidates, AutoReadsEveryKeyField) {
         "ta=N tb=N layout=packed m=16 n=16 k=128 batch=128 | tiled 1 | direct 2\n"
         "ta=N tb=N layout=packed m=16 n=16 k=16 batch=4096 | tiled 1 | direct 2\n";
     if constexpr (kCx<T>)
-        rows += "ta=C tb=N layout=packed m=16 n=16 k=16 batch=128 | wide:m=64:n=64:k=16 1 | direct 2\n"
-                "ta=N tb=C layout=packed m=16 n=16 k=16 batch=128 | wide:m=64:n=64:k=16 1 | direct 2\n";
+        rows += "ta=C tb=N layout=packed m=16 n=16 k=16 batch=128 | " + wide_c + " 1 | direct 2\n"
+                "ta=N tb=C layout=packed m=16 n=16 k=16 batch=128 | " + wide_c + " 1 | direct 2\n";
     const TableGuard restore;
     select::testing::set_builtin_tables(test_utils::dtype_keyed(with_gemm_table(dtype, dev, rows)));
-    const std::string conj = kCx<T> ? "wide:m=64:n=64:k=16" : "tiled";
+    const std::string conj = kCx<T> ? wide_c : "tiled";
     struct Probe { Spec s; std::string expect; const char* field; };
     const Probe probes[] = {
         {{kN, kN, 16, 16, 16, 128, Layout::Packed}, "direct", "base"},
