@@ -167,6 +167,7 @@ struct Entry {
     std::function<void(Pool<Scalar>&)> call;
     bool pinned = false;  ///< runs under a strict pin, so "cannot run this shape" is can_run's refusal
     std::function<void(Pool<Scalar>&)> prepare{};  ///< unmasked setup run before the snapshot (honouring checks)
+    std::vector<std::string> packed{};  ///< buffers passed as a flat span, items kN elements apart (wspan)
 };
 
 // The host backend's natives yield to its BLAS, which cannot skip an item. A vendor-free host
@@ -267,13 +268,17 @@ void expect_honoured(Queue& q, const Entry<Scalar>& entry, Span<const std::uint8
         const auto after = p.snapshot();
         const auto bufs = p.buffers();
         for (std::size_t i = 0; i < bufs.size(); ++i) {
-            const std::size_t item = after[i].size() / kBatch;  // every buffer holds kBatch equal items
+            const std::string name = std::get<0>(bufs[i]);
+            const bool packed = std::find(entry.packed.begin(), entry.packed.end(), name) != entry.packed.end();
+            // Every buffer holds kBatch equal items; a packed one kBatch items of kN elements, then a tail.
+            const std::size_t item = packed ? kN * (after[i].size() / Pool<Scalar>::vec_len()) : after[i].size() / kBatch;
+            EXPECT_TRUE(std::equal(after[i].begin() + kBatch * item, after[i].end(), before[i].begin() + kBatch * item))
+                << name << " written past its last item";
             for (int b = 0; b < kBatch; ++b) {
                 const bool active = kAlternating[std::size_t(b)] != 0;
                 const auto& ref = active ? want[i] : before[i];
                 EXPECT_EQ(std::memcmp(after[i].data() + b * item, ref.data() + b * item, item), 0)
-                    << std::get<0>(bufs[i]) << " item " << b
-                    << (active ? " differs from the unmasked call" : " was written");
+                    << name << " item " << b << (active ? " differs from the unmasked call" : " was written");
             }
         }
     }
@@ -410,7 +415,7 @@ std::vector<Entry<Scalar>> host_routed_entries() {
         out.push_back({"sygvd_factored", true, sygvd, false, [=](P& p) {
                            const MV<Scalar> Bf(p.b.data(), kN, kN, kLd, kStride, kBatch, p.pb.data());
                            potrf<B, Scalar>(p.q, Bf, L, p.ws, p.ispan());
-                       }});
+                       }, {"w"}});
     }
     return out;
 }
@@ -550,10 +555,12 @@ std::vector<Entry<Scalar>> host_direct_entries() {
         syfn_from_eigen<B, Scalar>(p.q, p.mat(p.z), p.wspan(), p.mat(p.c), SyfnFunction<R>::exp(), p.ws, p.ispan());
     });
     add("syev_align", [=](P& p) { syev_align<B, Scalar>(p.q, p.mat(p.z), p.wspan(), p.mat(p.v), R(1e-3), p.ws); });
-    if constexpr (!is_std_complex_v<Scalar>)  // real only
+    if constexpr (!is_std_complex_v<Scalar>) {  // real only
         add("lanczos", [=](P& p) {
             lanczos<B, Scalar, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), p.ws, JobType::EigenVectors, p.mat(p.z));
         });
+        out.back().packed = {"w"};
+    }
     return out;
 }
 
