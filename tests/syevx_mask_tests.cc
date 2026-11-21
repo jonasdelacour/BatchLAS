@@ -148,6 +148,7 @@ protected:
 
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
+        if (::testing::Test::IsSkipped()) return;  // no device for this backend: ctx is empty
         if (kHost && !select::kHasNetlib && !kHostNative) GTEST_SKIP() << "no host syev route in this build";
         if (!kHost && this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native families are GPU kernels";
     }
