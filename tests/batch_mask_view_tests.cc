@@ -373,7 +373,7 @@ void check_after_bound_slots(Queue& ctx, const MatOp<Scalar>& op, const char* wh
         Matrix<Scalar> first(rows, cols, kBatch, ld, stride);
         Matrix<Scalar> got(rows, cols, kBatch, ld, stride);
         fill_poison<Scalar>(first, 5);
-        fill_poison<Scalar>(got, 11);
+        fill_poison<Scalar>(got);  // as ref: the padding a correct call leaves alone compares equal
         if (k == 0) op(ctx, first.view().with_batch_mask(mask.span()));
         else bind_every_slot(ctx, zeros);
         op(ctx, got.view());
