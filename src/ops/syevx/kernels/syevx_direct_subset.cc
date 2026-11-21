@@ -402,13 +402,16 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
         const int32_t ormqr_block_size = tuning::ormqr_block_size_for_n(n);
         const int32_t nrefl = detail::sb2st_hh_num_reflectors(n, kd);
 
-        size_t bytes = 0;
-        bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(n) * n * batch);
-        bytes += BumpAllocator::allocation_size<Scalar*>(ctx, static_cast<size_t>(batch));
-        bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(kd + 1) * n * batch);
-        bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(tau_sy2sb_n) * batch);
+        // A measuring() replay of the solver's allocations, never a hand sum: a hand sum misses the
+        // padding from a workspace base below the device alignment (a CPU queue's USM), so the
+        // solver ran out of workspace.
+        BumpAllocator pool = BumpAllocator::measuring();
+        (void)pool.allocate<Scalar>(ctx, static_cast<size_t>(n) * n * batch);
+        (void)pool.allocate<Scalar*>(ctx, static_cast<size_t>(batch));
+        (void)pool.allocate<Scalar>(ctx, static_cast<size_t>(kd + 1) * n * batch);
+        (void)pool.allocate<Scalar>(ctx, static_cast<size_t>(tau_sy2sb_n) * batch);
         if (want_eigenvectors) {
-            bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(n) * batch);
+            (void)pool.allocate<Scalar>(ctx, static_cast<size_t>(n) * batch);
         }
 
         // Shapes must match the runtime views exactly so the provider choices agree.
@@ -420,33 +423,32 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
         const auto tau_sy2sb_dummy = VectorView<Scalar>(nullptr, tau_sy2sb_n, batch, 1,
                                                         tau_sy2sb_n).with_batch_mask(mask);
 
-        bytes += BumpAllocator::allocation_size<std::byte>(
+        (void)pool.allocate<std::byte>(
             ctx, sytrd_sy2sb_buffer_size<B, Scalar>(ctx, a_dummy, ab_dummy, tau_sy2sb_dummy, Uplo::Lower, kd));
 
-        bytes += BumpAllocator::allocation_size<Real>(ctx, static_cast<size_t>(n) * batch);
-        bytes += BumpAllocator::allocation_size<Real>(ctx, static_cast<size_t>(std::max(0, n - 1)) * batch);
+        (void)pool.allocate<Real>(ctx, static_cast<size_t>(n) * batch);
+        (void)pool.allocate<Real>(ctx, static_cast<size_t>(std::max(0, n - 1)) * batch);
 
         // Householder chase: reflectors, taus and the 2 x n tridiagonal band.
         const int32_t nr = std::max<int32_t>(1, nrefl);
-        bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(kd) * nr * batch);
-        bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(nr) * batch);
-        bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(2) * n * batch);
-        bytes += BumpAllocator::allocation_size<std::byte>(
-            ctx, detail::sytrd_sb2st_hh_buffer_size<B, Scalar>(ctx, n, kd, batch));
+        (void)pool.allocate<Scalar>(ctx, static_cast<size_t>(kd) * nr * batch);
+        (void)pool.allocate<Scalar>(ctx, static_cast<size_t>(nr) * batch);
+        (void)pool.allocate<Scalar>(ctx, static_cast<size_t>(2) * n * batch);
+        (void)pool.allocate<std::byte>(ctx, detail::sytrd_sb2st_hh_buffer_size<B, Scalar>(ctx, n, kd, batch));
 
         // w_sub, then m. Mirrors the runtime allocation order exactly.
-        bytes += BumpAllocator::allocation_size<Real>(ctx, w_sub_len * batch);
-        bytes += BumpAllocator::allocation_size<int32_t>(ctx, static_cast<size_t>(batch));
+        (void)pool.allocate<Real>(ctx, w_sub_len * batch);
+        (void)pool.allocate<int32_t>(ctx, static_cast<size_t>(batch));
 
         StebzParams<Real> bp;
         bp.range = rr.value_range ? EigenRangeType::Value : EigenRangeType::Index;
-        bytes += BumpAllocator::allocation_size<std::byte>(ctx, stebz_buffer_size<B, Real>(ctx, n, batch, bp));
+        (void)pool.allocate<std::byte>(ctx, stebz_buffer_size<B, Real>(ctx, n, batch, bp));
 
         if (want_eigenvectors) {
             SteinParams<Real> sp;
             // Sized on the CAPACITY, which is what the solver passes as stein's k: its
             // scratch grid is n * k * batch whether or not a column ends up used.
-            bytes += BumpAllocator::allocation_size<std::byte>(
+            (void)pool.allocate<std::byte>(
                 ctx, stein_buffer_size<B, Real>(ctx, n, static_cast<size_t>(capacity), batch, sp));
 
             // Q1 back-transform; shapes mirror the runtime slices exactly.
@@ -467,11 +469,11 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
                         ctx, v1_dummy, c_dummy, Side::Left, Transpose::NoTrans, tau1_flat,
                         ormqr_block_size);
                 }
-                bytes += BumpAllocator::allocation_size<std::byte>(ctx, bytes_ormqr);
+                (void)pool.allocate<std::byte>(ctx, bytes_ormqr);
             }
         }
 
-        return bytes;
+        return pool.required_bytes();
     }
 }
 
