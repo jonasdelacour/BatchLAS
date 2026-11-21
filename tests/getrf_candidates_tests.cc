@@ -806,8 +806,11 @@ TYPED_TEST(GetrfCandidates, AutoReadsTheShippedTablesOnTheRealDevice) {
                                          {13, 600}, {24, 5},    {25, 5},    {31, 1000}, {33, 3},   {40, 2},
                                          {200, 2},  {255, 300}, {256, 2},   {256, 256}, {300, 255}, {300, 257},
                                          {511, 2},  {512, 2},   {600, 3}};
+    // A device with no table at all (the vendor-free host) takes the last resort, blocked (§5.5).
+    const bool untabled =
+        select::tables_in_borrow_order("getrf", select::dtype_name<T>(), select::device_of<B>(*this->ctx)).empty();
     for (auto [n, batch] : cells) {
-        const std::string want = test_utils::shipped_table_pick<C>(
+        const std::string want = untabled ? std::string("blocked") : test_utils::shipped_table_pick<C>(
             "getrf", select::dtype_name<T>(), select::device_of<B>(*this->ctx), select::Key{{"n", n}, {"batch", batch}},
             [&, n = n, batch = batch] {
                 auto q = make_lu<T>(n, batch, 41u + n);

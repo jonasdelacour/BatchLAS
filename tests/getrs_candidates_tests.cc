@@ -263,7 +263,10 @@ protected:
         this->ctx->wait();
     }
     // What Auto (or, native_only, the class word `native`) must pick for `s`, from the shipped tables.
+    // A device with no table at all (the vendor-free host) takes the last resort, blocked (§5.5).
     std::string table_pick(const Spec& s, bool native_only = false) {
+        if (select::tables_in_borrow_order("getrs", select::dtype_name<T>(), select::device_of<B>(*this->ctx)).empty())
+            return "blocked";
         return test_utils::shipped_table_pick<C>("getrs", select::dtype_name<T>(), select::device_of<B>(*this->ctx),
                                                  select::Key{{"n", s.n}, {"nrhs", s.nrhs}, {"batch", s.batch}}, [&] {
                                                      auto p = make_sys<T>(s);

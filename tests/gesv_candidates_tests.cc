@@ -244,16 +244,15 @@ protected:
         const Pin pin("gesv", c);
         return run_auto(p);
     }
-    // What Auto must pick for an order-n, nrhs system, from the shipped tables. A child without a
-    // route (vendor-free) still means the gesv pin itself was taken.
+    // What Auto must pick for an order-n, nrhs system, from the shipped tables. A device with no
+    // table at all (the vendor-free host) takes the last resort, blocked (select.hh walk, §5.5).
     std::string table_pick(int n, int nrhs, int batch) {
-        return test_utils::shipped_table_pick<C>("gesv", select::dtype_name<T>(), select::device_of<B>(*this->ctx),
+        const auto d = select::device_of<B>(*this->ctx);
+        if (select::tables_in_borrow_order("gesv", select::dtype_name<T>(), d).empty()) return "blocked";
+        return test_utils::shipped_table_pick<C>("gesv", select::dtype_name<T>(), d,
                                                  select::Key{{"n", n}, {"nrhs", nrhs}}, [&] {
                                                      auto p = make_sys<T>(n, nrhs, batch, 7u);
-                                                     try {
-                                                         (void)run_auto(p);
-                                                     } catch (const batchlas::NoRouteError&) {
-                                                     }
+                                                     (void)run_auto(p);
                                                  });
     }
 
