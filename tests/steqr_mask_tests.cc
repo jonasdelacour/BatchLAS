@@ -54,7 +54,7 @@ struct Strided {
     VectorView<Real> view() const { return VectorView<Real>(store.data(), n, batch, 1, stride); }
     mc::Output output(std::string name) const {
         return {std::move(name), reinterpret_cast<const std::byte*>(store.data()), sizeof(Real) * std::size_t(n),
-                sizeof(Real) * std::size_t(stride), sizeof(Real)};
+                sizeof(Real) * std::size_t(stride)};
     }
 };
 

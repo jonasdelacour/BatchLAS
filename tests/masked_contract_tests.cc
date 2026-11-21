@@ -32,6 +32,7 @@ struct CopyCase {
 
     // How the op under test misbehaves when masked.
     enum class Defect { none, ignores_mask, active_off, sized_by_mask } defect = Defect::none;
+    T active_scale = T(2);  // active_off: what a masked call scales its active items by
     int size_calls = 0;
     std::vector<bool> calls;  // per call: masked
     std::size_t ws_bytes = 0;  // > 0: a workspace that must arrive poisoned, which the call then dirties
@@ -56,7 +57,7 @@ struct CopyCase {
             const auto m = defect == Defect::ignores_mask ? Span<const std::uint8_t>{} : mask;
             batchlas::MatrixView<T>::copy(q, dst.view().with_batch_mask(m), src.view().with_batch_mask(m));
             if (defect == Defect::active_off && !mask.empty())
-                batchlas::scale(q, T(2), dst.view().with_batch_mask(mask));
+                batchlas::scale(q, active_scale, dst.view().with_batch_mask(mask));
         };
         c.outputs = [this] { return std::vector<mc::Output>{mc::Output::matrix("dst", dst.view())}; };
         if (defect == Defect::sized_by_mask)
@@ -228,6 +229,17 @@ TEST(MaskedContract, AWriteToAnInactiveItemIsRed) {
 TEST(MaskedContract, AnActiveItemThatDiffersIsRed) {
     CopyCase op;
     op.defect = CopyCase::Defect::active_off;
+    auto want = kWithHoles;
+    want.insert("all-active");
+    EXPECT_EQ(red_patterns([&] { mc::check(op.q, op.make()); }, "differs from the unmasked call"), want);
+}
+
+// One ulp in every masked call's active items, the same in every pattern: red on every device,
+// an Apple GPU included (no tolerance, and no all-active masked call as the reference).
+TEST(MaskedContract, AnActiveItemOneUlpOffIsRed) {
+    CopyCase op;
+    op.defect = CopyCase::Defect::active_off;
+    op.active_scale = T(1.0f + 0x1p-23f);
     auto want = kWithHoles;
     want.insert("all-active");
     EXPECT_EQ(red_patterns([&] { mc::check(op.q, op.make()); }, "differs from the unmasked call"), want);
