@@ -456,7 +456,9 @@ Event sytrd_blocked_impl(Queue& ctx,
             }
         }
 
-        constexpr bool allow_local_small = !select::native_gpu_backend<B>;
+        // Not on a vendor-free host either (native_backend): the legacy kernel reads A's upper
+        // triangle, which syev's Lower calls never wrote (poison there: values off by 9e4).
+        constexpr bool allow_local_small = !select::native_backend<B>;
         const bool auto_local = allow_local_small && std::is_same_v<Scalar, float>;
         if ((auto_local && props_ok) || (allow_local_small && force_local && props_ok)) {
             {
