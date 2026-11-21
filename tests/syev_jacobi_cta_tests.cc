@@ -628,9 +628,11 @@ TEST(SyevJacobiCtaAccuracy, GradedSpdRelativeAccuracy) {
                               << " exceeds " << bound
                               << " -- the relative-accuracy property is not being achieved";
 
-    // Informational head-to-head against the tridiagonalization-based path on
-    // the same input. Deliberately NOT asserted: this documents why the Jacobi
-    // kernel exists without pinning a competitor's numbers into the test suite.
+    // Head-to-head against the tridiagonalization-based path on the same input. Its relative
+    // error is informational (it documents why the Jacobi kernel exists); its ABSOLUTE error is
+    // asserted, as any backward-stable solver's: eps*||A||-sized. BREAK (2026-11-21): larfg_lanes'
+    // unscaled sum of squares on Metal (which flushes |x| < 2^-63's square to 0) left sytrd_cta's
+    // reflectors non-orthogonal: 1.6e6 eps*||A||_2 (lambda_max 1.19 for 1), red; the scaled norm 2.0.
     {
         Matrix<float, MatrixFormat::Dense> A_tri(n, n, 1);
         for (int j = 0; j < n; ++j) {
@@ -648,15 +650,18 @@ TEST(SyevJacobiCtaAccuracy, GradedSpdRelativeAccuracy) {
         std::vector<float> w_tri(W_tri.begin(), W_tri.begin() + n);
         std::sort(w_tri.begin(), w_tri.end());
 
-        double tri_max_rel = 0.0;
+        double tri_max_rel = 0.0, tri_max_abs = 0.0;
         for (int i = 0; i < n; ++i) {
             const double want = w_true[static_cast<std::size_t>(i)];
-            tri_max_rel = verify::nanmax(tri_max_rel,
-                                   std::abs(static_cast<double>(w_tri[static_cast<std::size_t>(i)]) - want)
-                                       / std::abs(want));
+            const double err = std::abs(static_cast<double>(w_tri[static_cast<std::size_t>(i)]) - want);
+            tri_max_rel = verify::nanmax(tri_max_rel, err / std::abs(want));
+            tri_max_abs = verify::nanmax(tri_max_abs, err);
         }
+        const double norm2 = std::abs(w_true.back());  // SPD: ||A||_2 is the largest eigenvalue
         std::cout << "  [informational] max relative error: jacobi_cta=" << max_rel
-                  << "  syev_cta(sytrd+steqr)=" << tri_max_rel << "\n";
+                  << "  syev_cta(sytrd+steqr)=" << tri_max_rel << "; syev_cta absolute "
+                  << tri_max_abs / (norm2 * std::numeric_limits<float>::epsilon()) << " eps*||A||_2\n";
+        EXPECT_VERIFY(float, verify::Check::values, n, tri_max_abs / norm2) << "syev_cta on the graded input";
     }
 }
 #endif

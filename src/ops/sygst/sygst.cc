@@ -50,8 +50,13 @@ bool can_run(const SygstChoice& c, const select::Device& d, const MV<Scalar>& A,
     return std::visit(overloaded{
         [&](const Blocked& b) {
             const int kb = std::min(ops::sygst::kDiagMaxOrder, A.rows());
-            return homogeneous && select::natives_run_on(d) && blocked_nb_compiled(b.nb) && d.max_wg >= ops::sygst::kDiagWg &&
-                   static_cast<std::int64_t>(ops::sygst::diag_slm_bytes<Scalar>(kb)) <= d.slm_budget;
+            // sygst_diag's own sizing (blocks per group under diag_slm_cap), against the budget at
+            // its work-group size: Metal's runtime takes 8 B per work-item.
+            const std::size_t cap = ops::sygst::diag_slm_cap(d.slm_budget_for(ops::sygst::kDiagWg));
+            return homogeneous && select::natives_run_on(d) && blocked_nb_compiled(b.nb) &&
+                   d.max_wg >= ops::sygst::kDiagWg &&
+                   static_cast<std::int64_t>(ops::sygst::diag_slm_bytes<Scalar>(kb, cap)) <=
+                       d.slm_budget_for(ops::sygst::diag_group_size<Scalar>(kb, cap));
         },
         [&](TwoSided) { return homogeneous; },
         [&](Vendor) { return vendor_linked<B> && d.has_vendor && homogeneous; },

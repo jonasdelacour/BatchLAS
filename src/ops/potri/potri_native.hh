@@ -57,6 +57,13 @@ constexpr int cta_max_n(std::size_t slm_budget, int max_wg) {
     return best;
 }
 
+// The work-group cap potri_cta launches with on ctx's device (MAX_WORK_GROUP_SIZE and the kernel's
+// own limit), and the largest order it launches there. can_run and the launcher share both.
+template <typename Scalar>
+BATCHLAS_INTERNAL_API int cta_launch_max_wg(Queue& ctx);
+template <typename Scalar>
+BATCHLAS_INTERNAL_API int cta_ceiling(Queue& ctx);
+
 // blocked keeps a zero-diagonal item unchanged: Trtri sets flags[b] (1-based) and copies a flagged item
 // to slot b (its packed uplo triangle); Lauum on the block at (origin, origin) copies it back.
 template <typename Scalar>

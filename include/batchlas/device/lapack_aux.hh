@@ -531,9 +531,18 @@ template <class Conv = alg::Phase, class Ops = arith::Explicit, class Ex, class 
 BATCHLAS_DEVICE_INLINE Scalar larfg_lanes(const Ex& ex, int n, int alpha_item, Scalar& alpha, Scalar& x,
                                           bool x_active) {
     using Ar = arith_t<Ops, Scalar>;
+    using A = Arith<Scalar>;
     using R = real_t<Scalar>;
-    const R xsq = x_active ? abs2(x) : R(0);
-    const R xnorm = sycl::sqrt(detail::scope_reduce<Scope::Own>(ex, xsq));
+    // ||x|| as LAPACK's nrm2 scales it: by 2^-e, e the exponent of max |x|, so no square under- or
+    // overflows (Metal flushes |x| < 2^-63's square to 0: the reflector lost x(1) of a graded
+    // matrix and was no longer orthogonal). A power of two scales exactly: without under- or
+    // overflow the bits are the unscaled sum's.
+    const R mag = x_active ? sycl::fmax(sycl::fabs(A::re(x)), sycl::fabs(A::im(x))) : R(0);
+    const R m = detail::scope_reduce<Scope::Own>(ex, mag, sycl::maximum<R>());
+    const int e = (m > R(0) && sycl::isfinite(m)) ? sycl::clamp(static_cast<int>(sycl::ilogb(m)), -120, 120) : 0;
+    const R sc = sycl::ldexp(R(1), -e);
+    const R xsq = x_active ? abs2(A::make(A::re(x) * sc, A::im(x) * sc)) : R(0);
+    const R xnorm = sycl::sqrt(detail::scope_reduce<Scope::Own>(ex, xsq)) * sycl::ldexp(R(1), e);
     const Scalar alpha_b = ex.bcast(alpha, alpha_item);
     const auto s = larfg_scalars<Conv>(alpha_b, xnorm, n);
     if (ex.lid() == alpha_item) alpha = s.beta;

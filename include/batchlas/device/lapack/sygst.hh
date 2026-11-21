@@ -116,8 +116,8 @@ template <class D> constexpr SygstCtaPlan<D> sygst_cta_plan(int n) {
 ///   fbase   ipw * (fper + sper) local elements, 16-byte aligned: the F stores, then the S buffers
 ///   fper    kb * ldf, ldf = detail::sygs2_ldf<D>(kb);  sper = kb * lds, lds = kb + 1
 ///   a_of(itm), b_of(itm)  matrix itm's A (read, written) and B (read) operands
-///   dead(itm)             true for a matrix no item may load, compute or store (out of range or
-///                         masked; uniform per block)
+///   dead(itm)             true for a matrix no item may load or store (out of range or masked;
+///                         uniform per block); its items compute on its unloaded local slot
 /// KB > 0 is a compile-time order (kb == KB); KB = 0 any kb <= NF. Every item of ex reaches the
 /// four barriers. The argument order is the hand kernel's capture order (its parameter order).
 template <bool Inverse, int KB, int NF = 32, class Ex, class D, class AOf, class Dead, class BOf, class Full>
@@ -134,7 +134,7 @@ BATCHLAS_DEVICE_INLINE void sygs2_group(const Ex& ex, int t, int kb, bool lower,
     D* const sbase = fbase + ipw * fper;
     auto s_of = [=](int gi) { return mat_aligned<A16, Mem::Local>(sbase + gi * sper, kb, kb, lds); };
     // ?LACPY of A's uplo triangle into S and of B's into F (conjugate-transposed from U), column-wise
-    // and coalesced. I2: a dead block is never loaded, computed or stored.
+    // and coalesced. I2: a dead block is never loaded or stored.
     detail::for_each_tile_col(t, wg, kb, ipw, [&](int gi, int row, int c) BATCHLAS_DEVICE_BODY {
         const std::ptrdiff_t itm = first + gi;
         if (row >= kb || dead(itm) || !detail::in_triangle(ul, row, c)) return;
@@ -144,24 +144,29 @@ BATCHLAS_DEVICE_INLINE void sygs2_group(const Ex& ex, int t, int kb, bool lower,
         if (lower) detail::fat<Inverse>(fs, row, c) = bv;
         else detail::fat<Inverse>(fs, c, row) = Arith<D>::conj(bv);
     });
-    const int g = t / kb, j = t - g * kb;
-    // t < ipw * KB, not g < ipw: at ipw == 1 that becomes g == 0, never folded back to t < KB.
-    const bool active = (KB ? t < ipw * KB : g < ipw) && !dead(first + g);
-    const D* const f = fbase + (active ? g * fper : 0);
-    const SMat s{detail::Slm<D>{sbase + (active ? g * sper : 0)}, kn, kn, Dyn{lds}};
+    // Every item runs the two passes, so no barrier sits beside a per-item branch: AdaptiveCpp's
+    // Metal code repeats such a branch's barriers on both of its sides, and a partly live sub-group
+    // then reaches each one twice and frees the others a phase early (wrong blocks from the first
+    // one in that sub-group). A dead block's items work in its own slot, which nothing loads from or
+    // stores to global memory; an item past the ipw * kb columns repeats item t % (ipw * kb), so it
+    // stores the same values to the same column.
+    const int tc = t % (ipw * live);
+    const int g = tc / kb, j = tc - g * kb;
+    const D* const f = fbase + g * fper;
+    const SMat s{detail::Slm<D>{sbase + g * sper}, kn, kn, Dyn{lds}};
     sync(ex);
     // X = op(F) A, column j: the Hermitian A's column, then F^-1 or F^H.
     Frag<D, NF> col{};
-    if (active) detail::load_live(col, herm_view(s, ul).col(j), live);
+    detail::load_live(col, herm_view(s, ul).col(j), live);
     sync(ex);
-    if (active) col = detail::apply<Inverse, KB>(col, f, ldf, kb);
-    if (active) store(col, s.col(j), live);
+    col = detail::apply<Inverse, KB>(col, f, ldf, kb);
+    store(col, s.col(j), live);
     sync(ex);
     // C = op(F) X^H: X's conjugate transpose, row j of X as column j.
-    if (active) detail::load_live(col, conj_view(s.row(j)), live);
+    detail::load_live(col, conj_view(s.row(j)), live);
     sync(ex);
-    if (active) col = detail::apply<Inverse, KB>(col, f, ldf, kb);
-    if (active) store(col, s.col(j), live);
+    col = detail::apply<Inverse, KB>(col, f, ldf, kb);
+    store(col, s.col(j), live);
     sync(ex);
     // The Hermitian C (real diagonal) to `full` and its uplo triangle back to A.
     detail::for_each_tile_col(t, wg, kb, ipw, [&](int gi, int row, int c) BATCHLAS_DEVICE_BODY {
@@ -244,10 +249,8 @@ template <Itype IT, Uplo UL, int NB, class Alg, class Scalar> struct tier_info<r
 namespace detail {
 
 // One ?sygs2 block of order kb <= NF at f, A's and B's leading kb x kb blocks (ipw 1): sygs2_group
-// on ex when ex is one sub-group, else on sub-group 0 alone. AdaptiveCpp's Metal code repeats
-// sygs2_group's barriers on both sides of its per-item `active` branch, so a partly active
-// sub-group in a wider group reaches each barrier twice and frees the other sub-groups a phase
-// early: their write-back read S before its last store (wrong columns from sub-group 1 on).
+// on ex when ex is one sub-group, else on sub-group 0 alone (its 32 items cover the kb columns;
+// sygs2_group's passes have no per-item branch, so no sub-group meets a barrier twice).
 template <bool Inverse, int NF, class Ex, class D, class MA, class MB, class Full>
 BATCHLAS_DEVICE_INLINE void sygs2_one(const Ex& ex, int kb, bool lower, D* f, const MA& a, const MB& b, const Full& full) {
     const int ldf = sygs2_ldf<D>(kb), lds = kb + 1;

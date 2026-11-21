@@ -28,7 +28,10 @@
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace batchlas::ops::potri {
 
@@ -37,6 +40,37 @@ namespace {
 template <typename Scalar> class PotriCtaKernel;
 
 }  // namespace
+
+// The kernel's own launch limit (its registers), not only the device's: at 181 registers
+// (complex<float>, sm_89) a block holds 352 work-items, so the device's 512 would not launch.
+// Each item holds up to kCtaTiles tiles, so the smaller block still covers the ceiling.
+// Memoized per device: DPC++ answers from a kernel bundle.
+template <typename Scalar>
+int cta_launch_max_wg(Queue& ctx) {
+    static std::mutex mu;
+    static std::vector<std::pair<sycl::device, int>> seen;
+    const sycl::device sd = ctx->get_device();
+    {
+        const std::lock_guard<std::mutex> lock(mu);
+        for (const auto& [d, w] : seen)
+            if (d == sd) return w;
+    }
+    int max_wg = static_cast<int>(ctx.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+    try {
+        const int kmax = static_cast<int>(impl::kernel_max_wg_size<PotriCtaKernel<Scalar>>(ctx->get_context(), sd));
+        if (kmax >= 32) max_wg = std::min(max_wg, kmax / 32 * 32);
+    } catch (const sycl::exception&) {
+    }
+    const std::lock_guard<std::mutex> lock(mu);
+    seen.emplace_back(sd, max_wg);
+    return max_wg;
+}
+
+template <typename Scalar>
+int cta_ceiling(Queue& ctx) {
+    const std::size_t budget = resident::device_slm_budget(ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
+    return cta_max_n<Scalar>(budget, cta_launch_max_wg<Scalar>(ctx));
+}
 
 template <typename Scalar>
 Event potri_cta(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, Uplo uplo, CtaMode mode, int nb,
@@ -55,15 +89,7 @@ Event potri_cta(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, Up
     const int nblk = (n + bn - 1) / bn;
     const auto dev = ctx.device();
     const std::size_t budget = resident::device_slm_budget(dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
-    // The kernel's own launch limit (its registers), not only the device's: at 181 registers
-    // (complex<float>, sm_89) a block holds 352 work-items, so the ceiling's 384 would not launch.
-    // Each item holds up to kCtaTiles tiles, so the smaller block still covers the ceiling.
-    int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
-    try {
-        const int kmax = static_cast<int>(impl::kernel_max_wg_size<PotriCtaKernel<Scalar>>(ctx->get_context(), ctx->get_device()));
-        if (kmax >= 32) max_wg = std::min(max_wg, kmax / 32 * 32);
-    } catch (const sycl::exception&) {
-    }
+    const int max_wg = cta_launch_max_wg<Scalar>(ctx);  // can_run's cta_ceiling reads the same limit
     if (!cta_fits(bn, TS, sizeof(D), sizeof(R), budget, max_wg))
         throw batchlas::internal_error("potri_cta: order " + std::to_string(bn) + " needs " +
                                        std::to_string(cta_slm_bytes(bn, TS, sizeof(D), sizeof(R))) +
@@ -281,7 +307,9 @@ Event potri_cta(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, Up
 
 #define BATCHLAS_POTRI_CTA_INSTANTIATE(T)                                                                    \
     template Event potri_cta<T>(Queue&, const MatrixView<T, MatrixFormat::Dense>&, Uplo, CtaMode, int, bool, \
-                                Span<int32_t>, Stash<T>);
+                                Span<int32_t>, Stash<T>);                                                \
+    template int cta_launch_max_wg<T>(Queue&);                                                           \
+    template int cta_ceiling<T>(Queue&);
 
 BATCHLAS_POTRI_CTA_INSTANTIATE(float)
 BATCHLAS_POTRI_CTA_INSTANTIATE(double)

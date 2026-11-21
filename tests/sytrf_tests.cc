@@ -36,6 +36,7 @@
 #include <map>
 #include <optional>
 #include <random>
+#include <set>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -849,7 +850,7 @@ TYPED_TEST(SytrfTest, SytrsSkipListEveryFamily) {
             }
 }
 
-// blocked's batch chunks (forced to 7 over 23 items: 7 + 7 + 9), in order and out of order: every
+// blocked's batch chunks (forced to 7 over 23 items: parts 8 + 8 + 7), in order and out of order: every
 // item is solved from its own factor and pivots, a malformed list in the last part gives that item
 // NaN, and sysv's skip list reaches the item in the second part.
 TYPED_TEST(SytrfTest, SytrsBlockedChunksKeepEachItemsPivots) {
@@ -882,6 +883,29 @@ TYPED_TEST(SytrfTest, SytrsBlockedChunksKeepEachItemsPivots) {
         ASSERT_GT(s.info[9], 0);
         ASSERT_TRUE(ts::items_bit_identical_to<T>(s.b, s.b0, std::vector{9}));
         EXPECT_VERIFY(T, Check::solve, n, this->residual(s, all_but(batch, 9))) << "sysv compose, chunked";
+    }
+}
+
+// blocked's parts are one size where the batch allows it, so its trsm children select at one key:
+// a chunk forced to 7 over 24 items is 8 + 8 + 8, and every reached trsm row has batch 8. Uneven
+// parts (the old 7 + 7 + 10) re-selected per part, and on apple_m5_max the part of 352 of a
+// 1024-item batch ran another gemm (SytrsSaturatingBatchIsBitIdenticalToItemZero, items 672 on).
+// BREAK: the old remainder-last loop gives trsm rows at batch 7 and 10.
+TYPED_TEST(SytrfTest, SytrsBlockedPartsSelectTheirTrsmAtOneBatch) {
+    using T = typename TestFixture::T;
+    if constexpr (TestFixture::Bk == Backend::NETLIB) GTEST_SKIP() << "no native route on NETLIB";
+    else {
+        const int n = 45, batch = 24;
+        const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "7");
+        ASSERT_EQ(tuning::blocked_chunk_items(batch, 1, 1, 1), 7) << "the override did not reach the accessor";
+        auto p = make_sys<T>(n, 3, batch, Uplo::Lower, Gen::kkt, 2950u);
+        this->factor_auto(p);
+        const auto rows = ts::reached_rows([&] { this->solve(p, ops::sytrs::Blocked{}); });
+        std::set<long long> batches;
+        for (const auto& r : rows)
+            if (r.op == "trsm") batches.insert(r.batch);
+        EXPECT_EQ(batches, (std::set<long long>{8})) << "blocked's parts are not one size";
+        EXPECT_VERIFY(T, Check::solve, n, this->residual(p));
     }
 }
 

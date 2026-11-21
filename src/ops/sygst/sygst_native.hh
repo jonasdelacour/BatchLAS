@@ -30,16 +30,29 @@ constexpr std::size_t diag_item_elems(int kb) {
     return ::batchlas::device::detail::sygs2_block_elems<Scalar>(kb);
 }
 
-template <typename Scalar>  /// items per work-group at order kb: as many as kDiagWg columns and kDiagSlmCap hold
-constexpr int diag_items_per_group(int kb) {
+/// A group's shared-memory target on a device whose budget at kDiagWg work-items is @p budget_at_wg:
+/// kDiagSlmCap, or that budget where it is lower (Apple: 32 KiB less the runtime's 8 B per work-item).
+constexpr std::size_t diag_slm_cap(std::int64_t budget_at_wg) {
+    return budget_at_wg > 0 && static_cast<std::size_t>(budget_at_wg) < kDiagSlmCap
+               ? static_cast<std::size_t>(budget_at_wg) : kDiagSlmCap;
+}
+
+template <typename Scalar>  /// items per work-group at order kb: as many as kDiagWg columns and `cap` bytes hold
+constexpr int diag_items_per_group(int kb, std::size_t cap = kDiagSlmCap) {
     const std::size_t per = diag_item_elems<Scalar>(kb) * sizeof(Scalar);
-    const int g = static_cast<int>(std::min<std::size_t>(kDiagWg / (kb < 1 ? 1 : kb), kDiagSlmCap / per));
+    const int g = static_cast<int>(std::min<std::size_t>(kDiagWg / (kb < 1 ? 1 : kb), cap / per));
     return g < 1 ? 1 : g;
 }
 
+template <typename Scalar>  /// work-items of one work-group at order kb: kb per block, whole sub-groups of 32
+constexpr int diag_group_size(int kb, std::size_t cap = kDiagSlmCap) {
+    return (diag_items_per_group<Scalar>(kb, cap) * kb + 31) / 32 * 32;
+}
+
 template <typename Scalar>  /// shared memory of one work-group at order kb, in whole 16-byte packs
-constexpr std::size_t diag_slm_bytes(int kb) {
-    const std::size_t bytes = static_cast<std::size_t>(diag_items_per_group<Scalar>(kb)) * diag_item_elems<Scalar>(kb) * sizeof(Scalar);
+constexpr std::size_t diag_slm_bytes(int kb, std::size_t cap = kDiagSlmCap) {
+    const std::size_t bytes =
+        static_cast<std::size_t>(diag_items_per_group<Scalar>(kb, cap)) * diag_item_elems<Scalar>(kb) * sizeof(Scalar);
     return (bytes + 15) / 16 * 16;
 }
 

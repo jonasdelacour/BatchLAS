@@ -487,6 +487,15 @@ template <InvSqrtEdge E = InvSqrtEdge::Lapack, class Real> BATCHLAS_DEVICE_HELPE
         if constexpr (E == InvSqrtEdge::Lapack) return sycl::isinf(a) ? 0.0f : r;
         else return r;
     }
+#elif BATCHLAS_SYCL_IMPL_ACPP
+    // AdaptiveCpp float FiniteGeOne: the same FMA Newton step, from 1 / sqrt_a (two roundings, and
+    // Metal's divide and sqrt are not correctly rounded), so the Jacobi cosine is near correctly
+    // rounded as on NVPTX (n = 32 graded ||Z^H Z - I||: 252 eps without it on apple_m5_max, bound 180).
+    if constexpr (std::is_same_v<Real, float> && E == InvSqrtEdge::FiniteGeOne) {
+        const float y = 1.0f / sqrt_a;
+        const float e = sycl::fma(-(a * y), y, 1.0f);
+        return sycl::fma(0.5f * y, e, y);
+    }
 #endif
     (void)a;
     return Real(1) / sqrt_a;
