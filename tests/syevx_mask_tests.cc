@@ -473,7 +473,8 @@ TYPED_TEST(SyevxMask, LanczosLeavesInactiveItemsUntouched) {
     if constexpr (is_std_complex_v<T>) {
         GTEST_SKIP() << "the lanczos case runs real T";
     } else {
-        if (TestFixture::kHostBlas) GTEST_SKIP() << "lanczos's steqr CTA kernel is not built for the host device, unmasked too";
+        // steqr runs its work-group tier on a CPU; the refusal is gemm's, whose host route is the BLAS.
+        if (TestFixture::kHostBlas) GTEST_SKIP() << "a host BLAS refuses a mask: lanczos's gemm has no masked route beside it";
         Queue& q = *this->ctx;
         const int batch = 12;
         for (const int n : {12, 40})

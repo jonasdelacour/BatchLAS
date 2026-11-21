@@ -169,7 +169,7 @@ struct Entry {
     std::function<void(Pool<Scalar>&)> prepare{};  ///< unmasked setup run before the snapshot (honouring checks)
     std::vector<std::string> packed{};  ///< buffers passed as a flat span, items packed_stride elements apart (wspan)
     std::size_t packed_stride = kN;     ///< syevx's W: items neigs apart
-    bool active_exact = true;  ///< false: active items agree to a tolerance only (syevx_mask_tests bounds them)
+    bool active_exact = true;  ///< false: active items are not compared here; syevx_mask_tests bounds them
 };
 
 // The host backend's natives yield to its BLAS, which cannot skip an item. A vendor-free host
@@ -584,7 +584,9 @@ std::vector<Entry<Scalar>> host_direct_entries() {
             syevx_filtered<B, Scalar, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z), SyevxParams<Scalar>());
         });
         // Its batch filter degree folds over the active items, so they need not match the unmasked
-        // call bit for bit (complex<float> does not); syevx_mask_tests bounds them.
+        // call bit for bit (complex<float> does not). Only its inactive items are checked here;
+        // syevx_mask_tests' FilteredLeavesInactiveItemsUntouched bounds the active W, m and info to
+        // the solver's tolerance against the unmasked call.
         out.back().active_exact = false;
     }
     return out;
