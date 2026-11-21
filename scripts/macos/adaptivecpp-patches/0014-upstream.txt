@@ -92,6 +92,12 @@ the BatchLAS local series:
   - 7 are tolerance, bit-identity and sygst failures. Cases that compiled
     before the patch already showed the same failures.
   No case that passed before the patch fails after it.
+- after the cache change (conflicting kept distinct from unknown), the 28
+  ctest entries holding those cases were rerun with a fresh JIT cache: the
+  same cases pass, no case that passed fails, and no MSL compilation error
+  mentions `threadgroup void *`. A select over truly conflicting private
+  and device pointers in device_core_lapack_aux_tests still gives the same
+  MSL error as before ("incompatible operand types").
 
 The series has no lit-style emitter tests, so this patch adds none. A lit
 test would feed the PHI web above to llvm-to-metal-tool and check that every
