@@ -243,8 +243,6 @@ protected:
     }
     std::vector<Shape> posv_shapes(int batch, bool identical) {
         std::vector<Shape> v;
-        // posv's tiny tier is GPU-only while the posv library has no CPU image (BATCHLAS_NO_CPU_OBJECT_LIBS).
-        if (!gpu()) return v;
         for (const auto& [n, r, u] : {std::tuple{6, 1, Uplo::Lower}, {14, 3, Uplo::Upper}, {30, 4, Uplo::Lower}})
             if (n <= ops::posv::posv_tiny_max_n<T>()) v.push_back({Op::posv, "tiny", n, r, batch, u, posv_wg(n), identical});
         return v;

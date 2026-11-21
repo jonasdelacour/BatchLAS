@@ -50,9 +50,8 @@ bool can_run(const PosvChoice& c, const select::Device& d, const MatrixView<Scal
                         A.batch_size() >= 1;
     return std::visit(overloaded{
         [&](Tiny) {
-            // GPU only while the posv library is on BATCHLAS_NO_CPU_OBJECT_LIBS: no CPU image.
-            return native && d.is_gpu && n <= ops::posv::posv_tiny_max_n<Scalar>() &&
-                   nrhs <= ops::posv::kPosvTinyMaxRhs &&
+            // A vendor-free host has the posv library's CPU image (off BATCHLAS_NO_CPU_OBJECT_LIBS).
+            return native && n <= ops::posv::posv_tiny_max_n<Scalar>() && nrhs <= ops::posv::kPosvTinyMaxRhs &&
                    d.max_wg >= resident::kTinyWgSize;
         },
         [&](Cta) { return native && ops::potrs::fused_fits<Scalar>(d, n, nrhs); },

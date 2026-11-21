@@ -200,15 +200,14 @@ protected:
             GTEST_SKIP() << "NETLIB without LAPACKE/CBLAS or a host-native image has no potrf or trsm route";
     }
 
-    // posv's cta tier needs sub-group size 32 on a GPU or a vendor-free host (select::natives_run_on
-    // in src/ops/posv/posv.cc can_run); the blocked tier and linalg::solve_spd run on any queue.
+    // posv's tiny and cta tiers need sub-group size 32 on a GPU or a vendor-free host
+    // (select::natives_run_on in src/ops/posv/posv.cc can_run); the blocked tier and
+    // linalg::solve_spd run on any queue.
     bool native_ok() const {
         const bool runs = this->ctx->device().type == DeviceType::GPU ||
                           (BackendType == Backend::NETLIB && select::kHostNative);
         return runs && this->ctx->device().supports_sub_group_size(32);
     }
-    // The tiny tier is GPU-only while the posv library has no CPU image (BATCHLAS_NO_CPU_OBJECT_LIBS).
-    bool tiny_ok() const { return native_ok() && this->ctx->device().type == DeviceType::GPU; }
 
     int cap() const { return ops::posv::posv_tiny_max_n<T>(); }
 
@@ -239,7 +238,7 @@ TYPED_TEST_SUITE(PosvTest, PosvTestTypes);
 // ARMED BREAK (R9): the local-memory transpose read guarded `lane < i - 1`. EXPECTED: RED
 // here for float and cfloat, P2 GREEN.
 TYPED_TEST(PosvTest, TinySolveResidualMatchesHostReference) {
-    if (!this->tiny_ok()) GTEST_SKIP() << "the tiny posv tier is GPU-only here";
+    if (!this->native_ok()) GTEST_SKIP() << "the tiny posv tier needs a GPU or a vendor-free host";
     using T = typename TestFixture::T;
     const int cap = this->cap();
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
@@ -267,7 +266,7 @@ TYPED_TEST(PosvTest, TinySolveResidualMatchesHostReference) {
 // P1 stays GREEN, because rsqrt.approx is still accurate enough for the residual
 // bound -- which is exactly why the bit-exact comparison has to exist.
 TYPED_TEST(PosvTest, TinyFactorIsBitIdenticalToPotrf) {
-    if (!this->tiny_ok()) GTEST_SKIP() << "the tiny posv tier is GPU-only here";
+    if (!this->native_ok()) GTEST_SKIP() << "the tiny posv tier needs a GPU or a vendor-free host";
     using T = typename TestFixture::T;
     const int cap = this->cap();
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
@@ -300,7 +299,7 @@ TYPED_TEST(PosvTest, TinyFactorIsBitIdenticalToPotrf) {
 // ARMED BREAK (R9): replace either solve's `tiny_select(zero, D{}, ...)` with the bare
 // division. EXPECTED: finiteness RED on the zero_minor rows only, info GREEN.
 TYPED_TEST(PosvTest, TinyInfoReportsTheLeadingMinorAndLeavesXFinite) {
-    if (!this->tiny_ok()) GTEST_SKIP() << "the tiny posv tier is GPU-only here";
+    if (!this->native_ok()) GTEST_SKIP() << "the tiny posv tier needs a GPU or a vendor-free host";
     using T = typename TestFixture::T;
     const int cap = this->cap();
     for (int shape = 0; shape < 2; ++shape) {
@@ -326,7 +325,7 @@ TYPED_TEST(PosvTest, TinyInfoReportsTheLeadingMinorAndLeavesXFinite) {
 // ARMED BREAK (R9): in lapack/potrf.hh's device::detail::reg_store_lower change `c <= lane` to `c < N`.
 // EXPECTED: RED for Uplo::Lower at every n.
 TYPED_TEST(PosvTest, TinyWritesOnlyItsOwnTriangle) {
-    if (!this->tiny_ok()) GTEST_SKIP() << "the tiny posv tier is GPU-only here";
+    if (!this->native_ok()) GTEST_SKIP() << "the tiny posv tier needs a GPU or a vendor-free host";
     using T = typename TestFixture::T;
     const int cap = this->cap();
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
@@ -344,7 +343,7 @@ TYPED_TEST(PosvTest, TinyWritesOnlyItsOwnTriangle) {
 // P5. Packed launches must cover every batch item; see gesv_tests.cc G5 for the
 // break this arms (tiny_device.hh's tiny_partition_id).
 TYPED_TEST(PosvTest, TinyPackedLaunchCoversEveryBatchItem) {
-    if (!this->tiny_ok()) GTEST_SKIP() << "the tiny posv tier is GPU-only here";
+    if (!this->native_ok()) GTEST_SKIP() << "the tiny posv tier needs a GPU or a vendor-free host";
     using T = typename TestFixture::T;
     const int cap = this->cap();
     for (int n : {8, 16}) {
