@@ -51,8 +51,7 @@ inline size_t subset_w_sub_len(int64_t n, int64_t capacity, bool value_range) {
                        : static_cast<size_t>(capacity);
 }
 
-// A host backend beside netlib: its gemm and ormqr are LAPACKE/CBLAS, which refuse a mask. A
-// vendor-free host runs every stage natively, the Q1 back-transform as ormqr_blocked.
+// Beside netlib the host's gemm and ormqr are LAPACKE/CBLAS (no mask); vendor-free, all native.
 template <Backend B>
 inline constexpr bool kSubsetHostBlas = B == Backend::NETLIB && !select::kHostNative;
 
@@ -402,9 +401,7 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
         const int32_t ormqr_block_size = tuning::ormqr_block_size_for_n(n);
         const int32_t nrefl = detail::sb2st_hh_num_reflectors(n, kd);
 
-        // A measuring() replay of the solver's allocations, never a hand sum: a hand sum misses the
-        // padding from a workspace base below the device alignment (a CPU queue's USM), so the
-        // solver ran out of workspace.
+        // A measuring() replay: a hand sum missed the padding below an unaligned workspace base.
         BumpAllocator pool = BumpAllocator::measuring();
         (void)pool.allocate<Scalar>(ctx, static_cast<size_t>(n) * n * batch);
         (void)pool.allocate<Scalar*>(ctx, static_cast<size_t>(batch));
@@ -414,8 +411,7 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
             (void)pool.allocate<Scalar>(ctx, static_cast<size_t>(n) * batch);
         }
 
-        // Shapes must match the runtime views exactly so the provider choices agree.
-        // Masked like the runtime views, so each size query picks the masked family.
+        // Shapes and masks match the runtime views, so each size query picks the same family.
         using MV = MatrixView<Scalar, MatrixFormat::Dense>;
         const auto a_dummy = MV(nullptr, n, n, n, static_cast<int64_t>(n) * n, batch).with_batch_mask(mask);
         const auto ab_dummy =
