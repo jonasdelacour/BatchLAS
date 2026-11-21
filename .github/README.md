@@ -25,7 +25,7 @@ every measurement behind a routing decision).
 | `CUDA` | NVIDIA GPUs: native SYCL kernels plus cuBLAS/cuSOLVER/cuSPARSE | RTX 4090 (`sm_89`) in daily CI; RTX PRO 6000 (`sm_120`) built and tested |
 | `SYCL` | a GPU without a vendor library: native kernels only | Apple M5 Max through AdaptiveCpp Metal; `float` and `complex<float>` only; not in CI |
 | `NETLIB` | host LAPACKE/CBLAS plus native kernels on a CPU device | built and tested beside the GPU backends |
-| `ROCM` | AMD GPUs: rocBLAS/rocSOLVER/rocSPARSE | **unsupported (code paths only)**: syntax-checked, never built or run |
+| `ROCM` | AMD GPUs: rocBLAS/rocSOLVER/rocSPARSE | **unsupported (code paths only)**: no build or CI job compiles them, nothing runs them |
 
 A vendor-free build (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) runs native kernels only; its gaps are in
 [vendor independence](../docs/design/vendor-independence.md#vendor-free-status).
