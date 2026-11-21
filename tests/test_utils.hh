@@ -45,6 +45,21 @@ inline std::int64_t slm_budget_for(const batchlas::Device& d, int wg) {
     return std::max<std::int64_t>(local - 4096, 0) + (apple ? 8 : 0) * std::max(0, max_wg - wg);
 }
 
+// Success when @p f throws can_run's refusal of a pin (batchlas::invalid_argument naming "cannot
+// run this shape"); a launcher's own guard, another exception or a run is a failure.
+template <class F> ::testing::AssertionResult refused_by_can_run(F&& f) {
+    try {
+        f();
+    } catch (const batchlas::invalid_argument& e) {
+        if (std::string_view(e.what()).find("cannot run this shape") != std::string_view::npos)
+            return ::testing::AssertionSuccess();
+        return ::testing::AssertionFailure() << "refused, but not by can_run: " << e.what();
+    } catch (const std::exception& e) {
+        return ::testing::AssertionFailure() << "threw something other than a refusal: " << e.what();
+    }
+    return ::testing::AssertionFailure() << "ran above the local memory budget";
+}
+
 // True when Device::default_device() can name a device. With none visible it throws
 // std::out_of_range (vector::_M_range_check), so a fixture that builds a Queue skips on false.
 inline bool sycl_device_visible() {

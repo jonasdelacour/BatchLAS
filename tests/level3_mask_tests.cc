@@ -179,7 +179,7 @@ protected:
             Problem<T> p(q, s.a, s.b, s.c, s.batch, s.identical, false, op);
             auto c = p.make_case(s.chunk_items);
             c.prepare();
-            EXPECT_THROW(c.call({}, {}), batchlas::invalid_argument) << "ran above the local memory budget";
+            EXPECT_TRUE(test_utils::refused_by_can_run([&] { c.call({}, {}); }));
             return;
         }
         std::optional<select::ScopedPin<ops::gemm::GemmChoice>> gemm_pin;

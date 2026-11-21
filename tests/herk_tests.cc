@@ -298,8 +298,9 @@ TYPED_TEST(HerkTest, MatchesGemmReference) {
                 MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C, C0).wait();
 
                 if (!runs(n)) {
-                    EXPECT_THROW((herk<Ba, T>(*(this->ctx), A, C, alpha, beta, uplo, transA).wait()), batchlas::invalid_argument)
-                        << "route=" << route << " ran above the local memory budget at n=" << n;
+                    EXPECT_TRUE(test_utils::refused_by_can_run(
+                        [&] { herk<Ba, T>(*(this->ctx), A, C, alpha, beta, uplo, transA).wait(); }))
+                        << "route=" << route << " n=" << n;
                     continue;
                 }
                 herk<Ba, T>(*(this->ctx), A, C, alpha, beta, uplo, transA).wait();

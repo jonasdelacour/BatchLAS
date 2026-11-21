@@ -196,7 +196,7 @@ protected:
         if (budget < ops::mirror::slm_bytes<T>()) {
             for (bool herm : ops()) {
                 Prob<T> p(Spec{Side::Left, Uplo::Lower, 16, 16, 2, herm});
-                EXPECT_THROW(run(p), batchlas::invalid_argument) << "mirror ran above the local memory budget";
+                EXPECT_TRUE(test_utils::refused_by_can_run([&] { run(p); })) << "mirror";
             }
             GTEST_SKIP() << "mirror stages " << ops::mirror::slm_bytes<T>() << " B, over this device's " << budget;
         }

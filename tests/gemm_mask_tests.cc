@@ -153,7 +153,7 @@ protected:
             Problem<T, B> p(q, s, T(0));
             auto c = p.make_case();
             c.prepare();
-            EXPECT_THROW(c.call({}, {}), batchlas::invalid_argument) << "ran above the local memory budget";
+            EXPECT_TRUE(test_utils::refused_by_can_run([&] { c.call({}, {}); }));
             return;
         }
         {

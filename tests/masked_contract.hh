@@ -273,7 +273,8 @@ void check(batchlas::Queue& q, const char* op, const std::string& spelling, cons
                         << outs[o].name << ": inactive item " << b << " was written";
                 else if (ref)
                     EXPECT_TRUE(detail::item_equal(res[o], (*ref)[o], outs[o], b))
-                        << outs[o].name << ": active item " << b << " differs from the unmasked call";
+                        << outs[o].name << ": active item " << b << " differs from the "
+                        << (masked_reference ? "all-active masked call" : "unmasked call");
                 if (c.identical_items && p.active(b) && !active.empty())
                     EXPECT_TRUE(detail::item_equal(res[o], res[o], outs[o], b, active.front()))
                         << outs[o].name << ": active item " << b << " differs from item " << active.front();

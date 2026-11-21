@@ -198,7 +198,7 @@ protected:
             const mc::Case c = p.make_case();
             UnifiedVector<std::byte> ws(std::size_t(1) << 22);
             c.prepare();
-            EXPECT_THROW(c.call({}, ws.to_span()), batchlas::invalid_argument) << "ran above the local memory budget";
+            EXPECT_TRUE(test_utils::refused_by_can_run([&] { c.call({}, ws.to_span()); }));
             return;
         }
         // A masked call never reaches the vendor, so the composites' children take a native family

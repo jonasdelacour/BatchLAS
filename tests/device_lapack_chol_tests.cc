@@ -460,7 +460,7 @@ template <class T, Uplo UL, class Tier> void potri_case(Dev& d, int n) {
         static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE)));
     std::vector<std::int32_t> hinfo(kBatch, 0);
     if (host_runs) hinfo = host_potri(d, dah, p.s, UL);
-    else EXPECT_THROW(host_potri(d, dah, p.s, UL), batchlas::invalid_argument) << "blocked:nb=64 ran above the budget";
+    else EXPECT_TRUE(test_utils::refused_by_can_run([&] { (void)host_potri(d, dah, p.s, UL); })) << "blocked:nb=64";
     const auto got = d.down(da, factor.size()), host = d.down(dah, factor.size());
     const auto gi = d.down(info, kBatch);
     const std::string where = tag<T>("potri", UL, n, Tier::nb);
