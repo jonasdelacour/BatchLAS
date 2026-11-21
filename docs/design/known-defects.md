@@ -112,7 +112,9 @@ Fixed 2026-11-20 (61d8703e). CTA mode always took the normal-equations branch, a
 \f$\sigma_{\max}/\sigma_i\f$: \f$\max|U^T U - I|\f$ reached \f$\varepsilon\kappa^2\f$ (float
 \f$1.7 \times 10^{-3}\f$, double \f$8.4 \times 10^{-12}\f$ at \f$n = 16\f$). Same root as
 [gesvd defect A](../perf/gesvd.md#gesvd-defect-a-the-normal-equations-square-kappa).
-`gesvd_direct_bidiag` (`src/ops/gesvd/kernels/gesvd_blocked.cc`) no longer reads the mode: CTA keeps
+The default `gesvd_direct_bidiag()` (`src/ops/gesvd/kernels/gesvd_blocked.cc`) no longer depends
+on the mode; only the two-argument overload still reads it, to force a direct solve for a thin tall
+U in blocked mode. CTA keeps
 `gebrd_cta` and `ormqx_cta` and solves \f$B\f$ with `bdsdc`/`bdsqr` like blocked;
 `BATCHLAS_GESVD_BIDIAG=normal` still reaches the normal equations. Guard:
 `GesvdTest.CtaProviderCoversAllJobCombinations`, float and double.
