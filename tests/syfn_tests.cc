@@ -45,8 +45,8 @@ template <typename Scalar>
 using Fn = SyfnFunction<float_t<Scalar>>;
 using Spectra = std::vector<std::vector<double>>;  // one spectrum per item
 
-// A vendor-free build has no host syev or syrk, so its NETLIB items are covered only by
-// SyfnVendorFree.HostWithoutLapackeThrowsNoRoute.
+// A build without LAPACKE skips its NETLIB items here; a vendor-free one (host syev and syrk native)
+// is covered by SyfnVendorFree.HostWithoutLapackeThrowsNoRoute.
 template <typename Config>
 class SyfnTest : public test_utils::BatchLASTest<Config> {
 protected:
@@ -440,8 +440,8 @@ TYPED_TEST(SyfnTest, RejectsBadArguments) {
 #if BATCHLAS_HAS_HOST_BACKEND && BATCHLAS_HAS_CPU_TARGET
 // Vendor-free on a CPU queue: syfn_buffer_size and syfn throw NoRouteError while sizing syev's
 // workspace, before any kernel. syfn_from_eigen throws it from syrk after its own kernels, which it
-// drains first, unless the host runs syrk natively (BATCHLAS_HAS_HOST_NATIVE): then it computes
-// F = V exp(W) V^T = e I. The queue stays usable.
+// drains first. Unless the host runs syev and syrk natively (BATCHLAS_HAS_HOST_NATIVE): then syfn
+// computes F = A^{-1/2} = I and syfn_from_eigen F = V exp(W) V^T = e I. The queue stays usable.
 TEST(SyfnVendorFree, HostWithoutLapackeThrowsNoRoute) {
     if (BATCHLAS_HAS_LAPACKE && BATCHLAS_HAS_CBLAS) GTEST_SKIP() << "host LAPACKE/CBLAS is built in";
     Queue q(Device("cpu"), Backend::NETLIB, true);
@@ -449,9 +449,18 @@ TEST(SyfnVendorFree, HostWithoutLapackeThrowsNoRoute) {
     UnifiedVector<float> W(24, 1.0f);
     UnifiedVector<std::byte> ws(size_t(1) << 20);
     const auto inv = SyfnFunction<float>::inv_sqrt();
-    EXPECT_THROW((void)(syfn_buffer_size<Backend::NETLIB, float>(q, A, F, inv, Uplo::Lower)), batchlas::NoRouteError);
-    EXPECT_THROW((void)(syfn<Backend::NETLIB, float>(q, A, F, inv, Uplo::Lower, ws.to_span(), Span<int32_t>{})),
-                 batchlas::NoRouteError);
+    if (BATCHLAS_HAS_HOST_NATIVE) {
+        EXPECT_EQ((run_syfn<float, Backend::NETLIB>(q, A, F, inv, Uplo::Lower)), std::vector<int32_t>(3, 0));
+        for (int b = 0; b < 3; ++b)
+            for (int j = 0; j < 8; ++j)
+                for (int i = 0; i < 8; ++i)
+                    EXPECT_NEAR(F(i, j, b), i == j ? 1.0f : 0.0f, 1e-5f) << i << "," << j << " item " << b;
+    } else {
+        EXPECT_THROW((void)(syfn_buffer_size<Backend::NETLIB, float>(q, A, F, inv, Uplo::Lower)),
+                     batchlas::NoRouteError);
+        EXPECT_THROW((void)(syfn<Backend::NETLIB, float>(q, A, F, inv, Uplo::Lower, ws.to_span(), Span<int32_t>{})),
+                     batchlas::NoRouteError);
+    }
     if (BATCHLAS_HAS_HOST_NATIVE) {
         EXPECT_EQ((run_from_eigen<float, Backend::NETLIB>(q, V, W, F, SyfnFunction<float>::exp())),
                   std::vector<int32_t>(3, 0));

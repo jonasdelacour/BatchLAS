@@ -124,12 +124,13 @@ void validate(const MV<Scalar>& A, const char* who) {
                                          " x " + std::to_string(A.cols()));
 }
 
-// Capability only (the Python binding, the LOBPCG accuracy pin): the same can_run, where the only
-// backend term is the ROCm exclusion.
+// Capability only (the Python binding, the LOBPCG accuracy pin): the same can_run, where the
+// backend terms are the ROCm exclusion and the vendor-free host's (no two_stage).
 template <typename Scalar>
 bool supports(const Queue& q, const MV<Scalar>& A, const SyevChoice& c) {
     const select::Device& d = select::describe(q.device(), Backend::Auto, false);
     if (q.backend() == Backend::ROCM) return can_run<Backend::ROCM, Scalar>(c, d, A);
+    if (q.backend() == Backend::NETLIB) return can_run<Backend::NETLIB, Scalar>(c, d, A);
     return can_run<Backend::Auto, Scalar>(c, d, A);
 }
 
