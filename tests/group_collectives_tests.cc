@@ -14,8 +14,10 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <string>
 #include <vector>
 
+#include <batchlas/backend_config.h>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
 #include <batchlas/util/group-collectives.hh>
@@ -124,17 +126,28 @@ TEST(GroupCollectivesTest, PortableGroupReductionsAreExact) {
     Queue gpu(Device::default_device());
     check_portable_group_reductions_on<float>(gpu, "default device");
     if (!test_utils::kNativeGpuLacksFp64) check_portable_group_reductions_on<double>(gpu, "default device");
-#if BATCHLAS_HAS_CPU_TARGET
-    std::unique_ptr<Queue> cpu;
+}
+
+namespace {
+// The CPU legs are tests of their own: a CPU device that cannot be opened skips them visibly
+// (GTEST_SKIP with the reason), so a run without one never reports the leg as passed.
+std::unique_ptr<Queue> open_cpu_queue(std::string& why) {
     try {
-        cpu = std::make_unique<Queue>(Device("cpu"));
+        return std::make_unique<Queue>(Device("cpu"));
     } catch (const std::exception& e) {
-        std::cout << "[ INFO ] cpu leg not run: " << e.what() << std::endl;
-        return;
+        why = e.what();
+        return nullptr;
     }
+}
+}  // namespace
+
+TEST(GroupCollectivesTest, PortableGroupReductionsAreExactOnTheCpu) {
+    if (!BATCHLAS_HAS_CPU_TARGET) GTEST_SKIP() << "no CPU SYCL target in this build";
+    std::string why;
+    const auto cpu = open_cpu_queue(why);
+    if (!cpu) GTEST_SKIP() << "no CPU device: " << why;
     check_portable_group_reductions_on<float>(*cpu, "cpu device");
     check_portable_group_reductions_on<double>(*cpu, "cpu device");
-#endif
 }
 
 namespace {
@@ -171,11 +184,17 @@ template <typename T> struct real_of {
 template <typename R> struct real_of<std::complex<R>> {
     using type = R;
 };
+// Six bytes: not a whole number of 4-byte words, so it rides zero-padded in the last word.
+using Six = std::array<std::uint16_t, 3>;
+template <> struct real_of<Six> {
+    using type = std::uint16_t;
+};
 
 template <typename T> T bcast_value(std::uint64_t b) {
     using R = typename real_of<T>::type;
     const auto real = [](std::uint64_t h) {
-        if constexpr (std::is_integral_v<R>) return static_cast<R>(h >> 33);
+        if constexpr (std::is_same_v<R, bool>) return ((h >> 40) & 1) != 0;  // either value, per item
+        else if constexpr (std::is_integral_v<R>) return static_cast<R>(h >> 33);
         else return static_cast<R>(std::ldexp(static_cast<double>(h >> 20), -30)) - R(1000);
     };
     R re = real(test_hash(b)), im = real(test_hash(b + 99991));
@@ -183,7 +202,8 @@ template <typename T> T bcast_value(std::uint64_t b) {
         if (b % 7 == 3) re = R(-0.0);
         if (b % 7 == 5) re = std::numeric_limits<R>::quiet_NaN();
     }
-    if constexpr (std::is_same_v<T, R>) return re;
+    if constexpr (std::is_same_v<T, Six>) return Six{re, im, real(test_hash(b + 7))};
+    else if constexpr (std::is_same_v<T, R>) return re;
     else return T(re, im);
 }
 
@@ -242,33 +262,41 @@ template <typename T> void check_portable_broadcast_on(Queue& ctx, const char* w
     }
 }
 
-template <typename T> void check_portable_broadcast_all(const char* type) {
-    Queue gpu(Device::default_device());
-    SCOPED_TRACE(type);
-    check_portable_broadcast_on<T>(gpu, "default device");
-#if BATCHLAS_HAS_CPU_TARGET
-    std::unique_ptr<Queue> cpu;
-    try {
-        cpu = std::make_unique<Queue>(Device("cpu"));
-    } catch (const std::exception& e) {
-        std::cout << "[ INFO ] cpu leg not run: " << e.what() << std::endl;
-        return;
-    }
-    check_portable_broadcast_on<T>(*cpu, "cpu device");
-#endif
+// Every T the wrapper must move: 1, 2, 4, 6, 8 and 16 bytes (6: zero-padded in its last word).
+void check_portable_broadcast_all(Queue& ctx, const char* where) {
+    const auto each = [&](auto tag, const char* type) {
+        SCOPED_TRACE(type);
+        check_portable_broadcast_on<decltype(tag)>(ctx, where);
+    };
+    each(bool{}, "bool");
+    each(std::uint8_t{}, "uint8");
+    each(std::int16_t{}, "int16");
+    each(std::int32_t{}, "int32");
+    each(float{}, "float");
+    each(Six{}, "uint16[3]");
+    each(double{}, "double");
+    each(std::complex<float>{}, "complex<float>");
+    each(std::complex<double>{}, "complex<double>");
 }
 
 }  // namespace
 
 // portable::group_broadcast over a work-group reaches every item with the source's exact bits,
-// for 4-, 8- and 16-byte T, at reqd_sub_group_size(32) and without. Red with `using
-// sycl::group_broadcast` (the bare DPC++ call): the CPU leg at reqd_sub_group_size(32).
+// for every T above, at reqd_sub_group_size(32) and without. Red with `using
+// sycl::group_broadcast` (the bare DPC++ call), or with the OR pass limited to sizeof(T) % 4 == 0
+// (the first wrapper): the CPU leg at reqd_sub_group_size(32), and there only bool, uint8, int16
+// and uint16[3] in the second case.
 TEST(GroupCollectivesTest, PortableWorkGroupBroadcastReachesEveryItem) {
-    check_portable_broadcast_all<std::int32_t>("int32");
-    check_portable_broadcast_all<float>("float");
-    check_portable_broadcast_all<double>("double");
-    check_portable_broadcast_all<std::complex<float>>("complex<float>");
-    check_portable_broadcast_all<std::complex<double>>("complex<double>");
+    Queue gpu(Device::default_device());
+    check_portable_broadcast_all(gpu, "default device");
+}
+
+TEST(GroupCollectivesTest, PortableWorkGroupBroadcastReachesEveryItemOnTheCpu) {
+    if (!BATCHLAS_HAS_CPU_TARGET) GTEST_SKIP() << "no CPU SYCL target in this build";
+    std::string why;
+    const auto cpu = open_cpu_queue(why);
+    if (!cpu) GTEST_SKIP() << "no CPU device: " << why;
+    check_portable_broadcast_all(*cpu, "cpu device");
 }
 
 // P0.6: a double WORK-GROUP sum through batchlas::portable is exact on every SYCL implementation.
