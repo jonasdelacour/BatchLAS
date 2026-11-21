@@ -401,7 +401,9 @@ TYPED_TEST(PosvCandidates, CtaLaunchesAtItsCapacityAndRefusesOnePast) {
     using T = typename TestFixture::T;
     const std::size_t cap = this->cta_elems();
     ASSERT_GT(cap, 0u);
-    const auto at = this->cta_shape(cap, 4096);
+    // A host's local memory (256 KiB on opencl:cpu) puts the float ceiling at n = cap / 8 = 7932.
+    const bool gpu = this->ctx->device().type == DeviceType::GPU;
+    const auto at = this->cta_shape(cap, gpu ? 4096 : 8192);
     const auto past = this->cta_shape(cap + 1);
     ASSERT_TRUE(at.has_value()) << "no (n, nrhs <= 8) with n * nrhs == " << cap;
     const C cta{ps::Cta{}};

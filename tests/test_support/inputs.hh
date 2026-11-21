@@ -53,10 +53,12 @@ bool potrf_in_place(batchlas::Queue& q, const batchlas::MatrixView<Scalar, batch
         const std::size_t need = batchlas::potrf_buffer_size<B, Scalar>(q, a, uplo);
         batchlas::UnifiedVector<std::byte> ws(std::max<std::size_t>(need, 1));
         (void)batchlas::potrf<B, Scalar>(q, a, uplo, batchlas::Span<std::byte>(ws.data(), need), info);
+        // Before ws dies: a host queue's kernels still write it after the free (a CUDA-default
+        // context unmaps the pages: SIGSEGV), where a CUDA queue's free happens to synchronise.
+        q.wait();
     } catch (const batchlas::NoRouteError&) {
         return false;
     }
-    q.wait();
     return true;
 }
 
