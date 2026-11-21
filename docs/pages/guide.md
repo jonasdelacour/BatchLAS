@@ -12,3 +12,4 @@ Build BatchLAS, link it into a project and call it.
 | @subpage consumer_example "Consuming BatchLAS from CMake" | An outside project that finds the installed package. |
 | @subpage python_examples "Python examples" | The pybind11 package by example. |
 | @subpage guide_ritz_values "Ritz values" | Rayleigh-quotient eigenvalue estimates for dense, CSR and batched operators. |
+| @subpage changelog "Changelog" | Every user-visible change per release, newest first. |
