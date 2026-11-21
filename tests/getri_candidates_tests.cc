@@ -199,7 +199,8 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native tier is GPU-only";
+        if (this->ctx->device().type != DeviceType::GPU && !(B == Backend::NETLIB && batchlas::select::kHostNative))
+            GTEST_SKIP() << "the native tier runs on a GPU or a vendor-free host";
         if (!this->ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "no sub-group size 32";
     }
 
@@ -512,11 +513,23 @@ TYPED_TEST(GetriCandidates, HeterogeneousBatchHasNoNativeRoute) {
 #if BATCHLAS_HAS_HOST_BACKEND
 // GPU backends pack 1-based int32 pivots into the int64
 // span and netlib writes genuine int64, so on a GPU queue a NETLIB getri must never take Blocked.
+// Without LAPACKE (select::kHostNative) every NETLIB pivot is native: there Blocked is NETLIB's.
 // evidence: docs/perf/lu.md#lu-correctness-findings
 TYPED_TEST(GetriCandidates, NetlibBackendOnAGpuQueueRefusesBlocked) {
     using T = typename TestFixture::T;
     const auto A = meta_view<T>(512, 512, 256);
     ASSERT_TRUE(this->pin_accepted(C{gi::Blocked{}}, A)) << "guard: the shape is Blocked's on " << TestFixture::B;
+    if constexpr (batchlas::select::kHostNative) {
+        for (const char* word : {"blocked", "native"}) {
+            select::testing::reset_warnings();
+            const Pin pin("getri", std::string_view(word));
+            ::testing::internal::CaptureStderr();
+            EXPECT_NO_THROW((void)getri_buffer_size<Backend::NETLIB, T>(*this->ctx, A)) << word;
+            const std::string err = ::testing::internal::GetCapturedStderr();
+            EXPECT_EQ(err.find("getri pinned"), std::string::npos) << word << ": " << err;
+        }
+        return;
+    }
     {
         const Pin pin("getri", C{gi::Blocked{}});
         try {
@@ -749,8 +762,9 @@ TYPED_TEST(GetriCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     }
 }
 
-// On a CPU queue Blocked cannot run, so its pin throws and Auto is
-// the vendor (netlib, with its genuine int64 pivots) or, without one, no route.
+// On a CPU queue with netlib Blocked cannot run, so its pin throws and Auto is the vendor (netlib,
+// with its genuine int64 pivots). A vendor-free host (select::kHostNative) runs Blocked, pinned and
+// under Auto; ||A0 C - I|| is checked on the host. evidence: docs/design/vendor-independence.md#the-host-native-gate
 template <typename Config>
 class GetriCandidatesCpu : public test_utils::BatchLASTest<Config> {};
 TYPED_TEST_SUITE(GetriCandidatesCpu, Types);
@@ -761,15 +775,23 @@ TYPED_TEST(GetriCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     if (!this->ctx) GTEST_SKIP() << "no queue";
     if (this->ctx->device().type == DeviceType::GPU) GTEST_SKIP() << "a GPU queue";
     const ScopedEnvVar clear("BATCHLAS_GETRI_ROUTE", nullptr);
-    {
+    constexpr bool kHostRuns = B == Backend::NETLIB && batchlas::select::kHostNative;
+    if constexpr (!kHostRuns) {
         const Pin pin("getri", C{gi::Blocked{}});
         EXPECT_THROW((void)(getri_buffer_size<B, T>)(*this->ctx, meta_view<T>(8, 8, 2)), std::invalid_argument);
     }
     const int n = 8, batch = 2;
     Matrix<T, MatrixFormat::Dense> A(n, n, batch), Ai(n, n, batch);
-    for (int b = 0; b < batch; ++b)
-        for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i) A(i, j, b) = MVof<T>::make(RealOf<T>(i == j ? n + 1 : 0.25), RealOf<T>(0.1));
+    // Row i's off-diagonal entries grow with i, so getrf's row order matters to the inverse.
+    auto a0 = [&](int i, int j) {
+        return MVof<T>::make(RealOf<T>(i == j ? n + 1 : 0.25 + 0.05 * i), RealOf<T>(i == j ? 0.1 : -0.1 * j));
+    };
+    auto fill = [&] {
+        for (int b = 0; b < batch; ++b)
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < n; ++i) A(i, j, b) = a0(i, j);
+    };
+    fill();
     UnifiedVector<int64_t> piv(std::size_t(n) * batch);
     auto call = [&] {
         UnifiedVector<std::byte> fws(std::max<std::size_t>(1, getrf_buffer_size<B, T>(*this->ctx, A)));
@@ -778,8 +800,34 @@ TYPED_TEST(GetriCandidatesCpu, CpuQueueRunsNoNativeFamily) {
         (void)getri<B, T>(*this->ctx, A, Ai, piv.to_span(), ws.to_span());
         this->ctx->wait();
     };
-    if constexpr (batchlas::select::factorization_vendor_available<B>) EXPECT_EQ(traced_choice(call), "vendor");
-    else EXPECT_THROW(call(), batchlas::NoRouteError);
+    if constexpr (kHostRuns) {
+        for (const bool pinned : {true, false}) {
+            fill();
+            std::optional<Pin> pin;
+            if (pinned) pin.emplace("getri", C{gi::Blocked{}});
+            EXPECT_EQ(traced_choice(call), "blocked") << (pinned ? "pinned" : "auto");
+            // ||A0 C - I||_F / (||A0||_F ||C||_F) per item, in double on the host.
+            for (int b = 0; b < batch; ++b) {
+                double r = 0, na = 0, nc = 0;
+                for (int j = 0; j < n; ++j)
+                    for (int i = 0; i < n; ++i) {
+                        std::complex<double> s = i == j ? -1.0 : 0.0;
+                        for (int k = 0; k < n; ++k)
+                            s += std::complex<double>(a0(i, k)) * std::complex<double>(Ai(k, j, b));
+                        r += std::norm(s);
+                        na += std::norm(std::complex<double>(a0(i, j)));
+                        nc += std::norm(std::complex<double>(Ai(i, j, b)));
+                    }
+                const double res = std::sqrt(r) / (std::sqrt(na) * std::sqrt(nc));
+                EXPECT_TRUE(::test_utils::verify_pass<T>(verify::Check::solve, n, res))
+                    << (pinned ? "pinned" : "auto") << " item " << b << " residual " << res;
+            }
+        }
+    } else if constexpr (batchlas::select::factorization_vendor_available<B>) {
+        EXPECT_EQ(traced_choice(call), "vendor");
+    } else {
+        EXPECT_THROW(call(), batchlas::NoRouteError);
+    }
 }
 
 // The vendor family on every backend and device, NETLIB on a CPU queue included: A and C at

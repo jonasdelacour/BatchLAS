@@ -120,7 +120,10 @@ protected:
     using T = typename Config::ScalarType;
     static constexpr Backend B = Config::BackendVal;
 
-    bool device() const { return this->ctx->device().type == DeviceType::GPU && B != Backend::NETLIB; }
+    // The native families run: a GPU, or a vendor-free host (select::kHostNative).
+    bool device() const {
+        return B == Backend::NETLIB ? select::kHostNative : this->ctx->device().type == DeviceType::GPU;
+    }
 
     void check(const Shape& s) {
         SCOPED_TRACE(label(s));

@@ -256,8 +256,9 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        if (this->ctx->device().type != DeviceType::GPU)
-            GTEST_SKIP() << "the native LU kernels are GPU-only (getrf.cc can_run)";
+        // A vendor-free host runs them too (select::kHostNative, getrf.cc can_run).
+        if (this->ctx->device().type != DeviceType::GPU && !(BackendType == Backend::NETLIB && select::kHostNative))
+            GTEST_SKIP() << "the native LU kernels run on a GPU or a vendor-free host (getrf.cc can_run)";
         if (!this->ctx->device().supports_sub_group_size(32))
             GTEST_SKIP() << "device does not offer sub-group size 32 (getrf.cc can_run)";
     }
@@ -1934,7 +1935,6 @@ TYPED_TEST(LuTest, GetrsPermutationSpellingsAgreeBitForBit) {
 // silent by design and invisible to every other test in this suite.
 TYPED_TEST(LuTest, GetrsPermSpellingDecisionSurface) {
     using T = typename TestFixture::T;
-    if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the gather is GPU-only";
 
     constexpr int kMin = ops::getrs::kGetrsPermGatherMinNrhs;
     ASSERT_GE(kMin, 1) << "a boundary below 1 would make the walk unreachable by default";

@@ -102,8 +102,11 @@ if constexpr (select::native_backend<B>) return <native kernel>; else throw batc
 ```
 
 trsm's kernels are not templated on the backend, so trsm changes only the run-time half. That
-covers its `can_run` and the alpha == 0 mask refusal in `trsm.cc`. Adopted so far: syrk, herk,
-syr2k, her2k, symm, hemm, trmm and trsm. To verify an op, read its `BATCHLAS_COVERAGE_OUT`
+covers its `can_run` and the alpha == 0 mask refusal in `trsm.cc`. getrf, getri, getrs and gesv
+are the same case: their gates read `(B != NETLIB || kHostNative) && natives_run_on(d)`, which keeps
+ROCm's native routes. Their pivot format is safe on that host because a vendor-free NETLIB has no
+LAPACKE: native getrf writes every pivot, so all of them are 1-based int32 packed. Adopted so far:
+syrk, herk, syr2k, her2k, symm, hemm, trmm, trsm, getrf, getri, getrs and gesv. To verify an op, read its `BATCHLAS_COVERAGE_OUT`
 `reached` rows on `NETLIB` in a vendor-free tree.
 
 ## Vendor independence: headers keyed on the library axis

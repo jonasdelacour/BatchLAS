@@ -217,7 +217,8 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native tiers are GPU kernels";
+        if (this->ctx->device().type != DeviceType::GPU && !(B == Backend::NETLIB && batchlas::select::kHostNative))
+            GTEST_SKIP() << "the native tiers run on a GPU or a vendor-free host";
         if (!this->ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "no sub-group size 32";
     }
 
@@ -698,7 +699,8 @@ TYPED_TEST(GetrfCandidates, CanRunFalsePinsThrow) {
 
 // The pivot-format gate: the native
 // tiers write packed int32 where netlib writes int64, so a NETLIB getrf runs no native family,
-// even on a GPU queue.
+// even on a GPU queue. Without LAPACKE (select::kHostNative) every NETLIB pivot is native, so
+// there each native pin factors under NETLIB.
 TYPED_TEST(GetrfCandidates, NetlibBackendRunsNoNativeFamily) {
 #if BATCHLAS_HAS_HOST_BACKEND
     using T = typename TestFixture::T;
@@ -706,8 +708,16 @@ TYPED_TEST(GetrfCandidates, NetlibBackendRunsNoNativeFamily) {
         if (std::holds_alternative<gf::Vendor>(c)) continue;
         auto p = make_lu<T>(16, 2, 9u);
         const Pin pin("getrf", c);
-        EXPECT_THROW(((void)getrf_buffer_size<Backend::NETLIB, T>(*this->ctx, p.A())), std::invalid_argument)
-            << select::to_string(c);
+        if constexpr (batchlas::select::kHostNative) {
+            UnifiedVector<std::byte> ws(
+                std::max<std::size_t>(1, getrf_buffer_size<Backend::NETLIB, T>(*this->ctx, p.A())));
+            (void)getrf<Backend::NETLIB, T>(*this->ctx, p.A(), p.piv.to_span(), ws.to_span(), p.info.to_span());
+            this->ctx->wait();
+            expect_factored(*this->ctx, p, "NETLIB " + select::to_string(c));
+        } else {
+            EXPECT_THROW(((void)getrf_buffer_size<Backend::NETLIB, T>(*this->ctx, p.A())), std::invalid_argument)
+                << select::to_string(c);
+        }
     }
 #else
     GTEST_SKIP() << "no NETLIB backend in this build";
@@ -902,8 +912,9 @@ TYPED_TEST(GetrfCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     }
 }
 
-// On a CPU queue no native family can run: native pins throw and Auto is the vendor (netlib),
-// or there is no route without one.
+// On a CPU queue with netlib no native family can run: native pins throw and Auto is the vendor.
+// A vendor-free host (select::kHostNative) runs every native family, pinned and under Auto.
+// evidence: docs/design/vendor-independence.md#the-host-native-gate
 template <typename Config>
 class GetrfCandidatesCpu : public test_utils::BatchLASTest<Config> {};
 TYPED_TEST_SUITE(GetrfCandidatesCpu, Types);
@@ -914,6 +925,25 @@ TYPED_TEST(GetrfCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     if (!this->ctx) GTEST_SKIP() << "no queue";
     if (this->ctx->device().type == DeviceType::GPU) GTEST_SKIP() << "a GPU queue";
     const ScopedEnvVar clear("BATCHLAS_GETRF_ROUTE", nullptr);
+    auto factor = [&](Lu<T>& p) {
+        UnifiedVector<std::byte> ws(std::max<std::size_t>(1, getrf_buffer_size<B, T>(*this->ctx, p.A())));
+        (void)getrf<B, T>(*this->ctx, p.A(), p.piv.to_span(), ws.to_span(), p.info.to_span());
+        this->ctx->wait();
+    };
+    if constexpr (B == Backend::NETLIB && batchlas::select::kHostNative) {
+        for (const C& c : gf::candidates<T>()) {
+            if (std::holds_alternative<gf::Vendor>(c)) continue;
+            auto p = make_lu<T>(8, 2, 3u);
+            const Pin pin("getrf", c);
+            EXPECT_EQ(traced_choice([&] { factor(p); }), select::to_string(c));
+            expect_factored(*this->ctx, p, "cpu pinned " + select::to_string(c));
+        }
+        auto p = make_lu<T>(8, 2, 3u);
+        const std::string got = traced_choice([&] { factor(p); });
+        EXPECT_TRUE(got == "tiny" || got == "cta" || got == "blocked") << got;
+        expect_factored(*this->ctx, p, "cpu auto " + got);
+        return;
+    }
     for (const C& c : gf::candidates<T>()) {
         if (std::holds_alternative<gf::Vendor>(c)) continue;
         auto p = make_lu<T>(8, 2, 3u);
