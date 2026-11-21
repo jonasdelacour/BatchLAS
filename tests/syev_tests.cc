@@ -16,7 +16,9 @@
 #include <src/select/vendor.hh>
 #include <src/ops/syev/kernels/chunk_budget.hh>
 #include <src/select/select.hh>
+#include <src/ops/syev/choice.hh>
 #include <src/queue.hh>
+#include <tests/test_support/coverage_rows.hh>
 #include <batchlas/no_route.hh>
 #include <algorithm>
 #include <complex>
@@ -45,19 +47,10 @@ struct SyevConfig {
 #include <batchlas/verify/tolerance.hh>
 using SyevTestTypes = typename test_utils::backend_types<SyevConfig>::type;
 
+// A vendor-free build's NETLIB queue runs the native families on the CPU (select::kHostNative), so
+// every case runs there too. evidence: docs/design/vendor-independence.md#the-host-native-gate
 template <typename Config>
-class SyevTest : public test_utils::BatchLASTest<Config> {
-protected:
-    // A vendor-free build has no syev on the CPU: every native family is a GPU kernel, so a NETLIB
-    // queue throws NoRouteError by design (docs/perf/syev.md#syev-vendor-free-double-band).
-    void SetUp() override {
-        test_utils::BatchLASTest<Config>::SetUp();
-        if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
-        const std::string name = ::testing::UnitTest::GetInstance()->current_test_info()->name();
-        if (Config::BackendVal == Backend::NETLIB && !batchlas::select::kHasNetlib && name != "VendorFreeCpuHasNoRoute")
-            GTEST_SKIP() << "vendor-free build: no syev route on the CPU";
-    }
-};
+class SyevTest : public test_utils::BatchLASTest<Config> {};
 
 TYPED_TEST_SUITE(SyevTest, SyevTestTypes);
 
@@ -1213,28 +1206,66 @@ TYPED_TEST(SyevTest, NativeFamiliesFitTheScratchBudgetAtFullereneShapes) {
     }
 }
 
-// Vendor-free, the CPU has no syev family: the call and its size query throw NoRouteError, never a
-// silent answer (docs/perf/syev.md#syev-vendor-free-double-band). With netlib, LAPACKE serves it.
-TYPED_TEST(SyevTest, VendorFreeCpuHasNoRoute) {
+// Vendor-free, the CPU runs syev natively (select::kHostNative): Auto takes blocked (the CPU has no
+// table, so the last resort), and every native family that can serve the shape, pinned strictly,
+// returns the closed-form graded spectrum and an eigendecomposition on a strided batch (ld = n + 3)
+// with the unnamed triangle poisoned, both uplo and both jobz. two_stage is refused: its sy2sb
+// runs the public geqrf, which has no host route. With netlib, LAPACKE serves the CPU.
+// evidence: docs/design/vendor-independence.md#the-host-native-gate
+TYPED_TEST(SyevTest, VendorFreeCpuRunsNativeRoutes) {
     using T = typename TestFixture::ScalarType;
     using Real = typename base_type<T>::type;
+    using MV = MatrixView<T, MatrixFormat::Dense>;
     constexpr Backend B = TestFixture::BackendType;
     if constexpr (B != Backend::NETLIB) {
         GTEST_SKIP() << "a CPU-queue requirement";
     } else {
         if (batchlas::select::kHasNetlib) GTEST_SKIP() << "netlib present: LAPACKE serves the CPU";
-        const int n = 64, batch = 2;
-        Matrix<T, MatrixFormat::Dense> A(n, n, batch);
-        A.view().fill_graded_hermitian(*this->ctx, 6.0, 64u).wait();
-        UnifiedVector<Real> W(size_t(n) * batch, Real(-1));
-        for (const JobType jobz : {JobType::EigenVectors, JobType::NoEigenVectors}) {
-            EXPECT_THROW(((void)syev_buffer_size<B, T>(*this->ctx, A.view(), W.to_span(), jobz, Uplo::Lower)),
-                         batchlas::NoRouteError);
-            UnifiedVector<std::byte> ws(size_t(1) << 20);
-            EXPECT_THROW(((void)syev<B, T>(*this->ctx, A.view(), W.to_span(), jobz, Uplo::Lower, ws.to_span(),
-                                           Span<int32_t>{})),
-                         batchlas::NoRouteError);
+        Queue& ctx = *this->ctx;
+        const ScopedEnvVar clear("BATCHLAS_SYEV_ROUTE", nullptr);
+        GradedFills<T> fills;
+        struct Route {
+            const char* pin;  // nullptr: Auto
+            const char* want;
+            int n;
+        };
+        // n = 200: sytrd_blocked's panels and its gemm-pair trailing update (n2 > 128); 40 its local tier.
+        for (const Route r : {Route{nullptr, "blocked", 200}, Route{"blocked", "blocked", 40}, Route{"cta", "cta", 24},
+                              Route{"cta_fused", "cta_fused", 24}, Route{"jacobi", "jacobi", 24}}) {
+            std::optional<select::ScopedPin<ops::syev::SyevChoice>> pin;
+            if (r.pin) pin.emplace("syev", r.pin, select::StrictPin{});
+            const int n = r.n, batch = 3, ld = n + 3, stride = ld * n + 5;
+            for (const Uplo uplo : {Uplo::Lower, Uplo::Upper})
+                for (const JobType jobz : {JobType::EigenVectors, JobType::NoEigenVectors}) {
+                    const std::string where = std::string(r.pin ? r.pin : "auto") + (uplo == Uplo::Lower ? " L" : " U") +
+                                              (jobz == JobType::EigenVectors ? " V" : " N");
+                    UnifiedVector<T> buf(size_t(stride) * batch, T(0));
+                    UnifiedVector<T*> ptrs(batch, nullptr);
+                    MV A(buf.data(), n, n, ld, stride, batch, ptrs.data());
+                    const auto [A0, lambda] = fill_poisoned<T>(ctx, fills, A, uplo);
+                    UnifiedVector<Real> W(size_t(n) * batch, Real(-1));
+                    UnifiedVector<std::byte> ws(syev_buffer_size<B, T>(ctx, A, W.to_span(), jobz, uplo));
+                    EXPECT_EQ(test_support::traced_choice("syev", [&] {
+                                  (void)syev<B, T>(ctx, A, W.to_span(), jobz, uplo, ws.to_span(), Span<int32_t>{});
+                                  ctx.wait();
+                              }),
+                              r.want)
+                        << where;
+                    const VectorView<Real> w(W.data(), n, batch);
+                    EXPECT_VERIFY(T, verify::Check::values, n, MV::values_error(w, lambda, 1.0, A0.all_items())) << where;
+                    if (jobz != JobType::EigenVectors) continue;
+                    EXPECT_VERIFY(T, verify::Check::eigen_residual, n, MV::eigen_residual(ctx, A0, A, w, A0.all_items()))
+                        << where;
+                    EXPECT_VERIFY(T, verify::Check::orthogonality_rotations, n, MV::orthogonality(ctx, A, A0.all_items()))
+                        << where;
+                }
         }
+        const int n = 64;
+        Matrix<T, MatrixFormat::Dense> A(n, n, 2);
+        UnifiedVector<Real> W(size_t(n) * 2, Real(-1));
+        const select::ScopedPin<ops::syev::SyevChoice> two_stage("syev", "two_stage", select::StrictPin{});
+        EXPECT_THROW(((void)syev_buffer_size<B, T>(ctx, A.view(), W.to_span(), JobType::NoEigenVectors, Uplo::Lower)),
+                     std::invalid_argument);
     }
 }
 
