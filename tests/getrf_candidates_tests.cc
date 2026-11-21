@@ -925,12 +925,12 @@ TYPED_TEST(GetrfCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     if (!this->ctx) GTEST_SKIP() << "no queue";
     if (this->ctx->device().type == DeviceType::GPU) GTEST_SKIP() << "a GPU queue";
     const ScopedEnvVar clear("BATCHLAS_GETRF_ROUTE", nullptr);
-    auto factor = [&](Lu<T>& p) {
-        UnifiedVector<std::byte> ws(std::max<std::size_t>(1, getrf_buffer_size<B, T>(*this->ctx, p.A())));
-        (void)getrf<B, T>(*this->ctx, p.A(), p.piv.to_span(), ws.to_span(), p.info.to_span());
-        this->ctx->wait();
-    };
     if constexpr (B == Backend::NETLIB && batchlas::select::kHostNative) {
+        auto factor = [&](Lu<T>& p) {
+            UnifiedVector<std::byte> ws(std::max<std::size_t>(1, getrf_buffer_size<B, T>(*this->ctx, p.A())));
+            (void)getrf<B, T>(*this->ctx, p.A(), p.piv.to_span(), ws.to_span(), p.info.to_span());
+            this->ctx->wait();
+        };
         for (const C& c : gf::candidates<T>()) {
             if (std::holds_alternative<gf::Vendor>(c)) continue;
             auto p = make_lu<T>(8, 2, 3u);
