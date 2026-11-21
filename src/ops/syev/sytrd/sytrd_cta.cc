@@ -184,11 +184,9 @@ Event sytrd_cta(Queue& ctx,
     auto& e = const_cast<VectorView<Scalar>&>(e_out);
     auto& tau = const_cast<VectorView<Scalar>&>(tau_out);
 
-    // A GPU, or the CPU of a vendor-free build (the only one where this TU has a CPU image); the
-    // OpenCL CPU offers sub-group size 32. evidence: docs/design/vendor-independence.md#the-host-native-gate
-    if (!(BATCHLAS_HAS_HOST_NATIVE || ctx.device().type == DeviceType::GPU) ||
-        !ctx.device().supports_sub_group_size(32)) {
-        throw batchlas::unsupported("sytrd_cta: needs sub-group size 32 on a GPU, or on the CPU of a vendor-free build.");
+    // GPU only: this TU builds without CPU targets, and the OpenCL CPU offers sub-group size 32.
+    if (ctx.device().type != DeviceType::GPU || !ctx.device().supports_sub_group_size(32)) {
+        throw batchlas::unsupported("sytrd_cta: needs a GPU with subgroup size 32 (the CTA kernels have no CPU image).");
     }
 
     auto launch = [&](auto P_tag, bool upper) {

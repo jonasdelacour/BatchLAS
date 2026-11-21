@@ -285,9 +285,9 @@ fullerene workloads are double: C120 is \f$n = 480\f$ at batch about 1819, C300 
 **Routes.** No table or `can_run` change was needed: every row in the band lists native families after
 `vendor`, so `select::choose` takes the next entry (sm_89: `blocked` for `jobz=V`, `two_stage` for `jobz=N`;
 sm_120: whatever the deep row ranks next), never the last resort. The CPU (NETLIB) queue runs the native families
-itself (@ref design_vendor_independence, "The host-native gate"): it has no table, so Auto takes the last resort, `blocked`;
-`jacobi` runs there by pin; `two_stage` (its `sy2sb` runs the public `geqrf`, which has no host route), `cta`
-and `cta_fused` (steqr_cta's body reads out of bounds on the OpenCL CPU) do not.
+itself (@ref design_vendor_independence, "The host-native gate"): it has no table, so Auto takes the last resort, `blocked`,
+its only family there; `two_stage` (its `sy2sb` runs the public `geqrf`, which has no host route) and the sub-group
+solvers (wrong or out of bounds on the OpenCL CPU) stay GPU-only.
 
 **Workspace at the fullerene batch.** Blocked once sized its workspace for the whole batch: 22831 MiB at C120,
 which with A does not fit 24 GB (the test passed only because managed memory oversubscribes). Each driver now

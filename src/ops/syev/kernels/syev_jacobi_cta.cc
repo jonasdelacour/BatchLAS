@@ -328,11 +328,9 @@ Event syev_jacobi_cta(Queue& ctx,
         throw batchlas::invalid_argument("syev_jacobi_cta: eigenvalues span too small for n*batch.");
     }
 
-    // A GPU, or the CPU of a vendor-free build (the only one where this TU has a CPU image); the
-    // OpenCL CPU offers sub-group size 32. evidence: docs/design/vendor-independence.md#the-host-native-gate
-    if (!(BATCHLAS_HAS_HOST_NATIVE || ctx.device().type == DeviceType::GPU) ||
-        !ctx.device().supports_sub_group_size(32)) {
-        throw batchlas::unsupported("syev_jacobi_cta: needs sub-group size 32 on a GPU, or on the CPU of a vendor-free build.");
+    // GPU only: this TU builds without CPU targets, and the OpenCL CPU offers sub-group size 32.
+    if (ctx.device().type != DeviceType::GPU || !ctx.device().supports_sub_group_size(32)) {
+        throw batchlas::unsupported("syev_jacobi_cta: needs a GPU with subgroup size 32 (the CTA kernels have no CPU image).");
     }
 
     auto& a = const_cast<MatrixView<Scalar, MatrixFormat::Dense>&>(a_in);

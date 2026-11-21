@@ -109,12 +109,14 @@ syr2k, her2k, symm, hemm, trmm and trsm. To verify an op, read its `BATCHLAS_COV
 
 syev's kernels are templated on the backend and compiled for NETLIB in every build, so syev
 changes only the run-time half (`B != NETLIB || kHostNative`, then `natives_run_on`): the host
-runs `blocked` (Auto's last resort) and `jacobi`. `two_stage` stays GPU-only, as its `sy2sb` runs
-the public `geqrf`; so do `cta` and `cta_fused`, since steqr_cta's body reads out of bounds on the
-OpenCL CPU (not localised) and `cta`'s ormqx_cta has no CPU arm. The CTA entry points under
-`src/ops/syev/` (sytrd_cta, stedc_merge_cta, sytrd_sb2st, syev_jacobi_cta, sytrd_blocked's
-\f$n \le 32\f$ arm) accept the CPU under `BATCHLAS_HAS_HOST_NATIVE`, where the cta library keeps
-its CPU image; steqr_cta and syev_cta_fused stay GPU-only, and steqr runs steqr_wg there. syevx's DirectSubset
+runs `blocked`, Auto's last resort. `two_stage` stays GPU-only, as its `sy2sb` runs the public
+`geqrf`; so do the sub-group solvers `cta`, `cta_fused` and `jacobi` (`d.is_gpu` in `can_run`):
+on the OpenCL CPU, where the cta library has a CPU image in this build, steqr_cta's body reads out
+of bounds and the 32-wide sytrd_cta and Jacobi return NaN (2026-11-21, not localised; the DPC++
+sub-group collectives themselves are exact there). Their entry points stay GPU-only, and steqr
+runs steqr_wg on the CPU. Only sytrd_sb2st's sub-group chase accepts the CPU under
+`BATCHLAS_HAS_HOST_NATIVE`: it matches the device API there, which its work-group kernel does not
+(device_lapack_sb2st_tests WideBand). syevx's DirectSubset
 degrades to Direct on that host (its back-transform is LAPACKE's ormqr). NETLIB stedc runs the
 divide and conquer there instead of `steqr_legacy`, whose rotation store is
 \f$(n - 1) \cdot \mathit{max\_sweeps} \cdot (n/2 + 1)\f$ per item (37 GB at \f$n = 300\f$, batch

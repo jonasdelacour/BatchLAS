@@ -89,8 +89,7 @@ protected:
     // so what calls them (sy2sb, the band reduction, two_stage) stays GPU-only.
     // evidence: docs/design/vendor-independence.md#the-host-native-gate
     bool natives() const { return gpu() || (B == Backend::NETLIB && select::kHostNative); }
-    // cta, cta_fused and steqr_cta stay GPU-only there too (steqr_cta's body reads out of bounds on
-    // the OpenCL CPU).
+    // The sub-group solvers (cta, cta_fused, jacobi) and steqr_cta stay GPU-only there (syev.cc).
 
     // One masked syev: A (overwritten), w and info. `wg_items` > 1: items per packed sub-group.
     struct Problem {
@@ -166,30 +165,28 @@ TYPED_TEST(SyevMask, EveryHonouringFamilyLeavesInactiveItemsUntouched) {
     const int batch = 24;
     std::vector<std::string> fams;
     if (this->gpu()) fams = {"cta_fused", "jacobi"};
-    else if (this->natives()) fams = {"jacobi"};
+    else if (this->natives()) fams = {"blocked"};
     else fams = {"vendor"};
     for (const auto& f : fams)
         for (const int n : {3, 7, 13, 32})
             for (const JobType j : {JobType::EigenVectors, JobType::NoEigenVectors})
                 for (const Uplo u : {Uplo::Lower, Uplo::Upper})
-                    this->check(f, n, batch, j, u, items_per_subgroup(n));
+                    this->check(f, n, batch, j, u, f == "blocked" ? 0 : items_per_subgroup(n));
     if (!this->natives()) this->check("vendor", 45, 6, JobType::EigenVectors, Uplo::Lower, 0);
 }
 
 // The saturating batch: 1024 identical items, each active one bit-identical to the first.
 TYPED_TEST(SyevMask, SaturatingIdenticalItems) {
-    if (!this->natives()) GTEST_SKIP() << "the partition kernels are native families";
-    for (const auto* f : {"cta_fused", "jacobi"}) {
-        if (!this->gpu() && std::string(f) == "cta_fused") continue;  // GPU-only (above)
+    if (!this->gpu()) GTEST_SKIP() << "the partition kernels are GPU families (vendor-free too: syev.cc)";
+    for (const auto* f : {"cta_fused", "jacobi"})
         for (const int n : {7, 32}) this->check(f, n, 1024, JobType::EigenVectors, Uplo::Lower, items_per_subgroup(n), true);
-    }
 }
 
 // sytrd_cta, the CTA reduction syev_cta and sytrd_blocked call: A, d, e and tau.
 TYPED_TEST(SyevMask, SytrdCtaLeavesInactiveItemsUntouched) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::B;
-    if (!this->natives()) GTEST_SKIP() << "sytrd_cta is a native kernel";
+    if (!this->gpu()) GTEST_SKIP() << "sytrd_cta is a GPU kernel (vendor-free too: its 32-wide tier, sytrd_cta_tests)";
     Queue& q = *this->ctx;
     for (const int batch : {24, 1024})
         for (const int n : {5, 13, 32})

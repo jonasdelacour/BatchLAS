@@ -1217,11 +1217,12 @@ TYPED_TEST(SyevTest, NativeFamiliesFitTheScratchBudgetAtFullereneShapes) {
 }
 
 // Vendor-free, the CPU runs syev natively (select::kHostNative): Auto takes blocked (the CPU has no
-// table, so the last resort), and blocked and jacobi, pinned strictly, return the closed-form
-// graded spectrum and an eigendecomposition on a strided batch (ld = n + 3) with the unnamed
-// triangle poisoned, both uplo and both jobz. Refused there: two_stage (sy2sb runs the public
-// geqrf, which has no host route), cta and cta_fused (steqr_cta reads out of bounds on the OpenCL
-// CPU; cta's ormqx_cta is GPU-only). With netlib, LAPACKE serves the CPU.
+// table, so the last resort), and blocked, unpinned and pinned strictly at n = 5 .. 200 (sytrd's
+// small and panel tiers, the gemm-pair trailing update), returns the closed-form graded spectrum
+// and an eigendecomposition on a strided batch (ld = n + 3) with the unnamed triangle poisoned,
+// both uplo and both jobz. Refused there: two_stage (sy2sb runs the public geqrf, which has no host
+// route) and the sub-group solvers cta, cta_fused and jacobi (wrong or out of bounds on the OpenCL
+// CPU, syev.cc). With netlib, LAPACKE serves the CPU.
 // evidence: docs/design/vendor-independence.md#the-host-native-gate
 TYPED_TEST(SyevTest, VendorFreeCpuRunsNativeRoutes) {
     using T = typename TestFixture::ScalarType;
@@ -1241,7 +1242,8 @@ TYPED_TEST(SyevTest, VendorFreeCpuRunsNativeRoutes) {
             int n;
         };
         // n = 200: sytrd_blocked's panels and its gemm-pair trailing update (n2 > 128); 40 its local tier.
-        for (const Route r : {Route{nullptr, "blocked", 200}, Route{"blocked", "blocked", 40}, Route{"jacobi", "jacobi", 24}}) {
+        for (const Route r : {Route{nullptr, "blocked", 200}, Route{"blocked", "blocked", 40}, Route{nullptr, "blocked", 32},
+                              Route{"blocked", "blocked", 5}}) {
             std::optional<select::ScopedPin<ops::syev::SyevChoice>> pin;
             if (r.pin) pin.emplace("syev", r.pin, select::StrictPin{});
             const int n = r.n, batch = 3, ld = n + 3, stride = ld * n + 5;
@@ -1271,7 +1273,8 @@ TYPED_TEST(SyevTest, VendorFreeCpuRunsNativeRoutes) {
                 }
         }
         // Refused at the pin, each at an n it would serve on a GPU.
-        for (const Route r : {Route{"two_stage", "", 64}, Route{"cta", "", 24}, Route{"cta_fused", "", 24}}) {
+        for (const Route r : {Route{"two_stage", "", 64}, Route{"cta", "", 24}, Route{"cta_fused", "", 24},
+                              Route{"jacobi", "", 24}}) {
             Matrix<T, MatrixFormat::Dense> A(r.n, r.n, 2);
             UnifiedVector<Real> W(size_t(r.n) * 2, Real(-1));
             const select::ScopedPin<ops::syev::SyevChoice> pin("syev", r.pin, select::StrictPin{});
