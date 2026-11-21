@@ -205,8 +205,10 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        if (this->ctx->device().type != DeviceType::GPU) {
-            GTEST_SKIP() << "the native geqrf kernels are GPU-only (geqrf can_run)";
+        // A vendor-free host runs the native kernels (select::kHostNative); a netlib host does not.
+        if (this->ctx->device().type != DeviceType::GPU &&
+            !(Config::BackendVal == Backend::NETLIB && batchlas::select::kHostNative)) {
+            GTEST_SKIP() << "the native geqrf kernels run on a GPU or a vendor-free host (geqrf can_run)";
         }
         if (!this->ctx->device().supports_sub_group_size(32)) {
             GTEST_SKIP() << "device does not offer sub-group size 32 (geqrf can_run)";

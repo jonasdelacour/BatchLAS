@@ -234,12 +234,15 @@ protected:
     using MV = MVof<T>;
     static constexpr Backend B = Config::BackendVal;
     static constexpr bool kVendor = batchlas::select::factorization_vendor_available<B>;
+    // A vendor-free host runs the native families. evidence: docs/design/vendor-independence.md#the-host-native-gate
+    static constexpr bool kHostRun = B == Backend::NETLIB && batchlas::select::kHostNative;
 
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native family is GPU-only";
+        if (this->ctx->device().type != DeviceType::GPU && !kHostRun)
+            GTEST_SKIP() << "the native family runs on a GPU or a vendor-free host";
     }
 
     // The limit oracle: the drivers' own refusals, not ormqr.cc's can_run. Complex Trans is
@@ -302,12 +305,14 @@ protected:
                 const auto w = blocked_width(s);
                 UnifiedVector<std::byte> ws(ormqr_blocked_buffer_size<B, T>(q, p.A(), p.Cm(), s.side, s.trans, p.Tau(), w));
                 (void)ormqr_blocked<B, T>(q, p.A(), p.Cm(), s.side, s.trans, p.Tau(), ws.to_span(), w);
+                q.wait();  // ~UnifiedVector frees ws without waiting for the kernels
             } else {
                 if constexpr (kVendor) {
                     // The Vendor family spells a real ConjTrans as Trans (real unmqr takes N/T only).
                     const Transpose vt = !kCx<T> && s.trans == Transpose::ConjTrans ? Transpose::Trans : s.trans;
                     UnifiedVector<std::byte> ws(backend::ormqr_vendor_buffer_size<B, T>(q, p.A(), p.Cm(), s.side, vt, p.Tau()));
                     (void)backend::ormqr_vendor<B, T>(q, p.A(), p.Cm(), s.side, vt, p.Tau(), ws.to_span());
+                    q.wait();
                 } else {
                     if (why) *why = "no vendor solver in this build";
                     return false;
@@ -590,6 +595,8 @@ TYPED_TEST(OrmqrCandidates, RetiredProviderVariableIsNotRead) {
 // Auto against the shipped table of this device (shipped_table_pick.hh). Complex-Trans calls are
 // refused before choose() (ComplexTransIsRefusedUnderEveryPin), so they are not probed.
 TYPED_TEST(OrmqrCandidates, AutoReadsTheTranscribedTable) {
+    if (this->ctx->device().type != DeviceType::GPU)
+        GTEST_SKIP() << "a host reads no shipped table; the last-resort case covers it";
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     for (const Spec& s : {Spec{Side::Left, Transpose::NoTrans, 9, 9, 2, 300}, Spec{Side::Right, Transpose::ConjTrans, 70, 3, 40, 128},
@@ -709,6 +716,7 @@ TYPED_TEST(OrmqrCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     const std::string backend = B == Backend::CUDA   ? "CUDA"
                                 : B == Backend::ROCM ? "ROCM"
                                 : B == Backend::SYCL ? "SYCL"
+                                : B == Backend::NETLIB ? "NETLIB"
                                                      : "?";
     auto as_int = [](auto e) { return std::to_string(static_cast<int>(e)); };
     for (const auto& [key, s] : {std::pair{std::string("16 6 6"), lo}, std::pair{std::string("30 9 9"), hi}}) {
@@ -722,8 +730,8 @@ TYPED_TEST(OrmqrCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
         EXPECT_EQ(f[18], as_int(s.trans)) << key;
     }
 }
-
-// On a CPU queue the native family cannot run: a blocked pin throws, Auto is the vendor (or no
+// On a CPU queue with netlib the native family cannot run: a blocked pin throws, Auto is the vendor
+// (the old route table's `!is_gpu` gate). A vendor-free host runs blocked.
 // route without one) -- the old route table's `!is_gpu` gate.
 template <typename Config>
 class OrmqrCandidatesCpu : public test_utils::BatchLASTest<Config> {};
@@ -736,6 +744,22 @@ TYPED_TEST(OrmqrCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     if (this->ctx->device().type == DeviceType::GPU) GTEST_SKIP() << "a GPU queue";
     const ScopedEnvVar clear("BATCHLAS_ORMQR_ROUTE", nullptr);
     const Spec s{Side::Left, Transpose::NoTrans, 8, 5, 3, 2};
+    // A vendor-free host (select::kHostNative) runs blocked, pinned and under Auto.
+    // evidence: docs/design/vendor-independence.md#the-host-native-gate
+    if constexpr (B == Backend::NETLIB && batchlas::select::kHostNative) {
+        for (const bool pinned : {true, false}) {
+            auto q = make_apply<T>(s);
+            std::optional<Pin> pin;
+            if (pinned) pin.emplace("ormqr", C{om::Blocked{}});
+            EXPECT_EQ(traced_choice([&] {
+                UnifiedVector<std::byte> ws(ormqr_buffer_size<B, T>(*this->ctx, q.A(), q.Cm(), s.side, s.trans, q.Tau()));
+                (void)ormqr<B, T>(*this->ctx, q.A(), q.Cm(), s.side, s.trans, q.Tau(), ws.to_span());
+                this->ctx->wait();
+            }), "blocked") << (pinned ? "pinned" : "auto");
+            expect_applied(*this->ctx, q, pinned ? "cpu blocked pinned" : "cpu blocked auto");
+        }
+        return;
+    }
     auto p = make_apply<T>(s);
     {
         const Pin pin("ormqr", C{om::Blocked{}});

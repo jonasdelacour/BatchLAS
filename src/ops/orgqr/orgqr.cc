@@ -45,7 +45,7 @@ bool can_run(const OrgqrChoice& c, const select::Device& d, const MV<Scalar>& A)
         // Masked: the identity and copy-back kernels skip an inactive item, and the apply is the
         // routed ormqr (Left, NoTrans).
         [&](Blocked) {
-            return d.is_gpu && !A.is_heterogeneous() &&
+            return select::natives_run_on(d) && !A.is_heterogeneous() &&
                    A.rows() >= 1 && A.cols() >= 1 && A.batch_size() >= 1 && A.cols() <= A.rows();
         },
         // NETLIB's host loop skips an inactive item; a strided vendor call cannot.

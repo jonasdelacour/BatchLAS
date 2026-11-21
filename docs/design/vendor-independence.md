@@ -109,9 +109,13 @@ LAPACKE: native getrf writes every pivot, so all of them are 1-based int32 packe
 tier keeps its sub-group broadcast in a vendor-free build (`gesv_tiny_slm` in `gesv_tiny.cc`): the
 opencl:cpu image of its local-memory pivot row solves float N = 32 wrongly (residual 2.0, odd items
 never written), while the broadcast arm is right at every column bucket and RHS width. The
-`GesvTest` n = 31, 32 float rows on opencl:cpu fail without it. Adopted so far:
-syrk, herk, syr2k, her2k, symm, hemm, trmm, trsm, getrf, getri, getrs and gesv. To verify an op, read its `BATCHLAS_COVERAGE_OUT`
-`reached` rows on `NETLIB` in a vendor-free tree.
+`GesvTest` n = 31, 32 float rows on opencl:cpu fail without it. geqrf, orgqr and ormqr are the
+same: their `can_run` takes `natives_run_on`, and the launch-side GPU checks
+(`native::require_launchable` in `src/kernels/common/launch.hh`, `ormqx_cta`) also admit a host
+queue when `BATCHLAS_HAS_HOST_NATIVE` keeps the CPU image. ormqr_blocked refuses a mask only where
+gemm is the host BLAS (`!native_backend<B>`). Adopted so far: syrk, herk, syr2k, her2k, symm, hemm,
+trmm, trsm, getrf, getri, getrs, gesv, geqrf, orgqr and ormqr (ortho's Householder arm follows). To
+verify an op, read its `BATCHLAS_COVERAGE_OUT` `reached` rows on `NETLIB` in a vendor-free tree.
 
 ## Vendor independence: headers keyed on the library axis
 

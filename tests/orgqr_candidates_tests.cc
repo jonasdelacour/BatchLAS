@@ -185,12 +185,15 @@ protected:
     using MV = MVof<T>;
     static constexpr Backend B = Config::BackendVal;
     static constexpr bool kVendor = batchlas::select::factorization_vendor_available<B>;
+    // A vendor-free host runs the native families. evidence: docs/design/vendor-independence.md#the-host-native-gate
+    static constexpr bool kHostRun = B == Backend::NETLIB && batchlas::select::kHostNative;
 
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native driver is a GPU kernel";
+        if (this->ctx->device().type != DeviceType::GPU && !kHostRun)
+            GTEST_SKIP() << "the native driver runs on a GPU or a vendor-free host";
     }
 
     Prob<T> prob(int m, int n, int batch, unsigned seed, int period = 0) {
@@ -249,11 +252,13 @@ protected:
                 const std::size_t bytes = ops::orgqr::orgqr_blocked_buffer_size<T>(q, A, tau, apply_size);
                 UnifiedVector<std::byte> ws(std::max<std::size_t>(1, bytes));
                 (void)ops::orgqr::orgqr_blocked_dispatch<T>(q, A, tau, ws.to_span(), apply, apply_size);
+                q.wait();  // ~UnifiedVector frees ws without waiting for the kernels
             } else {
                 if constexpr (kVendor) {
                     UnifiedVector<std::byte> ws(
                         std::max<std::size_t>(1, backend::orgqr_vendor_buffer_size<B, T>(q, A, tau)));
                     (void)backend::orgqr_vendor<B, T>(q, A, tau, ws.to_span());
+                    q.wait();
                 } else {
                     if (why) *why = "no vendor factorization library in this build";
                     return false;
@@ -556,6 +561,8 @@ TYPED_TEST(OrgqrCandidates, ScopedPinBeatsTheEnvironment) {
 // Auto against the shipped table this device reads (shipped_table_pick.hh): the transcribed 512
 // ceiling straddled on each extent, on and off the grid.
 TYPED_TEST(OrgqrCandidates, AutoReadsTheShippedTable) {
+    if (this->ctx->device().type != DeviceType::GPU)
+        GTEST_SKIP() << "a host reads no shipped table; the last-resort case covers it";
     using T = typename TestFixture::T;
     struct Row { int m, n, batch; };
     const Row rows[] = {{1, 1, 3},     {96, 96, 2},  {200, 150, 2}, {512, 512, 1}, {512, 40, 1},
@@ -664,6 +671,7 @@ TYPED_TEST(OrgqrCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     const std::string backend = B == Backend::CUDA   ? "CUDA"
                                 : B == Backend::ROCM ? "ROCM"
                                 : B == Backend::SYCL ? "SYCL"
+                                : B == Backend::NETLIB ? "NETLIB"
                                                      : "?";
     auto as_int = [](auto e) { return std::to_string(static_cast<int>(e)); };
     std::vector<std::tuple<std::string, const char*, const char*>> want{{"40 24 24", "native", "blocked"}};
@@ -681,8 +689,8 @@ TYPED_TEST(OrgqrCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     }
 }
 
-// On a CPU queue the native driver cannot run, so a blocked pin
-// throws and Auto is the vendor (or no route without one).
+// On a CPU queue with netlib the native driver cannot run, so a blocked pin
+// throws and Auto is the vendor. A vendor-free host runs blocked.
 template <typename Config>
 class OrgqrCandidatesCpu : public test_utils::BatchLASTest<Config> {};
 TYPED_TEST_SUITE(OrgqrCandidatesCpu, Types);
@@ -692,6 +700,23 @@ TYPED_TEST(OrgqrCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     static constexpr Backend B = TypeParam::BackendVal;
     if (!this->ctx) GTEST_SKIP() << "no queue";
     if (this->ctx->device().type == DeviceType::GPU) GTEST_SKIP() << "a GPU queue";
+    // A vendor-free host (select::kHostNative) runs blocked, pinned and under Auto.
+    // evidence: docs/design/vendor-independence.md#the-host-native-gate
+    if constexpr (B == Backend::NETLIB && batchlas::select::kHostNative) {
+        const ScopedEnvVar clear("BATCHLAS_ORGQR_ROUTE", nullptr);
+        for (const bool pinned : {true, false}) {
+            auto p = make_prob<B, T>(*this->ctx, 16, 9, 3, 41u);
+            std::optional<Pin> pin;
+            if (pinned) pin.emplace("orgqr", C{oq::Blocked{}});
+            EXPECT_EQ(traced_choice([&] {
+                UnifiedVector<std::byte> ws(std::max<std::size_t>(1, orgqr_buffer_size<B, T>(*this->ctx, p.A(), p.tau.to_span())));
+                (void)orgqr<B, T>(*this->ctx, p.A(), p.tau.to_span(), ws.to_span());
+                this->ctx->wait();
+            }), "blocked") << (pinned ? "pinned" : "auto");
+            expect_q(*this->ctx, p, pinned ? "cpu blocked pinned" : "cpu blocked auto");
+        }
+        return;
+    }
     UnifiedVector<T> a(16 * 8 * 2, T(1)), tau(8 * 2, T(0));
     const MVof<T> A(a.data(), 16, 8, 16, 128, 2);
     {

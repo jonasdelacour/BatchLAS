@@ -81,7 +81,8 @@ inline void ormqx_cta_impl_m(Queue& ctx,
 
         const auto dev = ctx->get_device();
 
-        // CTA path assumes warp-sized sub-groups on NVIDIA.
+        // The partitions assume 32-wide sub-groups: both kernels pin it (BATCHLAS_REQD_SG_SIZE), or the
+        // OpenCL CPU picks a narrower one and a P = 32 partition spans two (wrong values, item-dependent).
         const int32_t sg_size = 32;
 
         const int32_t base_wg_size = std::lcm<int32_t>(static_cast<int32_t>(P), static_cast<int32_t>(sg_size));
@@ -130,7 +131,7 @@ inline void ormqx_cta_impl_m(Queue& ctx,
 
             batchlas::impl::parallel_for<OrmQxCTAKernel<Scalar, P, QL, Left, TransposeOrConj, Masked>>(cgh,
                 sycl::nd_range<1>(global_size, wg_size),
-                [=](sycl::nd_item<1> it) {
+                [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const auto sg = it.get_sub_group();
                 const auto part = make_partition<P>(sg);
 
@@ -281,7 +282,7 @@ BATCHLAS_UNROLL_FULL
 
             batchlas::impl::parallel_for<OrmQxCTAKernel<Scalar, P, QL, Left, TransposeOrConj, Masked>>(cgh,
                 sycl::nd_range<1>(global_size, wg_size),
-                [=](sycl::nd_item<1> it) {
+                [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                     const auto sg = it.get_sub_group();
                     const auto part = make_partition<P>(sg);
 
@@ -441,8 +442,10 @@ Event ormqx_cta(Queue& ctx,
     auto& tau = const_cast<VectorView<Scalar>&>(tau_in);
     auto& c = const_cast<MatrixView<Scalar, MatrixFormat::Dense>&>(c_in);
 
-    // GPU only: this TU builds without CPU targets, and the OpenCL CPU offers sub-group size 32.
-    if (ctx.device().type != DeviceType::GPU || !ctx.device().supports_sub_group_size(32)) {
+    // This TU's CPU image exists only in a vendor-free build (BATCHLAS_HAS_HOST_NATIVE keeps the cta
+    // library's CPU targets), and the OpenCL CPU offers sub-group size 32, so test the device type too.
+    const bool image = ctx.device().type == DeviceType::GPU || BATCHLAS_HAS_HOST_NATIVE;
+    if (!image || !ctx.device().supports_sub_group_size(32)) {
         throw batchlas::unsupported("ormqx_cta: needs a GPU with subgroup size 32 (the CTA kernels have no CPU image).");
     }
 

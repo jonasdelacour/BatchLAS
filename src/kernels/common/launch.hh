@@ -20,7 +20,8 @@ struct Need {
 };
 
 // can_run's launch gates, re-applied where a caller reaches a native route without choose(): A's
-// shape, every operand homogeneous (one launch reads one extent tuple), a GPU queue, the sub-group
+// shape, every operand homogeneous (one launch reads one extent tuple), a GPU queue (or any queue in a
+// vendor-free build), the sub-group
 // size from the enumerated list (MAX_SUB_GROUP_SIZE reports entry [0], so it accepts a {64}-only
 // device and the launch aborts), and the launched work-group. An operand or the queue type throws
 // invalid_argument, a missing device feature unsupported; every message opens with `who`.
@@ -33,7 +34,8 @@ Device require_launchable(Queue& ctx, const char* who, const MatrixView<Scalar, 
     if (A.is_heterogeneous() || (ops.is_heterogeneous() || ...))
         throw batchlas::invalid_argument(w + ": heterogeneous batch is not supported");
     const Device dev = ctx.device();
-    // A vendor-free host runs the natives too: there every native library keeps its CPU image.
+    // A vendor-free build keeps the native kernels' CPU images and runs them on the host queue.
+    // evidence: docs/design/vendor-independence.md#the-host-native-gate
     if (dev.type != DeviceType::GPU && !BATCHLAS_HAS_HOST_NATIVE)
         throw batchlas::invalid_argument(w + ": GPU queues only");
     if (need.sub_group > 0 && !dev.supports_sub_group_size(static_cast<std::size_t>(need.sub_group)))

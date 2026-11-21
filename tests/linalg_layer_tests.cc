@@ -8,6 +8,8 @@
 #include <batchlas/sycl_interop.hh>   // for the "Device-resident operands" block below
 #include <batchlas/verify/reference.hh>
 
+#include <src/ops/geqrf/choice.hh>
+#include <src/select/select.hh>
 #include <tests/eigen_verify.hh>
 #include <tests/test_utils.hh>
 
@@ -1468,4 +1470,29 @@ TEST(LinalgWrappers, ScratchOutlivesKernels) {
         const VectorView<float> w(W[r].data(), n, batch);
         EXPECT_VERIFY(float, batchlas::verify::Check::values, n, Dense::values_error(w, ref, scale)) << "eigvalsh, rep " << r;
     }
+}
+
+// linalg::qr copies A into Q and then calls geqrf, here under a pin that cannot run the tall shape,
+// so geqrf throws after the copy is enqueued. The wrapper must drain the copy before unwinding frees
+// Q and its in-order queue: undrained, the OpenCL CPU ran the copy after the throw and the process
+// died (SIGSEGV in CopyKernel3D, 7 of 8 runs of the QR cases at base). The guard is the process
+// surviving every rep on both queue kinds and both devices; after the pin a qr still verifies.
+TEST(LinalgWrappers, QrDrainsItsCopyWhenGeqrfThrows) {
+    const auto run = [](Queue& base, const std::string& where) {
+        Queue ooo(base, false);
+        for (Queue* q : {&base, &ooo}) {
+            const std::string what = where + (q == &ooo ? " out of order" : " in order");
+            const auto A = make<float>(*q, 301, 160, 64, Fill::general, 5);
+            {
+                const select::ScopedPin<ops::geqrf::GeqrfChoice> pin("geqrf", ops::geqrf::Tiny{});
+                for (int r = 0; r < 8; ++r)
+                    EXPECT_THROW((void)linalg::qr(*q, A.view()), batchlas::invalid_argument) << what << ", rep " << r;
+            }
+            expect_wrapper_qr<float>(*q, 37, 21, 5, 191, what + ", after the throws");
+        }
+    };
+    Queue fixture;
+    run(fixture, "default queue");
+    Queue netlib("cpu");
+    run(netlib, "NETLIB queue");
 }

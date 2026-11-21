@@ -108,6 +108,9 @@ protected:
     static constexpr Backend B = Config::BackendVal;
 
     bool gpu() const { return this->ctx->device().type == DeviceType::GPU; }
+    // Where the native families run: a GPU, or the host of a vendor-free build (a build fact, not
+    // the predicate under test). evidence: docs/design/vendor-independence.md#the-host-native-gate
+    bool natives() const { return gpu() || (B == Backend::NETLIB && select::kHostNative); }
 
     void check(const Shape& s) {
         SCOPED_TRACE(label(s));
@@ -137,7 +140,7 @@ protected:
 TYPED_TEST_SUITE(GeqrfMask, Types);
 
 TYPED_TEST(GeqrfMask, TinyAndCtaLeaveInactiveItemsUntouched) {
-    if (!this->gpu()) GTEST_SKIP() << "tiny and cta are GPU kernels";
+    if (!this->natives()) GTEST_SKIP() << "tiny and cta run on a GPU or a vendor-free host";
     std::vector<Shape> v = this->tiny_shapes(40, false);
     ASSERT_FALSE(v.empty()) << "no tiny bucket runs here: the case would pass vacuously";
     for (const Shape& s : TestFixture::cta_shapes(40, false)) v.push_back(s);
@@ -147,7 +150,7 @@ TYPED_TEST(GeqrfMask, TinyAndCtaLeaveInactiveItemsUntouched) {
 // Every panel leaf the driver reaches (resident, global, register by Auto and by the env pin), a
 // wide and a tall form, and parts of 8 items: each part takes its mask slice.
 TYPED_TEST(GeqrfMask, BlockedSlicesTheMaskPerPartThroughEveryLeaf) {
-    if (!this->gpu()) GTEST_SKIP() << "blocked is a GPU driver";
+    if (!this->natives()) GTEST_SKIP() << "blocked runs on a GPU or a vendor-free host";
     std::vector<Shape> v{{"blocked", 70, 50, 24, 0, 8}, {"blocked", 40, 70, 20}};
     // The global leaf takes a panel past the device's SLM: the shortest such height here.
     int tall = 300;
@@ -161,18 +164,19 @@ TYPED_TEST(GeqrfMask, BlockedSlicesTheMaskPerPartThroughEveryLeaf) {
     for (const Shape& s : v) this->check(s);
 }
 
+// A vendor-free host has no host loop: the same shapes run there on the native cta family.
 TYPED_TEST(GeqrfMask, NetlibHostLoopSkipsInactiveItems) {
     if constexpr (TestFixture::B != Backend::NETLIB) {
         GTEST_SKIP() << "the host loop is NETLIB's vendor family";
     } else {
-        for (const Shape& s : {Shape{"vendor", 9, 6, 12}, Shape{"vendor", 5, 8, 12}, Shape{"vendor", 16, 16, 7}})
-            this->check(s);
+        const std::string f = select::kHostNative ? "cta" : "vendor";
+        for (const Shape& s : {Shape{f, 9, 6, 12}, Shape{f, 5, 8, 12}, Shape{f, 16, 16, 7}}) this->check(s);
     }
 }
 
 // The saturating batch (>= 1024, identical items) for the packed and local-memory kernels.
 TYPED_TEST(GeqrfMask, SaturatingPackedKernels) {
-    if (!this->gpu()) GTEST_SKIP() << "tiny and cta are GPU kernels";
+    if (!this->natives()) GTEST_SKIP() << "tiny and cta run on a GPU or a vendor-free host";
     std::vector<Shape> v = this->tiny_shapes(1024, true);
     for (const Shape& s : TestFixture::cta_shapes(1024, true)) v.push_back(s);
     v.push_back({"blocked", 70, 50, 1024, 0, 0, true});

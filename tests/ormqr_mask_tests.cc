@@ -182,6 +182,9 @@ protected:
     static constexpr Transpose kC = Transpose::ConjTrans;
 
     bool gpu() const { return this->ctx->device().type == DeviceType::GPU; }
+    // Where the native families run: a GPU, or the host of a vendor-free build (a build fact, not
+    // the predicate under test). evidence: docs/design/vendor-independence.md#the-host-native-gate
+    bool natives() const { return gpu() || (B == Backend::NETLIB && select::kHostNative); }
 
     void check_ormqr(const Shape& s) {
         SCOPED_TRACE(label(s));
@@ -213,7 +216,7 @@ TYPED_TEST_SUITE(OrmqrMask, Types);
 
 // Several WY blocks (hint 16), both sides and both forms where blocked runs masked, and parts of 8.
 TYPED_TEST(OrmqrMask, BlockedLeavesInactiveItemsUntouched) {
-    if (!this->gpu()) GTEST_SKIP() << "blocked is a GPU family";
+    if (!this->natives()) GTEST_SKIP() << "blocked runs on a GPU or a vendor-free host";
     constexpr Transpose kC = TestFixture::kC;
     for (const Shape& s : {Shape{"blocked", 30, 21, 40, 24, Side::Right, Transpose::NoTrans, 16, 0, 8},
                            Shape{"blocked", 19, 37, 33, 12, Side::Right, kC, 16},
@@ -224,22 +227,24 @@ TYPED_TEST(OrmqrMask, BlockedLeavesInactiveItemsUntouched) {
     this->check_orgqr({"blocked", 33, 33, 33, 12});
 }
 
+// A vendor-free host has no host loops: the same shapes run there on the native blocked family.
 TYPED_TEST(OrmqrMask, NetlibHostLoopsSkipInactiveItems) {
     if constexpr (TestFixture::B != Backend::NETLIB) {
         GTEST_SKIP() << "the host loops are NETLIB's vendor family";
     } else {
         constexpr Transpose kC = TestFixture::kC;
-        for (const Shape& s : {Shape{"vendor", 11, 7, 6, 12, Side::Left, Transpose::NoTrans},
-                               Shape{"vendor", 5, 9, 4, 12, Side::Right, kC},
-                               Shape{"vendor", 8, 8, 8, 7, Side::Left, kC}})
+        const std::string f = select::kHostNative ? "blocked" : "vendor";
+        for (const Shape& s : {Shape{f, 11, 7, 6, 12, Side::Left, Transpose::NoTrans},
+                               Shape{f, 5, 9, 4, 12, Side::Right, kC},
+                               Shape{f, 8, 8, 8, 7, Side::Left, kC}})
             this->check_ormqr(s);
-        this->check_orgqr({"vendor", 11, 7, 7, 12});
-        this->check_orgqr({"vendor", 6, 6, 6, 9});
+        this->check_orgqr({f, 11, 7, 7, 12});
+        this->check_orgqr({f, 6, 6, 6, 9});
     }
 }
 
 TYPED_TEST(OrmqrMask, OrmqxCtaLeavesInactiveItemsUntouched) {
-    if (!this->gpu()) GTEST_SKIP() << "ormqx_cta is a GPU kernel";
+    if (!this->natives()) GTEST_SKIP() << "ormqx_cta runs on a GPU or a vendor-free host";
     this->check_cta(7, 5, 40, false);   // P = 8: four partitions per sub-group
     this->check_cta(13, 13, 20, false); // P = 16
     this->check_cta(3, 2, 40, false);   // P = 4
@@ -247,7 +252,7 @@ TYPED_TEST(OrmqrMask, OrmqxCtaLeavesInactiveItemsUntouched) {
 
 // The saturating batch (>= 1024, identical items) for the packed kernel.
 TYPED_TEST(OrmqrMask, SaturatingOrmqxCta) {
-    if (!this->gpu()) GTEST_SKIP() << "ormqx_cta is a GPU kernel";
+    if (!this->natives()) GTEST_SKIP() << "ormqx_cta runs on a GPU or a vendor-free host";
     this->check_cta(7, 6, 1024, true);
     this->check_cta(29, 20, 1024, true);
 }
