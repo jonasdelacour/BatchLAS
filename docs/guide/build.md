@@ -175,8 +175,9 @@ ctest --preset acpp-metal-tests -R '^gemm_tests$'
 
 The patched toolchain is required. A stock AdaptiveCpp, or one missing a patch, builds BatchLAS
 without complaint, and the kernels then fail at their first launch, or compute wrong values. For
-example, without 0014 every complex<float> potrf, posv, potrs, potri, sygvd and ortho path, and
-the float `reg:`/`wide:` gemm tiles, fail MSL compilation with "assigning 'threadgroup void *' to
+example, without 0014 the complex<float> paths listed in
+`scripts/macos/adaptivecpp-patches/0014-upstream.txt` (potrf, posv, potrs, potri, sygvd, ortho)
+and the float `reg:`/`wide:` gemm tiles fail MSL compilation with "assigning 'threadgroup void *' to
 'device void *'". The script refuses a checkout whose branch does not carry exactly the patches in
 the directory. When a patch is added or changed, re-run it with `ACPP_REAPPLY=1 SKIP_BREW=1` and
 clear `~/.acpp/apps`. No BatchLAS rebuild is needed for an emitter-only patch: kernels are

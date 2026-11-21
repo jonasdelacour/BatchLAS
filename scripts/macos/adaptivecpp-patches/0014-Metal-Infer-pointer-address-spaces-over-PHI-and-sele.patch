@@ -1,4 +1,4 @@
-From deea236f2fbc14e04232a01e6ee7e471a6fafc1b Mon Sep 17 00:00:00 2001
+From 1753f24168fb94ce211bdc8115bd10e6036fd818 Mon Sep 17 00:00:00 2001
 From: jonaslacour <jonaslacour1@gmail.com>
 Date: Fri, 20 Nov 2026 23:48:48 +0100
 Subject: [PATCH] [Metal] Infer pointer address spaces over PHI and select
@@ -27,18 +27,24 @@ Sources with no information (undef, poison, values no rule covers) do not
 constrain the join, for selects as already for PHIs. A conflict still gives
 AS 0, and a conflicting PHI still reports an error, now naming the PHI.
 
+The cache holds the lattice state, not the emitted address space: unknown
+and conflicting stay distinct there and both become AS 0 only when read.
+A later solve that reaches a value an earlier solve found conflicting
+therefore joins the conflict instead of ignoring it, so the result does
+not depend on which pointer is queried first.
+
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_017aoFdiFMnRejhwERDwnMoF
 ---
- .../llvm-to-backend/metal/Emitter.cpp         | 209 ++++++++++++------
- .../llvm-to-backend/metal/Emitter.hpp         |   4 +
- 2 files changed, 150 insertions(+), 63 deletions(-)
+ .../llvm-to-backend/metal/Emitter.cpp         | 213 ++++++++++++------
+ .../llvm-to-backend/metal/Emitter.hpp         |   7 +-
+ 2 files changed, 156 insertions(+), 64 deletions(-)
 
 diff --git a/src/compiler/llvm-to-backend/metal/Emitter.cpp b/src/compiler/llvm-to-backend/metal/Emitter.cpp
-index b0509122..6a62330f 100644
+index b0509122..a41bfaa9 100644
 --- a/src/compiler/llvm-to-backend/metal/Emitter.cpp
 +++ b/src/compiler/llvm-to-backend/metal/Emitter.cpp
-@@ -1692,87 +1692,170 @@ const Value* MetalEmitter::stripToRootObject(const Value* V) {
+@@ -1692,87 +1692,174 @@ const Value* MetalEmitter::stripToRootObject(const Value* V) {
    return Cur;
  }
  
@@ -70,15 +76,20 @@ index b0509122..6a62330f 100644
 +}
  
 -  inferredPtrAS[V] = 0; // to break cycles in PHIs and Loads
++// The address space a solved state is emitted with: unknown and conflicting give 0 (`device`).
++unsigned physicalAddressSpace(unsigned State) {
++  return State == kUnknownAS || State == kConflictingAS ? 0 : State;
++}
+ 
+-  if (auto* Alloca = dyn_cast<AllocaInst>(V)) {
+-    return (inferredPtrAS[V] = 5 /* private */);
+-  }
 +// Whether a generic pointer's address space follows from other values (addressSpaceSources).
 +bool hasAddressSpaceRule(const Value* V) {
 +  return isa<AddrSpaceCastInst, GetElementPtrInst, PHINode, SelectInst, LoadInst>(V);
 +}
 +} // namespace
- 
--  if (auto* Alloca = dyn_cast<AllocaInst>(V)) {
--    return (inferredPtrAS[V] = 5 /* private */);
--  }
++
 +void MetalEmitter::addressSpaceSources(const Value* V, SmallVectorImpl<const Value*>& Sources) {
    if (auto* ASC = dyn_cast<AddrSpaceCastInst>(V)) {
 -    return (inferredPtrAS[V] = getPhysicalPointerAddressSpace(ASC->getOperand(0)));
@@ -121,14 +132,14 @@ index b0509122..6a62330f 100644
 -    if (deducedAS != 0) {
 -      return (inferredPtrAS[V] = deducedAS);
 -    }
-   }
+-  }
 -  if (auto* Select = dyn_cast<SelectInst>(V)) {
 -    unsigned trueAS = getPhysicalPointerAddressSpace(Select->getTrueValue());
 -    unsigned falseAS = getPhysicalPointerAddressSpace(Select->getFalseValue());
 -    if (trueAS != 0 && trueAS == falseAS) {
 -      return (inferredPtrAS[V] = trueAS);
 -    }
--  }
+   }
 -  if (auto* LI = dyn_cast<LoadInst>(V)) {
 -    const Value* addr = LI->getPointerOperand();       // address of the slot
 -    const Value* root = stripToRootObject(addr);       // e.g. %.sroa.xxx.i alloca in AS5
@@ -140,7 +151,8 @@ index b0509122..6a62330f 100644
 -    for (const User* U : root->users()) {
 -      const StoreInst* SI = dyn_cast<StoreInst>(U);
 -      if (!SI) continue;
-+// The address space a source contributes without being solved: its own, or kUnknownAS.
++// The lattice state a source contributes without being solved: its own address space, the state
++// an earlier solve cached for it (conflicting stays conflicting), or kUnknownAS.
 +unsigned MetalEmitter::knownAddressSpace(const Value* V) {
 +  if (!V->getType()->isPointerTy()) {
 +    return kUnknownAS;
@@ -152,7 +164,7 @@ index b0509122..6a62330f 100644
 +    return 5 /* private */;
 +  }
 +  auto it = inferredPtrAS.find(V);
-+  return it != inferredPtrAS.end() && it->second != 0 ? it->second : kUnknownAS;
++  return it != inferredPtrAS.end() ? it->second : kUnknownAS;
 +}
  
 -      // Does this store target the same root (allow casts/trivial GEP)?
@@ -164,6 +176,8 @@ index b0509122..6a62330f 100644
 +// sources whenever one of them changes, and nothing is cached before that fixpoint. Caching a
 +// cycle-breaking 0 instead froze every value that saw it at AS 0, which is emitted as `device`.
 +// Sources without information (undef, poison, values no rule covers) do not constrain the join.
++// The cache keeps the lattice state, so a later solve that reaches a value an earlier one found
++// conflicting sees the conflict, and the result does not depend on the order of the queries.
 +void MetalEmitter::inferPointerAddressSpaces(const Value* V) {
 +  std::vector<const Value*> nodes;
 +  std::vector<SmallVector<const Value*, 2>> sources;
@@ -235,16 +249,12 @@ index b0509122..6a62330f 100644
 -    if (deducedAS != 0) {
 -      return (inferredPtrAS[V] = deducedAS);
 +  for (unsigned i = 0; i < nodes.size(); ++i) {
-+    unsigned AS = state[i];
-+    if (AS == kConflictingAS) {
++    if (state[i] == kConflictingAS) {
 +      if (auto* PHI = dyn_cast<PHINode>(nodes[i])) {
 +        errorMsg = "Error: Conflicting address space information in PHI node\n  " + irText(*PHI) + "\n";
 +      }
-+      AS = 0;
-+    } else if (AS == kUnknownAS) {
-+      AS = 0;
      }
-+    inferredPtrAS[nodes[i]] = AS;
++    inferredPtrAS[nodes[i]] = state[i];
    }
 +}
  
@@ -262,18 +272,18 @@ index b0509122..6a62330f 100644
 +  }
 +  auto it = inferredPtrAS.find(V);
 +  if (it != inferredPtrAS.end()) {
-+    return it->second;
++    return physicalAddressSpace(it->second);
 +  }
 +  if (!hasAddressSpaceRule(V)) {
 +    return 0; // no rule, e.g. undef or an argument
 +  }
 +  inferPointerAddressSpaces(V);
-+  return inferredPtrAS[V];
++  return physicalAddressSpace(inferredPtrAS[V]);
  }
  
  void MetalEmitter::analyzeCallInsts() {
 diff --git a/src/compiler/llvm-to-backend/metal/Emitter.hpp b/src/compiler/llvm-to-backend/metal/Emitter.hpp
-index 762dd86a..ff5d947b 100644
+index 762dd86a..8252bb45 100644
 --- a/src/compiler/llvm-to-backend/metal/Emitter.hpp
 +++ b/src/compiler/llvm-to-backend/metal/Emitter.hpp
 @@ -28,6 +28,7 @@ class Constant;
@@ -294,6 +304,16 @@ index 762dd86a..ff5d947b 100644
    const llvm::Value* stripToRootObject(const llvm::Value* V);
    std::unordered_map<llvm::Function*, std::vector<llvm::Function*>> buildCallGraph();
    std::vector<llvm::Function*> topologicalSort(const std::unordered_map<llvm::Function*, std::vector<llvm::Function*>>& callGraph);
+@@ -113,7 +117,8 @@ private:
+   std::map<std::pair<const llvm::BasicBlock*, const llvm::PHINode*>, const llvm::Value*> phiIncomingFromBlock;
+   std::unordered_set<const llvm::PHINode*> phiNodes;
+   std::unordered_map<const llvm::Value*, std::string> valuesToDeclare;
+-  //
++  // Solved lattice state of each generic pointer: an address space, or the unknown/conflicting
++  // marker (both emitted as 0); see inferPointerAddressSpaces.
+   std::unordered_map<const llvm::Value*, unsigned> inferredPtrAS;
+ 
+   // Names of the function being emitted, each computed once. Value::printAsOperand without a
 -- 
 2.54.0 (Apple Git-157)
 
