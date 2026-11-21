@@ -103,9 +103,13 @@ if constexpr (select::native_backend<B>) return <native kernel>; else throw batc
 ```
 
 trsm's kernels are not templated on the backend, so trsm changes only the run-time half. That
-covers its `can_run` and the alpha == 0 mask refusal in `trsm.cc`. Adopted so far: syrk, herk,
-syr2k, her2k, symm, hemm, trmm and trsm. To verify an op, read its `BATCHLAS_COVERAGE_OUT`
-`reached` rows on `NETLIB` in a vendor-free tree.
+covers its `can_run` and the alpha == 0 mask refusal in `trsm.cc`. geqrf, orgqr and ormqr are the
+same: their `can_run` takes `natives_run_on`, and the launch-side GPU checks
+(`native::require_launchable` in `src/kernels/common/launch.hh`, `ormqx_cta`) also admit a host
+queue when `BATCHLAS_HAS_HOST_NATIVE` keeps the CPU image. ormqr_blocked refuses a mask only where
+gemm is the host BLAS (`!native_backend<B>`). Adopted so far: syrk, herk, syr2k, her2k, symm, hemm,
+trmm, trsm, geqrf, orgqr and ormqr (ortho's Householder arm follows). To verify an op, read its
+`BATCHLAS_COVERAGE_OUT` `reached` rows on `NETLIB` in a vendor-free tree.
 
 ## Vendor independence: headers keyed on the library axis
 
