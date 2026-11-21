@@ -39,7 +39,9 @@ bool can_run(const PotrfChoice& c, const select::Device& d, const MatrixView<Sca
     const bool masked = detail::any_batch_mask(A);
     const int64_t n = A.rows();
     const auto budget = static_cast<std::size_t>(d.slm_budget);
-    const bool native = d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && n >= 1 && A.batch_size() >= 1;
+    // The kernels take no backend parameter, so only the run-time half of the host-native gate applies.
+    const bool native = select::natives_run_on(d) && d.has_sg32 && !A.is_heterogeneous() && n >= 1 &&
+                        A.batch_size() >= 1;
     return std::visit(overloaded{
         [&](Tiny) {
             return native && n <= ops::potrf::potrf_tiny_max_n<Scalar>() &&

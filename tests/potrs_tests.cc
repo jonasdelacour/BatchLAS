@@ -97,7 +97,9 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        TEST_SUPPORT_SKIP_NETLIB_WITHOUT_LAPACK(BK);
+        // A vendor-free host runs potrf and both potrs families natively (select::kHostNative).
+        if (BK == Backend::NETLIB && !select::kHasNetlib && !select::kHostNative)
+            GTEST_SKIP() << "NETLIB without LAPACKE/CBLAS or a host-native image has no potrf route";
     }
 
     Queue& q() { return *this->ctx; }
@@ -118,10 +120,14 @@ protected:
         return p;
     }
 
-    // The Cholesky factor in A's triangle, through the public potrf. False when the build has no potrf route.
+    // The Cholesky factor in A's triangle, through the public potrf. Every queue SetUp admits has a potrf
+    // route for every shape (the native blocked driver takes either triangle at any n), so none is a failure.
     bool factor(Sys<T>& p) {
         UnifiedVector<int32_t> info(static_cast<size_t>(p.a.batch_size()), int32_t(-12345));
-        if (!ts::potrf_in_place<BK, T>(q(), p.a, p.uplo, info.to_span())) return false;
+        if (!ts::potrf_in_place<BK, T>(q(), p.a, p.uplo, info.to_span())) {
+            ADD_FAILURE() << "potrf has no route for n=" << p.a.rows() << " " << ts::uplo_name(p.uplo);
+            return false;
+        }
         for (int it = 0; it < p.a.batch_size(); ++it) EXPECT_EQ(info[it], 0) << "potrf failed on item " << it;
         return true;
     }
@@ -393,7 +399,9 @@ TYPED_TEST(PotrsTest, AutoReadsTheShippedTable) {
 // so per run) AutoReadsTheShippedTable and FusedMatchesPosv for some CUDA types, with either suite.
 TYPED_TEST(PotrsTest, SaturatingBatchOfIdenticalItemsIsBitIdentical) {
     using T = typename TestFixture::T;
-    if (TestFixture::BK == Backend::NETLIB) GTEST_SKIP() << "no shared-local-memory kernel runs on the host queue";
+    // A vendor-free host runs the fused (shared-local-memory) kernel too; with netlib the host runs LAPACKE.
+    if (TestFixture::BK == Backend::NETLIB && !select::kHostNative)
+        GTEST_SKIP() << "no shared-local-memory kernel runs on the host queue";
     for (const char* family : {"fused", "trsm"})
         for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
             for (auto [n, nrhs] : {std::tuple{16, 8}, std::tuple{40, 5}, std::tuple{130, 8}}) {

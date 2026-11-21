@@ -162,13 +162,16 @@ class SytrfMask : public test_utils::BatchLASTest<Config> {
 protected:
     using T = typename Config::ScalarType;
     static constexpr Backend B = Config::BackendVal;
-    static constexpr bool kHost = B == Backend::NETLIB;
+    // A NETLIB queue runs LAPACKE's host loops, or in a vendor-free build (kHostNative) the natives.
+    static constexpr bool kHostNatives = B == Backend::NETLIB && select::kHostNative;
+    static constexpr bool kHost = B == Backend::NETLIB && !kHostNatives;
 
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
-        if (kHost && !select::kHasNetlib) GTEST_SKIP() << "no LAPACKE in this build";
-        if (!kHost && this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native families are GPU kernels";
+        if (kHost && !select::kHasNetlib) GTEST_SKIP() << "no LAPACKE and no host-native image in this build";
+        if (!kHost && !kHostNatives && this->ctx->device().type != DeviceType::GPU)
+            GTEST_SKIP() << "the native families run on a GPU or a vendor-free host";
     }
 
     template <typename Choice>
@@ -178,7 +181,7 @@ protected:
         mc::check<Choice>(*this->ctx, name, s.spelling, p.make_case());
     }
 
-    // The families that honour the mask here: LAPACKE's host loop on NETLIB, the natives on a GPU.
+    // The families that honour the mask here: LAPACKE's host loop on NETLIB, else the natives.
     static std::vector<std::string> sytrf_families(int n) {
         if (kHost) return {"vendor"};
         std::vector<std::string> v{"wg", "blocked"};
@@ -204,7 +207,7 @@ TYPED_TEST(SytrfMask, SytrfEveryFamilyBothTriangles) {
 // n = 170 runs blocked's panel loop through the public gemm; the parts {0..2}, {3..5}, {6..8}
 // each carry their own slice of the mask (the drop hazard), on the gemm views as on the kernels.
 TYPED_TEST(SytrfMask, SytrfBlockedPartsCarryTheirSlice) {
-    if (this->kHost) GTEST_SKIP() << "blocked is a GPU family";
+    if (this->kHost) GTEST_SKIP() << "blocked is a native family; this host runs LAPACKE";
     if constexpr (std::is_same_v<typename TestFixture::T, float>)
         for (Uplo u : {Uplo::Lower, Uplo::Upper})
             this->template check<ops::sytrf::SytrfChoice>(Op::sytrf, "sytrf", {"blocked", 170, 0, 9, u, false, 3});
@@ -221,7 +224,7 @@ TYPED_TEST(SytrfMask, SytrsEveryFamilyBothTriangles) {
 // sytrs blocked: the converted factor and gathered B per part, its two trsm on the masked part
 // views; parts of 3 and 4 items carry their own slice (the chunk patterns).
 TYPED_TEST(SytrfMask, SytrsBlockedPartsCarryTheirSlice) {
-    if (this->kHost) GTEST_SKIP() << "blocked is a GPU family";
+    if (this->kHost) GTEST_SKIP() << "blocked is a native family; this host runs LAPACKE";
     for (Uplo u : {Uplo::Lower, Uplo::Upper}) {
         this->template check<ops::sytrs::SytrsChoice>(Op::sytrs, "sytrs", {"blocked", 8, 3, 6, u});
         this->template check<ops::sytrs::SytrsChoice>(Op::sytrs, "sytrs", {"blocked", 45, 2, 9, u, false, 3});

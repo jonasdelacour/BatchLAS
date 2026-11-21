@@ -184,9 +184,11 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        // GPU-only and sub-group 32 are can_run()'s own correctness gates.
-        if (this->ctx->device().type != DeviceType::GPU) {
-            GTEST_SKIP() << "potrf_cta is a GPU kernel";
+        // select::natives_run_on and sub-group 32 are can_run()'s own correctness gates: a GPU, or a
+        // vendor-free host (kHostNative), whose CPU image holds the kernels.
+        const bool host_native = BackendType == Backend::NETLIB && select::kHostNative;
+        if (this->ctx->device().type != DeviceType::GPU && !host_native) {
+            GTEST_SKIP() << "potrf_cta runs on a GPU or a vendor-free host";
         }
         if (!this->ctx->device().supports_sub_group_size(32)) {
             GTEST_SKIP() << "device does not offer sub-group size 32";
@@ -1567,7 +1569,9 @@ TYPED_TEST(PotrfBlockedTest, FacadeBlockedUpper) {
 // so a ScopedEnvVar after any potrf was silently ignored.
 TEST(PotrfBlocked, NbFollowsScopedEnv) {
     Queue q;
-    if (q.device().type != DeviceType::GPU) GTEST_SKIP() << "the blocked driver is GPU-only";
+    // A host queue (ctx.backend() NETLIB) runs the pinned native only in a vendor-free build.
+    if (q.device().type != DeviceType::GPU && !select::kHostNative)
+        GTEST_SKIP() << "the blocked driver runs on a GPU or a vendor-free host";
     constexpr int n = 512;
     Matrix<float, MatrixFormat::Dense> A(n, n, 4);
     ScopedEnvVar clear_nb("BATCHLAS_POTRF_NB", nullptr);

@@ -49,7 +49,9 @@ using Dev = typename sycl_device::DevMap<Scalar>::type;
 
 void check_device(Queue& ctx, const char* who) {
     const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU) throw batchlas::invalid_argument(std::string(who) + ": GPU queues only");
+    // A vendor-free host runs these kernels too (select::kHostNative, the host-native gate).
+    if (dev.type != DeviceType::GPU && !select::kHostNative)
+        throw batchlas::invalid_argument(std::string(who) + ": GPU queues only");
     if (!dev.supports_sub_group_size(32))
         throw batchlas::unsupported(std::string(who) + ": device does not offer sub-group size 32");
 }

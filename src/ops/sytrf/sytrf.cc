@@ -44,8 +44,9 @@ select::Key key_of(const MV<Scalar>& A) {
 template <Backend B, class Scalar>
 bool can_run(const SytrfChoice& c, const select::Device& d, const MV<Scalar>& A) {
     const std::int64_t n = A.rows();
-    const bool native = B != Backend::NETLIB && d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && n >= 1 &&
-                        A.batch_size() >= 1 && d.max_wg >= ops::sytrf::kSytrfCtaWg;
+    // The host-native gate's run-time half; NETLIB takes the natives only in a vendor-free build.
+    const bool native = (B != Backend::NETLIB || select::kHostNative) && select::natives_run_on(d) && d.has_sg32 &&
+                        !A.is_heterogeneous() && n >= 1 && A.batch_size() >= 1 && d.max_wg >= ops::sytrf::kSytrfCtaWg;
     return std::visit(overloaded{
         [&](Cta) { return native && n <= ops::sytrf::kSytrfCtaMaxN; },
         [&](Wg) { return native; },

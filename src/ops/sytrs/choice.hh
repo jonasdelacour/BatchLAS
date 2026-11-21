@@ -17,7 +17,8 @@ struct Blocked : select::NoFields<"blocked"> {};  ///< sytrs_blocked_dispatch: ?
 struct Wg : select::NoFields<"wg"> {};            ///< sytrs_native_dispatch: one work-group per right-hand side
 struct Vendor : select::NoFields<"vendor"> {};    ///< backend::sytrs_vendor: LAPACKE ?sytrs per item (NETLIB only)
 
-using SytrsChoice = std::variant<Cta, Blocked, Wg, Vendor>;  ///< natives: GPU, sub-group 32, homogeneous, not NETLIB
+/// natives: natives_run_on, sub-group 32, homogeneous; on NETLIB only in a vendor-free build
+using SytrsChoice = std::variant<Cta, Blocked, Wg, Vendor>;
 
 template <class Scalar>  /// Every compiled choice, once, in tie-break order (§6.3).
 constexpr auto candidates() { return select::all_of<SytrsChoice>(); }
