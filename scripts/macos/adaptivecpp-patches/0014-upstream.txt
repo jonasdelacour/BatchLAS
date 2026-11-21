@@ -52,6 +52,11 @@ optimistic dataflow fixpoint:
   whenever one of its sources changes (a worklist over reverse edges);
 - results are cached only after the fixpoint, and no placeholder is ever
   cached as final;
+- the cache holds the lattice state, not the emitted address space. Unknown
+  and conflicting stay distinct there and both become AS 0 only when read.
+  A later solve that reaches a value an earlier solve found conflicting
+  joins the conflict instead of reading it as unknown, so the result does
+  not depend on which pointer is queried first;
 - sources with no information (undef, poison, values that no rule covers)
   do not constrain the join. This now holds for selects too, as it already
   did for PHIs.
