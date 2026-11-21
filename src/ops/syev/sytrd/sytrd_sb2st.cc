@@ -532,10 +532,10 @@ Event sytrd_sb2st(Queue& ctx,
 
     const Sb2stSubgroupMode mode = parse_mode();
 
-    // The sub-group kernel (sytrd_sb2st_cta.cc) builds without CPU targets, and the OpenCL CPU
-    // offers sub-group size 32.
-    const bool device_has_sg32 =
-        ctx.device().type == DeviceType::GPU && ctx.device().supports_sub_group_size(32);
+    // The sub-group kernel (sytrd_sb2st_cta.cc) has a CPU image only in a vendor-free build
+    // (BATCHLAS_HAS_HOST_NATIVE), and the OpenCL CPU offers sub-group size 32.
+    const bool device_has_sg32 = (BATCHLAS_HAS_HOST_NATIVE || ctx.device().type == DeviceType::GPU) &&
+                                 ctx.device().supports_sub_group_size(32);
 
     bool can_use_subgroup = false;
     if (mode != Sb2stSubgroupMode::ForceOff) {

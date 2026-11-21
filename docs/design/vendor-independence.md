@@ -111,6 +111,15 @@ Compose accepts a masked batch on a vendor-free host, whose trsm and trmm are na
 refuses a host mask only where its syrk and herk are the host BLAS. To verify an op, read its `BATCHLAS_COVERAGE_OUT`
 `reached` rows on `NETLIB` in a vendor-free tree.
 
+syev's kernels are templated on the backend and compiled for NETLIB in every build, so syev
+changes only the run-time half (`B != NETLIB || kHostNative`, then `natives_run_on`); `two_stage`
+stays GPU-only, as its `sy2sb` runs the public `geqrf`. The CTA entry points under `src/ops/syev/`
+(sytrd_cta, steqr_cta and steqr's dispatch, stedc_merge_cta, sytrd_sb2st, syev_cta_fused,
+syev_jacobi_cta, sytrd_blocked's \f$n \le 32\f$ arm) accept the CPU under
+`BATCHLAS_HAS_HOST_NATIVE`, where the cta library keeps its CPU image. syevx's DirectSubset
+degrades to Direct on that host (its back-transform is LAPACKE's ormqr), and stedc keeps its
+NETLIB solver, `steqr_legacy`, in every build.
+
 ## Vendor independence: headers keyed on the library axis
 
 The math-library includes in `src/linalg-impl.hh` (`<cublas_v2.h>`, `<cusparse.h>`,

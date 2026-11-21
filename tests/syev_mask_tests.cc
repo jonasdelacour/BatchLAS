@@ -17,6 +17,7 @@
 
 #include <src/ops/syev/choice.hh>
 #include <src/ops/syev/sytrd/sytrd_sb2st_hh.hh>
+#include <src/select/vendor.hh>
 #include <tests/masked_contract.hh>
 #include <tests/test_support/storage.hh>
 #include <tests/test_utils.hh>
@@ -83,6 +84,11 @@ protected:
     static constexpr Backend B = Config::BackendVal;
 
     bool gpu() const { return this->ctx->device().type == DeviceType::GPU; }
+    // Where the native families run: a GPU, or a vendor-free host (select::kHostNative), whose
+    // level-3 children are native too and honour the mask. Its geqrf and ormqr have no host route,
+    // so what calls them (sy2sb, the band reduction, two_stage) stays GPU-only.
+    // evidence: docs/design/vendor-independence.md#the-host-native-gate
+    bool natives() const { return gpu() || (B == Backend::NETLIB && select::kHostNative); }
 
     // One masked syev: A (overwritten), w and info. `wg_items` > 1: items per packed sub-group.
     struct Problem {
@@ -152,23 +158,24 @@ int items_per_subgroup(int n) {
     return 32 / p;
 }
 
-// cta_fused and jacobi (GPU), the LAPACKE loop (host): both jobz, both triangles, each partition size.
+// cta_fused and jacobi (GPU, vendor-free host), the LAPACKE loop (host with netlib): both jobz, both
+// triangles, each partition size.
 TYPED_TEST(SyevMask, EveryHonouringFamilyLeavesInactiveItemsUntouched) {
     const int batch = 24;
     std::vector<std::string> fams;
-    if (this->gpu()) fams = {"cta_fused", "jacobi"};
+    if (this->natives()) fams = {"cta_fused", "jacobi"};
     else fams = {"vendor"};
     for (const auto& f : fams)
         for (const int n : {3, 7, 13, 32})
             for (const JobType j : {JobType::EigenVectors, JobType::NoEigenVectors})
                 for (const Uplo u : {Uplo::Lower, Uplo::Upper})
                     this->check(f, n, batch, j, u, items_per_subgroup(n));
-    if (!this->gpu()) this->check("vendor", 45, 6, JobType::EigenVectors, Uplo::Lower, 0);
+    if (!this->natives()) this->check("vendor", 45, 6, JobType::EigenVectors, Uplo::Lower, 0);
 }
 
 // The saturating batch: 1024 identical items, each active one bit-identical to the first.
 TYPED_TEST(SyevMask, SaturatingIdenticalItems) {
-    if (!this->gpu()) GTEST_SKIP() << "the partition kernels are GPU families";
+    if (!this->natives()) GTEST_SKIP() << "the partition kernels are native families";
     for (const auto* f : {"cta_fused", "jacobi"})
         for (const int n : {7, 32}) this->check(f, n, 1024, JobType::EigenVectors, Uplo::Lower, items_per_subgroup(n), true);
 }
@@ -177,7 +184,7 @@ TYPED_TEST(SyevMask, SaturatingIdenticalItems) {
 TYPED_TEST(SyevMask, SytrdCtaLeavesInactiveItemsUntouched) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::B;
-    if (!this->gpu()) GTEST_SKIP() << "sytrd_cta is a GPU kernel";
+    if (!this->natives()) GTEST_SKIP() << "sytrd_cta is a native kernel";
     Queue& q = *this->ctx;
     for (const int batch : {24, 1024})
         for (const int n : {5, 13, 32})
@@ -210,7 +217,7 @@ TYPED_TEST(SyevMask, Sb2stLeavesInactiveItemsUntouched) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
     constexpr Backend B = TestFixture::B;
-    if (!this->gpu()) GTEST_SKIP() << "sytrd_sb2st's chase is a GPU kernel";
+    if (!this->natives()) GTEST_SKIP() << "sytrd_sb2st's chase is a native kernel";
     Queue& q = *this->ctx;
     const int n = 19, batch = 20;
     for (const int kd : {0, 1, 3, 6})
@@ -248,7 +255,7 @@ TYPED_TEST(SyevMask, Sb2stHhAndItsBackTransformLeaveInactiveItemsUntouched) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
     constexpr Backend B = TestFixture::B;
-    if (!this->gpu()) GTEST_SKIP() << "sytrd_sb2st_hh is a GPU kernel";
+    if (!this->natives()) GTEST_SKIP() << "sytrd_sb2st_hh is a native kernel";
     Queue& q = *this->ctx;
     const int n = 23, kd = 4, batch = 12;
     const auto sched = detail::build_sb2st_hh_schedule(n, kd);
@@ -307,7 +314,7 @@ TYPED_TEST(SyevMask, Sb2stHhAndItsBackTransformLeaveInactiveItemsUntouched) {
 TYPED_TEST(SyevMask, LatrdPanelLeavesInactiveItemsUntouched) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::B;
-    if (!this->gpu()) GTEST_SKIP() << "latrd's panel is a GPU kernel";
+    if (!this->natives()) GTEST_SKIP() << "latrd's panel is a native kernel";
     Queue& q = *this->ctx;
     const int ib = 4, j0 = 3, batch = 10;
     // grid at n = 100: four work-groups per item share its software grid barrier (40 resident).
@@ -346,7 +353,7 @@ TYPED_TEST(SyevMask, SytrdCompositesLeaveInactiveItemsUntouched) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
     constexpr Backend B = TestFixture::B;
-    if (!this->gpu()) GTEST_SKIP() << "on the host backend their level-3 children are its BLAS, which refuses";
+    if (!this->natives()) GTEST_SKIP() << "on the host backend their level-3 children are its BLAS, which refuses";
     Queue& q = *this->ctx;
     const bool vendor = B == Backend::CUDA || B == Backend::ROCM;
     const int batch = 10;
@@ -381,6 +388,7 @@ TYPED_TEST(SyevMask, SytrdCompositesLeaveInactiveItemsUntouched) {
             mc::check(q, c);
         }
     }
+    if (!this->gpu()) return;  // sy2sb and the band reduction run geqrf/ormqr (no vendor-free host route)
     for (const int kd : {4, 8}) {
         {
             const int n = 40;
@@ -469,12 +477,14 @@ TYPED_TEST(SyevMask, SytrdCompositesLeaveInactiveItemsUntouched) {
 // stedc, stebz and ormqr_blocked; two_stage over sy2sb, sb2st, stedc and the back-transforms. Both
 // jobz and triangles, and the part patterns (part edges off, one part wholly inactive).
 TYPED_TEST(SyevMask, CompositesLeaveInactiveItemsUntouched) {
-    if (!this->gpu()) GTEST_SKIP() << "the composites are GPU families";
+    if (!this->natives()) GTEST_SKIP() << "the composites are native families";
     for (const JobType j : {JobType::EigenVectors, JobType::NoEigenVectors})
         for (const Uplo u : {Uplo::Lower, Uplo::Upper}) {
             for (const int n : {3, 13, 32}) this->check("cta", n, 24, j, u, items_per_subgroup(n), false, 8);
-            for (const auto* f : {"blocked", "two_stage"})
+            for (const auto* f : {"blocked", "two_stage"}) {
+                if (!this->gpu() && std::string(f) == "two_stage") continue;  // sy2sb's geqrf: GPU only
                 for (const int n : {45, 70}) this->check(f, n, 24, j, u, 0, false, 8);
+            }
         }
 }
 
@@ -493,7 +503,7 @@ TYPED_TEST(SyevMask, SyfnLeavesInactiveItemsUntouched) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
     constexpr Backend B = TestFixture::B;
-    if (!this->gpu()) GTEST_SKIP() << "the host backend's syrk is its BLAS, which refuses a mask";
+    if (!this->natives()) GTEST_SKIP() << "the host backend's syrk is its BLAS, which refuses a mask";
     Queue& q = *this->ctx;
     for (const int n : {7, 45}) {
         SCOPED_TRACE("syfn n " + std::to_string(n));
@@ -557,7 +567,7 @@ TYPED_TEST(SyevMask, SyevAlignLeavesInactiveItemsUntouched) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
     constexpr Backend B = TestFixture::B;
-    if (!this->gpu()) GTEST_SKIP() << "the host backend's gemm is its BLAS, which refuses a mask";
+    if (!this->natives()) GTEST_SKIP() << "the host backend's gemm is its BLAS, which refuses a mask";
     Queue& q = *this->ctx;
     const int n = 11, m = 6, batch = 14;
     Matrix<T> V0 = ts::padded<T>(n, m, batch), V = ts::padded<T>(n, m, batch);

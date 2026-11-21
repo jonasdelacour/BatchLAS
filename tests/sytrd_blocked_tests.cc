@@ -21,20 +21,25 @@
 #include <type_traits>
 #include <vector>
 
+#include <batchlas/backend_config.h>
+#include <src/select/vendor.hh>
 #include <tests/test_utils.hh>
 #include <tests/eigen_verify.hh>
+#include <tests/test_support/coverage_rows.hh>
 
 using namespace batchlas;
 
 namespace {
 
 // The tridiagonalization's backward error seen through its spectrum: max |eig(T) - eig(A0)| / ||A0||_2
-// over `items` (default: first, middle, last), both from LAPACKE in double. T's spectrum comes from
-// (Re d, |e|): a unitary diagonal similarity makes a Hermitian tridiagonal's spectrum the real one's.
+// over `items` (default: first, middle, last), both from LAPACKE in double, or without it from the
+// host references of eigen_verify.hh. T's spectrum comes from (Re d, |e|): a unitary diagonal
+// similarity makes a Hermitian tridiagonal's spectrum the real one's.
 template <typename Scalar>
 double spectrum_error(const MatrixView<Scalar, MatrixFormat::Dense>& A0, Vector<Scalar>& d, Vector<Scalar>& e,
                       std::span<const int> items = {}) {
     using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+    using P = typename MV::promoted_type;
     const int n = A0.rows();
     const int batch = A0.batch_size();
     const std::vector<int> picked = items.empty() ? A0.default_items() : std::vector<int>(items.begin(), items.end());
@@ -45,8 +50,12 @@ double spectrum_error(const MatrixView<Scalar, MatrixFormat::Dense>& A0, Vector<
         std::vector<double> dd(n), ee(std::max(0, n - 1));
         for (int i = 0; i < n; ++i) dd[i] = std::real(MV::up(d(i, b)));
         for (int i = 0; i + 1 < n; ++i) ee[i] = std::abs(MV::up(e(i, b)));
-        if (!verify::eigenvalues(A0, b, ref[static_cast<std::size_t>(b)]) || !verify::tridiagonal_eigenvalues(dd, ee))
+        if constexpr (!verify::have_reference) {
+            ref[static_cast<std::size_t>(b)] = test_utils::host_hermitian_eigenvalues<P>(n, verify::detail::item_vector<P>(A0, b));
+            dd = test_utils::host_tridiagonal_eigenvalues(dd, ee);
+        } else if (!verify::eigenvalues(A0, b, ref[static_cast<std::size_t>(b)]) || !verify::tridiagonal_eigenvalues(dd, ee)) {
             return std::numeric_limits<double>::quiet_NaN();
+        }
         std::copy(dd.begin(), dd.end(), got.begin() + static_cast<std::ptrdiff_t>(b) * n);
         for (double l : ref[static_cast<std::size_t>(b)]) scale = verify::nanmax(scale, std::fabs(l));
     }
@@ -74,11 +83,10 @@ void expect_values_err(int n, double err, std::optional<verify::Slack> slack) {
     else EXPECT_VERIFY(Scalar, verify::Check::values, n, err);
 }
 
-// spectrum_error at Check::values (n = the order); skips without LAPACKE.
+// spectrum_error at Check::values (n = the order).
 template <typename Scalar>
 void expect_spectrum(const MatrixView<Scalar, MatrixFormat::Dense>& A0, Vector<Scalar>& d, Vector<Scalar>& e,
                      std::optional<verify::Slack> slack = std::nullopt, std::span<const int> items = {}) {
-    if (!BATCHLAS_VERIFY_HAVE_LAPACKE) GTEST_SKIP() << "no host LAPACKE reference in this build";
     expect_values_err<Scalar>(A0.rows(), spectrum_error(A0, d, e, items), slack);
 }
 
@@ -145,7 +153,6 @@ TYPED_TEST(SytrdBlockedTest, TrailingUpdateRoutesAgree) {
     Matrix<Real, MatrixFormat::Dense> A0 =
         Matrix<Real, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/20260806);
     const auto items = A0.all_items();
-    if (!BATCHLAS_VERIFY_HAVE_LAPACKE) GTEST_SKIP() << "no host LAPACKE reference in this build";
     const auto slack = float_slack<Real>({0.25, "old bound 4 n eps(2^-23) ||A|| = 8 n u ||A||"});
 
     // Runs one trailing-update route; returns its spectrum_error, checked at Check::values.
@@ -453,5 +460,43 @@ TEST(SytrdBlockedLatrdGridCudaTest, ForcedGroupCountsAgree) {
             run_latrd_grid_case<double>(129, 1, 32, "grid");
         }
     }
+}
+#endif
+
+#if BATCHLAS_HAS_HOST_BACKEND && BATCHLAS_HAS_CPU_TARGET
+namespace {
+// sytrd_blocked on a vendor-free host at n = 200, nb = 32 (n2 > 128 on the first two panels, so
+// the blocked trailing update runs): the tridiagonal's spectrum is A0's (host reference), and each
+// level-3 child it reached on NETLIB is a native family. The update there is the gemm pair:
+// syr2k / her2k replace it only under select::level3_tile_substitution_enabled, a GPU backend's.
+template <typename Scalar>
+void expect_host_sytrd_native(Queue& ctx) {
+    SCOPED_TRACE(is_std_complex_v<Scalar> ? "complex<float>" : "float");
+    const int n = 200, batch = 3, nb = 32;
+    Matrix<Scalar, MatrixFormat::Dense> A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, true, batch, 2611);
+    Matrix<Scalar, MatrixFormat::Dense> A = A0;
+    Vector<Scalar> d(n, batch), e(n - 1, batch), tau(n - 1, batch);
+    UnifiedVector<std::byte> ws(sytrd_blocked_buffer_size<Backend::NETLIB, Scalar>(ctx, A, d, e, tau, Uplo::Lower, nb));
+    const auto rows = test_support::reached_rows([&] {
+        (void)sytrd_blocked<Backend::NETLIB, Scalar>(ctx, A, d, e, tau, Uplo::Lower, ws.to_span(), nb);
+        ctx.wait();
+    });
+    int wide_gemm = 0;
+    for (const auto& r : rows) {
+        if (r.op != "gemm" && r.op != "syr2k" && r.op != "her2k") continue;
+        EXPECT_EQ(r.backend, "NETLIB") << r.op;
+        EXPECT_NE(r.spelling, "vendor") << r.op << " m " << r.m;
+        wide_gemm += r.op == "gemm" && r.m > 128;
+    }
+    EXPECT_GT(wide_gemm, 0) << "the blocked trailing update (n2 > 128) was not reached";
+    expect_spectrum<Scalar>(A0, d, e, float_old_power<Scalar>(n));
+}
+}  // namespace
+
+TEST(SytrdBlockedHostTest, VendorFreeTrailingUpdateIsNative) {
+    if (!batchlas::select::kHostNative) GTEST_SKIP() << "netlib present: the host's level-3 children are its BLAS";
+    Queue ctx(Device("cpu"), Backend::NETLIB, true);
+    expect_host_sytrd_native<float>(ctx);
+    expect_host_sytrd_native<std::complex<float>>(ctx);
 }
 #endif

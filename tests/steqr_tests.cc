@@ -26,13 +26,17 @@ using namespace batchlas;
 
 namespace {
 // Eigenvalues of every item of a dense symmetric A (both triangles valid) from LAPACKE, ascending,
-// and ||A||_2 over them. Empty without LAPACKE or when a reference fails.
+// and ||A||_2 over them; without LAPACKE from the host Householder + bisection reference
+// (eigen_verify.hh), never from a BatchLAS route. Empty when a LAPACKE reference fails.
 template <typename Real>
 std::vector<std::vector<double>> lapacke_spectra(const MatrixView<Real, MatrixFormat::Dense>& A, double& norm2) {
     std::vector<std::vector<double>> w(static_cast<std::size_t>(A.batch_size()));
     norm2 = 0;
     for (int b = 0; b < A.batch_size(); ++b) {
-        if (!verify::eigenvalues(A, b, w[static_cast<std::size_t>(b)])) return {};
+        if constexpr (!verify::have_reference)
+            w[static_cast<std::size_t>(b)] =
+                test_utils::host_hermitian_eigenvalues<double>(A.rows(), verify::detail::item_vector<double>(A, b));
+        else if (!verify::eigenvalues(A, b, w[static_cast<std::size_t>(b)])) return {};
         for (double l : w[static_cast<std::size_t>(b)]) norm2 = verify::nanmax(norm2, std::fabs(l));
     }
     return w;
@@ -45,15 +49,12 @@ std::vector<std::vector<double>> repeated(const std::vector<double>& one, int ba
     return std::vector<std::vector<double>>(static_cast<std::size_t>(batch), one);
 }
 
-// w (n values per item) against ref at Check::values, scaled by norm2. An empty ref skips without
-// LAPACKE and fails with it: there it means the reference itself failed.
+// w (n values per item) against ref at Check::values, scaled by norm2. An empty ref fails: the
+// reference itself failed (the host fallback never returns empty).
 template <typename Real>
 void expect_values(const VectorView<Real>& w, const std::vector<std::vector<double>>& ref, double norm2, int n,
                    std::optional<verify::Slack> slack = std::nullopt, std::span<const int> items = {}) {
-    if (ref.empty()) {
-        if constexpr (verify::have_reference) FAIL() << "host LAPACKE reference failed (info != 0)";
-        else GTEST_SKIP() << "no host LAPACKE reference in this build";
-    }
+    if (ref.empty()) FAIL() << "host eigenvalue reference failed";
     const double err = MatrixView<Real, MatrixFormat::Dense>::values_error(w, ref, norm2, items);
     if (slack) EXPECT_VERIFY_SLACK(Real, verify::Check::values, n, err, *slack);
     else EXPECT_VERIFY(Real, verify::Check::values, n, err);
@@ -444,10 +445,28 @@ TYPED_TEST(SteqrTest, SteqrConditionedTridiagonalNetlibRef) {
         }
     }
 
-    auto conds = cond<B>(*this->ctx, dense_A, NormType::Spectral);
-    this->ctx->wait();
+    // The oracle, from (d, e) before steqr runs: LAPACKE dsterf, or without it the host bisection
+    // of eigen_verify.hh; never syev (on NETLIB that is a BatchLAS route, steqr's sibling). The
+    // premise check (spectral condition max|l| / min|l|) reads the same reference.
+    std::vector<std::vector<double>> ref(batch);
+    double norm2 = 0;
     for (int b = 0; b < batch; ++b) {
-        EXPECT_GE(std::log10(conds[b]), log10_cond - float_type(0.5)) << "Batch " << b;
+        std::vector<double> d(n), e(n - 1);
+        for (int i = 0; i < n; ++i) d[i] = diag(i, b);
+        for (int i = 0; i + 1 < n; ++i) e[i] = sub(i, b);
+        if constexpr (verify::have_reference) {
+            ASSERT_TRUE(verify::tridiagonal_eigenvalues(d, e)) << "host LAPACKE reference failed, item " << b;
+        } else {
+            d = test_utils::host_tridiagonal_eigenvalues(d, e);
+        }
+        double lmax = 0, lmin = std::numeric_limits<double>::infinity();
+        for (double l : d) {
+            lmax = verify::nanmax(lmax, std::fabs(l));
+            lmin = std::min(lmin, std::fabs(l));
+        }
+        EXPECT_GE(std::log10(lmax / lmin), double(log10_cond) - 0.5) << "Batch " << b;
+        norm2 = verify::nanmax(norm2, lmax);
+        ref[b] = std::move(d);
     }
 
     Vector<float_type> eigenvalues(n, batch);
@@ -465,17 +484,6 @@ TYPED_TEST(SteqrTest, SteqrConditionedTridiagonalNetlibRef) {
     (void)steqr<B, float_type>(*this->ctx, diag, sub, eigenvalues,
                          ws.to_span(), JobType::EigenVectors, params, eigvects);
     this->ctx->wait();
-
-    std::vector<std::vector<double>> ref(batch);
-    double norm2 = 0;
-    for (int b = 0; b < batch; ++b) {
-        std::vector<double> d(n), e(n - 1);
-        for (int i = 0; i < n; ++i) d[i] = diag(i, b);
-        for (int i = 0; i + 1 < n; ++i) e[i] = sub(i, b);
-        if (!verify::tridiagonal_eigenvalues(d, e)) { ref.clear(); break; }
-        for (double l : d) norm2 = verify::nanmax(norm2, std::fabs(l));
-        ref[b] = std::move(d);
-    }
     expect_values(VectorView<float_type>(eigenvalues), ref, norm2, n, std::nullopt, eigvects.all_items());
 }
 

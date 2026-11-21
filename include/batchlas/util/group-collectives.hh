@@ -408,11 +408,14 @@ inline std::size_t source_linear_id(const Group& g, sycl::id<D> id) {
 
 // TRAP (DPC++ CPU device, spir64_x86_64): sycl::group_broadcast over a WORK-GROUP launched
 // with reqd_sub_group_size(32) reaches lanes 0..15 of each sub-group only; lanes 16..31 keep
-// their own x (WG 256: 128 of 256 items, every T; the Blocked device syev's sytrd lost its
-// reflector scale there, 2026-11-21). The SPIR device pass ORs the source's bits over the
-// group word by word instead, exact for every value (as device::detail::group_bcast does).
-// NVPTX, AMDGCN, the host pass and sub-groups call sycl::group_broadcast unchanged.
-/// @brief `sycl::group_broadcast`, correct on every item of a SPIR work-group. Collective.
+// their own x (WG 256: 128 of 256 items at 4 to 16 bytes, and short and bool fail too; the
+// Blocked device syev's sytrd lost its reflector scale, 2026-11-21). The SPIR device pass ORs the source's bits
+// over the group word by word instead, exact for every trivially copyable T: a T that is not a
+// whole number of words rides zero-padded in the last 32-bit word (device::detail::group_bcast
+// ORs one 4- or 8-byte word the same way). NVPTX, AMDGCN, the host pass and sub-groups call
+// sycl::group_broadcast unchanged.
+/// @brief `sycl::group_broadcast`, correct on every item of a SPIR work-group for every
+/// trivially copyable `T`. Collective.
 /// @param[in] g   group or sub-group; every work-item of it must call
 /// @param[in] x   this work-item's value; only the source work-item's is used
 /// @param[in] id  local id of the source work-item (omitted: work-item 0)
@@ -421,13 +424,14 @@ template <typename Group, typename T, typename... Id>
     requires sycl::is_group_v<Group>
 inline T group_broadcast(Group g, T x, Id... id) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-    if constexpr (detail::kWorkGroup<Group> && std::is_trivially_copyable_v<T> && sizeof(T) % 4 == 0) {
+    if constexpr (detail::kWorkGroup<Group>) {
+        static_assert(std::is_trivially_copyable_v<T>, "portable::group_broadcast moves T by its bytes");
         using W = std::conditional_t<sizeof(T) % 8 == 0, std::uint64_t, std::uint32_t>;
-        constexpr std::size_t kN = sizeof(T) / sizeof(W);
+        constexpr std::size_t kN = (sizeof(T) + sizeof(W) - 1) / sizeof(W);
         W w[kN] = {};
         if (g.get_local_linear_id() == detail::source_linear_id(g, id...)) std::memcpy(w, &x, sizeof(T));
         for (std::size_t i = 0; i < kN; ++i) w[i] = sycl::reduce_over_group(g, w[i], sycl::bit_or<W>());
-        T out;
+        T out = x;
         std::memcpy(&out, w, sizeof(T));
         return out;
     }

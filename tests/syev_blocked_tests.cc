@@ -37,17 +37,10 @@ struct SyevBlockedConfig {
 
 using SyevBlockedTestTypes = typename test_utils::backend_types<SyevBlockedConfig>::type;
 
+// Vendor-free, the CPU runs syev_blocked natively (select::kHostNative), against the host
+// reference of eigen_verify.hh. evidence: docs/design/vendor-independence.md#the-host-native-gate
 template <typename Config>
-class SyevBlockedTest : public test_utils::BatchLASTest<Config> {
-protected:
-    // Vendor-free: the CPU has no syev route and no netlib reference (docs/perf/syev.md#syev-vendor-free-double-band).
-    void SetUp() override {
-        test_utils::BatchLASTest<Config>::SetUp();
-        if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
-        if (Config::BackendVal == Backend::NETLIB && !batchlas::select::kHasNetlib)
-            GTEST_SKIP() << "vendor-free build: no syev route on the CPU";
-    }
-};
+class SyevBlockedTest : public test_utils::BatchLASTest<Config> {};
 
 TYPED_TEST_SUITE(SyevBlockedTest, SyevBlockedTestTypes);
 
@@ -334,14 +327,21 @@ Matrix<Scalar, MatrixFormat::Dense> upper_mirrored(const Matrix<Scalar, MatrixFo
     return M;
 }
 
-// max over items of max_i |eig_i(A) - eig_i(B)|, both read from the lower triangle by LAPACKE.
+// max over items of max_i |eig_i(A) - eig_i(B)|, both read from the lower triangle by LAPACKE, or
+// without it by the host reference of eigen_verify.hh (which reads the lower triangle too).
 template <typename Scalar>
 double lapacke_spectrum_gap(const MatrixView<Scalar, MatrixFormat::Dense>& A, const MatrixView<Scalar,
                             MatrixFormat::Dense>& B) {
+    using P = typename MatrixView<Scalar, MatrixFormat::Dense>::promoted_type;
+    const auto spectrum = [](const MatrixView<Scalar, MatrixFormat::Dense>& M, int b, std::vector<double>& w) {
+        if constexpr (verify::have_reference) return verify::eigenvalues(M, b, w);
+        w = test_utils::host_hermitian_eigenvalues<P>(M.rows(), verify::detail::item_vector<P>(M, b));
+        return true;
+    };
     double gap = 0;
     for (int b = 0; b < A.batch_size(); ++b) {
         std::vector<double> wa, wc;
-        if (!verify::eigenvalues(A, b, wa) || !verify::eigenvalues(B, b, wc)) return std::numeric_limits<double>::quiet_NaN();
+        if (!spectrum(A, b, wa) || !spectrum(B, b, wc)) return std::numeric_limits<double>::quiet_NaN();
         for (std::size_t i = 0; i < wa.size(); ++i) gap = verify::nanmax(gap, std::fabs(wa[i] - wc[i]));
     }
     return gap;
@@ -377,10 +377,8 @@ TYPED_TEST(SyevBlockedTest, UpperMatchesNetlibWithDisagreeingTriangles) {
     // still symmetric, Upper and Lower are interchangeable, and this test would pass even if
     // the mirror never ran. The spectrum read from the LOWER triangle must differ from the
     // Upper one (LAPACKE on both) -- that is what makes the Upper comparison below meaningful.
-#if BATCHLAS_VERIFY_HAVE_LAPACKE
     ASSERT_GT(lapacke_spectrum_gap(A0, A_sym), 1.0)
         << "fixture is vacuous: the two triangles agree, so Upper vs Lower proves nothing";
-#endif
 
     // Ours: blocked path with Uplo::Upper, which must mirror before reducing.
     {

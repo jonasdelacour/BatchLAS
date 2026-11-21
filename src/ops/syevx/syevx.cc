@@ -170,10 +170,13 @@ SyevxAlgorithm algorithm_from_env(SyevxAlgorithm fallback, bool& from_env) {
 }
 
 // The host backend's DirectSubset refuses a mask (its gemm is the host BLAS): a masked call reaches it
-// there only by name (and throws before any write), while Auto walks on to Direct.
+// there only by name (and throws before any write), while Auto walks on to Direct. A vendor-free
+// host has no DirectSubset: its sy2sb runs the public geqrf (no host route there) and its
+// back-transform LAPACKE's ormqr, so every request there degrades to Direct (syev's host route).
 template <Backend B, typename Scalar, MatrixFormat MFormat>
 bool syevx_subset_route_allowed(Span<const std::uint8_t> mask, const SyevxParams<Scalar>& params) {
-    return syevx_direct_subset_supported<Scalar, MFormat>() &&
+    constexpr bool kHostLapack = B != Backend::NETLIB || (BATCHLAS_HAS_LAPACKE && BATCHLAS_HAS_CBLAS);
+    return kHostLapack && syevx_direct_subset_supported<Scalar, MFormat>() &&
            (mask.empty() || B != Backend::NETLIB || params.method == SyevxAlgorithm::DirectSubset);
 }
 

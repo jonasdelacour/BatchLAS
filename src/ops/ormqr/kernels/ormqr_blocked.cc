@@ -287,8 +287,9 @@ Event ormqr_blocked(Queue& ctx,
                     Span<std::byte> workspace,
                     int32_t block_size) {
     // NETLIB's gemm is its host BLAS, which cannot skip an item: refuse before pack_v launches,
-    // which would otherwise still be reading a and writing the workspace after the throw.
-    if constexpr (!select::native_gpu_backend<B>) ::batchlas::detail::refuse_batch_mask("ormqr_blocked", a_in, c_in);
+    // which would otherwise still be reading a and writing the workspace after the throw. A
+    // vendor-free host's gemm and trmm are native and skip it (select::native_backend).
+    if constexpr (!select::native_backend<B>) ::batchlas::detail::refuse_batch_mask("ormqr_blocked", a_in, c_in);
     // Both operands carry the call's mask whichever brought it.
     const auto mask = ::batchlas::detail::call_mask("ormqr_blocked", a_in, c_in);
     const bool adopt = !mask.empty() && a_in.batch_size() == c_in.batch_size();
