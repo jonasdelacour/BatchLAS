@@ -855,7 +855,9 @@ TYPED_TEST(SymmCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     }
 }
 
-// On a CPU queue no native family can run: expand pins throw, Auto is the vendor (or no route).
+// On a CPU queue with netlib no native family can run: expand pins throw, Auto is the vendor. A
+// vendor-free host (select::kHostNative) runs both natives and Auto picks one.
+// evidence: docs/design/vendor-independence.md#the-host-native-gate
 template <typename Config>
 class SymmCandidatesCpu : public test_utils::BatchLASTest<Config> {};
 TYPED_TEST_SUITE(SymmCandidatesCpu, Types);
@@ -867,6 +869,23 @@ TYPED_TEST(SymmCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     if (this->ctx->device().type == DeviceType::GPU) GTEST_SKIP() << "a GPU queue";
     const ScopedEnvVar clear("BATCHLAS_SYMM_ROUTE", nullptr);
     const Spec s{Side::Left, Uplo::Lower, 8, 3, 4};
+    if constexpr (B == Backend::NETLIB && batchlas::select::kHostNative) {
+        for (const C& native : {C{sy::Expand{}}, C{sy::Mirror{}}}) {
+            auto p = make_prob<T>(s);
+            const Pin pin("symm", native);
+            ASSERT_NO_THROW(((void)symm<B, T>(*this->ctx, p.A(), p.B(), p.Cv(), p.alpha, p.beta, s.side, s.uplo),
+                             this->ctx->wait()))
+                << select::to_string(native);
+            expect_symm(*this->ctx, p, "cpu " + select::to_string(native));
+        }
+        auto p = make_prob<T>(s);
+        EXPECT_NE(traced_choice([&] {
+            (void)symm<B, T>(*this->ctx, p.A(), p.B(), p.Cv(), p.alpha, p.beta, s.side, s.uplo);
+            this->ctx->wait();
+        }), "vendor");
+        expect_symm(*this->ctx, p, "cpu auto");
+        return;
+    }
     for (const C& native : {C{sy::Expand{}}, C{sy::Mirror{}}}) {
         auto p = make_prob<T>(s);
         const Pin pin("symm", native);

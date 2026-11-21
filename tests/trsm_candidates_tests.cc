@@ -912,8 +912,9 @@ TYPED_TEST(TrsmCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     }
 }
 
-// On a CPU queue no native
-// family can run, so native pins throw and Auto is the vendor (or no route without one).
+// On a CPU queue with netlib no native family can run, so native pins throw and Auto is the
+// vendor. A vendor-free host (select::kHostNative) runs every native family and Auto picks one.
+// evidence: docs/design/vendor-independence.md#the-host-native-gate
 template <typename Config>
 class TrsmCandidatesCpu : public test_utils::BatchLASTest<Config> {};
 TYPED_TEST_SUITE(TrsmCandidatesCpu, Types);
@@ -925,6 +926,24 @@ TYPED_TEST(TrsmCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     if (this->ctx->device().type == DeviceType::GPU) GTEST_SKIP() << "a GPU queue";
     const ScopedEnvVar clear("BATCHLAS_TRSM_ROUTE", nullptr);
     Spec s{Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 8, 3, 2};
+    if constexpr (B == Backend::NETLIB && batchlas::select::kHostNative) {
+        for (const C& c : ts::candidates<T>()) {
+            if (std::holds_alternative<ts::Vendor>(c)) continue;
+            auto p = make_solve<T>(s);
+            const Pin pin("trsm", c);
+            ASSERT_NO_THROW(((void)trsm<B, T>(*this->ctx, p.A(), p.B(), p.alpha, s.side, s.uplo, s.trans, s.diag),
+                             this->ctx->wait()))
+                << select::to_string(c);
+            expect_solved(*this->ctx, p, "cpu " + select::to_string(c));
+        }
+        auto p = make_solve<T>(s);
+        EXPECT_NE(traced_choice([&] {
+            (void)trsm<B, T>(*this->ctx, p.A(), p.B(), p.alpha, s.side, s.uplo, s.trans, s.diag);
+            this->ctx->wait();
+        }), "vendor");
+        expect_solved(*this->ctx, p, "cpu auto");
+        return;
+    }
     for (const C& c : ts::candidates<T>()) {
         if (std::holds_alternative<ts::Vendor>(c)) continue;
         auto p = make_solve<T>(s);
