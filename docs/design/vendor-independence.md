@@ -105,7 +105,11 @@ trsm's kernels are not templated on the backend, so trsm changes only the run-ti
 covers its `can_run` and the alpha == 0 mask refusal in `trsm.cc`. getrf, getri, getrs and gesv
 are the same case: their gates read `(B != NETLIB || kHostNative) && natives_run_on(d)`, which keeps
 ROCm's native routes. Their pivot format is safe on that host because a vendor-free NETLIB has no
-LAPACKE: native getrf writes every pivot, so all of them are 1-based int32 packed. Adopted so far:
+LAPACKE: native getrf writes every pivot, so all of them are 1-based int32 packed. The DPC++ CPU
+image of the fully unrolled float gesv tiny kernels (column bucket 32) reads sub-group id 0 in both
+sub-groups of a work-group, so two partitions solved one item and the next was never written; on
+SPIR `gesv_tiny.cc` takes the partition from the work-item id instead (the `GesvTest` n = 31, 32
+float rows on opencl:cpu fail without it). Adopted so far:
 syrk, herk, syr2k, her2k, symm, hemm, trmm, trsm, getrf, getri, getrs and gesv. To verify an op, read its `BATCHLAS_COVERAGE_OUT`
 `reached` rows on `NETLIB` in a vendor-free tree.
 

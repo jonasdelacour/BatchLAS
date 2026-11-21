@@ -139,7 +139,15 @@ BATCHLAS_UNROLL_FULL
         const auto px = device::wrap(part);
         const int wg_id = static_cast<int>(it.get_group_linear_id());
         const int lane = static_cast<int>(part.get_local_linear_id());
+#if defined(__SPIR__)
+        // The DPC++ CPU image of the unrolled NC = 32 float kernels reads sub-group id 0 in both
+        // sub-groups, so two partitions solved item 0 and item 1 was never written. The work-item
+        // id gives the same partition on every device (the work-group is kMpw partitions of N).
+        // evidence: docs/design/vendor-independence.md#the-host-native-gate
+        const int pidx = static_cast<int>(it.get_local_linear_id()) / N;
+#else
         const int pidx = tiny_native::tiny_partition_id(sg, part);
+#endif
         const device::MatrixSlot ms = device::matrix_slot(wg_id, kMpw, pidx, batch);
         const int prob_id = ms.b;
 
