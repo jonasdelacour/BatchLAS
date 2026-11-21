@@ -6,6 +6,7 @@
 #include <batchlas/util/sycl-span.hh>
 
 #include <src/queue.hh>
+#include <src/select/vendor.hh>
 #include <src/util/batch_mask.hh>
 
 #include <cstdint>
@@ -27,7 +28,7 @@ void syevx_iterative_refuse_mask(const Queue& /*ctx*/, const char* who, Span<con
                                  const SyevxParams<Scalar>& params, bool lobpcg) {
     if (mask.empty()) return;
     const std::string w(who);
-    if constexpr (B == Backend::NETLIB) {
+    if constexpr (B == Backend::NETLIB && !select::kHostNative) {  // vendor-free, its children are natives
         throw batchlas::unsupported(w + ": batch mask not supported on the host backend, whose gemm is the host BLAS");
     }
     if (!lobpcg) return;

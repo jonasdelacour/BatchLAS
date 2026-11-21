@@ -33,6 +33,7 @@
 #include <src/ops/syev/sytrd/sytrd_sb2st_hh.hh>
 #include <vector>
 #include <src/ops/ormqr/vendor.hh>
+#include <src/select/vendor.hh>
 #include <src/util/batch_mask.hh>
 #include <batchlas/device.hh>
 
@@ -50,6 +51,11 @@ inline size_t subset_w_sub_len(int64_t n, int64_t capacity, bool value_range) {
                        : static_cast<size_t>(capacity);
 }
 
+// A host backend beside netlib: its gemm and ormqr are LAPACKE/CBLAS, which refuse a mask. A
+// vendor-free host runs every stage natively, the Q1 back-transform as ormqr_blocked.
+template <Backend B>
+inline constexpr bool kSubsetHostBlas = B == Backend::NETLIB && !select::kHostNative;
+
 }  // namespace
 
 template <Backend B, typename Scalar, MatrixFormat MFormat>
@@ -63,9 +69,9 @@ Event syevx_direct_subset(Queue& ctx,
                           const MatrixView<Scalar, MatrixFormat::Dense>& V,
                           const SyevxParams<Scalar>& params,
                           Span<int32_t> info) {
-    // The plumbing below carries the mask to every child and kernel. On the host backend gemm is the
-    // host BLAS, which refuses a mask: refused here, before info_clear writes an item.
-    if constexpr (B == Backend::NETLIB) ::batchlas::detail::refuse_batch_mask("syevx_direct_subset", A, V);
+    // The plumbing below carries the mask to every child and kernel. Beside a host BLAS gemm is that
+    // BLAS, which refuses a mask: refused here, before info_clear writes an item.
+    if constexpr (kSubsetHostBlas<B>) ::batchlas::detail::refuse_batch_mask("syevx_direct_subset", A, V);
     const Span<const std::uint8_t> mask = ::batchlas::detail::call_mask("syevx_direct_subset", A, V);
     using Real = typename base_type<Scalar>::type;
 
@@ -272,7 +278,7 @@ Event syevx_direct_subset(Queue& ctx,
                                            static_cast<size_t>(tau_sy2sb_n) * batch);
 
                     size_t bytes_ormqr = 0;
-                    if constexpr (B == Backend::NETLIB) {
+                    if constexpr (kSubsetHostBlas<B>) {
                         bytes_ormqr = ops::ormqr::detail::ormqr_vendor_buffer_size_or_throw<B, Scalar>(
                             ctx, v1_view, v_sub_rows, Side::Left, Transpose::NoTrans, tau1_flat);
                     } else {
@@ -281,7 +287,7 @@ Event syevx_direct_subset(Queue& ctx,
                             ormqr_block_size);
                     }
                     auto ormqr_ws = pool.allocate<std::byte>(ctx, bytes_ormqr);
-                    if constexpr (B == Backend::NETLIB) {
+                    if constexpr (kSubsetHostBlas<B>) {
                         (void)ops::ormqr::detail::ormqr_vendor_or_throw<B, Scalar>(ctx, v1_view, v_sub_rows, Side::Left,
                                                     Transpose::NoTrans, tau1_flat, ormqr_ws);
                     } else {
@@ -375,7 +381,7 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
         return 0;
     } else {
         // Must reject exactly what the solver rejects.
-        if constexpr (B == Backend::NETLIB)
+        if constexpr (kSubsetHostBlas<B>)
             ::batchlas::detail::refuse_batch_mask("syevx_direct_subset_buffer_size", A, V);
         const auto mask = ::batchlas::detail::call_mask("syevx_direct_subset_buffer_size", A, V);
         (void)W;
@@ -453,7 +459,7 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
                                          .with_batch_mask(mask);
                 Span<Scalar> tau1_flat(nullptr, static_cast<size_t>(tau_sy2sb_n) * batch);
                 size_t bytes_ormqr = 0;
-                if constexpr (B == Backend::NETLIB) {
+                if constexpr (kSubsetHostBlas<B>) {
                     bytes_ormqr = ops::ormqr::detail::ormqr_vendor_buffer_size_or_throw<B, Scalar>(
                         ctx, v1_dummy, c_dummy, Side::Left, Transpose::NoTrans, tau1_flat);
                 } else {

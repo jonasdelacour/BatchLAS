@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 // syevx honours a batch mask (W4c) on tests/masked_contract.hh: A, W, V, m and info of an inactive
 // item keep every byte, and an active item equals the unmasked call with the public syev pinned
-// strictly (cta_fused on a GPU, the LAPACKE loop on the host backend). Direct runs every range on
-// both backends, DirectSubset (lift 2, real T) every range unpinned on a GPU. LOBPCG and Filtered
-// run on a GPU with every ortho; on the host backend (gemm is the host BLAS: these and
-// DirectSubset) a masked call throws before any write. lanczos (lift 2) runs dense, real T, on a
-// GPU. Every mask is device-only; data complex where T is, ld and stride padded for A and V, W, m
-// and info poisoned.
+// strictly (cta_fused on a GPU, blocked on a vendor-free host, the LAPACKE loop beside netlib).
+// Direct runs every range on both backends, DirectSubset (lift 2, real T) every range unpinned on a
+// GPU and a vendor-free host. LOBPCG and Filtered run on a GPU with every ortho and on a vendor-free
+// host; beside a host BLAS (gemm is that BLAS: these and DirectSubset) a masked call throws before
+// any write. lanczos (lift 2) runs dense, real T, on a GPU and a vendor-free host. Every mask is
+// device-only; data complex where T is, ld and stride padded for A and V, W, m and info poisoned.
 // evidence: docs/design/masked-batches.md#masked-batches-tests
 #include <gtest/gtest.h>
 
@@ -142,9 +142,11 @@ protected:
     using R = Real<T>;
     static constexpr Backend B = Config::BackendVal;
     static constexpr bool kHost = B == Backend::NETLIB;
-    // A vendor-free host: syev runs natively there (select::kHostNative), but DirectSubset
-    // degrades to Direct and LOBPCG / Filtered orthonormalise through geqrf, which has no host route.
+    // A vendor-free host (select::kHostNative): every child is native and honours the mask, so
+    // LOBPCG, Filtered, DirectSubset and lanczos run masked there as on a GPU.
     static constexpr bool kHostNative = kHost && !select::kHasNetlib && select::kHostNative;
+    // A host beside netlib: gemm is the host BLAS, which refuses a mask.
+    static constexpr bool kHostBlas = kHost && !kHostNative;
 
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
@@ -349,7 +351,7 @@ TYPED_TEST(SyevxMask, DirectSaturatingIdenticalItems) {
 // reach fixes the iteration count, so with Householder active items are bit-identical.
 TYPED_TEST(SyevxMask, LobpcgLeavesInactiveItemsUntouched) {
     using T = typename TestFixture::T;
-    if (TestFixture::kHost) GTEST_SKIP() << "the host backend refuses (LobpcgAndFilteredRefuseOnTheHostBackend)";
+    if (TestFixture::kHostBlas) GTEST_SKIP() << "a host BLAS refuses (LobpcgAndFilteredRefuseOnTheHostBackend)";
     for (const bool largest : {true, false})
         for (const JobType j : {JobType::EigenVectors, JobType::NoEigenVectors})
             this->check(largest ? "lobpcg largest" : "lobpcg smallest", 16, 20, 3, j,
@@ -382,7 +384,7 @@ TYPED_TEST(SyevxMask, LobpcgLeavesInactiveItemsUntouched) {
 // reads converged: without that neutral value it runs to the cap and the active items move.
 TYPED_TEST(SyevxMask, IterativeStopsOnTheActiveItems) {
     using T = typename TestFixture::T;
-    if (TestFixture::kHost) GTEST_SKIP() << "the host backend refuses";
+    if (TestFixture::kHostBlas) GTEST_SKIP() << "a host BLAS refuses (LobpcgAndFilteredRefuseOnTheHostBackend)";
     for (const auto a : {SyevxAlgorithm::LOBPCG, SyevxAlgorithm::Filtered})
         for (const int batch : {20, 1024}) {
             auto p = TestFixture::iterative(a, true);
@@ -396,7 +398,7 @@ TYPED_TEST(SyevxMask, IterativeStopsOnTheActiveItems) {
 
 // Filtered on a GPU: Gershgorin bounds, the interval, sigma and step kernels, and the finalize.
 TYPED_TEST(SyevxMask, FilteredLeavesInactiveItemsUntouched) {
-    if (TestFixture::kHost) GTEST_SKIP() << "the host backend refuses (LobpcgAndFilteredRefuseOnTheHostBackend)";
+    if (TestFixture::kHostBlas) GTEST_SKIP() << "a host BLAS refuses (LobpcgAndFilteredRefuseOnTheHostBackend)";
     for (const bool largest : {true, false})
         for (const JobType j : {JobType::EigenVectors, JobType::NoEigenVectors})
             this->check(largest ? "filtered largest" : "filtered smallest", 16, 20, 3, j,
@@ -407,9 +409,10 @@ TYPED_TEST(SyevxMask, FilteredLeavesInactiveItemsUntouched) {
                     TestFixture::iterative(SyevxAlgorithm::Filtered, true));
     }
 }
+// Beside a host BLAS both arms refuse a mask. A vendor-free host has none to refuse: its natives
+// honour the mask (Lobpcg/FilteredLeavesInactiveItemsUntouched check the contract there).
 TYPED_TEST(SyevxMask, LobpcgAndFilteredRefuseOnTheHostBackend) {
-    if (!TestFixture::kHost) GTEST_SKIP() << "the device gemm honours the mask";
-    if (TestFixture::kHostNative) GTEST_SKIP() << "vendor-free host: the unmasked call has no route (ortho's geqrf)";
+    if (!TestFixture::kHostBlas) GTEST_SKIP() << "no host BLAS to refuse: the natives honour the mask (*LeavesInactiveItemsUntouched)";
     for (const auto a : {SyevxAlgorithm::LOBPCG, SyevxAlgorithm::Filtered})
         this->expect_refused(a == SyevxAlgorithm::LOBPCG ? "lobpcg" : "filtered", 16, 8, 3,
                              TestFixture::iterative(a, true));
@@ -431,8 +434,7 @@ TYPED_TEST(SyevxMask, DirectSubsetLeavesInactiveItemsUntouched) {
     if constexpr (is_std_complex_v<T>) {
         GTEST_SKIP() << "DirectSubset is real only (complex falls back to Direct)";
     } else {
-        if (TestFixture::kHostNative) GTEST_SKIP() << "vendor-free host: DirectSubset degrades to Direct (Direct* cases)";
-        if (TestFixture::kHost) {  // its gemm is the host BLAS: refused before any write
+        if (TestFixture::kHostBlas) {  // its gemm is the host BLAS: refused before any write
             auto p = TestFixture::params(SyevxAlgorithm::DirectSubset);
             p.select = SyevxSelect::Index;
             p.il = 1;
@@ -471,7 +473,7 @@ TYPED_TEST(SyevxMask, LanczosLeavesInactiveItemsUntouched) {
     if constexpr (is_std_complex_v<T>) {
         GTEST_SKIP() << "the lanczos case runs real T";
     } else {
-        if (TestFixture::kHost) GTEST_SKIP() << "lanczos's steqr CTA kernel is not built for the host device, unmasked too";
+        if (TestFixture::kHostBlas) GTEST_SKIP() << "lanczos's steqr CTA kernel is not built for the host device, unmasked too";
         Queue& q = *this->ctx;
         const int batch = 12;
         for (const int n : {12, 40})
