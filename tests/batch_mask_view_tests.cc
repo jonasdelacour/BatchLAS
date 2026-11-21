@@ -341,6 +341,19 @@ TYPED_TEST(BatchMaskUtilities, FillsAndTransforms) {
 class BindEverySlotKernel;
 
 namespace {
+constexpr std::size_t kZeroBytes = 4096;
+
+// Six pointers into `zeros` (all zero bytes) as the kernel's only arguments: AdaptiveCpp Metal's
+// flat argument mode binds them to slots 3-8, every slot a later small kernel's pointer can take.
+void bind_every_slot(Queue& ctx, std::uint8_t* zeros) {
+    std::uint8_t* w = zeros;
+    const std::uint8_t *p1 = zeros, *p2 = zeros + 1, *p3 = zeros + 2, *p4 = zeros + 3, *p5 = zeros + 4;
+    ctx->parallel_for<BindEverySlotKernel>(sycl::range<1>(64), [=](sycl::id<1> id) {
+        const std::size_t i = id[0];
+        w[kZeroBytes / 2 + i] = std::uint8_t(p1[i] | p2[i] | p3[i] | p4[i] | p5[i]);
+    });
+}
+
 template <typename Scalar>
 void check_after_bound_slots(Queue& ctx, const MatOp<Scalar>& op, const char* what, int rows, int cols,
                              bool packed = false) {
@@ -352,7 +365,6 @@ void check_after_bound_slots(Queue& ctx, const MatOp<Scalar>& op, const char* wh
     ctx.wait();
     const auto want = snapshot<Scalar>(ref);
     DeviceMask mask(ctx, kBatch);
-    constexpr std::size_t kZeroBytes = 4096;
     std::uint8_t* zeros = sycl::malloc_device<std::uint8_t>(kZeroBytes, *ctx.operator->());
     ctx->memset(zeros, 0, kZeroBytes);
     ctx.wait();
@@ -362,16 +374,8 @@ void check_after_bound_slots(Queue& ctx, const MatOp<Scalar>& op, const char* wh
         Matrix<Scalar> got(rows, cols, kBatch, ld, stride);
         fill_poison<Scalar>(first, 5);
         fill_poison<Scalar>(got, 11);
-        if (k == 0) {
-            op(ctx, first.view().with_batch_mask(mask.span()));
-        } else {
-            std::uint8_t* w = zeros;
-            const std::uint8_t *p1 = zeros, *p2 = zeros + 1, *p3 = zeros + 2, *p4 = zeros + 3, *p5 = zeros + 4;
-            ctx->parallel_for<BindEverySlotKernel>(sycl::range<1>(64), [=](sycl::id<1> id) {
-                const std::size_t i = id[0];
-                w[kZeroBytes / 2 + i] = std::uint8_t(p1[i] | p2[i] | p3[i] | p4[i] | p5[i]);
-            });
-        }
+        if (k == 0) op(ctx, first.view().with_batch_mask(mask.span()));
+        else bind_every_slot(ctx, zeros);
         op(ctx, got.view());
         ctx.wait();
         const std::size_t s = static_cast<std::size_t>(stride);
