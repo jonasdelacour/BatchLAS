@@ -108,12 +108,13 @@ syr2k, her2k, symm, hemm, trmm and trsm. To verify an op, read its `BATCHLAS_COV
 `reached` rows on `NETLIB` in a vendor-free tree.
 
 syev's kernels are templated on the backend and compiled for NETLIB in every build, so syev
-changes only the run-time half (`B != NETLIB || kHostNative`, then `natives_run_on`); `two_stage`
-stays GPU-only, as its `sy2sb` runs the public `geqrf`. The CTA entry points under `src/ops/syev/`
-(sytrd_cta, stedc_merge_cta, sytrd_sb2st, syev_cta_fused, syev_jacobi_cta, sytrd_blocked's
+changes only the run-time half (`B != NETLIB || kHostNative`, then `natives_run_on`): the host
+runs `blocked` (Auto's last resort) and `jacobi`. `two_stage` stays GPU-only, as its `sy2sb` runs
+the public `geqrf`; so do `cta` and `cta_fused`, since steqr_cta's body reads out of bounds on the
+OpenCL CPU (not localised) and `cta`'s ormqx_cta has no CPU arm. The CTA entry points under
+`src/ops/syev/` (sytrd_cta, stedc_merge_cta, sytrd_sb2st, syev_jacobi_cta, sytrd_blocked's
 \f$n \le 32\f$ arm) accept the CPU under `BATCHLAS_HAS_HOST_NATIVE`, where the cta library keeps
-its CPU image. steqr_cta does not: its kernel reads out of bounds on the OpenCL CPU, so steqr
-(and syev's `cta`, which falls back inside steqr_cta) runs steqr_wg there. syevx's DirectSubset
+its CPU image; steqr_cta and syev_cta_fused stay GPU-only, and steqr runs steqr_wg there. syevx's DirectSubset
 degrades to Direct on that host (its back-transform is LAPACKE's ormqr). NETLIB stedc runs the
 divide and conquer there instead of `steqr_legacy`, whose rotation store is
 \f$(n - 1) \cdot \mathit{max\_sweeps} \cdot (n/2 + 1)\f$ per item (37 GB at \f$n = 300\f$, batch
