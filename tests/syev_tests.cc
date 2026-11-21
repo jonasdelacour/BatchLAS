@@ -48,9 +48,13 @@ struct SyevConfig {
 using SyevTestTypes = typename test_utils::backend_types<SyevConfig>::type;
 
 // A vendor-free build's NETLIB queue runs the native families on the CPU (select::kHostNative), so
-// every case runs there too. evidence: docs/design/vendor-independence.md#the-host-native-gate
+// every case runs there too, the pinned and chunked ones included (kNativesRun); two_stage stays
+// GPU-only there. evidence: docs/design/vendor-independence.md#the-host-native-gate
 template <typename Config>
 class SyevTest : public test_utils::BatchLASTest<Config> {};
+
+template <Backend B>
+inline constexpr bool kNativesRun = B != Backend::NETLIB || batchlas::select::kHostNative;
 
 TYPED_TEST_SUITE(SyevTest, SyevTestTypes);
 
@@ -262,7 +266,7 @@ TYPED_TEST(SyevTest, InfoReportsItemsThatExhaustTheSweepBudget) {
     constexpr Backend B = TestFixture::BackendType;
     // syev_cta needs a sub-group width of 32; the host device generally has less
     // and the tier throws batchlas::unsupported there rather than running slowly.
-    if constexpr (B == Backend::NETLIB) {
+    if constexpr (!kNativesRun<B>) {
         GTEST_SKIP() << "syev_cta requires sub-group 32; not available on the host backend";
     } else {
         const int n = 32;
@@ -448,7 +452,7 @@ TYPED_TEST(SyevTest, ChunksKeepEigenpairsPerItem) {
     using T = typename TestFixture::ScalarType;
     using Real = typename base_type<T>::type;
     using MV = MatrixView<T, MatrixFormat::Dense>;
-    if constexpr (TestFixture::BackendType == Backend::NETLIB) {
+    if constexpr (!kNativesRun<TestFixture::BackendType>) {
         GTEST_SKIP() << "cta and blocked are GPU drivers";
     } else {
         const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "7");
@@ -506,7 +510,7 @@ TYPED_TEST(SyevTest, ChunksKeepCtaInfoPerItem) {
     using T = typename TestFixture::ScalarType;
     using Real = typename base_type<T>::type;
     constexpr Backend B = TestFixture::BackendType;
-    if constexpr (B == Backend::NETLIB) {
+    if constexpr (!kNativesRun<B>) {
         GTEST_SKIP() << "syev_cta requires sub-group 32";
     } else {
         const int n = 32, batch = 23, ld = n + 3, stride = ld * n + 7;
@@ -560,7 +564,7 @@ TYPED_TEST(SyevTest, ChunksAtSaturatingBatchAreBitIdentical) {
     using T = typename TestFixture::ScalarType;
     using Real = typename base_type<T>::type;
     using MV = MatrixView<T, MatrixFormat::Dense>;
-    if constexpr (TestFixture::BackendType == Backend::NETLIB) {
+    if constexpr (!kNativesRun<TestFixture::BackendType>) {
         GTEST_SKIP() << "cta and blocked are GPU drivers";
     } else {
         const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "256");
@@ -605,7 +609,7 @@ TYPED_TEST(SyevTest, ChunksOnAnOutOfOrderQueue) {
     using T = typename TestFixture::ScalarType;
     using Real = typename base_type<T>::type;
     using MV = MatrixView<T, MatrixFormat::Dense>;
-    if constexpr (TestFixture::BackendType == Backend::NETLIB) {
+    if constexpr (!kNativesRun<TestFixture::BackendType>) {
         GTEST_SKIP() << "cta and blocked are GPU drivers";
     } else {
         const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "7");
@@ -756,6 +760,7 @@ void expect_pinned_route_repeatable(Queue& ctx, std::initializer_list<RepeatCase
     GradedFills<T> fills;
     for (const RepeatCase& c : cases) {
         if (B == Backend::ROCM && std::string(c.route) == "cta") continue;
+        if (B == Backend::NETLIB && std::string(c.route) == "two_stage") continue;  // GPU-only (sy2sb's geqrf)
         const ScopedEnvVar pin("BATCHLAS_SYEV_ROUTE", c.route);
         for (const Uplo uplo : {Uplo::Lower, Uplo::Upper})
             for (const JobType jobz : {JobType::EigenVectors, JobType::NoEigenVectors}) {
@@ -823,7 +828,7 @@ TYPED_TEST(SyevTest, AutoReadsOnlyTheNamedTriangleAtLargeN) {
 }
 
 TYPED_TEST(SyevTest, PinnedRouteIsBitwiseRepeatable) {
-    if constexpr (TestFixture::BackendType == Backend::NETLIB) {
+    if constexpr (!kNativesRun<TestFixture::BackendType>) {
         GTEST_SKIP() << "the pinned native families are GPU kernels";
     } else {
         expect_graded_fill_deterministic<typename TestFixture::ScalarType>(*this->ctx, 17, 64);
@@ -835,7 +840,7 @@ TYPED_TEST(SyevTest, PinnedRouteIsBitwiseRepeatable) {
 // Heavy tier (*Saturating*): cta's batch of 1024 fills the device with sub-group partitions, and
 // the n = 400 solves are the slow half of the cases.
 TYPED_TEST(SyevTest, PinnedRouteIsBitwiseRepeatableAtSaturatingBatch) {
-    if constexpr (TestFixture::BackendType == Backend::NETLIB) {
+    if constexpr (!kNativesRun<TestFixture::BackendType>) {
         GTEST_SKIP() << "the pinned native families are GPU kernels";
     } else {
         expect_pinned_route_repeatable<typename TestFixture::ScalarType, TestFixture::BackendType>(
