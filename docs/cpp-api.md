@@ -151,23 +151,41 @@ the promise is kept by review.
 | `batchlas.__version__` (Python) | the full number of the library the module was built with |
 | the SONAME | the major: `libbatchlas*.so.1`, `libbatchlas*.1.dylib` |
 
-**Covered:** `<batchlas.hh>` and the API it declares in `namespace batchlas`; the headers under
-`<batchlas/blas/>`; `<batchlas/error.hh>` (the exception types and what they derive from);
-`<batchlas/settings.hh>`; `<batchlas/version.hh>`; the device API, `<batchlas/device.hh>` and
-`<batchlas/device/...>` (the documented signatures, not `device/detail/`); the names the Python
-module `batchlas` and `batchlas.linalg` export.
+**Covered** (every installed header is in one of these two lists):
+
+- `<batchlas.hh>` and the API it declares in `namespace batchlas`. That includes `Device`, `Event`,
+  `Queue`, `Span`, `UnifiedVector` and `WorkspaceLease`, which it reaches through
+  `<batchlas/util/sycl-device-queue.hh>`, `sycl-span.hh`, `sycl-vector.hh` and `workspace.hh`: the
+  names are covered, those four `util/` paths are not (include `<batchlas.hh>`).
+- The headers under `<batchlas/blas/>`.
+- `<batchlas/error.hh>` (the exception types and what they derive from) and
+  `<batchlas/no_route.hh>` (`NoRouteError`, `Op`, `ScalarKind`; a minor release may add an `Op`).
+- `<batchlas/settings.hh>`, `<batchlas/version.hh>`, and `<batchlas/sycl_interop.hh>` (the four
+  functions in [Interop](#interop-with-cuda-and-with-your-own-sycl) below).
+- `<batchlas/config.hh>`: including it, and the three override macros in
+  [the header-only table](#the-device-api-without-building-batchlas).
+- The device API, `<batchlas/device.hh>` and `<batchlas/device/...>` (the documented signatures,
+  not `device/detail/`).
+- The names the Python module `batchlas` and `batchlas.linalg` export.
 
 **Not covered** (may change in any release, minor or patch):
 
 - `<batchlas/internal/...>`: installed because public headers include them, not API.
-- `<batchlas/util/minibench*.hh>` and the benchmark tooling.
+- The other `<batchlas/util/...>` headers: `env.hh`, `mempool.hh` (`BumpAllocator`),
+  `group-collectives.hh`, `group-invoke.hh`, `kernel-heuristics.hh`, `miniacc.hh` and
+  `sycl-local-accessor-helpers.hh`, the library's and the benchmarks' own helpers.
+- The generated `<batchlas/backend_config.h>` and `<batchlas/export.hh>` (read them through
+  `<batchlas/config.hh>`) and AdaptiveCpp's `<batchlas/acpp/annexg_complex.hh>` (the package adds
+  its `-include` itself).
 - `<batchlas/tuning_params.hh>` and the contents of the tuned tables: which route runs, and with it
   the speed and the last bits of a result, can change in any release.
 - The `BATCHLAS_*` tuning environment variables and the `BATCHLAS_<OP>_ROUTE` route spellings (a pin
   that no longer names a route throws; @ref design_environment lists them).
 
-Anything not listed as covered is outside the promise. The ROCm backend is unsupported (code paths
-only; never built or run).
+Not installed: `<batchlas/verify/...>`, `<batchlas/util/minibench*.hh>`,
+`<batchlas/util/bench_structured.hh>` and the rest of the benchmark tooling. Anything not listed as
+covered is outside the promise. The ROCm backend is unsupported (code paths only; never built or
+run).
 
 ## Devices and queues
 
