@@ -2117,7 +2117,8 @@ TYPED_TEST(GesvdTest, BlockedChunksOnAnOutOfOrderQueue) {
 }
 
 // The query is one part's: chunk 7 over 23 items needs what 9 items (7 + 23 % 7) need unchunked,
-// and less than all 23.
+// and less than all 23. The L2 chunk is a GPU schedule: a CPU queue (vendor-free host) runs one pass,
+// so its query is the whole batch's whatever the knob says.
 TYPED_TEST(GesvdTest, BlockedChunksWorkspaceIsTheLargestPart) {
     using Scalar = typename TestFixture::Scalar;
     using Real = typename TestFixture::Real;
@@ -2144,8 +2145,13 @@ TYPED_TEST(GesvdTest, BlockedChunksWorkspaceIsTheLargestPart) {
             nine = query(9);
             whole = query(batch);
         }
-        EXPECT_EQ(chunked, nine);
-        EXPECT_LT(chunked, whole);
+        if (this->ctx->device().type == DeviceType::GPU) {
+            EXPECT_EQ(chunked, nine);
+            EXPECT_LT(chunked, whole);
+        } else {
+            EXPECT_EQ(chunked, whole);
+            EXPECT_LT(nine, whole);
+        }
     }
 }
 
