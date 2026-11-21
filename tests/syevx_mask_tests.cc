@@ -208,20 +208,22 @@ protected:
     }
     // Runs unmasked first (the shape runs), then masked {0,1,0,1,...}: throws naming the mask, and
     // writes nothing at all (A, V, W, m, info).
-    void expect_refused(const std::string& what, int n, int batch, int neigs, const SyevxParams<T>& p) {
+    void expect_refused(const std::string& what, int n, int batch, int neigs, const SyevxParams<T>& p,
+                        bool uses_larft = false) {
         SCOPED_TRACE(what);
         Queue& q = *this->ctx;
         Problem<T, B> pr(q, n, batch, neigs, JobType::EigenVectors, p, false);
-        // sy2sb's larft needs 32-wide sub-groups, which the AdaptiveCpp host device (size 1) lacks:
-        // there the unmasked call is refused too, and only the size query's refusal is checked.
-        const bool sg32 = q.device().supports_sub_group_size(32);
+        // DirectSubset's sy2sb runs larft, which needs 32-wide sub-groups; the AdaptiveCpp host
+        // device (size 1) lacks them, so there its unmasked call is refused too, and only the size
+        // query's refusal is checked.
+        const bool larft_refused = uses_larft && !q.device().supports_sub_group_size(32);
         {
             UnifiedVector<std::byte> ws(std::max<std::size_t>(pr.buffer_size({}), 1));
             pr.prepare();
-            if (sg32) {
-                ASSERT_NO_THROW(pr.call({}, ws.to_span())) << "the unmasked call must run";
-            } else {
+            if (larft_refused) {
                 EXPECT_THROW(pr.call({}, ws.to_span()), batchlas::unsupported) << "larft ran without 32-wide sub-groups";
+            } else {
+                ASSERT_NO_THROW(pr.call({}, ws.to_span())) << "the unmasked call must run";
             }
             q.wait();
         }
@@ -229,7 +231,7 @@ protected:
         for (int b = 0; b < batch; ++b) bytes[std::size_t(b)] = b % 2;
         const mc::DeviceMask mask(q, bytes);
         EXPECT_THROW((void)pr.buffer_size(mask.span()), batchlas::unsupported) << "the size query must refuse too";
-        if (!sg32) return;
+        if (larft_refused) return;
         UnifiedVector<std::byte> ws(std::max<std::size_t>(pr.buffer_size({}), 1));
         pr.prepare();
         q.wait();
@@ -428,7 +430,7 @@ TYPED_TEST(SyevxMask, DirectSubsetLeavesInactiveItemsUntouched) {
             p.select = SyevxSelect::Index;
             p.il = 1;
             p.iu = 3;
-            this->expect_refused("direct_subset", 40, 8, 3, p);
+            this->expect_refused("direct_subset", 40, 8, 3, p, true);
             return;
         }
         for (const int n : {40, 70})

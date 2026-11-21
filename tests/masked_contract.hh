@@ -4,6 +4,7 @@
 // family. An inactive item's outputs are bit-for-bit untouched; an active item equals the unmasked
 // whole-batch call on the same pin. The mask is device-only (sycl::malloc_device, written by a
 // kernel), so a host read faults on a GPU. evidence: docs/design/masked-batches.md#masked-batches-tests
+#include <batchlas/blas/enums.hh>
 #include <batchlas/error.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -16,6 +17,7 @@
 #include <tests/test_support/coverage_rows.hh>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -24,6 +26,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -34,19 +37,26 @@ struct Output {
     std::string name;
     const std::byte* base = nullptr;
     std::size_t item_bytes = 0, stride_bytes = 0;
+    std::size_t real_bytes = 0;  ///< 4 / 8: float / double reals (complex too); 0: compared as bytes
 
+    template <typename T>
+    static constexpr std::size_t real_bytes_of() {
+        if constexpr (std::is_floating_point_v<T>) return sizeof(T);
+        else if constexpr (batchlas::is_std_complex_v<T>) return sizeof(T) / 2;
+        else return 0;
+    }
     /// A matrix view's whole stride per item (ld pads and the item gap included).
     template <typename View>
     static Output matrix(std::string name, const View& v) {
         using T = std::remove_cv_t<std::remove_pointer_t<decltype(v.data_ptr())>>;
         const std::size_t s = static_cast<std::size_t>(v.stride()) * sizeof(T);
-        return {std::move(name), reinterpret_cast<const std::byte*>(v.data_ptr()), s, s};
+        return {std::move(name), reinterpret_cast<const std::byte*>(v.data_ptr()), s, s, real_bytes_of<T>()};
     }
     /// `per_item` elements per item, packed (w, tau, pivots: per_item = n; info: 1).
     template <typename T>
     static Output span(std::string name, std::span<const T> s, std::size_t per_item) {
         const std::size_t b = per_item * sizeof(T);
-        return {std::move(name), reinterpret_cast<const std::byte*>(s.data()), b, b};
+        return {std::move(name), reinterpret_cast<const std::byte*>(s.data()), b, b, real_bytes_of<T>()};
     }
 };
 
@@ -178,6 +188,39 @@ inline bool item_equal(const std::vector<std::byte>& a, const std::vector<std::b
     return std::memcmp(a.data() + off, b.data() + off_b, o.item_bytes) == 0;
 }
 
+// n reals at a and b agree to their last bits: each pair is bit-equal, or finite and apart by at
+// most 2^-10 of the larger of the two and the rms of the pairs that differ.
+template <typename R>
+bool reals_near(const std::byte* a, const std::byte* b, std::size_t n) {
+    double ss = 0;
+    std::size_t differ = 0;
+    const auto at = [](const std::byte* p, std::size_t i) {
+        R v;
+        std::memcpy(&v, p + i * sizeof(R), sizeof(R));
+        return static_cast<double>(v);
+    };
+    for (std::size_t i = 0; i < n; ++i) {
+        if (std::memcmp(a + i * sizeof(R), b + i * sizeof(R), sizeof(R)) == 0) continue;
+        const double x = at(a, i), y = at(b, i);
+        if (!std::isfinite(x) || !std::isfinite(y)) return false;
+        ss += std::max(x * x, y * y);
+        ++differ;
+    }
+    const double rms = differ ? std::sqrt(ss / double(differ)) : 0.0;
+    for (std::size_t i = 0; i < n; ++i) {
+        const double x = at(a, i), y = at(b, i);
+        if (std::fabs(x - y) > 0x1p-10 * std::max({std::fabs(x), std::fabs(y), rms})) return false;
+    }
+    return true;
+}
+// item_equal for an untyped output; for a typed one, reals_near over the item.
+inline bool item_near(const std::vector<std::byte>& a, const std::vector<std::byte>& b, const Output& o, int item) {
+    const std::size_t off = o.stride_bytes * static_cast<std::size_t>(item);
+    if (o.real_bytes == 4) return reals_near<float>(a.data() + off, b.data() + off, o.item_bytes / 4);
+    if (o.real_bytes == 8) return reals_near<double>(a.data() + off, b.data() + off, o.item_bytes / 8);
+    return item_equal(a, b, o, item);
+}
+
 /// One workspace per check, grown to the largest size asked and poisoned before every run.
 class Workspace {
 public:
@@ -221,10 +264,13 @@ void check(batchlas::Queue& q, const char* op, const std::string& spelling, cons
     std::optional<ScopedPin<Choice>> pin;
     if (op) pin.emplace(op, spelling, StrictPin{});
     const bool bitwise = !c.verify_active;
+    const bool masked_reference = c.masked_reference;
     // On an Apple GPU (Metal) bits agree only within one kernel build, and the masked and unmasked
-    // calls' builds differ in their last bits: there the reference is the all-active masked call.
-    const bool masked_reference = c.masked_reference || (q.device().type == batchlas::DeviceType::GPU &&
-                                                         q.device().get_vendor() == batchlas::Vendor::APPLE);
+    // calls' builds differ in their last bits: there an active item agrees with the unmasked call to
+    // its last bits (detail::item_near) and with the all-active masked call bit for bit.
+    const bool one_build = !masked_reference && bitwise && q.device().type == batchlas::DeviceType::GPU &&
+                           q.device().get_vendor() == batchlas::Vendor::APPLE;
+    std::map<int, detail::Bytes> all_active;  // one_build: per chunk setting
     const auto is_reference = [&](const Pattern& p) {
         return masked_reference ? p.name == "all-active" && p.chunk_items == 0 : p.bytes.empty();
     };
@@ -262,6 +308,9 @@ void check(batchlas::Queue& q, const char* op, const std::string& spelling, cons
         if (self_reference) refs[p.chunk_items] = std::move(got);
         const detail::Bytes& res = self_reference ? refs[p.chunk_items] : got;
         const detail::Bytes* ref = bitwise && !self_reference ? &refs[p.chunk_items] : nullptr;
+        const auto mr = all_active.find(p.chunk_items);
+        const detail::Bytes* masked_ref = one_build && mr != all_active.end() ? &mr->second : nullptr;
+        if (one_build && p.name == "all-active") all_active[p.chunk_items] = res;
         const auto outs = c.outputs();
         std::vector<int> active;
         for (int b = 0; b < c.batch; ++b)
@@ -271,10 +320,17 @@ void check(batchlas::Queue& q, const char* op, const std::string& spelling, cons
                 if (!p.active(b))
                     EXPECT_TRUE(detail::item_equal(res[o], before[o], outs[o], b))
                         << outs[o].name << ": inactive item " << b << " was written";
-                else if (ref)
+                else if (ref && one_build) {
+                    EXPECT_TRUE(detail::item_near(res[o], (*ref)[o], outs[o], b))
+                        << outs[o].name << ": active item " << b << " differs from the unmasked call past its last bits";
+                    if (masked_ref)
+                        EXPECT_TRUE(detail::item_equal(res[o], (*masked_ref)[o], outs[o], b))
+                            << outs[o].name << ": active item " << b << " differs from the all-active masked call";
+                } else if (ref) {
                     EXPECT_TRUE(detail::item_equal(res[o], (*ref)[o], outs[o], b))
                         << outs[o].name << ": active item " << b << " differs from the "
                         << (masked_reference ? "all-active masked call" : "unmasked call");
+                }
                 if (c.identical_items && p.active(b) && !active.empty())
                     EXPECT_TRUE(detail::item_equal(res[o], res[o], outs[o], b, active.front()))
                         << outs[o].name << ": active item " << b << " differs from item " << active.front();
