@@ -209,6 +209,8 @@ Event syev_cta_fused(Queue& ctx,
         throw batchlas::invalid_argument("syev_cta_fused: eigenvalues span too small for n*batch.");
     }
 
+    // GPU only: outside a vendor-free build this TU has no CPU image, and in one its fused steqr_cta
+    // body reads out of bounds on the OpenCL CPU (steqr_cta.cc).
     if (ctx.device().type != DeviceType::GPU || !ctx.device().supports_sub_group_size(32)) {
         throw batchlas::unsupported("syev_cta_fused: needs a GPU with subgroup size 32 (the CTA kernels have no CPU image).");
     }

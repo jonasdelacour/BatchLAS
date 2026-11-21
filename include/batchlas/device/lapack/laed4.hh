@@ -38,7 +38,8 @@ template <class Ex> inline constexpr bool is_group_v = is_work_group_v<Ex>;
 template <int SG> inline constexpr bool is_group_v<RtGroup<Scope::Group, SG>> = true;
 
 // The leader's v in every item (a loop exit on a reduced value, else a partition may diverge and
-// deadlock); work-group: the legacy broadcast of a bool (core's group bcast moves 4/8-byte words).
+// deadlock); work-group: portable::group_broadcast, which moves a bool too (core's group bcast moves
+// 4/8-byte words; DPC++'s own reaches half the items of a CPU work-group at sub-group 32).
 template <class Ex, class T> BATCHLAS_DEVICE_INLINE T uniform(const Ex& ex, T v) {
     if constexpr (is_thread_v<Ex>) return v;
     else if constexpr (is_group_v<Ex>) return batchlas::portable::group_broadcast(ex.it.get_group(), v, 0);

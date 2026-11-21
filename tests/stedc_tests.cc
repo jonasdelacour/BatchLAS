@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
+#include <batchlas/backend_config.h>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <tests/test_utils.hh>
@@ -15,8 +16,10 @@
 #include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <type_traits>
+#include <vector>
 
 using namespace batchlas;
 
@@ -244,7 +247,8 @@ TYPED_TEST(StedcTest, DeviceWorkspaceAtTheDeflationScanOrder) {
 TYPED_TEST(StedcTest, LevelsMatchesRecursive) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
-    if constexpr (B == Backend::NETLIB) { GTEST_SKIP() << "level driver is GPU-only"; }
+    // Vendor-free, NETLIB stedc is the divide and conquer too (BATCHLAS_HAS_HOST_NATIVE).
+    if constexpr (B == Backend::NETLIB && !BATCHLAS_HAS_HOST_NATIVE) { GTEST_SKIP() << "level driver is GPU-only"; }
     using float_type = typename base_type<T>::type;
     const int batch = 8;
 
@@ -877,5 +881,62 @@ TYPED_TEST(StedcTest, NoEigenVectorsWithoutAnEigenvectorMatrix) {
 
             test_utils::expect_eigenvalues_match_lapacke<float_type>(dense, eigvals, n, false, items);
         }
+    }
+}
+
+// d and e fall by 10 every 4 rows (device_lapack_stedc_tests' representative 1, n = 300): in float
+// rows 152..180 are subnormal, so the divide and conquer tears off leaves whose norm is below
+// 2.2e-44, where steqr_wg's scale ssfmin / anorm overflowed and the sweep made NaN (info 2 on every
+// item of the vendor-free host, whose leaves take steqr_wg). Item 1 is item 0 reversed. Oracle:
+// host bisection in double on the rounded input, which shares no code with stedc.
+TYPED_TEST(StedcTest, GradedSubnormalLeavesConverge) {
+    using T = typename TestFixture::ScalarType;
+    using Real = typename base_type<T>::type;
+    const int n = 300, batch = 2;
+    const auto unit = [](std::uint64_t i) {  // splitmix64, as the device test's uval
+        std::uint64_t x = i + 0x9e3779b97f4a7c15ull;
+        x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ull;
+        x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
+        return static_cast<double>((x ^ (x >> 31)) >> 11) * 0x1.0p-53 * 2.0 - 1.0;
+    };
+    std::vector<std::vector<double>> hd(batch, std::vector<double>(n)), he(batch, std::vector<double>(n - 1));
+    for (int i = 0; i < n; ++i) hd[0][i] = Real(std::pow(10.0, -(i / 4)) * (1.5 + unit(7 * n + i)));
+    for (int i = 0; i + 1 < n; ++i) he[0][i] = Real(0.5 * std::pow(10.0, -(i / 4)) * unit(13 * n + i));
+    hd[1].assign(hd[0].rbegin(), hd[0].rend());
+    he[1].assign(he[0].rbegin(), he[0].rend());
+    std::vector<std::vector<double>> ref(batch);
+    double norm = 0;
+    for (int b = 0; b < batch; ++b) {
+        ref[b] = test_utils::host_tridiagonal_eigenvalues(hd[b], he[b]);
+        for (int i = 0; i < n; ++i)
+            norm = std::max(norm, std::fabs(hd[b][i]) + (i > 0 ? std::fabs(he[b][i - 1]) : 0.0) + (i + 1 < n ? std::fabs(he[b][i]) : 0.0));
+    }
+    if constexpr (std::is_same_v<Real, float>) {  // double keeps these rows normal
+        ASSERT_GT(std::fabs(hd[0][170]), 0.0);
+        ASSERT_LT(std::fabs(hd[0][170]), double(std::numeric_limits<Real>::min())) << "the premise: subnormal rows";
+    }
+
+    const std::vector<int> items = {0, 1};
+    for (StedcAlgorithm algorithm : {StedcAlgorithm::Auto, StedcAlgorithm::Recursive}) {
+        SCOPED_TRACE("algorithm " + std::to_string(int(algorithm)));
+        auto d = Vector<Real>::zeros(n, batch);
+        auto e = Vector<Real>::zeros(n - 1, batch);
+        for (int b = 0; b < batch; ++b) {
+            for (int i = 0; i < n; ++i) d(i, b) = Real(hd[b][i]);
+            for (int i = 0; i + 1 < n; ++i) e(i, b) = Real(he[b][i]);
+        }
+        auto w = Vector<Real>::zeros(n, batch);
+        auto z = Matrix<Real>::Identity(n, batch);
+        StedcParams<Real> params;
+        params.algorithm = algorithm;
+        UnifiedVector<int32_t> info(batch, int32_t(-1));
+        UnifiedVector<std::byte> ws(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params));
+        (void)stedc(*this->ctx, d, e, w, ws, JobType::EigenVectors, params, z, info.to_span());
+        this->ctx->wait();
+        for (int b = 0; b < batch; ++b) {
+            EXPECT_EQ(info[b], 0) << "item " << b;
+            for (int i = 0; i < n; ++i) ASSERT_TRUE(std::isfinite(double(w(i, b)))) << "w(" << i << ") item " << b;
+        }
+        EXPECT_VERIFY(Real, verify::Check::values, n, MatrixView<Real>::values_error(w, ref, norm, items));
     }
 }

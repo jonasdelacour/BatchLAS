@@ -142,15 +142,20 @@ protected:
     using R = Real<T>;
     static constexpr Backend B = Config::BackendVal;
     static constexpr bool kHost = B == Backend::NETLIB;
+    // A vendor-free host: syev runs natively there (select::kHostNative), but DirectSubset
+    // degrades to Direct and LOBPCG / Filtered orthonormalise through geqrf, which has no host route.
+    static constexpr bool kHostNative = kHost && !select::kHasNetlib && select::kHostNative;
 
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
-        if (kHost && !select::kHasNetlib) GTEST_SKIP() << "no LAPACKE in this build";
+        if (::testing::Test::IsSkipped()) return;  // no device for this backend: ctx is empty
+        if (kHost && !select::kHasNetlib && !kHostNative) GTEST_SKIP() << "no host syev route in this build";
         if (!kHost && this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native families are GPU kernels";
     }
 
     // The public syev family both calls share, pinned strictly and required reached.
-    static const char* syev_family() { return kHost ? "vendor" : "cta_fused"; }
+    // The vendor-free host: blocked (the sub-group solvers stay GPU-only there, syev.cc).
+    static const char* syev_family() { return kHost ? (kHostNative ? "blocked" : "vendor") : "cta_fused"; }
 
     // Bit-identical to the unmasked call where the route allows it: Direct everywhere, and LOBPCG
     // with Householder (complex T). Elsewhere EXPECT_VERIFY mode: m equal, and an item the unmasked
@@ -394,6 +399,7 @@ TYPED_TEST(SyevxMask, FilteredLeavesInactiveItemsUntouched) {
 }
 TYPED_TEST(SyevxMask, LobpcgAndFilteredRefuseOnTheHostBackend) {
     if (!TestFixture::kHost) GTEST_SKIP() << "the device gemm honours the mask";
+    if (TestFixture::kHostNative) GTEST_SKIP() << "vendor-free host: the unmasked call has no route (ortho's geqrf)";
     for (const auto a : {SyevxAlgorithm::LOBPCG, SyevxAlgorithm::Filtered})
         this->expect_refused(a == SyevxAlgorithm::LOBPCG ? "lobpcg" : "filtered", 16, 8, 3,
                              TestFixture::iterative(a, true));
@@ -415,6 +421,7 @@ TYPED_TEST(SyevxMask, DirectSubsetLeavesInactiveItemsUntouched) {
     if constexpr (is_std_complex_v<T>) {
         GTEST_SKIP() << "DirectSubset is real only (complex falls back to Direct)";
     } else {
+        if (TestFixture::kHostNative) GTEST_SKIP() << "vendor-free host: DirectSubset degrades to Direct (Direct* cases)";
         if (TestFixture::kHost) {  // its gemm is the host BLAS: refused before any write
             auto p = TestFixture::params(SyevxAlgorithm::DirectSubset);
             p.select = SyevxSelect::Index;

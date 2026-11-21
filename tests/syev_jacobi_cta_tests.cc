@@ -506,6 +506,7 @@ TEST(SyevJacobiCtaAccuracy, RandomSymmetricMatchesDoubleReference) {
     if (!test_utils::should_run_float_type<float>()) {
         GTEST_SKIP() << "float type filtered by BATCHLAS_TEST_FLOAT_TYPE environment variable";
     }
+    if (Device::get_devices(DeviceType::GPU).empty()) GTEST_SKIP() << "the runtime lists no GPU";  // Queue("gpu") throws
     auto ctx = Queue("gpu", true);
     if (ctx.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "GPU backend requires GPU device, but none was selected";
@@ -581,6 +582,7 @@ TEST(SyevJacobiCtaAccuracy, GradedSpdRelativeAccuracy) {
     if (!test_utils::should_run_float_type<float>()) {
         GTEST_SKIP() << "float type filtered by BATCHLAS_TEST_FLOAT_TYPE environment variable";
     }
+    if (Device::get_devices(DeviceType::GPU).empty()) GTEST_SKIP() << "the runtime lists no GPU";  // Queue("gpu") throws
     auto ctx = Queue("gpu", true);
     if (ctx.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "GPU backend requires GPU device, but none was selected";

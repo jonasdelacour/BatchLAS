@@ -425,8 +425,8 @@ Event sytrd_blocked_impl(Queue& ctx,
         throw batchlas::unsupported("sytrd_blocked: only Uplo::Lower is implemented");
     }
 
-    // sytrd_cta builds without CPU targets (NO_CPU_TARGETS), and the OpenCL CPU offers sub-group
-    // size 32, so only a GPU can run it (steqr.cc carries the same term).
+    // GPU only: sytrd_cta has a CPU image only in a vendor-free build, and there its 32-wide tier
+    // returns NaN on the OpenCL CPU (syev n = 32); the CPU offers sub-group size 32 (steqr.cc alike).
     if (n <= 32) {
         if (ctx.device().type == DeviceType::GPU && ctx.device().supports_sub_group_size(32)) {
             return sytrd_cta<B, Scalar>(ctx, A, D, E, TAU, uplo, Span<std::byte>(), /*cta_wg_size_multiplier=*/1);
@@ -455,7 +455,9 @@ Event sytrd_blocked_impl(Queue& ctx,
             }
         }
 
-        constexpr bool allow_local_small = !select::native_gpu_backend<B>;
+        // Not on a vendor-free host either (native_backend): the legacy kernel reads A's upper
+        // triangle, which syev's Lower calls never wrote (poison there: values off by 9e4).
+        constexpr bool allow_local_small = !select::native_backend<B>;
         const bool auto_local = allow_local_small && std::is_same_v<Scalar, float>;
         if ((auto_local && props_ok) || (allow_local_small && force_local && props_ok)) {
             {

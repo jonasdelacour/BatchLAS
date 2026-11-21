@@ -20,7 +20,8 @@ inline bool should_use_cta(const Queue& ctx, int64_t n) {
         (void)ctx; (void)n;
         return false;
     }
-    // GPU only: the CTA kernels build without CPU targets (steqr_cta falls back alike).
+    // GPU only (steqr_cta falls back alike): the CTA kernels have no CPU image outside a vendor-free
+    // build, and in one steqr_cta reads out of bounds on the OpenCL CPU (steqr_cta.cc).
     return n > 0 && n <= 32 && ctx.device().type == DeviceType::GPU && ctx.device().supports_sub_group_size(32);
 }
 
