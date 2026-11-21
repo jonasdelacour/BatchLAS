@@ -642,8 +642,11 @@ TYPED_TEST(PotrfCandidates, BareNativePicksTheBestRunnableNonVendor) {
     static constexpr Backend B = TestFixture::B;
     const ScopedEnvVar clear("BATCHLAS_POTRF_ROUTE", nullptr);
     const auto& dev = select::device_of<B>(*this->ctx, select::Lib::solver);
+    // A device with no table at all (the vendor-free host) takes the last resort, blocked (§5.5).
+    const bool untabled = select::tables_in_borrow_order("potrf", select::dtype_name<T>(), dev).empty();
     for (int n : {16, 64, 128, 256, 512}) {
         auto pick = [&](bool native_only) {
+            if (untabled) return std::string("blocked");
             return test_utils::shipped_table_pick<C>(
                 "potrf", select::dtype_name<T>(), dev, select::Key{{"uplo", "L"}, {"n", n}, {"batch", 128}}, [&] {
                     auto q = make_prob<T>(n, 128, Uplo::Lower, 20u);

@@ -295,8 +295,12 @@ TYPED_TEST(PotrfCtaTest, ResidualBothTriangles) {
 TYPED_TEST(PotrfCtaTest, FirstColumnReciprocalIsAccurate) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
-    // Measured worst (eps): float/cfloat 0.96 (origin/main: 1.19-1.29), double/cdouble 1.15.
-    constexpr double kMaxEps = std::is_same_v<R, float> ? 1.0 : 1.2;
+    // Measured worst (eps): float/cfloat 0.96 (origin/main: 1.19-1.29), double/cdouble 1.15. The
+    // rsqrt.approx fold this guards is NVPTX-only; a CPU device (the vendor-free host) computes
+    // 1 / sqrt(a00) with OpenCL's default float sqrt and divide, not correctly rounded: measured
+    // 1.07 on opencl:cpu, so its float bound is 1.25.
+    const bool cpu = this->ctx->device().type == DeviceType::CPU;
+    const double kMaxEps = std::is_same_v<R, float> ? (cpu ? 1.25 : 1.0) : 1.2;
 
     // Relative error in units of eps(R): unlike ulp-of-result it does not double across a binade.
     const auto rel_err = [](R got, long double want) {
