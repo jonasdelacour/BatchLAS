@@ -196,6 +196,50 @@ grep -q 'PASS' "${run_log}" || fail "consumer example did not report PASS"
 say "consumer ran and the numbers are right"
 
 # ---------------------------------------------------------------------------
+# Phase 3b: one version everywhere, and find_package draws the major line.
+# The installed version.hh, the CMake package (BatchLAS_VERSION), the string the
+# consumer compiled in and the SONAME must agree. The example asked for 1.0 and
+# was accepted; asking for the next major must be refused (rules out
+# AnyNewerVersion-style "newer is fine"), and so must an older major's last minor
+# (rules out a version file that ignores the major). ExactVersion would already
+# have refused the example's "1.0" against "1.0.0".
+# ---------------------------------------------------------------------------
+version_hh="${prefix}/include/batchlas/version.hh"
+[[ -f "${version_hh}" ]] || fail "missing installed header: include/batchlas/version.hh"
+hdr_part() { sed -n "s/^#define BATCHLAS_VERSION_$1 *//p" "${version_hh}" | tr -d '"[:space:]'; }
+hdr_major="$(hdr_part MAJOR)"
+hdr_version="${hdr_major}.$(hdr_part MINOR).$(hdr_part PATCH)"
+[[ "$(hdr_part STRING)" == "${hdr_version}" ]] \
+    || fail "version.hh: BATCHLAS_VERSION_STRING '$(hdr_part STRING)' is not MAJOR.MINOR.PATCH '${hdr_version}'"
+[[ "${hdr_major}" =~ ^[0-9]+$ ]] || fail "version.hh: BATCHLAS_VERSION_MAJOR '${hdr_major}' is not a number"
+pkg_version="$(sed -n 's/^-- BatchLAS package version \([^ ]*\) .*/\1/p' "${log_dir}/configure.log" | head -n 1)"
+[[ "${pkg_version}" == "${hdr_version}" ]] \
+    || fail "find_package reports BatchLAS ${pkg_version:-<none>}, the installed version.hh says ${hdr_version}"
+grep -qx "batchlas version = ${hdr_version}" "${run_log}" \
+    || fail "the consumer compiled in a BATCHLAS_VERSION_STRING other than ${hdr_version} (see ${run_log})"
+if ! compgen -G "${prefix}/lib*/libbatchlas*.so.${hdr_major}" >/dev/null && \
+   ! compgen -G "${prefix}/lib*/libbatchlas*.${hdr_major}.dylib" >/dev/null && \
+   ! compgen -G "${prefix}/lib*/libbatchlas*.a" >/dev/null; then
+    fail "no installed libbatchlas*.so.${hdr_major} / .${hdr_major}.dylib: the SONAME does not follow the major version"
+fi
+refuse_requests=("$((hdr_major + 1)).0")
+[[ ${hdr_major} -gt 0 ]] && refuse_requests+=("$((hdr_major - 1)).99")
+for req in "${refuse_requests[@]}"; do
+    req_log="${log_dir}/configure-request-${req}.log"
+    if configure_consumer "${work_dir}/build-request-${req}" \
+            -DBATCHLAS_CONSUMER_REQUIRE_VERSION="${req}" >"${req_log}" 2>&1; then
+        fail "find_package(BatchLAS ${req}) accepted a ${hdr_version} install (full log: ${req_log})"
+    fi
+    # CMake lists the rejected candidate with its version; anything else failed for another reason.
+    grep -q "version: ${hdr_version}" "${req_log}" || {
+        tail -n 40 "${req_log}" >&2
+        fail "find_package(BatchLAS ${req}) failed, but not by refusing version ${hdr_version} (full log: ${req_log})"
+    }
+done
+say "version ${hdr_version}: version.hh, package, compiled string and SONAME agree;" \
+    "find_package accepts 1.0, refuses ${refuse_requests[*]}"
+
+# ---------------------------------------------------------------------------
 # Phase 4: the include-collision probe. Build the same example again with
 # consumer-owned blas/enums.hh, util/workspace.hh and internal/ormqr_blocked.hh
 # ahead of BatchLAS's headers -- see consumer/decoy_include/util/workspace.hh.

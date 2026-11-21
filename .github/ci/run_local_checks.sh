@@ -60,6 +60,8 @@ run python3 "$_root/scripts/sweep_to_table.py" --self-test
 run python3 "$_root/scripts/sweep_to_table.py" --check
 # The ctest failure gate's registered-test count, against a fixture (needs ctest, no build).
 run python3 "$here/compare_failures.py" --self-test
+# release.yml's notes extractor against its fixture (it otherwise runs only on a tag push).
+run python3 "$here/release_notes.py" --self-test
 # Plans and write-ups outside docs/ are what the documentation site replaced.
 run python3 "$here/check_markdown_locations.py" --self-test
 run python3 "$here/check_markdown_locations.py"

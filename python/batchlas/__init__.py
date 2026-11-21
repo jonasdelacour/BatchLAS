@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: MIT
+from ._batchlas import __version__  # BATCHLAS_VERSION_STRING of the library it was built with
 from ._api import (
     ApiMisuseError,
     BatchLASError,
@@ -109,6 +110,7 @@ from ._api import (
 from . import linalg
 
 __all__ = [
+    "__version__",
     "ApiMisuseError",
     "BatchLASError",
     "BatchLASException",

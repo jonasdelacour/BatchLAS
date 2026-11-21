@@ -277,7 +277,7 @@ option(BATCHLAS_SYCL_GLOBAL_OFFSET
 # `cmake --build <dir> --target batchlas -j16` from a scratch tree took
 # 11m38s wall, of which the single `Linking CXX shared library libbatchlas.so`
 # step was 9m35s (575 s) on its own. That step is single-threaded, so -j does
-# not shorten it. The product is a 273 MiB libbatchlas.so.0.1.0. Usable for a
+# not shorten it. The product was a 273 MiB libbatchlas.so (at 0.1.0). Usable for a
 # release build, ruinous as a dev loop - which is the whole reason this
 # defaults OFF.
 # macOS can only build the monolithic shape (check below), so it is the default there.

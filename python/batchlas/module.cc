@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: MIT
 #include <python/batchlas/bindings/init.hh>
 
+#include <batchlas/version.hh>
+
 #include <pybind11/pybind11.h>
 
 namespace py = pybind11;
 
 PYBIND11_MODULE(_batchlas, module) {
     module.doc() = "Hidden pybind11 extension for BatchLAS";
+    module.attr("__version__") = BATCHLAS_VERSION_STRING;
 
     batchlas::python::init_runtime(module);
     batchlas::python::init_types(module);

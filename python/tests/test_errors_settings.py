@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import os
+import re
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -125,6 +127,16 @@ def test_compiled_features_reports_vendor_status_and_sycl_implementation():
     assert isinstance(features["vendor_libraries"], list)
     assert features["vendor_free"] == (len(features["vendor_libraries"]) == 0)
     assert features["backends"] == bl.available_backends()
+
+
+def test_version_is_the_cmake_project_version():
+    # The reference is project(BatchLAS VERSION ...) in the source tree, not version.hh, which the
+    # extension compiles in: a header CMake failed to check would still turn this red.
+    cmake_lists = Path(__file__).resolve().parents[2] / "CMakeLists.txt"
+    match = re.search(r"^project\(BatchLAS VERSION (\d+\.\d+\.\d+)", cmake_lists.read_text(), re.M)
+    assert match, f"no project(BatchLAS VERSION x.y.z) in {cmake_lists}"
+    assert bl.__version__ == match.group(1)
+    assert "__version__" in bl.__all__
 
 
 def test_every_listed_backend_is_accepted():

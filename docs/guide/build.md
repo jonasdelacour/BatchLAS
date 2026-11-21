@@ -32,7 +32,8 @@ tested by hand, or untested.
 | AdaptiveCpp multipass CUDA | AdaptiveCpp `develop` (25.10.0+), `BATCHLAS_ACPP_TARGETS=cuda:sm_89`, CUDA 12.8 | RTX 4090, `sm_89` | Built and tested; ledger `tests/known-failures-acpp-cuda.txt` ([multipass CUDA](../design/sycl-implementations.md#sycl-impl-cuda-aot)) |
 | Apple GPU | AdaptiveCpp + local patches, Homebrew `llvm@21`, macOS 27 | M5 Max, Metal | float and complex<float> on the GPU ([below](#macos-apple-gpu-through-adaptivecpp-metal)) |
 | CPU only | oneAPI `icpx` 2025.x | none | Builds; no NVIDIA support |
-| AMD / ROCm, Windows | — | — | Untested |
+| AMD / ROCm | — | — | Unsupported (code paths only): syntax-checked, never built or run |
+| Windows | — | — | Untested |
 
 Other NVIDIA architectures should work (the build targets the detected GPU). `main` has known test
 failures: compare against `tests/known-failures.txt`, not `ctest`'s exit code.
@@ -223,9 +224,10 @@ Consumer CMake recipe, the same-compiler rule and `-fsycl` flags: [the C++ API](
 - **`cmake --install` never removes files.** A leftover `blas/`, `util/` or `internal/` in
   `<prefix>/include` shadows current headers; under a shared prefix those names may belong to
   another package.
-- **`SOVERSION` 0, no release tag.** Every 0.x library is `.so.0` and the version check is
-  `ExactVersion`, so pin to a commit. Link `BatchLAS::batchlas`;
-  `find_package(BatchLAS CONFIG REQUIRED COMPONENTS ...)` is not supported.
+- **The SONAME is the major version.** 1.x libraries are `.so.1` (`.1.dylib`) and
+  `find_package(BatchLAS 1.0)` accepts any 1.x; what the number promises is in
+  [versioning and compatibility](../cpp-api.md#versioning-and-compatibility). Link
+  `BatchLAS::batchlas`; `find_package(BatchLAS CONFIG REQUIRED COMPONENTS ...)` is not supported.
 
 ## Repository layout
 
