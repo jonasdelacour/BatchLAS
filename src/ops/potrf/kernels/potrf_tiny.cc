@@ -19,6 +19,7 @@
 #include <src/kernels/common/tiny_device.hh>
 
 #include <src/queue.hh>
+#include <src/select/vendor.hh>
 #include <src/util/resident_capacity.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/util/batch_mask.hh>
@@ -152,7 +153,7 @@ std::size_t potrf_tiny_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFo
 template <typename Scalar>
 unsigned potrf_tiny_debug_launch(Queue& ctx, int n) {
     const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU) return 0u;
+    if (dev.type != DeviceType::GPU && !select::kHostNative) return 0u;  // where the tier runs (natives_run_on)
     const int N = tiny_native::tiny_bucket_ge(n);
     if (N == 0 || n > potrf_tiny_max_n<Scalar>()) return 0u;
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
