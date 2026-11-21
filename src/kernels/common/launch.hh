@@ -34,8 +34,7 @@ Device require_launchable(Queue& ctx, const char* who, const MatrixView<Scalar, 
     if (A.is_heterogeneous() || (ops.is_heterogeneous() || ...))
         throw batchlas::invalid_argument(w + ": heterogeneous batch is not supported");
     const Device dev = ctx.device();
-    // A vendor-free build keeps the native kernels' CPU images and runs them on the host queue.
-    // evidence: docs/design/vendor-independence.md#the-host-native-gate
+    // evidence: docs/design/vendor-independence.md#the-host-native-gate (vendor-free host runs natives)
     if (dev.type != DeviceType::GPU && !BATCHLAS_HAS_HOST_NATIVE)
         throw batchlas::invalid_argument(w + ": GPU queues only");
     if (need.sub_group > 0 && !dev.supports_sub_group_size(static_cast<std::size_t>(need.sub_group)))
