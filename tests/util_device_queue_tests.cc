@@ -521,6 +521,67 @@ TEST(QueueTest, EmptyNdRangeInCommandGroupFollowsEarlierWork) {
     sycl::free(dst, sq);
 }
 
+// A null pointer argument reads null although the kernel before it, in the same command buffer,
+// bound a buffer at that argument's slot. acpp Metal bound nothing for a null pointer, so the
+// kernel inherited the earlier binding: MatrixView::fill's null mask then read another kernel's
+// bytes and skipped every element they zeroed (AdaptiveCpp patch 0015). Both kernels capture the
+// same values in the same order; only the pointers' nullness differs. No wait between them.
+class BindPointerSlotsKernel;
+class NullPointerSlotsKernel;
+TEST(QueueTest, NullPointerArgumentReadsNullAfterAKernelThatBoundItsSlot) {
+    constexpr size_t n = 3000;
+    int devices_run = 0;
+    for (const char* dev : {"cpu", "gpu"}) {
+        std::optional<Queue> q;
+        try {
+            q.emplace(Device(dev), true);
+        } catch (const std::exception&) {
+            continue;
+        }
+        ++devices_run;
+        sycl::queue& sq = batchlas::sycl_queue(*q);
+        int* out = sycl::malloc_shared<int>(n, sq);
+        float* zeros = sycl::malloc_shared<float>(n, sq);
+        std::fill(zeros, zeros + n, 0.0f);
+        for (int round = 0; round < 3; ++round) {
+            std::fill(out, out + n, -7);
+            const float* bound[3] = {zeros, zeros + 1, zeros + 2};
+            const float* none[3] = {nullptr, nullptr, nullptr};
+            {
+                const float *p0 = bound[0], *p1 = bound[1], *p2 = bound[2];
+                int* o = out;
+                (*q)->parallel_for<BindPointerSlotsKernel>(sycl::range<1>(n - 2), [=](sycl::id<1> id) {
+                    const size_t i = id[0];
+                    o[i] = int(p0[i] + p1[i] + p2[i]) - 7;
+                });
+            }
+            {
+                const float *p0 = none[0], *p1 = none[1], *p2 = none[2];
+                int* o = out;
+                (*q)->parallel_for<NullPointerSlotsKernel>(sycl::range<1>(n - 2), [=](sycl::id<1> id) {
+                    const size_t i = id[0];
+                    o[i] = int(p0 != nullptr) + 2 * int(p1 != nullptr) + 4 * int(p2 != nullptr) +
+                           (p0 && p0[i] == 0.0f ? 8 : 0);
+                });
+            }
+            q->wait();
+            size_t wrong = 0, first = n;
+            for (size_t i = 0; i < n - 2; ++i)
+                if (out[i] != 0) {
+                    ++wrong;
+                    first = std::min(first, i);
+                }
+            EXPECT_EQ(wrong, 0u) << dev << " round " << round << ": " << wrong << " work-items saw a non-null "
+                                 << "pointer argument passed as nullptr (first " << first << ", flags "
+                                 << (first < n ? out[first] : 0) << ")";
+            EXPECT_EQ(out[n - 2], -7) << dev << ": a work-item past the range wrote";
+        }
+        sycl::free(out, sq);
+        sycl::free(zeros, sq);
+    }
+    if (devices_run == 0) GTEST_SKIP() << "no cpu or gpu device";
+}
+
 // enqueue() orders every later submission path of an out-of-order queue after the event, with no
 // host wait. The event is a kernel spinning on a host flag the host sets only after submitting;
 // acpp's barrier node alone ordered nothing, so reads saw 0 and writes were overwritten. A watchdog

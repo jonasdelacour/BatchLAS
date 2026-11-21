@@ -332,6 +332,80 @@ TYPED_TEST(BatchMaskUtilities, FillsAndTransforms) {
     check_utility<T>(ctx, [](Queue& q, const MatrixView<T>& A) { (void)linalg::scale(q, A, T(2)); }, "linalg::scale", 5, 4);
 }
 
+// ---- an unmasked utility batched right after a kernel that bound its argument slots ----------
+// acpp Metal bound nothing for a null pointer argument, so a kernel batched into the same command
+// buffer kept the previous kernel's binding there: an unmasked utility's null mask read the masked
+// call's mask, or another kernel's zero bytes, and skipped those items (AdaptiveCpp patch 0015;
+// steqr_wg's 3 MB rotation fill lost a fifth of its writes). No wait between the two launches.
+// The reference is the same utility run alone, after a wait.
+class BindEverySlotKernel;
+
+namespace {
+template <typename Scalar>
+void check_after_bound_slots(Queue& ctx, const MatOp<Scalar>& op, const char* what, int rows, int cols,
+                             bool packed = false) {
+    const int ld = packed ? rows : rows + 3;
+    const int stride = packed ? rows * cols : ld * cols + 5;
+    Matrix<Scalar> ref(rows, cols, kBatch, ld, stride);
+    fill_poison<Scalar>(ref);
+    op(ctx, ref.view());
+    ctx.wait();
+    const auto want = snapshot<Scalar>(ref);
+    DeviceMask mask(ctx, kBatch);
+    constexpr std::size_t kZeroBytes = 4096;
+    std::uint8_t* zeros = sycl::malloc_device<std::uint8_t>(kZeroBytes, *ctx.operator->());
+    ctx->memset(zeros, 0, kZeroBytes);
+    ctx.wait();
+    for (int k = 0; k < 2; ++k) {
+        const char* lead = k == 0 ? "after the masked call" : "after a kernel binding six zero buffers";
+        Matrix<Scalar> first(rows, cols, kBatch, ld, stride);
+        Matrix<Scalar> got(rows, cols, kBatch, ld, stride);
+        fill_poison<Scalar>(first, 5);
+        fill_poison<Scalar>(got, 11);
+        if (k == 0) {
+            op(ctx, first.view().with_batch_mask(mask.span()));
+        } else {
+            std::uint8_t* w = zeros;
+            const std::uint8_t *p1 = zeros, *p2 = zeros + 1, *p3 = zeros + 2, *p4 = zeros + 3, *p5 = zeros + 4;
+            ctx->parallel_for<BindEverySlotKernel>(sycl::range<1>(64), [=](sycl::id<1> id) {
+                const std::size_t i = id[0];
+                w[kZeroBytes / 2 + i] = std::uint8_t(p1[i] | p2[i] | p3[i] | p4[i] | p5[i]);
+            });
+        }
+        op(ctx, got.view());
+        ctx.wait();
+        const std::size_t s = static_cast<std::size_t>(stride);
+        const auto d = got.data();
+        for (int b = 0; b < kBatch; ++b) {
+            const std::size_t off = static_cast<std::size_t>(b) * s;
+            EXPECT_TRUE(item_bytes_equal(d.data() + off, want.data() + off, std::min(s, d.size() - off)))
+                << what << " " << lead << ": item " << b << " differs from the same call run alone";
+        }
+    }
+    sycl::free(zeros, *ctx.operator->());
+}
+}  // namespace
+
+TYPED_TEST(BatchMaskUtilities, UnmaskedUtilityAfterAKernelThatBoundItsSlotsWritesEveryItem) {
+    using T = TypeParam;
+    auto& ctx = this->ctx;
+    const T value = poison<T>(23) * T(0.5);
+    check_after_bound_slots<T>(ctx, [=](Queue& q, const MatrixView<T>& A) { (void)A.fill(q, value); }, "fill packed", 5, 4, true);
+    check_after_bound_slots<T>(ctx, [=](Queue& q, const MatrixView<T>& A) { (void)A.fill(q, value); }, "fill strided", 5, 4);
+    check_after_bound_slots<T>(ctx, [](Queue& q, const MatrixView<T>& A) { (void)A.fill_zeros(q); }, "fill_zeros strided", 5, 4);
+    check_after_bound_slots<T>(ctx, [](Queue& q, const MatrixView<T>& A) { (void)A.fill_identity(q, T(2)); }, "fill_identity", 5, 5);
+    check_after_bound_slots<T>(ctx, [](Queue& q, const MatrixView<T>& A) { (void)A.fill_diagonal(q, T(3)); }, "fill_diagonal value", 5, 4);
+    UnifiedVector<T> diag(std::size_t(4) * kBatch);
+    for (std::size_t k = 0; k < diag.size(); ++k) diag[k] = poison<T>(k + 99);
+    check_after_bound_slots<T>(ctx, [&](Queue& q, const MatrixView<T>& A) { (void)A.fill_diagonal(q, diag.to_span(), -1); }, "fill_diagonal per-item span", 5, 4);
+    check_after_bound_slots<T>(ctx, [](Queue& q, const MatrixView<T>& A) { (void)A.fill_triangular(q, Uplo::Lower, T(2), T(-1)); }, "fill_triangular", 5, 5);
+    check_after_bound_slots<T>(ctx, [](Queue& q, const MatrixView<T>& A) { (void)A.fill_tridiag_toeplitz(q); }, "fill_tridiag_toeplitz", 5, 5, true);
+    check_after_bound_slots<T>(ctx, [](Queue& q, const MatrixView<T>& A) { (void)A.fill_random(q, false, 3); }, "fill_random", 5, 4);
+    check_after_bound_slots<T>(ctx, [](Queue& q, const MatrixView<T>& A) { (void)A.triangularize(q, Uplo::Upper, Diag::Unit); }, "triangularize", 5, 4);
+    check_after_bound_slots<T>(ctx, [](Queue& q, const MatrixView<T>& A) { (void)A.symmetrize(q, Uplo::Lower); }, "symmetrize", 5, 5);
+    check_after_bound_slots<T>(ctx, [](Queue& q, const MatrixView<T>& A) { (void)scale(q, T(-3), A); }, "scale", 5, 4);
+}
+
 // Two-operand utilities: the mask sits on the source only, so the destination adopts it.
 TYPED_TEST(BatchMaskUtilities, CopiesAndElementwise) {
     using T = TypeParam;
