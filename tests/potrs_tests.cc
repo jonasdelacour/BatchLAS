@@ -36,6 +36,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <map>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -265,7 +266,8 @@ TYPED_TEST(PotrsTest, NonSpdItemIsFlaggedAndTheOthersAreUndisturbed) {
 
 // The fused pin on both sides of each ceiling: the accumulator width (nrhs 8 runs, 9 is refused) and the
 // SLM capacity, LAUNCHED at the advertised ceiling (nrhs = 8, n = cap / 8 runs and solves; n + 1 is
-// refused). trsm and Auto run on both sides; an unknown spelling throws. On a CPU queue fused never runs.
+// refused). trsm and Auto run on both sides; an unknown spelling throws. A CPU queue with netlib never
+// runs fused; a vendor-free host does.
 // BREAK (run 2026-10-26): fused_fits drops `nrhs <= kGetrsFusedMaxRhs`. RED: this test (the nrhs = 9 pin is
 // refused by the kernel's entry check, not by selection) and EachFamilySolves (its fused pin at nrhs 9 and 20
 // reaches the kernel and throws), every CUDA type; every other potrs test GREEN, NETLIB GREEN.
@@ -277,15 +279,27 @@ TYPED_TEST(PotrsTest, PinnedCandidatesStraddleTheirLimits) {
     if (gpu) ASSERT_GT(ceil_n, 64) << "the fused SLM capacity reads implausibly small";
     struct Cell { int n, nrhs; bool fused_runs; };
     const Cell cells[] = {{24, 8, gpu}, {24, 9, false}, {ceil_n, 8, gpu}, {ceil_n + 1, 8, false}};
+    // A vendor-free host's 256 KiB of local memory puts the ceiling at n = cap / 8 (7932 for float), where
+    // the factor dominates: there only the ceiling's own family (fused) runs at the large cells. One factor
+    // per cell serves every family; a refused pin (selection, before any data is read) needs none.
+    const bool host = this->ctx->device().type != DeviceType::GPU;
     for (const Cell& k : cells) {
         const int batch = k.n > 256 ? 2 : 3;
+        std::optional<Sys<T>> factored;
         for (const char* family : {"fused", "trsm", "auto", "no_such_family"}) {
-            auto p = this->sys(k.n, k.nrhs, batch, Uplo::Lower, 5u + k.n);
-            if (!this->factor(p)) break;
-            const std::string what = std::string(family) + " n=" + std::to_string(k.n) + " nrhs=" + std::to_string(k.nrhs);
             const std::string_view f(family);
+            const bool refused = f == "no_such_family" || (f == "fused" && !k.fused_runs);
+            if (host && k.n > 64 && !refused && f != "fused") continue;
+            auto p = this->sys(k.n, k.nrhs, batch, Uplo::Lower, 5u + k.n);
+            if (!refused && !factored) {
+                if (!this->factor(p)) break;
+                factored = p;
+            } else if (!refused) {
+                p = *factored;
+            }
+            const std::string what = std::string(family) + " n=" + std::to_string(k.n) + " nrhs=" + std::to_string(k.nrhs);
             const Pin pin("potrs", f);
-            if (f == "no_such_family" || (f == "fused" && !k.fused_runs)) {
+            if (refused) {
                 // Refused by selection itself (can_run), not by the kernel's own entry check.
                 std::string err;
                 try {
