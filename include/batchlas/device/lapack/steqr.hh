@@ -150,14 +150,11 @@ BATCHLAS_DEVICE_INLINE bool wg_sweep(const D& d_, const E& e_, N n_local, bool Q
     const Thread th{};
     const SplitTol<Real> tol{eps2<Real>(), safmin<Real>()};
     const Real anorm = lanst<NormType::Max>(th, d_, e_);
-    if (anorm > ssfmax<Real>()) {
-        const Real s = ssfmax<Real>() / anorm;
-        scal(th, s, d_);
-        scal(th, s, e_);
-    } else if (anorm < ssfmin<Real>() && anorm != Real(0)) {
-        const Real s = ssfmin<Real>() / anorm;
-        scal(th, s, d_);
-        scal(th, s, e_);
+    // dlascl(anorm, bound) both ways; block_scale caps the factor of a subnormal block.
+    const auto bs = block_scale<alg::UnscaleRatio>(anorm);
+    if (bs.s != Real(1)) {
+        scal(th, bs.s, d_);
+        scal(th, bs.s, e_);
     }
 
     const auto shift = eig2x2_nearest<alg::TieHighest>(virt_get<Real, 1>(d_, QR, n_local, n_local - 2),
@@ -176,14 +173,9 @@ BATCHLAS_DEVICE_INLINE bool wg_sweep(const D& d_, const E& e_, N n_local, bool Q
 
     const bool deflatable = tridiag_split(th, d_, e_, tol);
 
-    if (anorm > ssfmax<Real>()) {
-        const Real s = anorm / ssfmax<Real>();
-        scal(th, s, d_);
-        scal(th, s, e_);
-    } else if (anorm < ssfmin<Real>() && anorm != Real(0)) {
-        const Real s = anorm / ssfmin<Real>();
-        scal(th, s, d_);
-        scal(th, s, e_);
+    if (bs.s != Real(1)) {
+        scal(th, bs.inv, d_);
+        scal(th, bs.inv, e_);
     }
     return deflatable;
 }

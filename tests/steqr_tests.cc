@@ -5,6 +5,7 @@
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/extra.hh>
+#include <batchlas/sycl_interop.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/verify/reference.hh>
 #include <batchlas/verify/tolerance.hh>
@@ -1047,6 +1048,71 @@ TYPED_TEST(SteqrTest, GradedTridiagonalRelativeAccuracy) {
         const double median_err = item_max[batch / 2];
         EXPECT_LE(median_err, median_tol) << "n=" << n << ": median over items of the worst relative eigenvalue error";
         EXPECT_LE(max_err, max_tol) << "n=" << n << ": worst relative eigenvalue error over the batch";
+    }
+}
+
+// Every entry a multiple 1..15 of denorm_min, so the block norm sits below 16 denorm_min: in float
+// ssfmin / anorm overflowed there (below 2.2e-44), steqr_wg's sweep made NaN and every off-diagonal
+// stayed (stedc's graded float leaves; info 18 / 37 without the cap). n = 38 is steqr_wg on every
+// device, n = 19 steqr_wg on a CPU and steqr_cta on a GPU (finite there with or without the cap).
+// Oracle: host bisection in double on the input times 2^1000 (exact; bisection's pivmin cannot
+// resolve a double subnormal). Each sweep unscales the block back onto the subnormal grid (0.5
+// denorm_min per entry), measured 1 / 2.0 / 4.8 denorm_min (float, steqr_wg double, steqr_cta),
+// so 7 of each difference are the grid's: a zero spectrum misses by max|d| = 15.
+TYPED_TEST(SteqrTest, SubnormalBlockConverges) {
+    using T = typename TestFixture::ScalarType;
+    using Real = typename base_type<T>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    const Real dm = std::numeric_limits<Real>::denorm_min();
+    {  // A device that flushes subnormals (Metal) sees a zero matrix; probed, as acpp reports denorm.
+        UnifiedVector<Real> probe(2, Real(-1));
+        probe[0] = Real(3) * dm;
+        Real* pp = probe.data();
+        batchlas::sycl_queue(*this->ctx).single_task([=] { pp[1] = pp[0] * Real(0.5); }).wait();
+        ASSERT_NE(probe[1], Real(-1)) << "the probe kernel did not run";
+        if (probe[1] == Real(0)) GTEST_SKIP() << "the device flushes subnormals to zero";
+    }
+    const int batch = 3;
+    const double up = std::ldexp(1.0, 1000);
+    for (const int n : {19, 38}) {
+        SCOPED_TRACE("n=" + std::to_string(n));
+        Vector<Real> d(n, batch), e(n - 1, batch), w(n, batch);
+        std::vector<std::vector<double>> ref(batch);
+        double anorm = 0;
+        for (int b = 0; b < batch; ++b) {
+            std::vector<double> hd(n), he(n - 1);
+            for (int i = 0; i < n; ++i) {
+                const int k = ((i * 7 + b * 5) % 15) + 1;
+                d(i, b) = Real((i + b) % 3 == 0 ? -k : k) * dm;
+                hd[i] = double(d(i, b)) * up;
+            }
+            for (int i = 0; i + 1 < n; ++i) {
+                e(i, b) = Real(((i * 3 + b) % 7) + 1) * dm;
+                he[i] = double(e(i, b)) * up;
+            }
+            for (int i = 0; i < n; ++i) anorm = std::max(anorm, std::fabs(hd[i]));
+            ref[b] = test_utils::host_tridiagonal_eigenvalues(hd, he);
+        }
+        ASSERT_LT(anorm, 16.0 * double(dm) * up);
+        auto eigvects = Matrix<Real>::Zeros(n, n, batch);
+        SteqrParams<Real> params = {};
+        params.sort = true;
+        params.sort_order = SortOrder::Ascending;
+        UnifiedVector<int32_t> info(batch, int32_t(-1));
+        auto ws = UnifiedVector<std::byte>(
+            steqr_buffer_size<Real>(*this->ctx, d, e, w, JobType::EigenVectors, params), std::byte(0));
+        (void)steqr<B, Real>(*this->ctx, d, e, w, ws.to_span(), JobType::EigenVectors, params, eigvects,
+                             info.to_span());
+        this->ctx->wait();
+        double err = 0;
+        for (int b = 0; b < batch; ++b) {
+            EXPECT_EQ(info[b], 0) << "item " << b;
+            for (int i = 0; i < n; ++i) {
+                ASSERT_TRUE(std::isfinite(double(w(i, b)))) << "w(" << i << ") item " << b;
+                err = std::max(err, std::fabs(double(w(i, b)) * up - ref[b][i]) - 7.0 * double(dm) * up);
+            }
+        }
+        EXPECT_VERIFY(Real, verify::Check::values, n, std::max(err, 0.0) / anorm);
     }
 }
 

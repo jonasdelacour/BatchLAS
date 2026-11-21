@@ -402,8 +402,17 @@ template <class Unscale = alg::UnscaleRecip, class Real> BATCHLAS_DEVICE_INLINE 
         s = ssfmax<Real>() / anorm;
         if constexpr (std::is_same_v<Unscale, alg::UnscaleRatio>) inv = anorm / ssfmax<Real>();
     } else if (anorm < ssfmin<Real>() && anorm != Real(0)) {
+        // Below ssfmin * min (float 9e-44, a subnormal block: stedc's graded float leaves) ssfmin /
+        // anorm overflows and the sweep made NaN. s stops at 1 / min, exact both ways, which leaves
+        // the block at >= 2^-23 (float): normal, and far above sqrt(safmin).
+        constexpr Real cap = Real(1) / std::numeric_limits<Real>::min();
         s = ssfmin<Real>() / anorm;
-        if constexpr (std::is_same_v<Unscale, alg::UnscaleRatio>) inv = anorm / ssfmin<Real>();
+        if (!(s <= cap)) {
+            s = cap;
+            inv = std::numeric_limits<Real>::min();
+        } else if constexpr (std::is_same_v<Unscale, alg::UnscaleRatio>) {
+            inv = anorm / ssfmin<Real>();
+        }
     }
     if constexpr (std::is_same_v<Unscale, alg::UnscaleRecip>) inv = Real(1) / s;
     return {s, inv};
