@@ -27,13 +27,17 @@ struct Blocked {
 
 using PotriChoice = std::variant<Cta, Blocked>;
 
-// Tie-break order (§6.3): cta first; nb = 128 for float only. evidence: docs/perf/potri.md#potri-selection
+// Tie-break order (§6.3): cta first; nb = 128 for float only; nb = 32 last, for complex only: on 32
+// KiB of local memory (Apple) its CTA ceiling is under 64, and nothing else serves n above it.
+// evidence: docs/perf/potri.md#potri-selection
 template <class Scalar>
 constexpr auto candidates() {
     if constexpr (std::is_same_v<Scalar, float>)
         return std::array<PotriChoice, 3>{Cta{}, Blocked{64}, Blocked{128}};
-    else
+    else if constexpr (std::is_same_v<Scalar, double>)
         return std::array<PotriChoice, 2>{Cta{}, Blocked{64}};
+    else
+        return std::array<PotriChoice, 3>{Cta{}, Blocked{64}, Blocked{32}};
 }
 
 inline constexpr std::array<std::string_view, 2> last_resort{"blocked", "cta"};  ///< generality order (§5.5)

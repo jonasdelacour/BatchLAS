@@ -128,11 +128,27 @@ std::vector<PotriChoice> potri_pins() {
 
 std::string pin_name(const PotriChoice& c) { return select::to_string(c); }
 
-// The order the cta pin can run on this queue (the can_run term, read from the same device facts).
+// The order the cta pin can run on this queue: can_run's term, which is the launcher's (the device's
+// local memory and the kernel's own work-group limit, 256 on AdaptiveCpp).
 template <Backend B, typename Scalar>
 int cta_ceiling(Queue& q) {
-    const auto& d = select::device_of<B>(q);
-    return ops::potri::cta_max_n<Scalar>(static_cast<std::size_t>(d.slm_budget), d.max_wg);
+    return ops::potri::cta_ceiling<Scalar>(q);
+}
+
+// Whether pin c serves order n on q: its CTA block (the whole matrix, or min(nb, n)) within the
+// ceiling. On 32 KiB of local memory complex<float>'s ceiling is under 64, so blocked:nb=64 cannot.
+template <Backend B, typename Scalar>
+bool pin_runs(Queue& q, const PotriChoice& c, int n) {
+    const auto* b = std::get_if<ops::potri::Blocked>(&c);
+    return (b ? std::min(b->nb, n) : n) <= cta_ceiling<B, Scalar>(q);
+}
+
+// The first compiled blocked pin that serves order n on q (nb 64 where it fits, else 32), or nullopt.
+template <Backend B, typename Scalar>
+std::optional<ops::potri::Blocked> blocked_pin(Queue& q, int n) {
+    for (const PotriChoice& c : potri_pins<Scalar>())
+        if (const auto* b = std::get_if<ops::potri::Blocked>(&c); b && pin_runs<B, Scalar>(q, c, n)) return *b;
+    return std::nullopt;
 }
 
 }  // namespace
@@ -143,11 +159,10 @@ int cta_ceiling(Queue& q) {
 // unreferenced triangle poisoned and written by nobody, info all zero.
 TYPED_TEST(PotriTest, PotriInvertsAndWritesOnlyItsTriangle) {
     using T = typename TestFixture::T;
-    const int ceiling = cta_ceiling<TestFixture::BK, T>(this->q());
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
         for (int n : {1, 2, 3, 4, 5, 8, 9, 16, 31, 32, 33, 64, 65, 100, 129, 200, 300})
             for (int route = -1; route < static_cast<int>(potri_pins<T>().size()); ++route) {
-                if (route == 0 && n > ceiling) continue;
+                if (route >= 0 && !pin_runs<TestFixture::BK, T>(this->q(), potri_pins<T>()[route], n)) continue;
                 auto p = this->sys(n, 4, uplo, 900u + n);
                 UnifiedVector<int32_t> info;
                 if (!this->factor(p, info)) continue;
@@ -170,11 +185,10 @@ TYPED_TEST(PotriTest, PotriInvertsAndWritesOnlyItsTriangle) {
 // both triangles: the diagonally dominant inputs above cannot see an unstable update order.
 TYPED_TEST(PotriTest, PotriInvertsGradedIllConditionedInputs) {
     using T = typename TestFixture::T;
-    const int ceiling = cta_ceiling<TestFixture::BK, T>(this->q());
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
         for (int n : {7, 33, 100, 200, 300})
             for (const PotriChoice& c : potri_pins<T>()) {
-                if (c.index() == 0 && n > ceiling) continue;
+                if (!pin_runs<TestFixture::BK, T>(this->q(), c, n)) continue;
                 auto p = this->sys(n, 3, uplo, 61u + n, ts::cond_for<T>());
                 UnifiedVector<int32_t> info;
                 if (!this->factor(p, info)) continue;
@@ -199,7 +213,7 @@ TYPED_TEST(PotriTest, PotriFullFillsTheOtherTriangleWithTheConjugateTranspose) {
                 auto p = this->sys(n, 3, uplo, 31u + n);
                 UnifiedVector<int32_t> info;
                 if (!this->factor(p, info)) continue;
-                if (c.index() == 0 && n > cta_ceiling<TestFixture::BK, T>(this->q())) continue;
+                if (!pin_runs<TestFixture::BK, T>(this->q(), c, n)) continue;
                 const Matrix<T> before = p.a;
                 {
                     const select::ScopedPin<PotriChoice> pin("potri", c);
@@ -231,7 +245,7 @@ TYPED_TEST(PotriTest, PotriInfoNamesTheZeroDiagonalAndLeavesOtherItemsAlone) {
             for (bool full : {false, true})
                 for (int n : {5, 8, 20, 70, 150})
                     for (int zero_at : {0, n / 2, n - 1}) {
-                        if (c.index() == 0 && n > cta_ceiling<TestFixture::BK, T>(this->q())) continue;
+                        if (!pin_runs<TestFixture::BK, T>(this->q(), c, n)) continue;
                         const int bad = 1, batch = 4;
                         const std::string what = pin_name(c) + " n=" + std::to_string(n) + " zero_at=" + std::to_string(zero_at) +
                                                  (uplo == Uplo::Lower ? " L" : " U") + (full ? " full" : "");
@@ -275,11 +289,14 @@ TYPED_TEST(PotriTest, PotriWorkspaceAndDegenerateCalls) {
         const select::ScopedPin<PotriChoice> pin("potri", PotriChoice{ops::potri::Cta{}});
         if (100 <= cta_ceiling<BK, T>(this->q())) EXPECT_EQ((potri_buffer_size<BK, T>(this->q(), p.a, p.uplo)), 0u);
     }
-    const select::ScopedPin<PotriChoice> pin("potri", PotriChoice{ops::potri::Blocked{64}});
+    const auto blocked = blocked_pin<BK, T>(this->q(), 100);
+    ASSERT_TRUE(blocked) << "no blocked pin serves n = 100 on this queue";
+    const std::size_t nb = static_cast<std::size_t>(blocked->nb);
+    const select::ScopedPin<PotriChoice> pin("potri", PotriChoice{*blocked});
     const size_t need = potri_buffer_size<BK, T>(this->q(), p.a, p.uplo);
-    EXPECT_GE(need, sizeof(T) * (100 * 64 + 100 * 101 / 2) * 3);
-    EXPECT_LT(need, sizeof(T) * 100 * (64 + 100) * 3);
-    MV<T> small_n(p.a.data_ptr(), 64, 64, p.a.ld(), p.a.stride(), 3, nullptr);
+    EXPECT_GE(need, sizeof(T) * (100 * nb + 100 * 101 / 2) * 3);
+    EXPECT_LT(need, sizeof(T) * 100 * (nb + 100) * 3);
+    MV<T> small_n(p.a.data_ptr(), blocked->nb, blocked->nb, p.a.ld(), p.a.stride(), 3, nullptr);
     EXPECT_EQ((potri_buffer_size<BK, T>(this->q(), small_n, p.uplo)), 0u);
     UnifiedVector<std::byte> small(need / 2);
     EXPECT_THROW(([&] { (void)potri<BK, T>(this->q(), p.a, p.uplo, false, Span<std::byte>(small.data(), small.size()), Span<int32_t>{}); }()), batchlas::workspace_error);
@@ -302,7 +319,9 @@ TYPED_TEST(PotriTest, PotriBlockedPartsCoverEveryItem) {
         auto p = this->sys(70, 10, uplo, 404u);
         UnifiedVector<int32_t> info;
         if (!this->factor(p, info)) GTEST_SKIP() << "no potrf route for this shape in this build";
-        const select::ScopedPin<PotriChoice> pin("potri", PotriChoice{ops::potri::Blocked{64}});
+        const auto blocked = blocked_pin<BK, T>(this->q(), 70);
+        ASSERT_TRUE(blocked) << "no blocked pin serves n = 70 on this queue";
+        const select::ScopedPin<PotriChoice> pin("potri", PotriChoice{*blocked});
         const size_t whole = potri_buffer_size<BK, T>(this->q(), p.a, p.uplo);
         const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "3");
         const size_t part = potri_buffer_size<BK, T>(this->q(), p.a, p.uplo);
@@ -356,10 +375,9 @@ TYPED_TEST(PotriTest, PotriCtaPinStraddlesItsCeiling) {
 // at n = 100) stops at 37.
 TYPED_TEST(PotriTest, SaturatingBatchOfIdenticalItemsIsBitIdentical) {
     using T = typename TestFixture::T;
-    const int ceiling = cta_ceiling<TestFixture::BK, T>(this->q());
     for (int n : {8, 37, 100})
         for (const PotriChoice& c : potri_pins<T>()) {
-            if ((c.index() == 0 && n > ceiling) || (TestFixture::BK == Backend::NETLIB && n > 37)) continue;
+            if (!pin_runs<TestFixture::BK, T>(this->q(), c, n) || (TestFixture::BK == Backend::NETLIB && n > 37)) continue;
             auto p = this->sys(n, 1024, Uplo::Lower, 13u + n, 1.0, /*identical=*/true);
             UnifiedVector<int32_t> info;
             if (!this->factor(p, info)) continue;
@@ -411,13 +429,15 @@ TYPED_TEST(PotriTest, PotriCoverageShowsEachFamilyAndTheBlockedChildren) {
     auto lo = this->sys(16, 3, Uplo::Lower, 5u), hi = this->sys(200, 3, Uplo::Lower, 6u);
     UnifiedVector<int32_t> info;
     if (!this->factor(lo, info) || !this->factor(hi, info)) GTEST_SKIP() << "no potrf route for this shape in this build";
+    const auto blocked = blocked_pin<TestFixture::BK, T>(this->q(), 200);
+    ASSERT_TRUE(blocked) << "no blocked pin serves n = 200 on this queue";
     const auto rows = ts::reached_rows([&] {
         const ScopedEnvVar clear("BATCHLAS_POTRI_ROUTE", nullptr);
         {
             const select::ScopedPin<PotriChoice> pin("potri", PotriChoice{ops::potri::Cta{}});
             (void)this->run_potri(lo, false);
         }
-        const select::ScopedPin<PotriChoice> pin("potri", PotriChoice{ops::potri::Blocked{64}});
+        const select::ScopedPin<PotriChoice> pin("potri", PotriChoice{*blocked});
         (void)this->run_potri(hi, false);
     });
     std::map<std::string, std::set<std::string>> algos;  // op -> chosen spellings
@@ -426,7 +446,7 @@ TYPED_TEST(PotriTest, PotriCoverageShowsEachFamilyAndTheBlockedChildren) {
         algos[r.op].insert(r.spelling);
         if (r.op != "potri") blocked_children.insert(r.op);
     }
-    EXPECT_EQ(algos["potri"], (std::set<std::string>{"cta", "blocked:nb=64"}));
-    // cta at n = 16 calls no child; blocked at n = 200 (four blocks) calls these, and nothing else.
+    EXPECT_EQ(algos["potri"], (std::set<std::string>{"cta", pin_name(*blocked)}));
+    // cta at n = 16 calls no child; blocked at n = 200 (four or more blocks) calls these, and nothing else.
     EXPECT_EQ(blocked_children, (std::set<std::string>{"trmm", "gemm", is_std_complex_v<T> ? "herk" : "syrk"}));
 }
