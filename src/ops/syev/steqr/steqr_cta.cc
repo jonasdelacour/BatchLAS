@@ -183,10 +183,10 @@ Event steqr_cta(Queue& ctx, const VectorView<Real>& d_in, const VectorView<Real>
         throw batchlas::invalid_argument("steqr_cta currently supports 1 <= n <= 32.");
     }
 
-    // The CTA kernels have a CPU image only in a vendor-free build (BATCHLAS_HAS_HOST_NATIVE), and
-    // the Intel OpenCL CPU offers sub-group size 32, so elsewhere only a GPU reaches the launch.
-    if (!(BATCHLAS_HAS_HOST_NATIVE || ctx.device().type == DeviceType::GPU) ||
-        !ctx.device().supports_sub_group_size(32)) {
+    // GPU only, the CPU takes steqr_wg. The CTA kernels have a CPU image only in a vendor-free
+    // build, and there SteqrCTAKernel<float, 32, true> reads out of bounds on the OpenCL CPU
+    // (SIGSEGV, 2026-11-21, not localised); the Intel OpenCL CPU also offers sub-group size 32.
+    if (ctx.device().type != DeviceType::GPU || !ctx.device().supports_sub_group_size(32)) {
         return steqr_wg<B, Real>(ctx, d_in, e_in, eigenvalues, ws, jobz, params, eigvects, info);
     }
 
@@ -273,8 +273,7 @@ size_t steqr_cta_buffer_size(Queue& ctx, const VectorView<Real>& d, const Vector
     size += sort_buffer_size<Real>(ctx, eigenvalues.data(),
                                    MatrixView<Real, MatrixFormat::Dense>(nullptr, n, n, n, n * n, batch_size), jobz);
 
-    if (!(BATCHLAS_HAS_HOST_NATIVE || ctx.device().type == DeviceType::GPU) ||
-        !ctx.device().supports_sub_group_size(32)) {
+    if (ctx.device().type != DeviceType::GPU || !ctx.device().supports_sub_group_size(32)) {
         const auto steqr_size = steqr_wg_buffer_size<Real>(ctx, d, e, eigenvalues, jobz, params);
         size = std::max<size_t>(size, steqr_size);
     }
