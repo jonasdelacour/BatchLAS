@@ -220,7 +220,8 @@ TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower33) {
 // grid (3 work-groups at n = 96 on CUDA; Metal and the host never take it and run legacy).
 // BREAK (2026-11-21, apple_m5_max, Backend::SYCL float): latrd_lower_run's unscaled sum of
 // squares gives spectrum error 0.82 relative at both 2^-70 and 2^-76 (Metal flushes the
-// subnormal squares); the power-of-two scaled norm passes all three.
+// subnormal squares); the power-of-two scaled norm passes all three. BREAK (2026-11-21, RTX 4090,
+// CUDA float): the grid kernel's unscaled sum gives 1.8e-4 at 2^-70 and 0.55 at 2^-76.
 TYPED_TEST(SytrdBlockedTest, LatrdPanelNormSurvivesSquaresBelowTheNormalRange) {
     using Real = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
