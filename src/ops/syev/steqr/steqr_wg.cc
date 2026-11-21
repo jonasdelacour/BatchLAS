@@ -120,25 +120,39 @@ Event steqr_wg_impl(Queue& ctx,
                     auto n_local = end_ix - start_ix;
 
                     if (n_local == 1) continue;
+                    // The rotation kernel reads rotation (j, k) of this block for every j < n_local - 1
+                    // and every sweep column k. The sweeps write theirs and this kernel writes the
+                    // identity into the columns no sweep used, so the buffer needs no fill per pass.
+                    const auto identity_from = [&](size_t k0) {
+                        if (!store_givens) return;
+                        for (int k = static_cast<int>(k0); k < rotations_view.cols(); ++k)
+                            for (int j = 0; j < n_local - 1; ++j) rotations_view(j, k, gid) = {Real(1), Real(0)};
+                    };
                     // The sweep bodies are device::steqr<J, tier::Blocked<1>>'s (detail::wg_*).
                     if (n_local == 2) {
                         device::detail::wg_solve_2x2<Real>(d_, e_, store_givens, [&](const device::Givens<Real>& g) BATCHLAS_DEVICE_BODY {
                             rotations_view(0, 0, gid) = {g.c, g.s};
                             order_view[gid] = ApplyOrder::Forward;
                         });
+                        identity_from(1);
                         continue;
                     }
 
                     bool QR = device::detail::wg_forward(d_, n_local);
                     order_view[gid] = QR ? ApplyOrder::Forward : ApplyOrder::Backward;
+                    size_t swept = max_sweeps;
                     for (size_t k = 0; k < max_sweeps; ++k) {
                         const bool deflatable = device::detail::wg_sweep<Real>(d_, e_, n_local, QR, [&](size_t j, const device::Givens<Real>& g) BATCHLAS_DEVICE_BODY {
                             if (store_givens) {
                                 rotations_view(j, k, gid) = {g.c, g.s};
                             }
                         });
-                        if (deflatable) break;
+                        if (deflatable) {
+                            swept = k + 1;
+                            break;
+                        }
                     }
+                    identity_from(swept);
                 }
             });
         });
@@ -250,10 +264,10 @@ Event steqr_wg(Queue& ctx,
     (void)VectorView<Real>::copy(ctx, d, d_in);
     (void)VectorView<Real>::copy(ctx, e, e_in);
 
+    // No fill of givens_rotations per pass: the sweep kernel writes every slot the rotation kernel
+    // reads. A 3 MB fill here was the one write a masked float call on Metal lost (about a fifth of
+    // its slots kept the workspace's old bytes, and Z took non-unit rotations).
     for (int64_t i = 0; i < n - 1; ++i) {
-        if (jobz == JobType::EigenVectors) {
-            (void)givens_rotations.fill(ctx, std::array<Real, 2>{1, 0});
-        }
         (void)steqr_wg_impl(ctx,
                       d,
                       e,
