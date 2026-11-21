@@ -1,0 +1,87 @@
+[Metal] Infer pointer address spaces over PHI and select cycles
+
+Problem
+-------
+MetalEmitter::getPhysicalPointerAddressSpace resolves a generic (addrspace 0)
+pointer from the values it derives from: addrspacecast and GEP operands, PHI
+incomings, select operands, and the pointers stored into the slot a load
+reads. To break cycles it stores inferredPtrAS[V] = 0 before it recurses.
+That placeholder is never revised:
+
+- a value that reads the placeholder during the recursion keeps AS 0 when its
+  other sources have no information. An example is a PHI whose only other
+  incoming value is undef, or that only reaches the concrete value through
+  the cycle;
+- a select resolves only when both operands are already known and equal, so a
+  select inside a cycle always fails and keeps the placeholder.
+
+AS 0 is spelled `device`, so the MSL assigns a threadgroup pointer to a
+`device void*` variable. The Metal compiler rejects it:
+
+  error: assigning 'threadgroup void *' to 'device void *' changes address
+  space of pointer
+
+Reproducer
+----------
+The IR that reaches the emitter (with __ACPP_PRINT_IR_BEFORE_EMIT=1) for a
+complex<float> Cholesky CTA kernel holds this web. It is the shape that
+DemotePHIsToStack + StructurizeCFG + mem2reg leave for a sunk GEP into local
+memory. Value names are shortened and the block labels are illustrative:
+
+  entry.loop:  %p0 = phi ptr [ undef, %pre ], [ %p6, %latch ]
+  inner:       %p1 = phi ptr [ %p0, %a ], [ %p2, %b ]
+               %c1 = addrspacecast ptr addrspace(3) %gep.lds to ptr
+  j1:          %p3 = phi ptr [ %c1, %c ], [ %p1, %d ]
+  j2:          %p4 = phi ptr [ %p3, %flow1 ], [ %c2, %e ], [ %p3, %flow2 ]
+               %c2 = addrspacecast ptr addrspace(3) %gep2.lds to ptr
+  j3:          %p2 = phi ptr [ %p1, %f ], [ %p4, %g ], [ %p4, %flow3 ]
+  latch:       %p6 = phi ptr [ %p0, %h ], [ %p2, %i ]
+
+The only concrete sources are the two addrspace(3) casts. When the query
+starts at %p0, the order is %p0 -> %p6 -> %p2 -> %p1, and %p1 sees only
+undef-derived placeholders: [%p0 = placeholder, %p2 = placeholder]. %p1 is
+cached as 0 and declared `device`. All the other PHIs resolve to threadgroup.
+
+Fix
+---
+Solve every generic pointer reachable from the queried value at once, as an
+optimistic dataflow fixpoint:
+
+- lattice: unknown > one address space > conflicting;
+- every reachable value starts unknown and is re-joined over its sources
+  whenever one of its sources changes (a worklist over reverse edges);
+- results are cached only after the fixpoint, and no placeholder is ever
+  cached as final;
+- sources with no information (undef, poison, values that no rule covers)
+  do not constrain the join. This now holds for selects too, as it already
+  did for PHIs.
+
+A state only moves down the lattice, so each value is revisited at most
+twice. The total cost stays linear in the def-use edges among generic
+pointers. Unknown and conflicting results still give AS 0, and a
+conflicting PHI still reports "Conflicting address space information in
+PHI node", now naming the PHI.
+
+Behaviour change: select(undef-or-unknown, X) now resolves to X's address
+space instead of 0. A select whose operands truly conflict still gives 0.
+
+Testing
+-------
+Apple M5 Max (applegpu_g17s), LLVM 21, AdaptiveCpp develop 9ec394ef plus
+the BatchLAS local series:
+
+- the kernel above used to fail MSL compilation. Its suite now passes, 5 of
+  5 cases, against a host reference;
+- the full BatchLAS Metal test tree was rerun serially (252 ctest entries).
+  Before the patch, 139 gtest cases failed MSL compilation with this error.
+  After it, none do: 115 of them pass, and 24 now reach failures that the
+  compile error had hidden. All 24 are on the BatchLAS side:
+  - 17 are test expectations about Apple's local-memory budget. One of them
+    launches a kernel over the 32 KiB limit.
+  - 7 are tolerance, bit-identity and sygst failures. Cases that compiled
+    before the patch already showed the same failures.
+  No case that passed before the patch fails after it.
+
+The series has no lit-style emitter tests, so this patch adds none. A lit
+test would feed the PHI web above to llvm-to-metal-tool and check that every
+%pN is declared `threadgroup void*`.

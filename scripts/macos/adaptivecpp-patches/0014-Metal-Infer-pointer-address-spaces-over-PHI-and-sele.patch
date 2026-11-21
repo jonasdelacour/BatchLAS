@@ -1,0 +1,299 @@
+From deea236f2fbc14e04232a01e6ee7e471a6fafc1b Mon Sep 17 00:00:00 2001
+From: jonaslacour <jonaslacour1@gmail.com>
+Date: Fri, 20 Nov 2026 23:48:48 +0100
+Subject: [PATCH] [Metal] Infer pointer address spaces over PHI and select
+ cycles
+
+getPhysicalPointerAddressSpace resolves a generic (AS 0) pointer from the
+values it is derived from: casts, GEPs, PHI incomings, select operands, and
+the pointers stored into the slot a load reads. To break cycles it cached
+AS 0 for the value before recursing. That placeholder was never revised:
+every value that met it during the recursion, and every value whose rule
+failed (a select needed both operands known), kept AS 0 for good, which the
+emitter spells `device`.
+
+The PHI webs StructurizeCFG and mem2reg leave behind are such cycles, often
+seeded with undef. In BatchLAS's complex<float> potrf CTA kernel six
+`invariant.gep52.sink.i.reg2mem.*` PHIs form a nested cycle whose only
+concrete sources are threadgroup (AS 3) GEPs; one of them came out `device`
+and the Metal compiler rejected the shader ("assigning 'threadgroup void *'
+to 'device void *' changes address space of pointer").
+
+Solve the reachable generic pointers together instead: every one starts
+unknown, is re-joined over its sources whenever one changes, and is cached
+only at the fixpoint. A state only moves down the lattice unknown -> one
+address space -> conflicting, so each value is revisited at most twice.
+Sources with no information (undef, poison, values no rule covers) do not
+constrain the join, for selects as already for PHIs. A conflict still gives
+AS 0, and a conflicting PHI still reports an error, now naming the PHI.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017aoFdiFMnRejhwERDwnMoF
+---
+ .../llvm-to-backend/metal/Emitter.cpp         | 209 ++++++++++++------
+ .../llvm-to-backend/metal/Emitter.hpp         |   4 +
+ 2 files changed, 150 insertions(+), 63 deletions(-)
+
+diff --git a/src/compiler/llvm-to-backend/metal/Emitter.cpp b/src/compiler/llvm-to-backend/metal/Emitter.cpp
+index b0509122..6a62330f 100644
+--- a/src/compiler/llvm-to-backend/metal/Emitter.cpp
++++ b/src/compiler/llvm-to-backend/metal/Emitter.cpp
+@@ -1692,87 +1692,170 @@ const Value* MetalEmitter::stripToRootObject(const Value* V) {
+   return Cur;
+ }
+ 
+-unsigned MetalEmitter::getPhysicalPointerAddressSpace(const Value* V) {
+-  Type* T = V->getType();
+-  if (!T->isPointerTy()) {
+-    return 0; // not a pointer
+-  }
+-  unsigned AS = T->getPointerAddressSpace();
+-  if (AS != 0) {
+-    return AS;
++namespace {
++// Lattice of the address-space inference: no information yet, one address space, or conflicting
++// ones. Concrete address spaces are small, so the two markers cannot collide with one.
++constexpr unsigned kUnknownAS = ~0u;
++constexpr unsigned kConflictingAS = ~0u - 1;
++
++unsigned joinAddressSpaces(unsigned A, unsigned B) {
++  if (A == kUnknownAS) {
++    return B;
+   }
+-  auto it = inferredPtrAS.find(V);
+-  if (it != inferredPtrAS.end()) {
+-    return it->second;
++  if (B == kUnknownAS || A == B) {
++    return A;
+   }
++  return kConflictingAS;
++}
+ 
+-  inferredPtrAS[V] = 0; // to break cycles in PHIs and Loads
++// Whether a generic pointer's address space follows from other values (addressSpaceSources).
++bool hasAddressSpaceRule(const Value* V) {
++  return isa<AddrSpaceCastInst, GetElementPtrInst, PHINode, SelectInst, LoadInst>(V);
++}
++} // namespace
+ 
+-  if (auto* Alloca = dyn_cast<AllocaInst>(V)) {
+-    return (inferredPtrAS[V] = 5 /* private */);
+-  }
++void MetalEmitter::addressSpaceSources(const Value* V, SmallVectorImpl<const Value*>& Sources) {
+   if (auto* ASC = dyn_cast<AddrSpaceCastInst>(V)) {
+-    return (inferredPtrAS[V] = getPhysicalPointerAddressSpace(ASC->getOperand(0)));
+-  }
+-  if (auto* GEP = dyn_cast<GetElementPtrInst>(V)) {
+-    return (inferredPtrAS[V] = getPhysicalPointerAddressSpace(GEP->getPointerOperand()));
+-  }
+-  if (auto* PHI = dyn_cast<PHINode>(V)) {
+-    unsigned deducedAS = 0;
+-    for (unsigned i = 0; i < PHI->getNumIncomingValues(); ++i) {
+-      Value* incomingV = PHI->getIncomingValue(i);
+-      unsigned incomingAS = getPhysicalPointerAddressSpace(incomingV);
+-      if (incomingAS != 0) {
+-        if (deducedAS == 0) {
+-          deducedAS = incomingAS;
+-        } else if (deducedAS != incomingAS) {
+-          errorMsg = "Error: Conflicting address space information in PHI node\n";
+-          return 0;
+-        }
++    Sources.push_back(ASC->getOperand(0));
++  } else if (auto* GEP = dyn_cast<GetElementPtrInst>(V)) {
++    Sources.push_back(GEP->getPointerOperand());
++  } else if (auto* PHI = dyn_cast<PHINode>(V)) {
++    for (const Value* Incoming : PHI->incoming_values()) {
++      Sources.push_back(Incoming);
++    }
++  } else if (auto* Select = dyn_cast<SelectInst>(V)) {
++    Sources.push_back(Select->getTrueValue());
++    Sources.push_back(Select->getFalseValue());
++  } else if (auto* LI = dyn_cast<LoadInst>(V)) {
++    // A pointer reloaded from a slot (e.g. a %.sroa.xxx.i alloca in AS5) has the address space
++    // of the pointers stored into the same root object (allowing casts and trivial GEPs).
++    const Value* root = stripToRootObject(LI->getPointerOperand());
++    for (const User* U : root->users()) {
++      auto* SI = dyn_cast<StoreInst>(U);
++      if (SI && stripToRootObject(SI->getPointerOperand()) == root) {
++        Sources.push_back(SI->getValueOperand());
+       }
+     }
+-    if (deducedAS != 0) {
+-      return (inferredPtrAS[V] = deducedAS);
+-    }
+   }
+-  if (auto* Select = dyn_cast<SelectInst>(V)) {
+-    unsigned trueAS = getPhysicalPointerAddressSpace(Select->getTrueValue());
+-    unsigned falseAS = getPhysicalPointerAddressSpace(Select->getFalseValue());
+-    if (trueAS != 0 && trueAS == falseAS) {
+-      return (inferredPtrAS[V] = trueAS);
+-    }
+-  }
+-  if (auto* LI = dyn_cast<LoadInst>(V)) {
+-    const Value* addr = LI->getPointerOperand();       // address of the slot
+-    const Value* root = stripToRootObject(addr);       // e.g. %.sroa.xxx.i alloca in AS5
+-
+-    unsigned deducedAS = 0;
++}
+ 
+-    // Scan stores that write into the same root object
+-    for (const User* U : root->users()) {
+-      const StoreInst* SI = dyn_cast<StoreInst>(U);
+-      if (!SI) continue;
++// The address space a source contributes without being solved: its own, or kUnknownAS.
++unsigned MetalEmitter::knownAddressSpace(const Value* V) {
++  if (!V->getType()->isPointerTy()) {
++    return kUnknownAS;
++  }
++  if (unsigned AS = V->getType()->getPointerAddressSpace()) {
++    return AS;
++  }
++  if (isa<AllocaInst>(V)) {
++    return 5 /* private */;
++  }
++  auto it = inferredPtrAS.find(V);
++  return it != inferredPtrAS.end() && it->second != 0 ? it->second : kUnknownAS;
++}
+ 
+-      // Does this store target the same root (allow casts/trivial GEP)?
+-      const Value* stRoot = stripToRootObject(SI->getPointerOperand());
+-      if (stRoot != root) continue;
++// A generic pointer takes the address space of the values it is derived from. Those rules form
++// cycles (loop-carried PHIs, and the PHI webs StructurizeCFG seeds with undef), so every generic
++// pointer reachable from V is solved at once: all start unknown, each is re-joined over its
++// sources whenever one of them changes, and nothing is cached before that fixpoint. Caching a
++// cycle-breaking 0 instead froze every value that saw it at AS 0, which is emitted as `device`.
++// Sources without information (undef, poison, values no rule covers) do not constrain the join.
++void MetalEmitter::inferPointerAddressSpaces(const Value* V) {
++  std::vector<const Value*> nodes;
++  std::vector<SmallVector<const Value*, 2>> sources;
++  std::vector<SmallVector<unsigned, 2>> dependents;
++  std::unordered_map<const Value*, unsigned> index;
++
++  auto isUnsolved = [&](const Value* X) {
++    return X->getType()->isPointerTy() && X->getType()->getPointerAddressSpace() == 0 &&
++           hasAddressSpaceRule(X) && !inferredPtrAS.count(X);
++  };
++  auto addNode = [&](const Value* X) {
++    index.emplace(X, nodes.size());
++    nodes.push_back(X);
++    sources.emplace_back();
++    dependents.emplace_back();
++  };
+ 
+-      unsigned storedAS = getPhysicalPointerAddressSpace(SI->getValueOperand());
+-      if (storedAS == 0) continue;
++  addNode(V);
++  for (unsigned i = 0; i < nodes.size(); ++i) {
++    SmallVector<const Value*, 2> found;
++    addressSpaceSources(nodes[i], found);
++    for (const Value* S : found) {
++      if (!index.count(S) && isUnsolved(S)) {
++        addNode(S);
++      }
++      sources[i].push_back(S);
++      auto it = index.find(S);
++      if (it != index.end()) {
++        dependents[it->second].push_back(i);
++      }
++    }
++  }
+ 
+-      if (deducedAS == 0) deducedAS = storedAS;
+-      else if (deducedAS != storedAS) {
+-        // Conflicting stores into same slot
+-        return 0;
++  std::vector<unsigned> state(nodes.size(), kUnknownAS);
++  std::vector<unsigned> worklist(nodes.size());
++  std::vector<bool> queued(nodes.size(), true);
++  for (unsigned i = 0; i < nodes.size(); ++i) {
++    worklist[i] = i;
++  }
++  // Each state only moves down the lattice (unknown -> one space -> conflicting), so every node
++  // changes at most twice and the loop ends.
++  while (!worklist.empty()) {
++    unsigned i = worklist.back();
++    worklist.pop_back();
++    queued[i] = false;
++    unsigned joined = kUnknownAS;
++    for (const Value* S : sources[i]) {
++      auto it = index.find(S);
++      joined = joinAddressSpaces(joined, it != index.end() ? state[it->second] : knownAddressSpace(S));
++    }
++    if (joined == state[i]) {
++      continue;
++    }
++    state[i] = joined;
++    for (unsigned d : dependents[i]) {
++      if (!queued[d]) {
++        queued[d] = true;
++        worklist.push_back(d);
+       }
+     }
++  }
+ 
+-    if (deducedAS != 0) {
+-      return (inferredPtrAS[V] = deducedAS);
++  for (unsigned i = 0; i < nodes.size(); ++i) {
++    unsigned AS = state[i];
++    if (AS == kConflictingAS) {
++      if (auto* PHI = dyn_cast<PHINode>(nodes[i])) {
++        errorMsg = "Error: Conflicting address space information in PHI node\n  " + irText(*PHI) + "\n";
++      }
++      AS = 0;
++    } else if (AS == kUnknownAS) {
++      AS = 0;
+     }
++    inferredPtrAS[nodes[i]] = AS;
+   }
++}
+ 
+-  return 0;
++unsigned MetalEmitter::getPhysicalPointerAddressSpace(const Value* V) {
++  Type* T = V->getType();
++  if (!T->isPointerTy()) {
++    return 0; // not a pointer
++  }
++  if (unsigned AS = T->getPointerAddressSpace()) {
++    return AS;
++  }
++  if (isa<AllocaInst>(V)) {
++    return 5 /* private */;
++  }
++  auto it = inferredPtrAS.find(V);
++  if (it != inferredPtrAS.end()) {
++    return it->second;
++  }
++  if (!hasAddressSpaceRule(V)) {
++    return 0; // no rule, e.g. undef or an argument
++  }
++  inferPointerAddressSpaces(V);
++  return inferredPtrAS[V];
+ }
+ 
+ void MetalEmitter::analyzeCallInsts() {
+diff --git a/src/compiler/llvm-to-backend/metal/Emitter.hpp b/src/compiler/llvm-to-backend/metal/Emitter.hpp
+index 762dd86a..ff5d947b 100644
+--- a/src/compiler/llvm-to-backend/metal/Emitter.hpp
++++ b/src/compiler/llvm-to-backend/metal/Emitter.hpp
+@@ -28,6 +28,7 @@ class Constant;
+ class BasicBlock;
+ class Type;
+ class ModuleSlotTracker;
++template <typename T> class SmallVectorImpl;
+ class Instruction;
+ } // namespace llvm
+ 
+@@ -89,6 +90,9 @@ private:
+   void analyzeCallInsts();
+   void collectVariablesInfo(const llvm::Function& F);
+   unsigned getPhysicalPointerAddressSpace(const llvm::Value* V);
++  void addressSpaceSources(const llvm::Value* V, llvm::SmallVectorImpl<const llvm::Value*>& Sources);
++  unsigned knownAddressSpace(const llvm::Value* V);
++  void inferPointerAddressSpaces(const llvm::Value* V);
+   const llvm::Value* stripToRootObject(const llvm::Value* V);
+   std::unordered_map<llvm::Function*, std::vector<llvm::Function*>> buildCallGraph();
+   std::vector<llvm::Function*> topologicalSort(const std::unordered_map<llvm::Function*, std::vector<llvm::Function*>>& callGraph);
+-- 
+2.54.0 (Apple Git-157)
+
