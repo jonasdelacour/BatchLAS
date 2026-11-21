@@ -533,7 +533,51 @@ void expect_host_sytrd_native(Queue& ctx) {
     EXPECT_GT(wide_gemm, 0) << "the blocked trailing update (n2 > 128) was not reached";
     expect_spectrum<Scalar>(A0, d, e, float_old_power<Scalar>(n));
 }
+
+// sytrd_lower_local_small_legacy at n = 48 (33..64) on the same Hermitian matrix at 2^0, 2^-70 and
+// 2^-76 (squares near 2^-140, subnormal, and 2^-152, zero), padded storage; float by default,
+// complex<float> under BATCHLAS_SYTRD_FORCE_LOCAL_SMALL. No level-3 child is reached: the legacy
+// kernel returns before the blocked path's trailing update.
+template <typename Scalar>
+void expect_local_small_scaled(Queue& ctx, bool force) {
+    SCOPED_TRACE(is_std_complex_v<Scalar> ? "complex<float>" : "float");
+    const int n = 48, batch = 3, nb = 32;
+    const Matrix<Scalar, MatrixFormat::Dense> R = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, true, batch, 20261122);
+    std::optional<ScopedEnvVar> pin;
+    if (force) pin.emplace("BATCHLAS_SYTRD_FORCE_LOCAL_SMALL", "1");
+    for (int scale_exp : {0, -70, -76}) {
+        SCOPED_TRACE(::testing::Message() << "entries scaled by 2^" << scale_exp);
+        Matrix<Scalar, MatrixFormat::Dense> A0 = test_support::padded<Scalar>(n, n, batch);
+        Matrix<Scalar, MatrixFormat::Dense> A = test_support::padded<Scalar>(n, n, batch);
+        for (int b = 0; b < batch; ++b)
+            for (int c = 0; c < n; ++c)
+                for (int r = 0; r < n; ++r) {
+                    const Scalar v = R.data_ptr()[std::size_t(b) * R.stride() + std::size_t(c) * R.ld() + r] *
+                                     std::ldexp(1.0f, scale_exp);
+                    A0.data_ptr()[std::size_t(b) * A0.stride() + std::size_t(c) * A0.ld() + r] = v;
+                    A.data_ptr()[std::size_t(b) * A.stride() + std::size_t(c) * A.ld() + r] = v;
+                }
+        Vector<Scalar> d(n, batch), e(n - 1, batch), tau(n - 1, batch);
+        UnifiedVector<std::byte> ws(sytrd_blocked_buffer_size<Backend::NETLIB, Scalar>(ctx, A, d, e, tau, Uplo::Lower, nb));
+        const auto rows = test_support::reached_rows([&] {
+            (void)sytrd_blocked<Backend::NETLIB, Scalar>(ctx, A, d, e, tau, Uplo::Lower, ws.to_span(), nb);
+            ctx.wait();
+        });
+        for (const auto& r : rows)
+            EXPECT_TRUE(r.op != "gemm" && r.op != "syr2k" && r.op != "her2k") << r.op << ": the blocked path ran, not the legacy kernel";
+        expect_spectrum<Scalar>(A0, d, e, float_old_power<Scalar>(n), A0.all_items());
+    }
+}
 }  // namespace
+
+// The legacy kernel's ||x|| when the squares of the entries leave the float range. It runs where
+// native_backend<B> is false: the host NETLIB backend of a build with a host BLAS, and ROCm.
+TEST(SytrdBlockedHostTest, LocalSmallNormSurvivesSquaresBelowTheNormalRange) {
+    if (batchlas::select::native_backend<Backend::NETLIB>) GTEST_SKIP() << "vendor-free host: no legacy local kernel (native_backend)";
+    Queue ctx(Device("cpu"), Backend::NETLIB, true);
+    expect_local_small_scaled<float>(ctx, false);
+    expect_local_small_scaled<std::complex<float>>(ctx, true);
+}
 
 TEST(SytrdBlockedHostTest, VendorFreeTrailingUpdateIsNative) {
     if (!batchlas::select::kHostNative) GTEST_SKIP() << "netlib present: the host's level-3 children are its BLAS";

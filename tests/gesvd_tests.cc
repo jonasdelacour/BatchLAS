@@ -2242,3 +2242,54 @@ TYPED_TEST(GesvdTest, BlockedChunksAtSaturatingBatchAreBitIdentical) {
                       MV::svd_residual(*this->ctx, A0.batch_range(0, 1), U.batch_range(0, 1), s0, Vh.batch_range(0, 1)));
     }
 }
+
+// gebrd's reflector norms when the squares of the entries leave the range: the same 40 x 33
+// matrix at 2^0 (control), then with squares subnormal and below the smallest subnormal (float
+// 2^-70 / 2^-76, double 2^-520 / 2^-560); padded A, d / e / tau at gapped strides, d / e poisoned.
+// gebrd_unblocked runs gebd2 (one matrix per work-item), gebrd_blocked the labrd panel (device
+// backends). Oracle: the bidiagonal's singular values (host Jacobi in double, rescaled by the
+// exact 2^-x) against the unscaled matrix's.
+template <typename Config>
+class GebrdScaledTest : public test_utils::BatchLASTest<Config> {
+protected:
+    using Scalar = typename Config::ScalarType;
+    using Real = typename base_type<Scalar>::type;
+    static constexpr Backend B = Config::BackendVal;
+};
+using GebrdScaledTypes = typename test_utils::backend_types<GesvdConfig>::type;
+TYPED_TEST_SUITE(GebrdScaledTest, GebrdScaledTypes);
+
+TYPED_TEST(GebrdScaledTest, ReflectorNormsSurviveSquaresBelowTheNormalRange) {
+    using Scalar = typename TestFixture::Scalar;
+    using Real = typename TestFixture::Real;
+    constexpr Backend B = TestFixture::B;
+    const int m = 40, n = 33, batch = 3, nb = 8, sd = n + 2, se = n + 1;
+    const auto R0 = Matrix<Scalar, MatrixFormat::Dense>::Random(m, n, false, batch, 20261123);
+    const std::array<int, 3> exps = std::is_same_v<Real, float> ? std::array<int, 3>{0, -70, -76} : std::array<int, 3>{0, -520, -560};
+    for (const std::string kernel : {"unblocked", "blocked"})
+    for (int x : exps) {
+        if (B == Backend::NETLIB && kernel == "blocked") continue;  // the host's gesvd runs gebd2 only
+        SCOPED_TRACE(::testing::Message() << "gebrd " << kernel << ", entries scaled by 2^" << x);
+        auto A = ts::padded<Scalar>(m, n, batch);
+        for (int b = 0; b < batch; ++b)
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < m; ++i) A.view()(i, j, b) = R0.view()(i, j, b) * Real(std::ldexp(1.0, x));
+        UnifiedVector<Real> d(std::size_t(sd) * batch, Real(1000)), e(std::size_t(se) * batch, Real(1000));
+        UnifiedVector<Scalar> tq(std::size_t(sd) * batch), tp(std::size_t(sd) * batch);
+        const VectorView<Real> dv(d.data(), n, batch, 1, sd), ev(e.data(), n - 1, batch, 1, se);
+        const VectorView<Scalar> tqv(tq.data(), n, batch, 1, sd), tpv(tp.data(), n, batch, 1, sd);
+        UnifiedVector<std::byte> ws(kernel == "blocked" ? gebrd_blocked_buffer_size<B, Scalar>(*this->ctx, A.view(), dv, ev, tqv, tpv, nb) : 0);
+        if (kernel == "unblocked") (void)gebrd_unblocked<B, Scalar>(*this->ctx, A.view(), dv, ev, tqv, tpv);
+        else (void)gebrd_blocked<B, Scalar>(*this->ctx, A.view(), dv, ev, tqv, tpv, ws.to_span(), nb);
+        this->ctx->wait();
+        UnifiedVector<Real> s(std::size_t(n) * batch);
+        for (int b = 0; b < batch; ++b) {
+            std::vector<double> bd(std::size_t(n) * n, 0.0), sv;
+            for (int i = 0; i < n; ++i) bd[std::size_t(i) * n + i] = std::ldexp(double(d[std::size_t(b) * sd + i]), -x);
+            for (int i = 0; i + 1 < n; ++i) bd[std::size_t(i + 1) * n + i] = std::ldexp(double(e[std::size_t(b) * se + i]), -x);
+            ASSERT_TRUE(test_utils::jacobi_singular_values<double>(n, n, bd, sv)) << "item " << b;
+            for (int j = 0; j < n; ++j) s[std::size_t(b) * n + j] = Real(sv[std::size_t(j)]);
+        }
+        test_utils::expect_singular_values_match_lapacke(R0.view(), s);
+    }
+}
