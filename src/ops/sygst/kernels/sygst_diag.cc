@@ -30,17 +30,11 @@ using Pack = device::detail::Pack16<D>;  // F is read as aligned 16-byte packs (
 template <typename D>
 constexpr int kVec = device::detail::pack16_elems<D>;
 
-// A CPU device (the vendor-free host) runs one block per work-group: on DPC++'s OpenCL CPU, blocks
-// packed ipw > 1 per group came out wrong for complex<double> at every runtime order (kb not 8, 16,
-// 32): item b's result differed from an identical item's, residuals O(1) (sygvd_tests'
-// SygstBlocked cases, opencl:cpu, 2026-11-21). One block per group is the sygs2_one layout, which
-// is correct there; GPU launches are unchanged.
 template <bool Inverse, int KB, typename Scalar, typename D>
 void launch_diag(Queue& ctx, D* ap, int lda, std::ptrdiff_t stride_a, const D* bp, int ldb, std::ptrdiff_t stride_b,
                  int kb_rt, int batch, bool lower, D* hp, int ldh, std::ptrdiff_t stride_h, const std::uint8_t* mask) {
     const int kb = KB ? KB : kb_rt;
-    const bool gpu = ctx.device().type == DeviceType::GPU;
-    const int ipw = gpu ? diag_items_per_group<Scalar>(kb) : 1, ldf = diag_ldf<Scalar>(kb), lds = kb + 1;
+    const int ipw = diag_items_per_group<Scalar>(kb), ldf = diag_ldf<Scalar>(kb), lds = kb + 1;
     const int fper = kb * ldf, sper = kb * lds, groups = (batch + ipw - 1) / ipw;
     const int wg = (ipw * kb + 31) / 32 * 32;
     const std::size_t packs = (static_cast<std::size_t>(ipw) * (fper + sper) + kVec<D> - 1) / kVec<D>;

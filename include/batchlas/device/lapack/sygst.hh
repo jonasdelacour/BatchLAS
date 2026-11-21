@@ -63,6 +63,21 @@ template <int KB> inline KbExt<KB> kb_ext(int kb) {
     else return Dyn{kb};
 }
 
+// device::load(f, x, live), except on DPC++'s SPIR targets: there a rolled loop of guarded loads.
+// The unrolled form came out wrong on the OpenCL CPU backend for complex<double> at a run-time
+// order (results O(1) off, right at -cl-opt-disable or with the loop rolled; 2026-11-21, opencl:cpu,
+// sygvd_tests' SygstBlocked cases). The same values; other targets compile exactly as before.
+template <class D, int NF, class X> BATCHLAS_DEVICE_INLINE void load_live(Frag<D, NF>& f, const X& x, int live) {
+#if defined(__SPIR__) && !defined(__ACPP__)
+#pragma nounroll
+    for (int k = 0; k < NF; ++k) {
+        if (k < live) f[k] = static_cast<D>(x(k));
+        else f[k] = Arith<D>::zero();
+    }
+#else
+    load(f, x, live);
+#endif
+}
 // F(r, q) as stored: F^T column-major for the solve (column i of the store is row i of F),
 // F column-major for the product.
 template <bool Inverse, class M> inline auto& fat(const M& fs, int r, int q) { return Inverse ? fs(q, r) : fs(r, q); }
@@ -137,13 +152,13 @@ BATCHLAS_DEVICE_INLINE void sygs2_group(const Ex& ex, int t, int kb, bool lower,
     sync(ex);
     // X = op(F) A, column j: the Hermitian A's column, then F^-1 or F^H.
     Frag<D, NF> col{};
-    if (active) load(col, herm_view(s, ul).col(j), live);
+    if (active) detail::load_live(col, herm_view(s, ul).col(j), live);
     sync(ex);
     if (active) col = detail::apply<Inverse, KB>(col, f, ldf, kb);
     if (active) store(col, s.col(j), live);
     sync(ex);
     // C = op(F) X^H: X's conjugate transpose, row j of X as column j.
-    if (active) load(col, conj_view(s.row(j)), live);
+    if (active) detail::load_live(col, conj_view(s.row(j)), live);
     sync(ex);
     if (active) col = detail::apply<Inverse, KB>(col, f, ldf, kb);
     if (active) store(col, s.col(j), live);
