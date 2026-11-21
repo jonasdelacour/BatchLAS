@@ -239,6 +239,16 @@ endif()
 
 batchlas_find_netlib_libs()
 
+# A host queue with no netlib to call runs the native kernels instead (src/select/vendor.hh,
+# native_backend). That needs a host backend and a CPU SYCL target, and costs the GPU-only kernel
+# libraries their CPU images (src/CMakeLists.txt): vendor-free builds only, never full or Metal.
+if(BATCHLAS_HAS_HOST_BACKEND AND BATCHLAS_HAS_CPU_TARGET AND NOT (BATCHLAS_HAS_LAPACKE AND BATCHLAS_HAS_CBLAS))
+    set(BATCHLAS_HAS_HOST_NATIVE ON)
+else()
+    set(BATCHLAS_HAS_HOST_NATIVE OFF)
+endif()
+message(STATUS "Host-native routes (vendor-free host): ${BATCHLAS_HAS_HOST_NATIVE}")
+
 # Some BLAS builds dispatch to CPU kernels that compute wrong results; find out
 # now rather than through mysterious numerical test failures later.
 include(${CMAKE_CURRENT_LIST_DIR}/BatchLASBlasHealthCheck.cmake)

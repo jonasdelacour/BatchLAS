@@ -322,8 +322,9 @@ TYPED_TEST(SytrdCtaTest, RandomSymmetricUpper) {
 
 #if BATCHLAS_HAS_HOST_BACKEND
 TEST(SytrdCtaTest, HostBackendThrowsWithoutSubgroup32) {
-    // On typical CPU devices, subgroup size 32 is unsupported; sytrd_cta should
-    // throw a clear runtime_error rather than misbehaving.
+    // A CPU device without sub-group size 32, or a build whose CTA kernels have no CPU image (any
+    // build with a host netlib), throws rather than misbehaving. A vendor-free host
+    // (BATCHLAS_HAS_HOST_NATIVE) with sub-group size 32 runs it: d and e match the host sytd2.
     Queue ctx("cpu");
 
     const int n = 8;
@@ -333,6 +334,18 @@ TEST(SytrdCtaTest, HostBackendThrowsWithoutSubgroup32) {
     Vector<float> tau(n - 1, 1);
     UnifiedVector<std::byte> ws(1, std::byte{0});
 
+    if (BATCHLAS_HAS_HOST_NATIVE && ctx.device().supports_sub_group_size(32)) {
+        std::vector<float> a_ref = extract_host_matrix_colmajor(A, n), d_ref, e_ref, tau_ref;
+        ref_sytd2_upper(a_ref, n, d_ref, e_ref, tau_ref);
+        double frob = 0, dev = 0;
+        for (const float x : a_ref) frob += double(x) * double(x);
+        (void)sytrd_cta(ctx, A, d, e, tau, Uplo::Upper, ws.to_span(), 1);
+        ctx.wait();
+        for (int i = 0; i < n; ++i) dev = batchlas::verify::nanmax(dev, std::abs(double(d(i, 0)) - double(d_ref[i])));
+        for (int i = 0; i < n - 1; ++i) dev = batchlas::verify::nanmax(dev, std::abs(double(e(i, 0)) - double(e_ref[i])));
+        EXPECT_VERIFY(float, batchlas::verify::Check::factorization, n, dev / std::sqrt(frob));
+        return;
+    }
     EXPECT_THROW(
         ((void)sytrd_cta(ctx, A, d, e, tau, Uplo::Lower, ws.to_span(), 1), ctx.wait()),
         std::exception);

@@ -46,6 +46,10 @@
 #ifndef BATCHLAS_HAS_ROCM_BACKEND
 #define BATCHLAS_HAS_ROCM_BACKEND 0
 #endif
+// No host backend, so no host-native library routes either (backend_config.h.in).
+#ifndef BATCHLAS_HAS_HOST_NATIVE
+#define BATCHLAS_HAS_HOST_NATIVE 0
+#endif
 #ifndef BATCHLAS_HAS_DEVICE_FP64
 #define BATCHLAS_HAS_DEVICE_FP64 1
 #endif

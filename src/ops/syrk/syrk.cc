@@ -45,8 +45,8 @@ select::Key key_of(const MV<Scalar>& A, const MV<Scalar>& C, Transpose transA) {
 }
 
 // Correctness only (R3): false means the kernel would throw or answer wrongly. The tile kernels
-// are portable SYCL wired for CUDA and SYCL, take one (n, k, ld, stride) per launch
-// (no heterogeneous batch) and put the batch (chunked by the launch) and triangular's tile count
+// are portable SYCL wired for CUDA, SYCL and a vendor-free host (NETLIB), take one
+// (n, k, ld, stride) per launch (no heterogeneous batch) and put the batch (chunked by the launch) and triangular's tile count
 // (not chunkable) in grid dimensions capped at 65535 on CUDA. syrk is real-only, so ConjTrans is Trans to both kernels (the table, not
 // can_run, keeps it on the vendor). Every vendor loop (cuBLAS, rocBLAS, netlib) runs each item
 // at the top-level (n, k), a wrong answer for a heterogeneous batch, so no family takes one.
@@ -58,7 +58,10 @@ bool can_run(const SyrkChoice& c, const select::Device& d, const MV<Scalar>& A, 
     const std::int64_t n = C.rows(), k = inner<Scalar>(A, transA), batch = C.batch_size();
     const Transpose real_trans = transA == Transpose::NoTrans ? Transpose::NoTrans : Transpose::Trans;
     const bool homogeneous = !A.is_heterogeneous() && !C.is_heterogeneous();
-    const bool native = select::native_gpu_backend<B> && d.is_gpu && homogeneous && n >= 1 && k >= 1 && batch >= 1;
+    // The worked example of a host route: native_backend here and in launch(), natives_run_on here.
+    // evidence: docs/design/vendor-independence.md#the-host-native-gate
+    const bool native = select::native_backend<B> && select::natives_run_on(d) && homogeneous && n >= 1 && k >= 1 &&
+                        batch >= 1;
     return std::visit(overloaded{
         [&](Gram) {
             return native && backend::detail::syrk_gram_supported<Scalar>(A, C, real_trans, false) &&
@@ -72,32 +75,32 @@ bool can_run(const SyrkChoice& c, const select::Device& d, const MV<Scalar>& A, 
     }, c);
 }
 
-// The native arms compile only for CUDA and SYCL (native_gpu_backend); can_run never admits the
-// other instantiations.
+// The native arms compile for CUDA, SYCL and a vendor-free NETLIB (native_backend); can_run never
+// admits the other instantiations.
 template <Backend B, typename Scalar>
 Event launch(Queue& q, const SyrkChoice& c, const MV<Scalar>& A, const MV<Scalar>& C, Scalar alpha, Scalar beta,
              Uplo uplo,
              Transpose transA) {
     return std::visit(overloaded{
         [&](Gram) -> Event {
-            if constexpr (select::native_gpu_backend<B>)
+            if constexpr (select::native_backend<B>)
                 return level3::for_each_chunk(q, C.batch_size(), level3::grid_chunk<B>(q), [&](int f, int n) {
                     return backend::detail::syrk_gram_tiles<Scalar, false>(q, level3::batch_range(A, f, n),
                                                                            level3::batch_range(C, f, n), alpha, beta,
                                                                            uplo, transA);
                 });
             else
-                throw batchlas::internal_error("syrk: gram is wired for native GPU backends only");
+                throw batchlas::internal_error("syrk: gram is wired for native backends only");
         },
         [&](Triangular) -> Event {
-            if constexpr (select::native_gpu_backend<B> && !std::is_same_v<Scalar, std::complex<double>>)
+            if constexpr (select::native_backend<B> && !std::is_same_v<Scalar, std::complex<double>>)
                 return level3::for_each_chunk(q, C.batch_size(), level3::grid_chunk<B>(q), [&](int f, int n) {
                     return backend::detail::syrk_triangular_tiles<Scalar>(q, level3::batch_range(A, f, n),
                                                                               level3::batch_range(C, f, n), alpha,
                                                                               beta, uplo, transA);
                 });
             else
-                throw batchlas::internal_error("syrk: triangular is wired for native GPU backends only");
+                throw batchlas::internal_error("syrk: triangular is wired for native backends only");
         },
         [&](Vendor) -> Event {
             if constexpr (vendor_wired<B, Scalar>)

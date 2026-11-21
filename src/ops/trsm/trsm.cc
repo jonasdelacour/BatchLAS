@@ -48,8 +48,8 @@ bool can_run(const TrsmChoice& c, const select::Device& d, const MV<Scalar>& A, 
     // Every native family honours a batch mask; the vendor's strided call cannot skip an item.
     const bool masked = batchlas::detail::any_batch_mask(A, B);
     const std::int64_t order = A.rows(), q = rhs_count<Scalar>(B, side);
-    const bool native = d.is_gpu && !A.is_heterogeneous() && !B.is_heterogeneous() && order >= 1 && q >= 1 &&
-                        A.batch_size() >= 1;
+    const bool native = select::natives_run_on(d) && !A.is_heterogeneous() && !B.is_heterogeneous() && order >= 1 &&
+                        q >= 1 && A.batch_size() >= 1;
     const int cta_max = ops::trsm::trsm_cta_max_n<Scalar>();
     // V1's work-group ladder bottoms out at 32 lanes whatever max_wg is (trsm_v1_ladder_wg).
     const bool v1_fits = d.max_wg >= 32;
@@ -103,9 +103,10 @@ Event trsm(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, const M
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // alpha == 0 is B := 0 reading neither A nor B (reference BLAS): one masked fill, no solve, since
-    // the kernels form alpha * B. A refused mask still refuses; a heterogeneous batch has no route.
+    // the kernels form alpha * B. Where no native runs (natives_run_on) the mask is refused; a
+    // heterogeneous batch has no route.
     if (alpha == Scalar(0) && !A.is_heterogeneous() && !B.is_heterogeneous()) {
-        if (!mask.empty() && !select::device_of<Back>(ctx, ops::trsm::spec.vendor).is_gpu)
+        if (!mask.empty() && !select::natives_run_on(select::device_of<Back>(ctx, ops::trsm::spec.vendor)))
             batchlas::detail::refuse_batch_mask<Scalar>(Op::trsm, "trsm", Back, A, B);
         if (B.rows() == 0 || B.cols() == 0) return ctx.create_event_after_external_work();
         return (mask.empty() ? B : B.with_batch_mask(mask)).fill_zeros(ctx);

@@ -39,7 +39,7 @@ template <typename Scalar>
 using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
 template <Backend B>
-inline constexpr bool kExpandWired = select::native_gpu_backend<B> || B == Backend::ROCM;
+inline constexpr bool kExpandWired = select::native_backend<B> || B == Backend::ROCM;
 // ROCm's vendor arm symmetrizes a real copy (MatrixView::symmetrize is real-only).
 template <Backend B, typename Scalar>
 inline constexpr bool kVendorWired =
@@ -64,8 +64,8 @@ bool can_run(const SymmChoice& c, const select::Device& d, Queue& q, const MV<Sc
     const bool masked = batchlas::detail::any_batch_mask(A, Bm, C);
     constexpr bool kWired = kExpandWired<B>;
     const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
-    const bool native = kWired && d.is_gpu && homogeneous && d.max_wg >= kExpandWg && C.rows() >= 1 &&
-                        C.cols() >= 1 && A.batch_size() >= 1;
+    const bool native = kWired && select::natives_run_on(d) && homogeneous && d.max_wg >= kExpandWg &&
+                        C.rows() >= 1 && C.cols() >= 1 && A.batch_size() >= 1;
     return std::visit(overloaded{
         [&](Mirror) {
             return native && d.slm_budget_for(mirror::kWg) >= mirror::slm_bytes<Scalar>() &&
@@ -106,13 +106,13 @@ Event launch(Queue& q, const SymmChoice& c, const MV<Scalar>& A, const MV<Scalar
                 return ops::symm::symm_mirror<Scalar, /*Herm=*/false>(q, A, Bm, C, alpha, beta, side, uplo,
                                                                       level3::grid_chunk<B>(q));
             else
-                throw batchlas::internal_error("symm: mirror is wired for GPU backends only");  // can_run refuses it
+                throw batchlas::internal_error("symm: mirror is wired for native backends and ROCm only");  // can_run refuses it
         },
         [&](Expand) -> Event {
             if constexpr (kExpandWired<B>)
                 return level3::expand_gemm<B, Scalar, /*Conjugate=*/false>(q, A, Bm, C, alpha, beta, side, uplo);
             else
-                throw batchlas::internal_error("symm: expand is wired for GPU backends only");  // can_run refuses it
+                throw batchlas::internal_error("symm: expand is wired for native backends and ROCm only");  // can_run refuses it
         },
         [&](Vendor) -> Event {
             if constexpr (B == Backend::ROCM && kVendorWired<B, Scalar>)

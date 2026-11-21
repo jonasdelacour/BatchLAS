@@ -818,8 +818,9 @@ TYPED_TEST(Syr2kCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     }
 }
 
-// On a CPU queue no native family can run: the triangular pin throws and Auto is the vendor
-// (or no route without one).
+// On a CPU queue with netlib no native family can run: the triangular pin throws and Auto is the
+// vendor. A vendor-free host (select::kHostNative) runs triangular, under the pin and under Auto.
+// evidence: docs/design/vendor-independence.md#the-host-native-gate
 template <typename Config>
 class Syr2kCandidatesCpu : public test_utils::BatchLASTest<Config> {};
 TYPED_TEST_SUITE(Syr2kCandidatesCpu, Types);
@@ -831,6 +832,19 @@ TYPED_TEST(Syr2kCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     if (this->ctx->device().type == DeviceType::GPU) GTEST_SKIP() << "a GPU queue";
     const ScopedEnvVar clear("BATCHLAS_SYR2K_ROUTE", nullptr);
     const Spec s{Uplo::Lower, Transpose::Trans, 9, 4, 2};
+    if constexpr (B == Backend::NETLIB && batchlas::select::kHostNative) {
+        for (const bool pinned : {true, false}) {
+            auto p = make_prob<T>(s);
+            std::optional<Pin> pin;
+            if (pinned) pin.emplace("syr2k", C{s2::Triangular{}});
+            EXPECT_EQ(traced_choice([&] {
+                (void)syr2k<B, T>(*this->ctx, p.A(), p.B(), p.Cv(), p.alpha, p.beta, s.uplo, s.trans);
+                this->ctx->wait();
+            }), "triangular") << (pinned ? "pinned" : "auto");
+            expect_syr2k(*this->ctx, p, pinned ? "cpu triangular pinned" : "cpu triangular auto");
+        }
+        return;
+    }
     if constexpr (std::is_same_v<T, float>) {
         auto p = make_prob<T>(s);
         const Pin pin("syr2k", C{s2::Triangular{}});

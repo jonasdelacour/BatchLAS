@@ -47,17 +47,17 @@ bool can_run(const HemmChoice& c, const select::Device& d, Queue& q, const MV<Sc
              const MV<Scalar>& C) {
     // Mirror and Expand honour a batch mask; the vendor's per-item loop cannot skip an item.
     const bool masked = batchlas::detail::any_batch_mask(A, Bm, C);
-    constexpr bool kWired = select::native_gpu_backend<B> || B == Backend::ROCM;
+    constexpr bool kWired = select::native_backend<B> || B == Backend::ROCM;
     const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
+    const bool native = kWired && select::natives_run_on(d) && homogeneous && C.rows() >= 1 && C.cols() >= 1 &&
+                        A.batch_size() >= 1;
     return std::visit(overloaded{
         [&](Mirror) {
-            return kWired && d.is_gpu && homogeneous && d.max_wg >= mirror::kWg && C.rows() >= 1 && C.cols() >= 1 &&
-                   A.batch_size() >= 1 && d.slm_budget_for(mirror::kWg) >= mirror::slm_bytes<Scalar>() &&
+            return native && d.max_wg >= mirror::kWg && d.slm_budget_for(mirror::kWg) >= mirror::slm_bytes<Scalar>() &&
                    (C.rows() + mirror::tile<Scalar>() - 1) / mirror::tile<Scalar>() <= d.max_groups_yz;
         },
         [&](Expand) {
-            return kWired && d.is_gpu && homogeneous && d.max_wg >= kExpandWg && C.rows() >= 1 && C.cols() >= 1 &&
-                   A.batch_size() >= 1 &&
+            return native && d.max_wg >= kExpandWg &&
                    backend::detail::expansion_chunk<Scalar>(q, A.rows(), 1, d.max_groups_yz) >= 1;
         },
         [&](Vendor) { return B != Backend::ROCM && d.has_vendor && homogeneous && !masked; },
@@ -70,17 +70,17 @@ Event launch(Queue& q, const HemmChoice& c, const MV<Scalar>& A, const MV<Scalar
              Side side, Uplo uplo) {
     return std::visit(overloaded{
         [&](Mirror) -> Event {
-            if constexpr (select::native_gpu_backend<B> || B == Backend::ROCM)
+            if constexpr (select::native_backend<B> || B == Backend::ROCM)
                 return ops::symm::symm_mirror<Scalar, /*Herm=*/true>(q, A, Bm, C, alpha, beta, side, uplo,
                                                                      level3::grid_chunk<B>(q));
             else
-                throw batchlas::internal_error("hemm: mirror is wired for GPU backends only");  // can_run refuses it
+                throw batchlas::internal_error("hemm: mirror is wired for native backends and ROCm only");  // can_run refuses it
         },
         [&](Expand) -> Event {
-            if constexpr (select::native_gpu_backend<B> || B == Backend::ROCM)
+            if constexpr (select::native_backend<B> || B == Backend::ROCM)
                 return level3::expand_gemm<B, Scalar, /*Conjugate=*/true>(q, A, Bm, C, alpha, beta, side, uplo);
             else
-                throw batchlas::internal_error("hemm: expand is wired for GPU backends only");  // can_run refuses it
+                throw batchlas::internal_error("hemm: expand is wired for native backends and ROCm only");  // can_run refuses it
         },
         [&](Vendor) -> Event {
             if constexpr (B != Backend::ROCM && select::has_library<B>(spec.vendor))
