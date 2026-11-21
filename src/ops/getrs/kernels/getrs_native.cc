@@ -5,6 +5,7 @@
 // getrf pair -- hence EXTENSIONS_FACTORIZATION_SOURCES and lu_laswp.hh's tag.
 // evidence: docs/perf/lu.md#getrs-composition-window-evidence
 
+#include <batchlas/backend_config.h>
 #include <src/ops/getrs/getrs_native.hh>
 #include <src/util/resident_capacity.hh>
 #include <src/kernels/common/launch.hh>
@@ -181,7 +182,7 @@ template <typename Scalar>
 int getrs_perm_spelling_debug(Queue& ctx, int n, int nrhs) {
     if (!getrs_perm_use_gather(perm_spelling(), nrhs)) return 0;
     const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU) return 0;
+    if (dev.type != DeviceType::GPU && !BATCHLAS_HAS_HOST_NATIVE) return 0;  // getrs.cc can_run
     const std::size_t lm = dev.get_property(DeviceProperty::LOCAL_MEM_SIZE);
     const std::size_t budget = (lm > 4096) ? (lm - 4096) : 0;
     return getrs_perm_gather_fits<Scalar>(n, budget) ? 1 : 0;

@@ -41,7 +41,8 @@ select::Key key_of(const MV<Scalar>& A) {
 // are getri_blocked_dispatch's own checks on A (C, the pivot span and aliasing are argument
 // errors the driver reports itself), plus the pivot format: GPU backends pack 1-based int32 into
 // the int64 span and netlib writes genuine int64, so a NETLIB backend on a GPU queue would read
-// netlib's pivots wrongly. evidence: docs/perf/lu.md#lu-correctness-findings
+// netlib's pivots wrongly. Without LAPACKE (select::kHostNative) every NETLIB pivot is native, so
+// Blocked runs there. evidence: docs/perf/lu.md#lu-correctness-findings
 // Vendor: exactly the launch's own guard. Not d.has_vendor && d.has_vendor: on ROCm
 // rocSOLVER and rocBLAS are separate options, and getri_vendor<ROCM> needs only rocSOLVER.
 template <Backend B, typename Scalar>
@@ -50,7 +51,7 @@ bool can_run(const GetriChoice& c, const select::Device& d, const MV<Scalar>& A)
     const bool masked = detail::any_batch_mask(A);
     return std::visit(overloaded{
         [&](Blocked) {
-            return d.is_gpu && d.has_sg32 && B != Backend::NETLIB &&
+            return select::natives_run_on(d) && d.has_sg32 && (B != Backend::NETLIB || select::kHostNative) &&
                    A.rows() == A.cols() && A.rows() >= 1 && A.batch_size() >= 1 && !A.is_heterogeneous();
         },
         [&](Vendor) {

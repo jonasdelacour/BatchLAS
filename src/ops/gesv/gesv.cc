@@ -37,7 +37,8 @@ select::Key key_of(const MV<Scalar>& A, const MV<Scalar>& B) {
 
 // Correctness only (R3): false means the driver would throw. Tiny's clauses are the argument
 // checks of gesv_tiny_dispatch, plus a NETLIB refusal: the GPU kernel packs 1-based
-// int32 pivots into the int64 span's low half where netlib writes true int64. No family takes a
+// int32 pivots into the int64 span's low half where netlib writes true int64 (a vendor-free host,
+// select::kHostNative, has only native pivots and runs Tiny). No family takes a
 // heterogeneous batch. Both families honour a batch mask: Tiny skips an inactive item, and
 // Blocked's children (getrf, getrs) honour it or refuse it themselves.
 template <Backend Bk, typename Scalar>
@@ -46,7 +47,8 @@ bool can_run(const GesvChoice& c, const select::Device& d, const MV<Scalar>& A, 
     const bool homogeneous = !A.is_heterogeneous() && !B.is_heterogeneous();
     return std::visit(overloaded{
         [&](Tiny) {
-            return Bk != Backend::NETLIB && d.is_gpu && d.has_sg32 && homogeneous && n >= 1 && nrhs >= 1 &&
+            return (Bk != Backend::NETLIB || select::kHostNative) && select::natives_run_on(d) && d.has_sg32 &&
+                   homogeneous && n >= 1 && nrhs >= 1 &&
                    A.batch_size() >= 1 && n <= ops::gesv::gesv_tiny_max_n<Scalar>() &&
                    nrhs <= ops::gesv::kGesvTinyMaxRhs && d.max_wg >= resident::kTinyWgSize;
         },
