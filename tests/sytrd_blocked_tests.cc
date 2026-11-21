@@ -103,6 +103,10 @@ struct SytrdBlockedConfig {
 using SytrdBlockedTestTypes = ::testing::Types<SytrdBlockedConfig<float, Backend::CUDA>, SytrdBlockedConfig<double, Backend::CUDA>>;
 #elif BATCHLAS_HAS_ROCM_BACKEND
 using SytrdBlockedTestTypes = ::testing::Types<SytrdBlockedConfig<float, Backend::ROCM>, SytrdBlockedConfig<double, Backend::ROCM>>;
+#elif BATCHLAS_HAS_SYCL_BACKEND && BATCHLAS_HAS_DEVICE_FP64
+using SytrdBlockedTestTypes = ::testing::Types<SytrdBlockedConfig<float, Backend::SYCL>, SytrdBlockedConfig<double, Backend::SYCL>>;
+#elif BATCHLAS_HAS_SYCL_BACKEND  // Metal: no fp64 on the GPU
+using SytrdBlockedTestTypes = ::testing::Types<SytrdBlockedConfig<float, Backend::SYCL>>;
 #else
 using SytrdBlockedTestTypes = ::testing::Types<SytrdBlockedConfig<float, Backend::NETLIB>>;
 #endif
@@ -213,9 +217,9 @@ TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower33) {
 // The latrd panel's ||x|| when the squares of the entries leave the float range: the same
 // Hermitian matrix at 2^0 (control), 2^-70 and 2^-76 (squares near 2^-140 and 2^-152, subnormal
 // or zero). Legacy latrd pinned (the panel body latrd_lower_run on every device), padded storage.
-// BREAK (2026-11-21, apple_m5_max float): latrd_lower_run's unscaled sum of squares gives
-// spectrum errors 1.6e-7, 3.1e-4 and 0.82 relative; the power-of-two scaled norm 1.6e-7 at all
-// three. At 2^-64 the unscaled sum is still 2.4e-7: this kernel's arithmetic keeps subnormals.
+// BREAK (2026-11-21, apple_m5_max, Backend::SYCL float): latrd_lower_run's unscaled sum of
+// squares gives spectrum error 0.82 relative at both 2^-70 and 2^-76 (Metal flushes the
+// subnormal squares); the power-of-two scaled norm passes all three.
 TYPED_TEST(SytrdBlockedTest, LatrdPanelNormSurvivesSquaresBelowTheNormalRange) {
     using Real = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
