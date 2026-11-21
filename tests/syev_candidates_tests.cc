@@ -669,8 +669,9 @@ TYPED_TEST(SyevCandidates, CoverageRowCarriesChoiceAndNativeFlags) {
 }
 
 // On a CPU queue with netlib no native family can run: native pins throw and Auto is the vendor.
-// A vendor-free host (select::kHostNative) runs them: every native pin but two_stage (sy2sb's geqrf
-// has no host route) solves, the capability answers agree, and Auto takes the last resort, blocked.
+// A vendor-free host (select::kHostNative) runs blocked and jacobi; two_stage (sy2sb's geqrf has no
+// host route), cta and cta_fused (steqr_cta's body reads out of bounds on the OpenCL CPU) throw at
+// the pin, the capability answers agree, and Auto takes the last resort, blocked.
 // evidence: docs/design/vendor-independence.md#the-host-native-gate
 template <typename Config>
 class SyevCandidatesCpu : public test_utils::BatchLASTest<Config> {};
@@ -694,7 +695,9 @@ TYPED_TEST(SyevCandidatesCpu, CpuQueueRunsNoNativeFamily) {
             if (std::holds_alternative<sy::Vendor>(c)) continue;
             auto p = make_eig<T>(s);
             const Pin pin("syev", c);
-            if (std::holds_alternative<sy::TwoStage>(c)) {
+            // GPU-only there: two_stage (sy2sb's geqrf), cta and cta_fused (steqr_cta's body).
+            if (std::holds_alternative<sy::TwoStage>(c) || std::holds_alternative<sy::Cta>(c) ||
+                std::holds_alternative<sy::CtaFused>(c)) {
                 EXPECT_THROW(((void)syev_buffer_size<B, T>(*this->ctx, p.A(), p.w.to_span(), s.jobz, s.uplo)),
                              std::invalid_argument);
                 continue;
@@ -703,7 +706,7 @@ TYPED_TEST(SyevCandidatesCpu, CpuQueueRunsNoNativeFamily) {
             expect_solved(*this->ctx, p, "cpu " + select::to_string(c));
         }
         auto sq = make_eig<T>(s);
-        EXPECT_TRUE(batchlas::ops::syev::detail::syev_supports_cta<T>(*this->ctx, sq.A()));
+        EXPECT_FALSE(batchlas::ops::syev::detail::syev_supports_cta<T>(*this->ctx, sq.A()));
         EXPECT_TRUE(batchlas::ops::syev::detail::syev_supports_blocked<T>(*this->ctx, sq.A(), Uplo::Lower));
         EXPECT_FALSE(batchlas::ops::syev::detail::syev_supports_two_stage<T>(*this->ctx, sq.A(), Uplo::Upper));
         auto p = make_eig<T>(s);

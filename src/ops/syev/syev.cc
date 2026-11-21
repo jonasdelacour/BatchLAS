@@ -60,7 +60,9 @@ bool can_run(const SyevChoice& c, const select::Device& d, const MV<Scalar>& A) 
     const bool wired = B != Backend::NETLIB || select::kHostNative;
     const bool native = wired && select::natives_run_on(d) && homogeneous && A.rows() == A.cols() && n >= 1;
     const bool small = native && n <= kSmallMaxN && d.has_sg32;
-    const bool cta_steqr = small && B != Backend::ROCM;
+    // A GPU even vendor-free: steqr_cta's body (CtaFused fuses it) reads out of bounds on the
+    // OpenCL CPU, and Cta's back-transform ormqx_cta has no CPU arm.
+    const bool cta_steqr = small && B != Backend::ROCM && d.is_gpu;
     const bool large = native && A.batch_size() >= 1;
     return std::visit(overloaded{
         [&](Cta) { return cta_steqr; },
