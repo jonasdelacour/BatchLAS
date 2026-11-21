@@ -300,16 +300,29 @@ BATCHLAS_DEVICE_INLINE void latrd_lower_run(const WorkGroup<WG>& ex, const AB& A
         latrd_col_update_run(Ab, Wb, vip_local, wip_local, i, lid == 0, i + 1, n, lid, WG);
         ex.barrier(Mem::Global);
 
-        // Householder reflector of A(i+1:, i); |x|^2 as re*re + im*im of the element in place.
+        // Householder reflector of A(i+1:, i); |x|^2 as re*re + im*im of the element in place, each
+        // part scaled by 2^-e, e the exponent of max |x| (larfg_lanes' scaling), so no square
+        // under- or overflows (float entries near 2^-70 lost 3e-4 of the spectrum unscaled). A
+        // power of two scales exactly: without under- or overflow the bits are the unscaled sum's.
         const auto x = A.col(i).tail(i + 2);
+        Real mag = Real(0);
+        for_each_owned(ex, x.size(), [&](int k) {
+            const Scalar& xk = x(k);
+            if constexpr (Arith<Scalar>::is_complex) mag = sycl::fmax(mag, sycl::fmax(sycl::fabs(xk.real()), sycl::fabs(xk.imag())));
+            else mag = sycl::fmax(mag, sycl::fabs(xk));
+        });
+        const Real xmax = detail::scope_reduce<Scope::Group>(ex, mag, sycl::maximum<Real>());
+        const int xexp = (xmax > Real(0) && sycl::isfinite(xmax)) ? sycl::clamp(static_cast<int>(sycl::ilogb(xmax)), -120, 120) : 0;
+        const Real sc = sycl::ldexp(Real(1), -xexp);
         const Real sumsq = reduce<Scope::Group>(ex, x.size(), [&](int k) {
             const Scalar& xk = x(k);
             if constexpr (Arith<Scalar>::is_complex) {
-                const Real re = xk.real();
-                const Real im = xk.imag();
+                const Real re = xk.real() * sc;
+                const Real im = xk.imag() * sc;
                 return re * re + im * im;
             } else {
-                return xk * xk;
+                const Real xs = xk * sc;
+                return xs * xs;
             }
         });
         Scalar alpha = Scalar(0);
@@ -323,7 +336,7 @@ BATCHLAS_DEVICE_INLINE void latrd_lower_run(const WorkGroup<WG>& ex, const AB& A
 
         if (lid == 0) {
             // xLARFG scalars, alg::PhaseN1: a complex alpha reflects at the last column too.
-            const auto h = larfg_scalars<alg::PhaseN1>(alpha, sycl::sqrt(sumsq), x.size() + 1);
+            const auto h = larfg_scalars<alg::PhaseN1>(alpha, sycl::sqrt(sumsq) * sycl::ldexp(Real(1), xexp), x.size() + 1);
             tau_i = h.tau;
             scale = h.scale;
             on_reflector(i, h.beta, tau_i);
