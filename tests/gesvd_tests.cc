@@ -197,7 +197,7 @@ inline bool gesvd_bidiag_is_normal_equations() {
 template <typename Real>
 inline batchlas::verify::Slack gesvd_cta_slack() {
     return {std::is_same_v<Real, float> ? 0.25 : 0.5,
-            "gesvd cta provider always takes the normal-equations bidiagonal path (squares the condition number); measured c 52 float / 113 double, accepted bounds 64 / 128 n eps"};
+            "gesvd cta provider solves the bidiagonal directly since defect 18 (measured c 3.2 float / 4.8 double at n=16); the normal-equations path it replaced fails 64 / 128 n eps (U 1.7e-3 float, 8.4e-12 double, case AN), as BATCHLAS_GESVD_BIDIAG=normal still shows"};
 }
 
 template <typename Scalar, Backend B>

@@ -162,8 +162,8 @@ Event gebrd_cta(Queue& ctx,
             throw batchlas::invalid_argument("gebrd_cta: batch size mismatch");
         }
 
-        if (!ctx.device().supports_sub_group_size(32)) {
-            throw batchlas::unsupported("gebrd_cta: device does not support subgroup size 32 required for CTA kernels");
+        if (ctx.device().type != DeviceType::GPU || !ctx.device().supports_sub_group_size(32)) {
+            throw batchlas::unsupported("gebrd_cta: needs a GPU with subgroup size 32 (the CTA kernels have no CPU image)");
         }
 
         auto& a = const_cast<MatrixView<Scalar, MatrixFormat::Dense>&>(a_in);
