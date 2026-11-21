@@ -201,7 +201,8 @@ size_t syevx_direct_buffer_size(Queue& ctx,
         work_size += BumpAllocator::allocation_size<std::byte>(
             ctx, syev_buffer_size<B>(ctx, A_copy, Span<float_type>(), jobz, Uplo::Lower));
 
-        return work_size;
+        // The sum assumes an aligned base; the caller's may be one quantum short (syev_blocked.cc).
+        return work_size + BumpAllocator::alignment<std::byte>(ctx.device());
     }
 }
 

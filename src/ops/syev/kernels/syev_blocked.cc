@@ -379,7 +379,10 @@ size_t syev_blocked_part_buffer_size(Queue& ctx,
         bytes += stebz_buffer_size<B, Real>(ctx, static_cast<std::size_t>(n), static_cast<std::size_t>(batch), bp);
     }
 
-    return bytes;
+    // The slices above sum as if from an aligned base, but the caller's base may sit up to one
+    // alignment quantum short: opencl:cpu asks 128 B and a UnifiedVector of 768 B there starts at
+    // 16 mod 128 (values-mode syev n = 4 ran out by 112 B). Every part reuses that base: one quantum.
+    return bytes + BumpAllocator::alignment<std::byte>(ctx.device());
 }
 
 // Items per pass: sytrd_blocked, stedc and ormqr_blocked hand A, Z and stedc's merge matrix (three
