@@ -524,7 +524,7 @@ TYPED_TEST(GetriCandidates, NetlibBackendOnAGpuQueueRefusesBlocked) {
             select::testing::reset_warnings();
             const Pin pin("getri", std::string_view(word));
             ::testing::internal::CaptureStderr();
-            EXPECT_NO_THROW((void)getri_buffer_size<Backend::NETLIB, T>(*this->ctx, A)) << word;
+            EXPECT_NO_THROW(((void)getri_buffer_size<Backend::NETLIB, T>(*this->ctx, A))) << word;
             const std::string err = ::testing::internal::GetCapturedStderr();
             EXPECT_EQ(err.find("getri pinned"), std::string::npos) << word << ": " << err;
         }
