@@ -45,17 +45,10 @@ template <typename Scalar>
 using Fn = SyfnFunction<float_t<Scalar>>;
 using Spectra = std::vector<std::vector<double>>;  // one spectrum per item
 
-// A build without LAPACKE skips its NETLIB items here; a vendor-free one (host syev and syrk native)
-// is covered by SyfnVendorFree.HostWithoutLapackeThrowsNoRoute.
+// A vendor-free build's NETLIB items run syev, syrk/herk and gemm natively on the host
+// (BATCHLAS_HAS_HOST_NATIVE), so every backend runs every case.
 template <typename Config>
-class SyfnTest : public test_utils::BatchLASTest<Config> {
-protected:
-    void SetUp() override {
-        test_utils::BatchLASTest<Config>::SetUp();
-        if (this->IsSkipped()) return;
-        TEST_SUPPORT_SKIP_NETLIB_WITHOUT_LAPACK(Config::BackendVal);
-    }
-};
+class SyfnTest : public test_utils::BatchLASTest<Config> {};
 
 using SyfnTestTypes = typename test_utils::backend_types<ts::Config>::type;
 TYPED_TEST_SUITE(SyfnTest, SyfnTestTypes);
@@ -438,41 +431,35 @@ TYPED_TEST(SyfnTest, RejectsBadArguments) {
 }
 
 #if BATCHLAS_HAS_HOST_BACKEND && BATCHLAS_HAS_CPU_TARGET
-// Vendor-free on a CPU queue: syfn_buffer_size and syfn throw NoRouteError while sizing syev's
-// workspace, before any kernel. syfn_from_eigen throws it from syrk after its own kernels, which it
-// drains first. Unless the host runs syev and syrk natively (BATCHLAS_HAS_HOST_NATIVE): then syfn
-// computes F = A^{-1/2} = I and syfn_from_eigen F = V exp(W) V^T = e I. The queue stays usable.
-TEST(SyfnVendorFree, HostWithoutLapackeThrowsNoRoute) {
+// Vendor-free on a CPU queue (a CPU target without LAPACKE/CBLAS is always BATCHLAS_HAS_HOST_NATIVE):
+// syfn sizes and runs syev, syrk and gemm natively. A = 4 I gives F = A^{-1/2} = I / 2, and
+// syfn_from_eigen F = V exp(W) V^T = e I; info is 0 on every item.
+TEST(SyfnVendorFree, HostWithoutLapackeRunsNatively) {
     if (BATCHLAS_HAS_LAPACKE && BATCHLAS_HAS_CBLAS) GTEST_SKIP() << "host LAPACKE/CBLAS is built in";
+    ASSERT_TRUE(BATCHLAS_HAS_HOST_NATIVE) << "a CPU target without LAPACKE/CBLAS is host-native";
     Queue q(Device("cpu"), Backend::NETLIB, true);
     Matrix<float> A = Matrix<float>::Identity(8, 3), F(8, 8, 3), V = Matrix<float>::Identity(8, 3);
+    for (int b = 0; b < 3; ++b)
+        for (int i = 0; i < 8; ++i) A(i, i, b) = 4.0f;
     UnifiedVector<float> W(24, 1.0f);
-    UnifiedVector<std::byte> ws(size_t(1) << 20);
+    UnifiedVector<int32_t> info(3, int32_t(-7));
     const auto inv = SyfnFunction<float>::inv_sqrt();
-    if (BATCHLAS_HAS_HOST_NATIVE) {
-        EXPECT_EQ((run_syfn<float, Backend::NETLIB>(q, A, F, inv, Uplo::Lower)), std::vector<int32_t>(3, 0));
-        for (int b = 0; b < 3; ++b)
-            for (int j = 0; j < 8; ++j)
-                for (int i = 0; i < 8; ++i)
-                    EXPECT_NEAR(F(i, j, b), i == j ? 1.0f : 0.0f, 1e-5f) << i << "," << j << " item " << b;
-    } else {
-        EXPECT_THROW((void)(syfn_buffer_size<Backend::NETLIB, float>(q, A, F, inv, Uplo::Lower)),
-                     batchlas::NoRouteError);
-        EXPECT_THROW((void)(syfn<Backend::NETLIB, float>(q, A, F, inv, Uplo::Lower, ws.to_span(), Span<int32_t>{})),
-                     batchlas::NoRouteError);
-    }
-    if (BATCHLAS_HAS_HOST_NATIVE) {
-        EXPECT_EQ((run_from_eigen<float, Backend::NETLIB>(q, V, W, F, SyfnFunction<float>::exp())),
-                  std::vector<int32_t>(3, 0));
-        for (int b = 0; b < 3; ++b)
-            for (int j = 0; j < 8; ++j)
-                for (int i = 0; i < 8; ++i)
-                    EXPECT_NEAR(F(i, j, b), i == j ? std::exp(1.0f) : 0.0f, 1e-5f) << i << "," << j << " item " << b;
-    } else {
-        EXPECT_THROW((run_from_eigen<float, Backend::NETLIB>(q, V, W, F, SyfnFunction<float>::exp())),
-                     batchlas::NoRouteError);
-    }
+    const size_t need = syfn_buffer_size<Backend::NETLIB, float>(q, A, F, inv, Uplo::Lower);
+    UnifiedVector<std::byte> ws(std::max<size_t>(need, 1));
+    (void)syfn<Backend::NETLIB, float>(q, A, F, inv, Uplo::Lower, Span<std::byte>(ws.data(), need), info.to_span());
     q.wait();
+    for (int b = 0; b < 3; ++b) {
+        EXPECT_EQ(info[b], 0) << "item " << b;
+        for (int j = 0; j < 8; ++j)
+            for (int i = 0; i < 8; ++i)
+                EXPECT_NEAR(F(i, j, b), i == j ? 0.5f : 0.0f, 1e-5f) << "inv_sqrt " << i << "," << j << " item " << b;
+    }
+    EXPECT_EQ((run_from_eigen<float, Backend::NETLIB>(q, V, W, F, SyfnFunction<float>::exp())),
+              std::vector<int32_t>(3, 0));
+    for (int b = 0; b < 3; ++b)
+        for (int j = 0; j < 8; ++j)
+            for (int i = 0; i < 8; ++i)
+                EXPECT_NEAR(F(i, j, b), i == j ? std::exp(1.0f) : 0.0f, 1e-5f) << i << "," << j << " item " << b;
 }
 #endif
 

@@ -113,9 +113,14 @@ never written), while the broadcast arm is right at every column bucket and RHS 
 same: their `can_run` takes `natives_run_on`, and the launch-side GPU checks
 (`native::require_launchable` in `src/kernels/common/launch.hh`, `ormqx_cta`) also admit a host
 queue when `BATCHLAS_HAS_HOST_NATIVE` keeps the CPU image. ormqr_blocked refuses a mask only where
-gemm is the host BLAS (`!native_backend<B>`). Adopted so far: syrk, herk, syr2k, her2k, symm, hemm,
-trmm, trsm, getrf, getri, getrs, gesv, geqrf, orgqr and ormqr (ortho's Householder arm follows). To
-verify an op, read its `BATCHLAS_COVERAGE_OUT` `reached` rows on `NETLIB` in a vendor-free tree.
+gemm is the host BLAS (`!native_backend<B>`). gesvd and sygst change only the run-time half for
+their Blocked family (gesvd's Jacobi and Cta stay GPU-only; on NETLIB gesvd Blocked takes the
+unblocked gebrd and refuses a batch mask, since its gebrd and ormbr children cannot skip an item).
+sygvd's Compose accepts a masked batch on a vendor-free host, whose trsm and trmm are natives, and
+syfn refuses a host mask only where its syrk and herk are the host BLAS. Adopted so far: syrk, herk,
+syr2k, her2k, symm, hemm, trmm, trsm, getrf, getri, getrs, gesv, geqrf, orgqr, ormqr, gesvd, sygst,
+sygvd and syfn (ortho's Householder arm follows). To verify an op, read its `BATCHLAS_COVERAGE_OUT`
+`reached` rows on `NETLIB` in a vendor-free tree.
 
 syev's kernels are templated on the backend and compiled for NETLIB in every build, so syev
 changes only the run-time half (`B != NETLIB || kHostNative`, then `natives_run_on`): the host

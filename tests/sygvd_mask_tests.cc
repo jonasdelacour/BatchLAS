@@ -3,8 +3,10 @@
 // and reached, on tests/masked_contract.hh: A, B, w and info of an inactive item untouched, active
 // items the unmasked call's. sygst's Blocked and TwoSided run their native children on the masked
 // views (lift 1). sygvd's Compose and sygvd_factored run potrf, sygst, syev and trsm / trmm on the
-// masked views (lift 2) on a device, pinned and reached; on the host backend compose refuses (its
-// trsm / trmm are the host BLAS). Auto on both. Device-only masks, complex data, padded ld and stride.
+// masked views (lift 2) on a device and on a vendor-free host, pinned and reached; on a LAPACKE host
+// compose refuses (its trsm / trmm are the host BLAS). A vendor-free host has no LAPACKE family: its
+// `vendor` cases pin the native family instead (compose; sygst blocked and twosided). Auto on both.
+// Device-only masks, complex data, padded ld and stride.
 // evidence: docs/design/masked-batches.md#masked-batches-tests
 #include <gtest/gtest.h>
 
@@ -47,6 +49,10 @@ protected:
 
     bool host() const { return B == Backend::NETLIB; }
     bool gpu() const { return this->ctx->device().type == DeviceType::GPU; }
+    // The host backend with LAPACKE: its compose children are the host BLAS. Vendor-free, they are natives.
+    bool lapacke_host() const { return host() && select::kHasNetlib; }
+    // Where the native families run: a GPU, or a vendor-free host (select::natives_run_on).
+    bool natives() const { return gpu() || (host() && select::kHostNative); }
 
     // A: item-dependent small values over 8 (complex where T is). B: Hermitian positive definite,
     // diagonal n + 2 over off-diagonals of at most 1 / 2, so sygvd's potrf succeeds on every item.
@@ -156,7 +162,7 @@ TYPED_TEST(SygvdMask, VendorLeavesInactiveItemsUntouched) {
                                                        mc::Output::span<R>("w", {w.data(), w.size()}, std::size_t(n)),
                                                        mc::Output::span<int32_t>("info", {info.data(), info.size()}, 1)};
                     };
-                    mc::check<ops::sygvd::SygvdChoice>(q, "sygvd", "vendor", c);
+                    mc::check<ops::sygvd::SygvdChoice>(q, "sygvd", this->lapacke_host() ? "vendor" : "compose", c);
                 }
 }
 
@@ -184,7 +190,14 @@ TYPED_TEST(SygvdMask, SygstVendorLeavesInactiveItemsUntouched) {
                 c.outputs = [&] {
                     return std::vector<mc::Output>{mc::Output::matrix("A", A.view()), mc::Output::matrix("B", Bm.view())};
                 };
-                mc::check<ops::sygst::SygstChoice>(q, "sygst", "vendor", c);
+                if (this->lapacke_host()) {
+                    mc::check<ops::sygst::SygstChoice>(q, "sygst", "vendor", c);
+                } else {
+                    for (const char* fam : {"blocked:nb=32", "twosided"}) {
+                        SCOPED_TRACE(fam);
+                        mc::check<ops::sygst::SygstChoice>(q, "sygst", fam, c);
+                    }
+                }
             }
 }
 
@@ -195,7 +208,7 @@ TYPED_TEST(SygvdMask, SygstVendorLeavesInactiveItemsUntouched) {
 TYPED_TEST(SygvdMask, SygstDeviceFamiliesLeaveInactiveItemsUntouched) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::B;
-    if (this->host() || !this->gpu()) GTEST_SKIP() << "blocked and twosided are device families";
+    if (!this->natives()) GTEST_SKIP() << "blocked and twosided run on a GPU or a vendor-free host";
     Queue& q = *this->ctx;
     for (const char* fam : {"blocked:nb=32", "twosided"})
         for (const int n : {6, 70})
@@ -228,14 +241,14 @@ TYPED_TEST(SygvdMask, SygstDeviceFamiliesLeaveInactiveItemsUntouched) {
 // back-transform on the masked views. syev's cta sizes with the sub-group hole patterns, then its
 // blocked sizes with the part patterns; every itype, both jobz and triangles.
 TYPED_TEST(SygvdMask, ComposeAtCtaSizesLeavesInactiveItemsUntouched) {
-    if (this->host()) GTEST_SKIP() << "compose refuses a mask on the host backend: its trsm and trmm are the host BLAS";
+    if (this->lapacke_host()) GTEST_SKIP() << "compose refuses a mask on a LAPACKE host: its trsm and trmm are the host BLAS";
     for (const int n : {7, 32})
         for (const int itype : {1, 2, 3})
             for (const JobType jobz : {JobType::EigenVectors, JobType::NoEigenVectors})
                 for (const Uplo uplo : {Uplo::Lower, Uplo::Upper}) this->check_compose("compose", n, itype, jobz, uplo, false);
 }
 TYPED_TEST(SygvdMask, ComposeAtBlockedSizesLeavesInactiveItemsUntouched) {
-    if (this->host()) GTEST_SKIP() << "compose refuses a mask on the host backend: its trsm and trmm are the host BLAS";
+    if (this->lapacke_host()) GTEST_SKIP() << "compose refuses a mask on a LAPACKE host: its trsm and trmm are the host BLAS";
     for (const int n : {45, 70})
         for (const int itype : {1, 2, 3})
             for (const JobType jobz : {JobType::EigenVectors, JobType::NoEigenVectors})
@@ -244,7 +257,7 @@ TYPED_TEST(SygvdMask, ComposeAtBlockedSizesLeavesInactiveItemsUntouched) {
 
 // sygvd_factored always composes (no potrf): sygst, syev and the back-transform; B is read only.
 TYPED_TEST(SygvdMask, FactoredComposeLeavesInactiveItemsUntouched) {
-    if (this->host()) GTEST_SKIP() << "compose refuses a mask on the host backend: its trsm and trmm are the host BLAS";
+    if (this->lapacke_host()) GTEST_SKIP() << "compose refuses a mask on a LAPACKE host: its trsm and trmm are the host BLAS";
     for (const int n : {7, 45})
         for (const int itype : {1, 2, 3})
             for (const JobType jobz : {JobType::EigenVectors, JobType::NoEigenVectors})

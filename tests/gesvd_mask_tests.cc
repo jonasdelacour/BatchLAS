@@ -522,15 +522,58 @@ TYPED_TEST(GesvdMask, BdsdcLeavesInactiveItemsUntouched) {
     }
 }
 
+// With LAPACKE, NETLIB's host loop skips the inactive items. Vendor-free, blocked serves the host
+// unmasked but its NETLIB children (gebrd, ormbr) cannot skip an item, so a masked call (Auto, or
+// blocked pinned) is refused at selection: it throws and writes no output of any item.
 TYPED_TEST(GesvdMask, NetlibHostLoopSkipsInactiveItems) {
     if constexpr (TestFixture::B != Backend::NETLIB) {
         GTEST_SKIP() << "the host loop is NETLIB's vendor family";
     } else {
-        if (!select::kHasNetlib) GTEST_SKIP() << "no LAPACKE in this build";
         const SvdVectors A = SvdVectors::All, S = SvdVectors::Thin, N = SvdVectors::None;
-        for (const Shape& s : {Shape{"vendor", 7, 7, 12, A, A}, Shape{"vendor", 11, 6, 9, S, A},
-                               Shape{"vendor", 5, 9, 9, A, S}, Shape{"vendor", 8, 8, 7, N, N}})
-            this->check(s);
+        const Shape shapes[] = {Shape{"vendor", 7, 7, 12, A, A}, Shape{"vendor", 11, 6, 9, S, A},
+                                Shape{"vendor", 5, 9, 9, A, S}, Shape{"vendor", 8, 8, 7, N, N}};
+        if (select::kHasNetlib) {
+            for (const Shape& s : shapes) this->check(s);
+            return;
+        }
+        Queue& q = *this->ctx;
+        for (const Shape& s : shapes)
+            for (const char* pin : {"auto", "blocked"}) {
+                SCOPED_TRACE(label(s) + " " + pin);
+                const select::ScopedPin<ops::gesvd::GesvdChoice> scoped("gesvd", std::string_view(pin));
+                GesvdProblem<typename TestFixture::T, TestFixture::B> p(q, s);
+                mc::Case c = p.make_case(false);
+                c.prepare();
+                UnifiedVector<std::byte> ws(c.buffer_size(Span<const std::uint8_t>{}));
+                c.call(Span<const std::uint8_t>{}, Span<std::byte>(ws.data(), ws.size()));
+                q.wait();  // the unmasked call runs: blocked serves the vendor-free host
+                c.prepare();
+                std::vector<std::uint8_t> bytes(std::size_t(s.batch));
+                for (int b = 0; b < s.batch; ++b) bytes[std::size_t(b)] = std::uint8_t(b % 2);
+                const mc::DeviceMask mask(q, bytes);
+                const auto outs = c.outputs();
+                const auto before = mc::detail::snapshot(q, outs, s.batch);
+                // Auto finds no family (unsupported); the pin cannot run this shape (invalid_argument).
+                const bool pinned = std::string_view(pin) != "auto";
+                auto refused = [&](auto&& f) {
+                    try {
+                        f();
+                    } catch (const batchlas::unsupported&) {
+                        return !pinned;
+                    } catch (const batchlas::invalid_argument& e) {
+                        return pinned && std::string(e.what()).find("cannot run this shape") != std::string::npos;
+                    }
+                    return false;
+                };
+                EXPECT_TRUE(refused([&] { (void)c.buffer_size(mask.span()); })) << "buffer_size";
+                EXPECT_TRUE(refused([&] { c.call(mask.span(), Span<std::byte>(ws.data(), ws.size())); })) << "call";
+                q.wait();
+                const auto after = mc::detail::snapshot(q, outs, s.batch);
+                for (std::size_t o = 0; o < outs.size(); ++o)
+                    for (int b = 0; b < s.batch; ++b)
+                        EXPECT_TRUE(mc::detail::item_equal(after[o], before[o], outs[o], b))
+                            << "refused after writing " << outs[o].name << " of item " << b;
+            }
     }
 }
 
