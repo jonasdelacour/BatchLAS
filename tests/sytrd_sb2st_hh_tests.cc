@@ -29,6 +29,7 @@
 #include <vector>
 
 #include <src/ops/syev/sytrd/sytrd_sb2st_hh.hh>
+#include <tests/host_eigen_reference.hh>
 #include <tests/test_utils.hh>
 
 #include <batchlas/verify/tolerance.hh>
@@ -247,6 +248,57 @@ TYPED_TEST(Sb2stHhTest, StoredReflectorsReproduceSimilarity) {
                         << "e[" << i << "] n=" << n << " kd=" << kd;
                 }
             }
+        }
+    }
+}
+
+// The chase's reflector norm when the squares of the band leave the float range: one band at 2^0
+// (control) and at 2^-64 and 2^-70; the tridiagonal's spectrum against the band's, from the host
+// references in double, relative to the band's own largest eigenvalue (no floor at 1, which
+// hides a tiny matrix). BREAK (2026-11-21, apple_m5_max): the unscaled ||x|| flushed to zero at
+// 2^-64, every tau was 0 and the band came back unreduced; the power-of-two scaled norm passes.
+TYPED_TEST(Sb2stHhTest, ReflectorNormSurvivesSquaresBelowTheNormalRange) {
+    using T = typename TestFixture::ScalarType;
+    using Real = typename base_type<T>::type;
+    using P = std::conditional_t<std::is_same_v<T, Real>, double, std::complex<double>>;
+    constexpr Backend B = TestFixture::BackendType;
+    auto& ctx = *this->ctx;
+    const int n = 48, kd = 8, batch = 2;
+    for (int scale_exp : {0, -64, -70}) {
+        SCOPED_TRACE(::testing::Message() << "band scaled by 2^" << scale_exp);
+        std::vector<std::vector<T>> Adense;
+        for (int b = 0; b < batch; ++b) {
+            Adense.push_back(make_banded_hermitian<T>(n, kd, 4242u + 5u * b));
+            for (auto& v : Adense.back()) v = v * T(std::ldexp(Real(1), scale_exp));
+        }
+        Matrix<T, MatrixFormat::Dense> ab(kd + 1, n, batch);
+        for (int b = 0; b < batch; ++b)
+            for (int j = 0; j < n; ++j)
+                for (int r = 0; r <= kd; ++r)
+                    ab(r, j, b) = (j + r < n) ? Adense[b][static_cast<size_t>(j + r) * n + j] : T(0);
+        const auto sched = detail::build_sb2st_hh_schedule(n, kd);
+        const int nrefl = std::max<int>(1, static_cast<int>(sched.size()));
+        Matrix<T, MatrixFormat::Dense> ab_tri(2, n, batch);
+        Matrix<T, MatrixFormat::Dense> vmat(kd, nrefl, batch);
+        Vector<T> tau(nrefl, batch);
+        Vector<Real> d(n, batch);
+        Vector<Real> e(n - 1, batch);
+        UnifiedVector<std::byte> ws(detail::sytrd_sb2st_hh_buffer_size<B, T>(ctx, n, kd, batch));
+        (void)detail::sytrd_sb2st_hh<B, T>(ctx, ab, ab_tri, d, e, vmat, tau, Uplo::Lower, kd, ws.to_span());
+        ctx.wait();
+        for (int b = 0; b < batch; ++b) {
+            std::vector<P> a(Adense[b].begin(), Adense[b].end());
+            const auto want = test_utils::host_hermitian_eigenvalues<P>(n, a);
+            std::vector<double> dd(n), ee(n - 1);
+            for (int i = 0; i < n; ++i) dd[i] = d(i, b);
+            for (int i = 0; i + 1 < n; ++i) ee[i] = std::abs(double(e(i, b)));
+            const auto got = test_utils::host_tridiagonal_eigenvalues(dd, ee);
+            double err = 0, norm2 = 0;
+            for (int i = 0; i < n; ++i) {
+                err = std::max(err, std::abs(got[i] - want[i]));
+                norm2 = std::max(norm2, std::abs(want[i]));
+            }
+            EXPECT_LT(err / norm2, 1e-4) << "item " << b;
         }
     }
 }

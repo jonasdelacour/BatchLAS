@@ -406,9 +406,23 @@ BATCHLAS_DEVICE_INLINE void sb2st_hh_chase(const Ex& ex, const Rows& rows, const
         const int32_t m = r1 - r0 + 1;
         const auto y = A.col(col, r0, m);  // (alpha; x)
         const auto v = vec(vloc, m);
-        // xLARFG scalars from alpha and an unscaled ||x|| (abs2 per element, one reduction).
-        const auto x = fn_vec(m - 1, [A, col, r0](int k) BATCHLAS_DEVICE_BODY { return A.get(r0 + 1 + k, col); });
-        const Real xnorm = sycl::sqrt(sumsq<alg::Unfused>(ex, x));
+        // xLARFG scalars from alpha and ||x||: abs2 per element of x scaled by 2^-e, e the exponent of
+        // max |x| (larfg_lanes' scaling; a max reduction, then the sum). Unscaled, the squares of a
+        // 2^-64 band flushed to zero on Metal and every reflector was the identity. A power of two
+        // scales exactly: without under- or overflow the bits are the unscaled sum's.
+        Real mag = Real(0);
+        for_each_owned(ex, m - 1, [&](int k) BATCHLAS_DEVICE_BODY {
+            const Scalar xk = A.get(r0 + 1 + k, col);
+            mag = sycl::fmax(mag, sycl::fmax(sycl::fabs(Arith<Scalar>::re(xk)), sycl::fabs(Arith<Scalar>::im(xk))));
+        });
+        const Real xmax = detail::scope_reduce<Scope::Own>(ex, mag, sycl::maximum<Real>());
+        const int xexp = (xmax > Real(0) && sycl::isfinite(xmax)) ? sycl::clamp(static_cast<int>(sycl::ilogb(xmax)), -120, 120) : 0;
+        const Real sc = sycl::ldexp(Real(1), -xexp);
+        const auto x = fn_vec(m - 1, [A, col, r0, sc](int k) BATCHLAS_DEVICE_BODY {
+            const Scalar xk = A.get(r0 + 1 + k, col);
+            return Arith<Scalar>::make(Arith<Scalar>::re(xk) * sc, Arith<Scalar>::im(xk) * sc);
+        });
+        const Real xnorm = sycl::sqrt(sumsq<alg::Unfused>(ex, x)) * sycl::ldexp(Real(1), xexp);
         const Scalar alpha = y(0);
         const auto h = larfg_scalars<alg::Phase>(alpha, xnorm, m);
 
