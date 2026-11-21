@@ -153,7 +153,7 @@ Event btrd_lower_inplace(Queue& q,
         const int batch = ab.batch_size();
         const size_t groups = static_cast<size_t>(batch);
         const size_t global = groups * static_cast<size_t>(kWorkGroupSize);
-        sycl::local_accessor<int, 1> shared_ints(4, h); // {nr, j1, j2, k}
+        sycl::local_accessor<int, 1> shared_ints(8, h); // two slots of {nr, j1, j2, k}
 
         batchlas::impl::parallel_for<BtrdLowerKernel<Scalar>>(h, sycl::nd_range<1>(sycl::range<1>(global),
                                                             sycl::range<1>(static_cast<size_t>(kWorkGroupSize))),
@@ -218,6 +218,12 @@ Event btrd_lower_inplace(Queue& q,
                 return [&idx, AB, r, dc](int j) BATCHLAS_DEVICE_BODY -> Scalar& { return AB[idx(r, j + dc)]; };
             };
 
+            // The leader publishes {nr, j1, j2} and every item reads them after a barrier. An nr == 0
+            // step has no barrier between that read and the leader's next publish, so publishes
+            // alternate slots: a slot is rewritten only past the barrier that follows its readers.
+            // On the OpenCL CPU, which runs a work-group's sub-groups one after another between
+            // barriers, a single slot fed later sub-groups the next nr (WideBand*, 2026-11-21).
+            int slot = 0;
             if (ex.leader()) {
                 shared_ints[0] = nr;
                 shared_ints[1] = j1;
@@ -235,19 +241,20 @@ Event btrd_lower_inplace(Queue& q,
 
             for (int i = 0; i < n - 2; ++i) {
                 for (int k = kdn; k >= 1; --k) {
+                    slot ^= 4;
                     if (ex.leader()) {
                         j1 += kdn;
                         j2 += kdn;
-                        shared_ints[0] = nr;
-                        shared_ints[1] = j1;
-                        shared_ints[2] = j2;
-                        shared_ints[3] = k;
+                        shared_ints[slot + 0] = nr;
+                        shared_ints[slot + 1] = j1;
+                        shared_ints[slot + 2] = j2;
+                        shared_ints[slot + 3] = k;
                     }
                     device::sync(ex, device::Mem::Global);
 
-                    nr = shared_ints[0];
-                    j1 = shared_ints[1];
-                    j2 = shared_ints[2];
+                    nr = shared_ints[slot + 0];
+                    j1 = shared_ints[slot + 1];
+                    j2 = shared_ints[slot + 2];
                     // k is only used for scalar work (leader) below.
 
                     if (nr > 0) {
@@ -304,15 +311,16 @@ Event btrd_lower_inplace(Queue& q,
                             nr += 1;
                             j1 = j1 - kdn - 1;
                         }
-                        shared_ints[0] = nr;
-                        shared_ints[1] = j1;
-                        shared_ints[2] = j2;
+                        shared_ints[(slot ^ 4) + 0] = nr;
+                        shared_ints[(slot ^ 4) + 1] = j1;
+                        shared_ints[(slot ^ 4) + 2] = j2;
                     }
+                    slot ^= 4;
                     device::sync(ex, device::Mem::Global);
 
-                    nr = shared_ints[0];
-                    j1 = shared_ints[1];
-                    j2 = shared_ints[2];
+                    nr = shared_ints[slot + 0];
+                    j1 = shared_ints[slot + 1];
+                    j2 = shared_ints[slot + 2];
 
                     if (nr > 0) {
                         // xLAR2V: the two-sided rotation of each 2x2 diagonal block.
@@ -368,15 +376,16 @@ Event btrd_lower_inplace(Queue& q,
                             nr -= 1;
                             j2 = j2 - kdn - 1;
                         }
-                        shared_ints[0] = nr;
-                        shared_ints[1] = j1;
-                        shared_ints[2] = j2;
+                        shared_ints[(slot ^ 4) + 0] = nr;
+                        shared_ints[(slot ^ 4) + 1] = j1;
+                        shared_ints[(slot ^ 4) + 2] = j2;
                     }
+                    slot ^= 4;
                     device::sync(ex, device::Mem::Global);
 
-                    nr = shared_ints[0];
-                    j1 = shared_ints[1];
-                    j2 = shared_ints[2];
+                    nr = shared_ints[slot + 0];
+                    j1 = shared_ints[slot + 1];
+                    j2 = shared_ints[slot + 2];
 
                     if (nr > 0) {
                         // The next fill: WORK(j + kd) = WORK(j) AB(kd, j), then AB(kd, j) *= C(j).
