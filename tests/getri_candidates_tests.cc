@@ -620,11 +620,14 @@ TYPED_TEST(GetriCandidates, AutoReadsTheShippedTable) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     const ScopedEnvVar clear("BATCHLAS_GETRI_ROUTE", nullptr);
+    // A device with no table at all (the vendor-free host) takes the last resort, blocked (§5.5).
+    const bool untabled =
+        select::tables_in_borrow_order("getri", select::dtype_name<T>(), select::device_of<B>(*this->ctx)).empty();
     for (const auto& [n, batch] : {std::pair{40, 2}, std::pair{127, 3}, std::pair{128, 3}, std::pair{129, 300},
                                    std::pair{200, 2}, std::pair{255, 2}, std::pair{256, 2}, std::pair{512, 2}}) {
         const Spec s{n, batch, 0, 23u + unsigned(n)};
         auto p = this->make(s);
-        const std::string want = test_utils::shipped_table_pick<C>(
+        const std::string want = untabled ? std::string("blocked") : test_utils::shipped_table_pick<C>(
             "getri", select::dtype_name<T>(), select::device_of<B>(*this->ctx), select::Key{{"n", n}, {"batch", batch}},
             [&] {
                 auto q = this->make(s);
@@ -748,6 +751,7 @@ TYPED_TEST(GetriCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     const std::string backend = B == Backend::CUDA   ? "CUDA"
                                 : B == Backend::ROCM ? "ROCM"
                                 : B == Backend::SYCL ? "SYCL"
+                                : B == Backend::NETLIB ? "NETLIB"  // a vendor-free host
                                                      : "?";
     std::vector<std::pair<std::string, std::string>> want{{"16 16 16", "blocked"}};
     if (TestFixture::kVendor) want.emplace_back("48 48 48", "vendor");

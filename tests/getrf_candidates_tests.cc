@@ -903,6 +903,7 @@ TYPED_TEST(GetrfCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     const std::string backend = B == Backend::CUDA   ? "CUDA"
                                 : B == Backend::ROCM ? "ROCM"
                                 : B == Backend::SYCL ? "SYCL"
+                                : B == Backend::NETLIB ? "NETLIB"  // a vendor-free host
                                                      : "?";
     for (const auto& [key, algo] : {std::pair{std::string("16 16 16"), "cta"}, std::pair{std::string("48 48 48"), "blocked"}}) {
         ASSERT_TRUE(rows.count(key)) << "no row " << key;

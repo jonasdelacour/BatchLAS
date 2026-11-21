@@ -73,7 +73,7 @@ struct Problem {
           Bm(test_support::padded<Scalar>(s.n, s.nrhs, s.batch)), C(test_support::padded<Scalar>(s.n, s.n, s.batch)),
           piv(std::size_t(s.n) * s.batch), info(std::size_t(s.batch)) {}
 
-    static constexpr bool kInt64Pivots = B == Backend::NETLIB;
+    static constexpr bool kInt64Pivots = B == Backend::NETLIB && !select::kHostNative;  // vendor-free: natives
 
     void fill(Matrix<Scalar>& M, int cols, int salt, bool singular) {
         Scalar* p = M.data_ptr();

@@ -772,6 +772,7 @@ TYPED_TEST(GetrsCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     const std::string backend = B == Backend::CUDA   ? "CUDA"
                                 : B == Backend::ROCM ? "ROCM"
                                 : B == Backend::SYCL ? "SYCL"
+                                : B == Backend::NETLIB ? "NETLIB"  // a vendor-free host
                                                      : "?";
     auto as_int = [](auto e) { return std::to_string(static_cast<int>(e)); };
     for (const auto& [key, s, algo] : {std::tuple{std::string("16 4 16"), lo, "cta"},
