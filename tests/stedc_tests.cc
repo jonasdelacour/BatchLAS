@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
+#include <batchlas/backend_config.h>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <tests/test_utils.hh>
@@ -244,7 +245,8 @@ TYPED_TEST(StedcTest, DeviceWorkspaceAtTheDeflationScanOrder) {
 TYPED_TEST(StedcTest, LevelsMatchesRecursive) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
-    if constexpr (B == Backend::NETLIB) { GTEST_SKIP() << "level driver is GPU-only"; }
+    // Vendor-free, NETLIB stedc is the divide and conquer too (BATCHLAS_HAS_HOST_NATIVE).
+    if constexpr (B == Backend::NETLIB && !BATCHLAS_HAS_HOST_NATIVE) { GTEST_SKIP() << "level driver is GPU-only"; }
     using float_type = typename base_type<T>::type;
     const int batch = 8;
 

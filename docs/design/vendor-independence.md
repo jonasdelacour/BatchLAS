@@ -111,13 +111,19 @@ refuses a host mask only where its syrk and herk are the host BLAS. To verify an
 `reached` rows on `NETLIB` in a vendor-free tree.
 
 syev's kernels are templated on the backend and compiled for NETLIB in every build, so syev
-changes only the run-time half (`B != NETLIB || kHostNative`, then `natives_run_on`); `two_stage`
-stays GPU-only, as its `sy2sb` runs the public `geqrf`. The CTA entry points under `src/ops/syev/`
-(sytrd_cta, steqr_cta and steqr's dispatch, stedc_merge_cta, sytrd_sb2st, syev_cta_fused,
-syev_jacobi_cta, sytrd_blocked's \f$n \le 32\f$ arm) accept the CPU under
-`BATCHLAS_HAS_HOST_NATIVE`, where the cta library keeps its CPU image. syevx's DirectSubset
-degrades to Direct on that host (its back-transform is LAPACKE's ormqr), and stedc keeps its
-NETLIB solver, `steqr_legacy`, in every build.
+changes only the run-time half (`B != NETLIB || kHostNative`, then `natives_run_on`): the host
+runs `blocked`, Auto's last resort. `two_stage` stays GPU-only, as its `sy2sb` runs the public
+`geqrf`; so do the sub-group solvers `cta`, `cta_fused` and `jacobi` (`d.is_gpu` in `can_run`):
+on the OpenCL CPU, where the cta library has a CPU image in this build, steqr_cta's body reads out
+of bounds and the 32-wide sytrd_cta and Jacobi return NaN (2026-11-21, not localised; the DPC++
+sub-group collectives themselves are exact there). Their entry points stay GPU-only, and steqr
+runs steqr_wg on the CPU. Only sytrd_sb2st's sub-group chase accepts the CPU under
+`BATCHLAS_HAS_HOST_NATIVE`: it matches the device API there, which its work-group kernel does not
+(device_lapack_sb2st_tests WideBand). syevx's DirectSubset
+degrades to Direct on that host (its back-transform is LAPACKE's ormqr). NETLIB stedc runs the
+divide and conquer there instead of `steqr_legacy`, whose rotation store is
+\f$(n - 1) \cdot \mathit{max\_sweeps} \cdot (n/2 + 1)\f$ per item (37 GB at \f$n = 300\f$, batch
+1024, double); with netlib it stays `steqr_legacy`.
 
 ## Vendor independence: headers keyed on the library axis
 

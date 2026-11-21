@@ -59,7 +59,10 @@ bool can_run(const SyevChoice& c, const select::Device& d, const MV<Scalar>& A) 
     // Auto (supports()) and the GPU backends pass the compile half; NETLIB only vendor-free.
     const bool wired = B != Backend::NETLIB || select::kHostNative;
     const bool native = wired && select::natives_run_on(d) && homogeneous && A.rows() == A.cols() && n >= 1;
-    const bool small = native && n <= kSmallMaxN && d.has_sg32;
+    // The sub-group solvers need a GPU even vendor-free: on the OpenCL CPU steqr_cta's body (Cta,
+    // CtaFused) reads out of bounds, the 32-wide sytrd_cta and Jacobi return NaN, and Cta's
+    // ormqx_cta has no CPU arm. evidence: docs/design/vendor-independence.md#the-host-native-gate
+    const bool small = native && n <= kSmallMaxN && d.has_sg32 && d.is_gpu;
     const bool cta_steqr = small && B != Backend::ROCM;
     const bool large = native && A.batch_size() >= 1;
     return std::visit(overloaded{

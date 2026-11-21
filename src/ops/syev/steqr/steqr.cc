@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #include <algorithm>
-#include <batchlas/backend_config.h>
 #include <batchlas/blas/extensions.hh>
 #include <src/ops/syev/steqr/steqr_internal.hh>
 #include <src/kernels/common/info_span.hh>
@@ -21,10 +20,9 @@ inline bool should_use_cta(const Queue& ctx, int64_t n) {
         (void)ctx; (void)n;
         return false;
     }
-    // A GPU, or the CPU of a vendor-free build: elsewhere the CTA kernels have no CPU image
-    // (steqr_cta falls back alike). evidence: docs/design/vendor-independence.md#the-host-native-gate
-    return n > 0 && n <= 32 && (BATCHLAS_HAS_HOST_NATIVE || ctx.device().type == DeviceType::GPU) &&
-           ctx.device().supports_sub_group_size(32);
+    // GPU only (steqr_cta falls back alike): the CTA kernels have no CPU image outside a vendor-free
+    // build, and in one steqr_cta reads out of bounds on the OpenCL CPU (steqr_cta.cc).
+    return n > 0 && n <= 32 && ctx.device().type == DeviceType::GPU && ctx.device().supports_sub_group_size(32);
 }
 
 }  // namespace

@@ -153,7 +153,8 @@ protected:
     }
 
     // The public syev family both calls share, pinned strictly and required reached.
-    static const char* syev_family() { return kHost && !kHostNative ? "vendor" : "cta_fused"; }
+    // The vendor-free host: blocked (the sub-group solvers stay GPU-only there, syev.cc).
+    static const char* syev_family() { return kHost ? (kHostNative ? "blocked" : "vendor") : "cta_fused"; }
 
     // Bit-identical to the unmasked call where the route allows it: Direct everywhere, and LOBPCG
     // with Householder (complex T). Elsewhere EXPECT_VERIFY mode: m equal, and an item the unmasked
