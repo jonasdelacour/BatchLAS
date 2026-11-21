@@ -148,6 +148,22 @@ protected:
     }
     Queue& q() { return *this->ctx; }
 
+    // Whether a family's staging fits the device's local memory at its launch width, spelled apart
+    // from choice.hh: gram one [32][tile] operand on L(L+1)/2 lanes rounded to 32, L = tile / 4
+    // (tile / 8 at the 128 tile); triangular 8 x 128 tiles, two (herk, syrk) or four (her2k, syr2k),
+    // on 256 lanes; mirror two 16-deep (complex<double>: 8) slabs of 2 x 64 elements plus 16 B, on
+    // 256 lanes. On Metal complex<float>'s 32 KiB stagings do not fit.
+    bool fits(std::int64_t bytes, int wg) { return bytes <= test_utils::slm_budget_for(q().device(), wg); }
+    bool gram_fits(int n) {
+        const int tile = n <= 32 ? 32 : n <= 64 ? 64 : 128, lanes = tile / (tile == 128 ? 8 : 4);
+        return fits(std::int64_t(32) * tile * std::int64_t(sizeof(T)), (lanes * (lanes + 1) / 2 + 31) / 32 * 32);
+    }
+    bool triangular_fits(int tiles) { return fits(std::int64_t(tiles) * 8 * 128 * std::int64_t(sizeof(T)), 256); }
+    bool mirror_fits() {
+        const std::int64_t k = sizeof(T) == 16 ? 8 : 16;
+        return fits(2 * k * (2 * 64 * std::int64_t(sizeof(T)) + 16), 256);
+    }
+
     // herk on fresh operands; returns whether the pin was accepted, and checks the answer if so.
     bool herk_case(const std::string& pin, int n, int k, int batch, Transpose t, Uplo uplo, int period = 0,
                    bool natural = false) {
@@ -264,8 +280,8 @@ TYPED_TEST(HermitianCandidates, HerkPinnedFamiliesStraddleTheirLimits) {
                     const Uplo uplo = batch == 1 ? Uplo::Lower : Uplo::Upper;
                     const std::string f = fam;
                     bool want = true;
-                    if (f == "gram") want = n <= 128;
-                    if (f == "triangular") want = TestFixture::kCfloat;
+                    if (f == "gram") want = n <= 128 && this->gram_fits(n);
+                    if (f == "triangular") want = TestFixture::kCfloat && this->triangular_fits(2);
                     if (f == "vendor" && !TestFixture::kVendor) continue;  // the class word falls back to Auto
                     EXPECT_EQ(this->herk_case(f, n, k, batch, t, uplo), want) << f << " n=" << n << " k=" << k;
                 }
@@ -278,7 +294,7 @@ TYPED_TEST(HermitianCandidates, Her2kPinnedFamiliesStraddleTheirLimits) {
                 for (Transpose t : {Transpose::NoTrans, Transpose::ConjTrans}) {
                     const std::string f = fam;
                     if (f == "vendor" && !TestFixture::kVendor) continue;
-                    const bool want = f != "triangular" || TestFixture::kCfloat;
+                    const bool want = f != "triangular" || (TestFixture::kCfloat && this->triangular_fits(4));
                     const Uplo uplo = (n + k) % 2 ? Uplo::Lower : Uplo::Upper;
                     EXPECT_EQ(this->her2k_case(f, n, k, 2, t, uplo), want) << f << " n=" << n << " k=" << k;
                 }
@@ -291,20 +307,20 @@ TYPED_TEST(HermitianCandidates, HemmPinnedFamiliesOnBothSides) {
                 for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
                     const std::string f = fam;
                     if (f == "vendor" && !TestFixture::kVendor) continue;
-                    EXPECT_TRUE(this->hemm_case(f, m, n, 3, side, uplo)) << f;
+                    EXPECT_EQ(this->hemm_case(f, m, n, 3, side, uplo), f != "mirror" || this->mirror_fits()) << f;
                 }
 }
 
 // The SLM tile kernels at a saturating batch: 1024 items repeating 3 problems, every item
 // bit-identical to its representative (a cross-sub-group race shows only at wg > 32 and a full grid).
 TYPED_TEST(HermitianCandidates, SaturatingBatchIsBitIdentical) {
-    EXPECT_TRUE(this->herk_case("gram", 100, 40, 1024, Transpose::NoTrans, Uplo::Lower, 3));
+    EXPECT_EQ(this->herk_case("gram", 100, 40, 1024, Transpose::NoTrans, Uplo::Lower, 3), this->gram_fits(100));
     EXPECT_TRUE(this->herk_case("fold", 150, 24, 1024, Transpose::ConjTrans, Uplo::Upper, 3));
     EXPECT_TRUE(this->her2k_case("fold", 150, 24, 1024, Transpose::NoTrans, Uplo::Lower, 3));
     if constexpr (TestFixture::kCfloat) {
-        EXPECT_TRUE(this->herk_case("triangular", 256, 64, 1024, Transpose::NoTrans, Uplo::Lower, 3, true));
-        EXPECT_TRUE(this->herk_case("triangular", 200, 53, 1024, Transpose::ConjTrans, Uplo::Upper, 3));
-        EXPECT_TRUE(this->her2k_case("triangular", 200, 53, 1024, Transpose::ConjTrans, Uplo::Upper, 3));
+        EXPECT_EQ(this->herk_case("triangular", 256, 64, 1024, Transpose::NoTrans, Uplo::Lower, 3, true), this->triangular_fits(2));
+        EXPECT_EQ(this->herk_case("triangular", 200, 53, 1024, Transpose::ConjTrans, Uplo::Upper, 3), this->triangular_fits(2));
+        EXPECT_EQ(this->her2k_case("triangular", 200, 53, 1024, Transpose::ConjTrans, Uplo::Upper, 3), this->triangular_fits(4));
     }
 }
 
@@ -327,12 +343,12 @@ TYPED_TEST(HermitianCandidates, ScratchFamiliesChunkToTheBudget) {
 // Grid z holds 65535 items on CUDA: every native family chunks a batch one past it.
 TYPED_TEST(HermitianCandidates, NativesChunkABatchPastTheGrid) {
     const int batch = 65536;
-    EXPECT_TRUE(this->herk_case("gram", 8, 5, batch, Transpose::NoTrans, Uplo::Lower, 7));
+    EXPECT_EQ(this->herk_case("gram", 8, 5, batch, Transpose::NoTrans, Uplo::Lower, 7), this->gram_fits(8));
     EXPECT_TRUE(this->herk_case("fold", 8, 5, batch, Transpose::ConjTrans, Uplo::Upper, 7));
     EXPECT_TRUE(this->her2k_case("fold", 8, 5, batch, Transpose::NoTrans, Uplo::Lower, 7));
     if constexpr (TestFixture::kCfloat) {
-        EXPECT_TRUE(this->herk_case("triangular", 8, 5, batch, Transpose::NoTrans, Uplo::Upper, 7));
-        EXPECT_TRUE(this->her2k_case("triangular", 8, 5, batch, Transpose::ConjTrans, Uplo::Lower, 7));
+        EXPECT_EQ(this->herk_case("triangular", 8, 5, batch, Transpose::NoTrans, Uplo::Upper, 7), this->triangular_fits(2));
+        EXPECT_EQ(this->her2k_case("triangular", 8, 5, batch, Transpose::ConjTrans, Uplo::Lower, 7), this->triangular_fits(4));
     }
 }
 
@@ -440,7 +456,8 @@ TYPED_TEST(HermitianCandidates, ComplexSymmetricSyrkFamilies) {
                     const bool ok = sym_pin("syrk", f, [&] {
                         syrk<B, T>(this->q(), A.view(), C.view(), alpha, beta, uplo, t).wait();
                     }, &ran);
-                    const bool want = (f != "gram" || n <= 128) && (f != "triangular" || TestFixture::kCfloat);
+                    const bool want = (f != "gram" || (n <= 128 && this->gram_fits(n))) &&
+                                      (f != "triangular" || (TestFixture::kCfloat && this->triangular_fits(2)));
                     const std::string what = f + " syrk n=" + std::to_string(n) + (nt ? " N" : " T");
                     ASSERT_EQ(ok, want) << what;
                     if (!ok) continue;
@@ -481,7 +498,7 @@ TYPED_TEST(HermitianCandidates, ComplexSymmetricSyr2kFamilies) {
                     const bool ok = sym_pin("syr2k", f, [&] {
                         syr2k<B, T>(this->q(), A.view(), Bm.view(), C.view(), alpha, beta, uplo, t).wait();
                     }, &ran);
-                    const bool want = f != "triangular" || TestFixture::kCfloat;
+                    const bool want = f != "triangular" || (TestFixture::kCfloat && this->triangular_fits(4));
                     const std::string what = f + " syr2k n=" + std::to_string(n) + (nt ? " N" : " T");
                     ASSERT_EQ(ok, want) << what;
                     if (!ok) continue;
@@ -518,9 +535,11 @@ TYPED_TEST(HermitianCandidates, ComplexSymmetricSymmFamilies) {
                     A.poison_opposite(uplo, false);
                     const T alpha = T(1.25, 0.5), beta = T(-0.5, 0.25);
                     std::string ran;
-                    ASSERT_TRUE(sym_pin("symm", f, [&] {
+                    const bool ok = sym_pin("symm", f, [&] {
                         symm<B, T>(this->q(), A.view(), Bm.view(), C.view(), alpha, beta, side, uplo).wait();
-                    }, &ran)) << f;
+                    }, &ran);
+                    ASSERT_EQ(ok, f != "mirror" || this->mirror_fits()) << f;
+                    if (!ok) continue;
                     EXPECT_EQ(ran, f);
                     const Transpose N = Transpose::NoTrans;
                     std::vector<int> items{0, batch - 1};

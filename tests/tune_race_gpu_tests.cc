@@ -146,6 +146,14 @@ TEST(TuneRaceGpu, TimedRunsStartWithTheirOperandsOutOfL2) {
         scrub.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
     }
     std::printf("scrub of %zu MiB: %.3f ms per run\n", bench::scrub_bytes(q) >> 20, median(scrub));
+    // On host-unified memory (Apple) this call is launch-bound, not memory-bound: the operands' trip
+    // from memory hides in its ~1 ms, so no timing tells a scrubbed run from a warm one and the lease
+    // above is the protocol's check there.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    const bool unified = batchlas::sycl_queue(q).get_device().get_info<sycl::info::device::host_unified_memory>();
+#pragma clang diagnostic pop
+    if (unified) GTEST_SKIP() << "host-unified memory: cold " << cold << " ms, warm " << median(warm) << " ms";
     EXPECT_GT(cold, 1.5 * median(warm)) << "the tuner timed L2-warm operands: is bench::scrub_l2 in reset_and_run?";
 }
 

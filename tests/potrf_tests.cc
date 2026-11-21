@@ -195,6 +195,13 @@ protected:
         }
     }
 
+    // Whether float 1 / sqrt is rsqrt.approx plus a Newton step (device::inv_sqrt: DPC++ on an
+    // NVIDIA device). Elsewhere (AdaptiveCpp, Metal) it is 1 / sqrt(a), two roundings, the path
+    // double takes everywhere, so float is bound like double there.
+    bool rsqrt_newton_path() const {
+        return !BATCHLAS_SYCL_IMPL_ACPP && this->ctx->device().get_vendor() == Vendor::NVIDIA;
+    }
+
     // THE DEVICE'S ceiling, not the reference budget's: can_run() and
     // potrf_cta_dispatch both gate on the RUNTIME budget LOCAL_MEM_SIZE - 4096.
     // evidence: docs/perf/potrf.md#the-slm-budget-and-the-fit-ceilings
@@ -295,12 +302,9 @@ TYPED_TEST(PotrfCtaTest, ResidualBothTriangles) {
 TYPED_TEST(PotrfCtaTest, FirstColumnReciprocalIsAccurate) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
-    // Measured worst (eps): float/cfloat 0.96 (origin/main: 1.19-1.29), double/cdouble 1.15. The
-    // rsqrt.approx fold this guards is NVPTX-only; a CPU device (the vendor-free host) computes
-    // 1 / sqrt(a00) with OpenCL's default float sqrt and divide, not correctly rounded: measured
-    // 1.07 on opencl:cpu, so its float bound is 1.25.
-    const bool cpu = this->ctx->device().type == DeviceType::CPU;
-    const double kMaxEps = std::is_same_v<R, float> ? (cpu ? 1.25 : 1.0) : 1.2;
+    // Measured worst (eps): float/cfloat 0.96 (origin/main: 1.19-1.29), double/cdouble 1.15;
+    // float on the 1 / sqrt path (rsqrt_newton_path() false: Metal M5 Max 1.10, opencl:cpu 1.07).
+    const double kMaxEps = std::is_same_v<R, float> && this->rsqrt_newton_path() ? 1.0 : 1.2;
 
     // Relative error in units of eps(R): unlike ulp-of-result it does not double across a binade.
     const auto rel_err = [](R got, long double want) {

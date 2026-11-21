@@ -25,6 +25,7 @@
 #include <cmath>
 #include <complex>
 #include <limits>
+#include <optional>
 #include <random>
 #include <vector>
 
@@ -48,7 +49,18 @@ using Spectra = std::vector<std::vector<double>>;  // one spectrum per item
 // A vendor-free build's NETLIB items run syev, syrk/herk and gemm natively on the host
 // (BATCHLAS_HAS_HOST_NATIVE), so every backend runs every case.
 template <typename Config>
-class SyfnTest : public test_utils::BatchLASTest<Config> {};
+class SyfnTest : public test_utils::BatchLASTest<Config> {
+protected:
+    void SetUp() override {
+        test_utils::BatchLASTest<Config>::SetUp();
+        if (this->IsSkipped()) return;
+        if (!this->ctx->device().supports_fp64()) ref_.emplace(Device::default_device_for<double>());
+    }
+    // The queue of the double references (make_problem, qdq, rel_diff, MV<P<T>>): the test's, or
+    // on a device without fp64 (Metal) one on Device::default_device_for<double>(), the host.
+    Queue& rq() { return ref_ ? *ref_ : *this->ctx; }
+    std::optional<Queue> ref_;
+};
 
 using SyfnTestTypes = typename test_utils::backend_types<ts::Config>::type;
 TYPED_TEST_SUITE(SyfnTest, SyfnTestTypes);
@@ -187,7 +199,7 @@ TYPED_TEST(SyfnTest, ExpMatchesClosedFormInPlace) {
     constexpr Backend B = TestFixture::BackendType;
     Queue& q = *this->ctx;
     constexpr int n = 24, batch = 4;
-    Problem<T> p = make_problem<T>(q, n, batch, 5, [&](int b) {
+    Problem<T> p = make_problem<T>(this->rq(), n, batch, 5, [&](int b) {
         std::vector<double> d(n);
         for (int k = 0; k < n; ++k) d[k] = -2.0 + 4.0 * double((k * 7 + b) % n) / double(n - 1);
         return d;
@@ -195,8 +207,8 @@ TYPED_TEST(SyfnTest, ExpMatchesClosedFormInPlace) {
     Matrix<T> a = stored<T>(p.At, Uplo::Upper, 2, batch);
     EXPECT_EQ((run_syfn<T, B>(q, a, a, Fn<T>::exp(), Uplo::Upper)), std::vector<int32_t>(batch, 0));
     EXPECT_TRUE(exactly_hermitian<T>(a));
-    const Matrix<P<T>> ref = qdq(q, p.Q, map(p.d, [](double x) { return std::exp(x); }));
-    EXPECT_VERIFY(T, Check::factorization, n, rel_diff(q, up<T>(a), ref));
+    const Matrix<P<T>> ref = qdq(this->rq(), p.Q, map(p.d, [](double x) { return std::exp(x); }));
+    EXPECT_VERIFY(T, Check::factorization, n, rel_diff(this->rq(), up<T>(a), ref));
     EXPECT_TRUE(ts::unwritten_outside<T>(a, Live::block()));
 }
 
@@ -209,7 +221,7 @@ TYPED_TEST(SyfnTest, SqrtAndInverseOfIndefinite) {
     constexpr int n = 20, batch = 3;
     for (SyfnKind kind : {SyfnKind::Sqrt, SyfnKind::Inverse}) {
         SCOPED_TRACE(int(kind));
-        Problem<T> p = make_problem<T>(q, n, batch, 9, [&](int b) {
+        Problem<T> p = make_problem<T>(this->rq(), n, batch, 9, [&](int b) {
             std::vector<double> d(n);
             for (int k = 0; k < n; ++k) {
                 d[k] = 1.0 + 3.0 * double((k * 3 + b) % n) / double(n - 1);
@@ -222,11 +234,11 @@ TYPED_TEST(SyfnTest, SqrtAndInverseOfIndefinite) {
         EXPECT_TRUE(exactly_hermitian<T>(F));
         const Matrix<U> f = up<T>(F), I = Matrix<U>::Identity(n, batch);
         if (kind == SyfnKind::Sqrt) {  // ||A - F F^H|| / ||A||, F exactly Hermitian
-            EXPECT_VERIFY(T, Check::factorization, n, MV<U>::similarity_residual(q, p.A, f, I, p.A.all_items()));
+            EXPECT_VERIFY(T, Check::factorization, n, MV<U>::similarity_residual(this->rq(), p.A, f, I, p.A.all_items()));
         } else {
             Matrix<U> FA(n, n, batch);
-            MV<U>::product(q, f, Transpose::NoTrans, p.A, Transpose::NoTrans, FA).wait();
-            EXPECT_VERIFY(T, Check::solve, n, rel_diff(q, FA, I));
+            MV<U>::product(this->rq(), f, Transpose::NoTrans, p.A, Transpose::NoTrans, FA).wait();
+            EXPECT_VERIFY(T, Check::solve, n, rel_diff(this->rq(), FA, I));
         }
         EXPECT_TRUE(ts::unwritten_outside<T>(F, Live::block()));
     }
@@ -259,8 +271,8 @@ TYPED_TEST(SyfnTest, FromEigenMatchesHostReference) {
                 const double f = weights ? double(wts[b * m + j]) : 1.0 / std::sqrt(double(W[b * m + j]));
                 for (int i = 0; i < n; ++i) vf(i, j, b) *= f;
             }
-        MV<U>::product(q, vf, Transpose::NoTrans, v, Transpose::ConjTrans, R).wait();
-        EXPECT_VERIFY(T, Check::blas, m, rel_diff(q, up<T>(F), R));
+        MV<U>::product(this->rq(), vf, Transpose::NoTrans, v, Transpose::ConjTrans, R).wait();
+        EXPECT_VERIFY(T, Check::blas, m, rel_diff(this->rq(), up<T>(F), R));
         EXPECT_TRUE(ts::unwritten_outside<T>(F, Live::block()));
         EXPECT_TRUE(ts::unwritten_outside<T>(V, Live::block()));
     }
@@ -274,7 +286,7 @@ TYPED_TEST(SyfnTest, WeightsPairWithAscendingEigenvalues) {
     constexpr Backend B = TestFixture::BackendType;
     Queue& q = *this->ctx;
     constexpr int n = 14, batch = 2;
-    Problem<T> p = make_problem<T>(q, n, batch, 17, [&](int b) {
+    Problem<T> p = make_problem<T>(this->rq(), n, batch, 17, [&](int b) {
         std::vector<double> d(n);
         for (int k = 0; k < n; ++k) d[k] = -3.0 + 0.5 * double((k * 5 + b) % n);
         return d;
@@ -294,7 +306,7 @@ TYPED_TEST(SyfnTest, WeightsPairWithAscendingEigenvalues) {
         for (int j = 0; j < n; ++j) g[b][order[j]] = double(wts[b * n + j]);
     }
     EXPECT_TRUE(exactly_hermitian<T>(F));
-    EXPECT_VERIFY(T, Check::factorization, n, rel_diff(q, up<T>(F), qdq(q, p.Q, g)));
+    EXPECT_VERIFY(T, Check::factorization, n, rel_diff(this->rq(), up<T>(F), qdq(this->rq(), p.Q, g)));
     EXPECT_TRUE(ts::unwritten_outside<T>(F, Live::block()));
     UnifiedVector<std::byte> ws(syfn_buffer_size(q, a.view(), F2.view(), fn, Uplo::Upper));
     syfn(q, a.view(), F2.view(), fn, Uplo::Upper, ws.to_span(), Span<int32_t>{}).wait();
@@ -310,15 +322,15 @@ TYPED_TEST(SyfnTest, OutOfDomainEigenvaluesSetInfo) {
     constexpr Backend B = TestFixture::BackendType;
     Queue& q = *this->ctx;
     constexpr int n = 16, batch = 3;
-    Problem<T> p = make_problem<T>(q, n, batch, 21, [&](int b) {
+    Problem<T> p = make_problem<T>(this->rq(), n, batch, 21, [&](int b) {
         std::vector<double> d = graded(n, 100.0);
         if (b == 1) d[3] = -0.5, d[9] = -2.0;
         return d;
     });
     Matrix<T> a = stored<T>(p.At, Uplo::Lower, 2, batch), F = ts::padded<T>(n, n, batch, 1);
     EXPECT_EQ((run_syfn<T, B>(q, a, F, Fn<T>::inv_sqrt(), Uplo::Lower)), (std::vector<int32_t>{0, 2, 0}));
-    const Matrix<P<T>> ref = qdq(q, p.Q, map(p.d, [](double x) { return x > 0 ? 1.0 / std::sqrt(x) : 0.0; }));
-    EXPECT_VERIFY_SLACK(T, Check::factorization, n, rel_diff(q, up<T>(F), ref),
+    const Matrix<P<T>> ref = qdq(this->rq(), p.Q, map(p.d, [](double x) { return x > 0 ? 1.0 / std::sqrt(x) : 0.0; }));
+    EXPECT_VERIFY_SLACK(T, Check::factorization, n, rel_diff(this->rq(), up<T>(F), ref),
                         verify::Slack{100.0, "forward error of A^{-1/2} scales with cond(A) = 100"});
     constexpr int m = 4;
     Matrix<T> V = ts::padded<T>(n, m, 1, 0), G = ts::padded<T>(n, n, 1, 0);
@@ -345,12 +357,12 @@ TYPED_TEST(SyfnTest, SaturatingBatchIsBitIdentical) {
     constexpr Backend B = TestFixture::BackendType;
     Queue& q = *this->ctx;
     constexpr int n = 16, batch = 1024;
-    Problem<T> p = make_problem<T>(q, n, 1, 8, [&](int) { return graded(n, 1.0e2); });
+    Problem<T> p = make_problem<T>(this->rq(), n, 1, 8, [&](int) { return graded(n, 1.0e2); });
     Matrix<T> a = stored<T>(p.At, Uplo::Lower, 1, batch), F = ts::padded<T>(n, n, batch, 3);
     run_syfn<T, B>(q, a, F, Fn<T>::inv_sqrt(), Uplo::Lower);
     EXPECT_TRUE(ts::items_bit_identical<T>(F));
-    const Matrix<P<T>> ref = qdq(q, p.Q, map(p.d, [](double x) { return 1.0 / std::sqrt(x); }));
-    EXPECT_VERIFY_SLACK(T, Check::factorization, n, rel_diff(q, up<T>(F.batch_item(0)), ref),
+    const Matrix<P<T>> ref = qdq(this->rq(), p.Q, map(p.d, [](double x) { return 1.0 / std::sqrt(x); }));
+    EXPECT_VERIFY_SLACK(T, Check::factorization, n, rel_diff(this->rq(), up<T>(F.batch_item(0)), ref),
                         verify::Slack{100.0, "forward error of A^{-1/2} scales with cond(A) = 100"});
 }
 

@@ -693,6 +693,12 @@ TYPED_TEST(SyrkCandidates, ClassWordsAndSpellings) {
               }),
               "gram");
     EXPECT_TRUE(correct(*this->ctx, p));
+    // The row is this test's own: a shipped table may rank another family first (apple_m5_max).
+    const std::string dtype(select::dtype_name<T>()), dev = select::device_of<TestFixture::B>(*this->ctx).key;
+    const std::string row = " trans=N n=96 k=20 batch=3 | gram 1 | " +
+                            std::string(TestFixture::kNative ? "triangular" : "vendor") + " 2\n";
+    const TableGuard restore;
+    use_syrk_table(dtype, dev, "form=sq" + row + "form=tall" + row + "form=wide" + row);
     auto q = make_prob<T>(Spec{96, 20, 3});
     EXPECT_EQ(traced_choice([&] {
                   const Pin pin("syrk", std::string_view("native"));

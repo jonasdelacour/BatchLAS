@@ -117,7 +117,8 @@ void check_utility(Queue& ctx, const MatOp<Scalar>& op, const char* what, int ro
 template <typename Scalar>
 class BatchMaskUtilities : public ::testing::Test {
 protected:
-    Queue ctx{Device::default_device()};
+    // double on a GPU without fp64 (Metal) runs on the CPU device, which has a SYCL image.
+    Queue ctx{Device::default_device_for<Scalar>()};
 };
 
 using MaskTypes = ::testing::Types<float, double, std::complex<float>>;
