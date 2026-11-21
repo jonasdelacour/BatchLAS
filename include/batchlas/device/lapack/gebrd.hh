@@ -27,11 +27,33 @@
 
 namespace batchlas::device {
 
+namespace detail {
+// ||x|| as sqrt(sumsq<Alg>) of x with each part scaled by 2^-e, e the exponent of max |x|
+// (larfg_lanes' scaling), so no square under- or overflows: Metal flushes squares below 2^-126,
+// and below 2^-149 every device loses them, so an x near 2^-76 formed no reflector. A power of two
+// scales exactly: without under- or overflow the bits are the unscaled sum's. Collective over ex.
+template <class Alg, class Ex, class X> BATCHLAS_DEVICE_INLINE auto pow2_scaled_norm(const Ex& ex, const X& x) {
+    using T = elem_t<X>;
+    using A = Arith<T>;
+    using R = real_t<T>;
+    R mag = R(0);
+    for_each_owned(ex, x.size(), [&](int i) {
+        const T v = x(i);
+        mag = sycl::fmax(mag, sycl::fmax(sycl::fabs(A::re(v)), sycl::fabs(A::im(v))));
+    });
+    const R m = scope_reduce<Scope::Own>(ex, mag, sycl::maximum<R>());
+    const int e = (m > R(0) && sycl::isfinite(m)) ? sycl::clamp(static_cast<int>(sycl::ilogb(m)), -120, 120) : 0;
+    const R sc = sycl::ldexp(R(1), -e);
+    const R ss = sumsq<Alg>(ex, mapped(x, [sc](const T& v) { return A::make(A::re(v) * sc, A::im(v) * sc); }));
+    return sycl::sqrt(ss) * sycl::ldexp(R(1), e);
+}
+}  // namespace detail
+
 // xGEBD2 of the m x n matrix A (m >= n) on one work-item (ex a Thread), every T: H(i) from the
 // left, then G(i) from the right. d, e are real (ZLARFG's real beta); row i holds conj(u_i) on
 // exit (unmbr 'P' order) and H(i) is applied as H^H = I - conj(tau) v v^H (real T: every conj and
-// lacgv is the identity). The norm is sumsq's policy, chosen by T: Fused for real (dot(x, x)'s
-// FFMA chain), Unfused for complex. tauq / taup past the reflectors are zeroed. Returns 0. A
+// lacgv is the identity). The norm is pow2_scaled_norm over sumsq's policy, chosen by T: Fused
+// for real (dot(x, x)'s FFMA chain), Unfused for complex. tauq / taup past the reflectors are zeroed. Returns 0. A
 // function, not the kernel lambda's body, so the lambda calls no view operator() (SemaSYCL quirk).
 template <class Ex, class MA, class RV, class TV>
 BATCHLAS_DEVICE_INLINE int gebd2(const Ex& ex, const MA& A, const RV& d, const RV& e, const TV& tauq, const TV& taup) {
@@ -43,7 +65,7 @@ BATCHLAS_DEVICE_INLINE int gebd2(const Ex& ex, const MA& A, const RV& d, const R
     for (int i = 0; i < k; ++i) {
         // H(i) annihilates A(i+1:m, i), then A(i:m, i+1:n) := H(i)^H A(i:m, i+1:n).
         const auto xq = A.col(i).tail(i + 1);
-        const auto hl = device::larfg_scalars<device::alg::RealBeta>(static_cast<T>(A(i, i)), sycl::sqrt(device::sumsq<Norm>(ex, xq)), m - i);
+        const auto hl = device::larfg_scalars<device::alg::RealBeta>(static_cast<T>(A(i, i)), detail::pow2_scaled_norm<Norm>(ex, xq), m - i);
         if (hl.tau != T(0)) {
             A(i, i) = T(1);
             device::scal(ex, hl.scale, xq);
@@ -62,7 +84,7 @@ BATCHLAS_DEVICE_INLINE int gebd2(const Ex& ex, const MA& A, const RV& d, const R
         const auto row = A.row(i).tail(i + 1);
         const auto xp = A.row(i).tail(i + 2);
         device::lacgv(ex, row);
-        const auto hr = device::larfg_scalars<device::alg::RealBeta>(static_cast<T>(A(i, i + 1)), sycl::sqrt(device::sumsq<Norm>(ex, xp)), n - (i + 1));
+        const auto hr = device::larfg_scalars<device::alg::RealBeta>(static_cast<T>(A(i, i + 1)), detail::pow2_scaled_norm<Norm>(ex, xp), n - (i + 1));
         if (hr.tau != T(0)) {
             A(i, i + 1) = T(1);
             device::scal(ex, hr.scale, xp);
@@ -294,8 +316,8 @@ BATCHLAS_DEVICE_INLINE void labrd(const Ex& ex, const MA& Ab, const MX& Xb, cons
         // before the reduction and forms the same scalars; the leader overwrites it after.
         const auto xq = Ab.col(gi).tail(gi + 1);
         const T alpha_q = Ab(gi, gi);
-        const Real sigma = device::sumsq<device::alg::Unfused>(ex, xq);
-        const auto hq = device::larfg_scalars<device::alg::RealBeta>(alpha_q, sycl::sqrt(sigma), mt);
+        const Real xnorm_q = detail::pow2_scaled_norm<device::alg::Unfused>(ex, xq);
+        const auto hq = device::larfg_scalars<device::alg::RealBeta>(alpha_q, xnorm_q, mt);
         if (ex.leader()) {
             d(gi) = device::Arith<T>::re(hq.beta);
             tauq(gi) = hq.tau;
@@ -329,8 +351,8 @@ BATCHLAS_DEVICE_INLINE void labrd(const Ex& ex, const MA& Ab, const MX& Xb, cons
         // G(gi) annihilates A(gi, gi+2:n); u overwrites it, A(gi, gi+1) = 1.
         const auto xp = Ab.row(gi).tail(gi + 2);
         const T alpha_p = Ab(gi, gi + 1);
-        const Real sigma_r = device::sumsq<device::alg::Unfused>(ex, xp);
-        const auto hp = device::larfg_scalars<device::alg::RealBeta>(alpha_p, sycl::sqrt(sigma_r), nt);
+        const Real xnorm_p = detail::pow2_scaled_norm<device::alg::Unfused>(ex, xp);
+        const auto hp = device::larfg_scalars<device::alg::RealBeta>(alpha_p, xnorm_p, nt);
         if (ex.leader()) {
             e(gi) = device::Arith<T>::re(hp.beta);
             taup(gi) = hp.tau;

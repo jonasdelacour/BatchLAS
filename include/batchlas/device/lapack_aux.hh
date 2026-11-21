@@ -375,43 +375,34 @@ template <class Scalar> BATCHLAS_DEVICE_INLINE real_t<Scalar> abs2_scaled(Scalar
 }  // namespace detail
 
 // xLARFG on (alpha, x) distributed Cyclic over ex: alpha := beta, x := v(1:), returns the
-// scalars (tau, identity, ...). alpha must be uniform. alg::LarfgLapack: every item seeds its max
-// with alpha, then two reductions (max, scaled sum of squares: geqrf's two-pass norm) and the
-// fma / Smith scaling of arith::Fma; alg::Phase / RealBeta: ||x|| Unscaled (one reduction, the
-// legacy group larfg) and x *= 1 / (alpha - beta). No barrier: the caller owns the one before
-// x is read across owners.
+// scalars (tau, identity, ...). alpha must be uniform. alg::LarfgLapack only: every item seeds its
+// max with alpha, then two reductions (max, scaled sum of squares: geqrf's two-pass norm) and the
+// fma / Smith scaling of arith::Fma. No barrier: the caller owns the one before x is read across
+// owners.
 template <class Conv = alg::LarfgLapack, Scope S = Scope::Own, class Ex, class Scalar, class X>
 BATCHLAS_DEVICE_INLINE LarfgScalars<Scalar> larfg(const Ex& ex, Scalar& alpha, const X& x) {
+    static_assert(std::is_same_v<Conv, alg::LarfgLapack>, "larfg: alg::LarfgLapack (larfg_lanes takes alg::Phase / RealBeta)");
     using A = Arith<Scalar>;
     using R = real_t<Scalar>;
     LarfgScalars<Scalar> h;
-    if constexpr (std::is_same_v<Conv, alg::LarfgLapack>) {
-        auto amax_ri = [](const Scalar& v) {
-            if constexpr (A::is_complex) return sycl::fmax(sycl::fabs(A::re(v)), sycl::fabs(A::im(v)));
-            else return sycl::fabs(v);
-        };
-        R smax = amax_ri(alpha);
-        for_each_owned(ex, x.size(), [&](int i) { smax = sycl::fmax(smax, amax_ri(static_cast<Scalar>(x(i)))); });
-        smax = detail::scope_reduce<S>(ex, smax, sycl::maximum<R>());
-        R ssq = R(0);  // the reduction stays outside the test: every item reaches it
-        if (smax > R(0)) {
-            for_each_owned(ex, x.size(), [&](int i) { ssq += detail::abs2_scaled(static_cast<Scalar>(x(i)), smax); });
-        }
-        ssq = detail::scope_reduce<S>(ex, ssq);
-        h = larfg_scalars<alg::LarfgLapack>(alpha, ScaledSsq<R>{smax, ssq});
-        alpha = h.beta;
-        if (!h.identity) {
-            if (h.use_mul) for_each_owned(ex, x.size(), [&](int i) { x(i) = FmaArith<Scalar>::mul(static_cast<Scalar>(x(i)), h.scale); });
-            else for_each_owned(ex, x.size(),
-                                [&](int i) { x(i) = FmaArith<Scalar>::div(static_cast<Scalar>(x(i)), h.scale); });
-        }
-    } else {
-        const int n = x.size();
-        const R xnorm = n > 0 ? nrm2<alg::Unscaled, S>(ex, x) : R(0);
-        h = larfg_scalars<Conv>(alpha, xnorm, n + 1);
-        alpha = h.beta;
-        if (!h.identity && n > 0) for_each_owned(ex, n,
-                                                 [&](int i) { x(i) = A::mul(h.scale, static_cast<Scalar>(x(i))); });
+    auto amax_ri = [](const Scalar& v) {
+        if constexpr (A::is_complex) return sycl::fmax(sycl::fabs(A::re(v)), sycl::fabs(A::im(v)));
+        else return sycl::fabs(v);
+    };
+    R smax = amax_ri(alpha);
+    for_each_owned(ex, x.size(), [&](int i) { smax = sycl::fmax(smax, amax_ri(static_cast<Scalar>(x(i)))); });
+    smax = detail::scope_reduce<S>(ex, smax, sycl::maximum<R>());
+    R ssq = R(0);  // the reduction stays outside the test: every item reaches it
+    if (smax > R(0)) {
+        for_each_owned(ex, x.size(), [&](int i) { ssq += detail::abs2_scaled(static_cast<Scalar>(x(i)), smax); });
+    }
+    ssq = detail::scope_reduce<S>(ex, ssq);
+    h = larfg_scalars<alg::LarfgLapack>(alpha, ScaledSsq<R>{smax, ssq});
+    alpha = h.beta;
+    if (!h.identity) {
+        if (h.use_mul) for_each_owned(ex, x.size(), [&](int i) { x(i) = FmaArith<Scalar>::mul(static_cast<Scalar>(x(i)), h.scale); });
+        else for_each_owned(ex, x.size(),
+                            [&](int i) { x(i) = FmaArith<Scalar>::div(static_cast<Scalar>(x(i)), h.scale); });
     }
     return h;
 }
