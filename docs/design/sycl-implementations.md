@@ -158,6 +158,10 @@ So a rethrowing handler on acpp turns any unconsumed error into `std::terminate`
 
 `include/batchlas/util/group-collectives.hh` (`batchlas::portable::`): under DPC++ each name is a
 using-declaration of the `sycl::` function (md5-identical objects); under acpp it replaces a broken one.
+One DPC++ exception: `group_broadcast` is a wrapper. On a SPIR work-group it ORs the source's bits
+over the group, because DPC++'s CPU device under `reqd_sub_group_size(32)` reaches only lanes 0..15
+of each sub-group (the Blocked device syev's sytrd went wrong from \f$n = 18\f$). NVPTX and AMDGCN
+forward unchanged. Guard: `GroupCollectivesTest.PortableWorkGroupBroadcastReachesEveryItem`.
 
 | acpp 25.10 defect (SSCP) | Effect | Replacement |
 | --- | --- | --- |

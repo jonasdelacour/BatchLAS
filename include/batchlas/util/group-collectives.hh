@@ -5,7 +5,8 @@
 /// @brief `batchlas::portable::` group broadcast, shuffles and sums for any trivially copyable or complex `T`.
 ///
 /// Under DPC++ these names are the `sycl::` functions themselves (using-declarations),
-/// so a call compiles to exactly the direct `sycl::` call. Under AdaptiveCpp they are
+/// so a call compiles to exactly the direct `sycl::` call; group_broadcast alone is a wrapper,
+/// which forwards except on a SPIR work-group (see its TRAP). Under AdaptiveCpp they are
 /// wrappers: a value not 1, 2, 4 or 8 bytes wide moves word by word and a `std::complex` sum
 /// reduces its real and imaginary parts separately. A separate namespace keeps
 /// unqualified calls on sub-group partitions (sg_partition.hh) resolving as before.
@@ -379,7 +380,61 @@ inline OutPtr joint_exclusive_scan(Group g, InPtr first, InPtr last, OutPtr resu
 
 #else
 
-using sycl::group_broadcast;
+namespace detail {
+template <typename G>
+inline constexpr bool kWorkGroup = false;
+template <int D>
+inline constexpr bool kWorkGroup<sycl::group<D>> = true;
+
+// The source's local linear id: item 0, a linear id, or a sycl::id<D> (row-major, as
+// get_local_linear_id counts).
+template <typename Group>
+inline std::size_t source_linear_id(const Group&) {
+    return 0;
+}
+template <typename Group, typename I>
+    requires std::is_integral_v<I>
+inline std::size_t source_linear_id(const Group&, I id) {
+    return static_cast<std::size_t>(id);
+}
+template <typename Group, int D>
+inline std::size_t source_linear_id(const Group& g, sycl::id<D> id) {
+    const sycl::range<D> r = g.get_local_range();
+    std::size_t l = 0;
+    for (int k = 0; k < D; ++k) l = l * r[k] + id[k];
+    return l;
+}
+}  // namespace detail
+
+// TRAP (DPC++ CPU device, spir64_x86_64): sycl::group_broadcast over a WORK-GROUP launched
+// with reqd_sub_group_size(32) reaches lanes 0..15 of each sub-group only; lanes 16..31 keep
+// their own x (WG 256: 128 of 256 items, every T; the Blocked device syev's sytrd lost its
+// reflector scale there, 2026-11-21). The SPIR device pass ORs the source's bits over the
+// group word by word instead, exact for every value (as device::detail::group_bcast does).
+// NVPTX, AMDGCN, the host pass and sub-groups call sycl::group_broadcast unchanged.
+/// @brief `sycl::group_broadcast`, correct on every item of a SPIR work-group. Collective.
+/// @param[in] g   group or sub-group; every work-item of it must call
+/// @param[in] x   this work-item's value; only the source work-item's is used
+/// @param[in] id  local id of the source work-item (omitted: work-item 0)
+/// @return        the source work-item's `x`, on every work-item
+template <typename Group, typename T, typename... Id>
+    requires sycl::is_group_v<Group>
+inline T group_broadcast(Group g, T x, Id... id) {
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+    if constexpr (detail::kWorkGroup<Group> && std::is_trivially_copyable_v<T> && sizeof(T) % 4 == 0) {
+        using W = std::conditional_t<sizeof(T) % 8 == 0, std::uint64_t, std::uint32_t>;
+        constexpr std::size_t kN = sizeof(T) / sizeof(W);
+        W w[kN] = {};
+        if (g.get_local_linear_id() == detail::source_linear_id(g, id...)) std::memcpy(w, &x, sizeof(T));
+        for (std::size_t i = 0; i < kN; ++i) w[i] = sycl::reduce_over_group(g, w[i], sycl::bit_or<W>());
+        T out;
+        std::memcpy(&out, w, sizeof(T));
+        return out;
+    }
+#endif
+    return sycl::group_broadcast(g, x, id...);
+}
+
 using sycl::joint_exclusive_scan;
 using sycl::joint_reduce;
 using sycl::permute_group_by_xor;
