@@ -110,9 +110,10 @@ syr2k, her2k, symm, hemm, trmm and trsm. To verify an op, read its `BATCHLAS_COV
 syev's kernels are templated on the backend and compiled for NETLIB in every build, so syev
 changes only the run-time half (`B != NETLIB || kHostNative`, then `natives_run_on`); `two_stage`
 stays GPU-only, as its `sy2sb` runs the public `geqrf`. The CTA entry points under `src/ops/syev/`
-(sytrd_cta, steqr_cta and steqr's dispatch, stedc_merge_cta, sytrd_sb2st, syev_cta_fused,
-syev_jacobi_cta, sytrd_blocked's \f$n \le 32\f$ arm) accept the CPU under
-`BATCHLAS_HAS_HOST_NATIVE`, where the cta library keeps its CPU image. syevx's DirectSubset
+(sytrd_cta, stedc_merge_cta, sytrd_sb2st, syev_cta_fused, syev_jacobi_cta, sytrd_blocked's
+\f$n \le 32\f$ arm) accept the CPU under `BATCHLAS_HAS_HOST_NATIVE`, where the cta library keeps
+its CPU image. steqr_cta does not: its kernel reads out of bounds on the OpenCL CPU, so steqr
+(and syev's `cta`, which falls back inside steqr_cta) runs steqr_wg there. syevx's DirectSubset
 degrades to Direct on that host (its back-transform is LAPACKE's ormqr). NETLIB stedc runs the
 divide and conquer there instead of `steqr_legacy`, whose rotation store is
 \f$(n - 1) \cdot \mathit{max\_sweeps} \cdot (n/2 + 1)\f$ per item (37 GB at \f$n = 300\f$, batch
