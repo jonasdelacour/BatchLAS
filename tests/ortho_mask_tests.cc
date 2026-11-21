@@ -178,7 +178,8 @@ protected:
             return ortho_buffer_size<B, T>(q, a, mm, Transpose::NoTrans, Transpose::NoTrans, algo, 2);
         };
         cs.outputs = [&] { return std::vector<mc::Output>{mc::Output::matrix("A", A.view()), mc::Output::matrix("M", M.view())}; };
-        if (B == Backend::NETLIB) return expect_refusal(q, cs);  // the projection's gemm
+        // The projection's gemm is the host BLAS with netlib; a vendor-free host runs the native gemm.
+        if (B == Backend::NETLIB && !select::kHostNative) return expect_refusal(q, cs);
         // AdaptiveCpp JIT-specialises a kernel on its argument values, so the null and the device
         // mask pointer compile apart: CGS2's gemv steps after the projection round differently on
         // Metal complex<float> (~1e-7 relative; the count moves with ACPP_ADAPTIVITY_LEVEL, and level
@@ -258,7 +259,7 @@ TYPED_TEST(OrthoMask, RitzValues) {
             return std::vector<mc::Output>{mc::Output::matrix("A", A.view()), mc::Output::matrix("V", V.view()),
                                            {"ritz", reinterpret_cast<const std::byte*>(rv.data()), s, s}};
         };
-        if (B == Backend::NETLIB) {  // AV through the host BLAS gemm, which refuses
+        if (B == Backend::NETLIB && !select::kHostNative) {  // AV through the host BLAS gemm, which refuses
             if (!identical) expect_refusal(q, cs);
             continue;
         }

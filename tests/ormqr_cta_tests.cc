@@ -54,6 +54,8 @@ TYPED_TEST(OrmqrCtaTest, MatchesNetlibOrmqrLeftRightTrans) {
     const int k = n;
 
     // Build a QR factorization (A_fact, tau) on the CPU queue: the reflector layout the CTA kernel reads.
+    // It is input only (netlib LAPACKE, or the host-native geqrf vendor-free): the oracle is op(Q) formed
+    // by form_q from these reflectors (ormqr_apply_error), independent of ormqx_cta and of any ormqr.
     Queue ctx_cpu("cpu");
     Matrix<T, MatrixFormat::Dense> A0 = Matrix<T, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/false, batch, /*seed=*/2025);
     Matrix<T, MatrixFormat::Dense> A_fact = A0;

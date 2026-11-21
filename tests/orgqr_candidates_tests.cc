@@ -190,7 +190,8 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native driver is a GPU kernel";
+        if (this->ctx->device().type != DeviceType::GPU && !(B == Backend::NETLIB && batchlas::select::kHostNative))
+            GTEST_SKIP() << "the native driver runs on a GPU or a vendor-free host";
     }
 
     Prob<T> prob(int m, int n, int batch, unsigned seed, int period = 0) {
@@ -681,8 +682,8 @@ TYPED_TEST(OrgqrCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     }
 }
 
-// On a CPU queue the native driver cannot run, so a blocked pin
-// throws and Auto is the vendor (or no route without one).
+// On a CPU queue with netlib the native driver cannot run, so a blocked pin
+// throws and Auto is the vendor. A vendor-free host runs blocked.
 template <typename Config>
 class OrgqrCandidatesCpu : public test_utils::BatchLASTest<Config> {};
 TYPED_TEST_SUITE(OrgqrCandidatesCpu, Types);
@@ -692,6 +693,23 @@ TYPED_TEST(OrgqrCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     static constexpr Backend B = TypeParam::BackendVal;
     if (!this->ctx) GTEST_SKIP() << "no queue";
     if (this->ctx->device().type == DeviceType::GPU) GTEST_SKIP() << "a GPU queue";
+    // A vendor-free host (select::kHostNative) runs blocked, pinned and under Auto.
+    // evidence: docs/design/vendor-independence.md#the-host-native-gate
+    if constexpr (B == Backend::NETLIB && batchlas::select::kHostNative) {
+        const ScopedEnvVar clear("BATCHLAS_ORGQR_ROUTE", nullptr);
+        for (const bool pinned : {true, false}) {
+            auto p = make_prob<B, T>(*this->ctx, 16, 9, 3, 41u);
+            std::optional<Pin> pin;
+            if (pinned) pin.emplace("orgqr", C{oq::Blocked{}});
+            EXPECT_EQ(traced_choice([&] {
+                UnifiedVector<std::byte> ws(std::max<std::size_t>(1, orgqr_buffer_size<B, T>(*this->ctx, p.A(), p.tau.to_span())));
+                (void)orgqr<B, T>(*this->ctx, p.A(), p.tau.to_span(), ws.to_span());
+                this->ctx->wait();
+            }), "blocked") << (pinned ? "pinned" : "auto");
+            expect_q(*this->ctx, p, pinned ? "cpu blocked pinned" : "cpu blocked auto");
+        }
+        return;
+    }
     UnifiedVector<T> a(16 * 8 * 2, T(1)), tau(8 * 2, T(0));
     const MVof<T> A(a.data(), 16, 8, 16, 128, 2);
     {

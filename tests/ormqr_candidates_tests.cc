@@ -239,7 +239,8 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native family is GPU-only";
+        if (this->ctx->device().type != DeviceType::GPU && !(B == Backend::NETLIB && batchlas::select::kHostNative))
+            GTEST_SKIP() << "the native family runs on a GPU or a vendor-free host";
     }
 
     // The limit oracle: the drivers' own refusals, not ormqr.cc's can_run. Complex Trans is
@@ -722,8 +723,8 @@ TYPED_TEST(OrmqrCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
         EXPECT_EQ(f[18], as_int(s.trans)) << key;
     }
 }
-
-// On a CPU queue the native family cannot run: a blocked pin throws, Auto is the vendor (or no
+// On a CPU queue with netlib the native family cannot run: a blocked pin throws, Auto is the vendor
+// (the old route table's `!is_gpu` gate). A vendor-free host runs blocked.
 // route without one) -- the old route table's `!is_gpu` gate.
 template <typename Config>
 class OrmqrCandidatesCpu : public test_utils::BatchLASTest<Config> {};
@@ -736,6 +737,22 @@ TYPED_TEST(OrmqrCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     if (this->ctx->device().type == DeviceType::GPU) GTEST_SKIP() << "a GPU queue";
     const ScopedEnvVar clear("BATCHLAS_ORMQR_ROUTE", nullptr);
     const Spec s{Side::Left, Transpose::NoTrans, 8, 5, 3, 2};
+    // A vendor-free host (select::kHostNative) runs blocked, pinned and under Auto.
+    // evidence: docs/design/vendor-independence.md#the-host-native-gate
+    if constexpr (B == Backend::NETLIB && batchlas::select::kHostNative) {
+        for (const bool pinned : {true, false}) {
+            auto q = make_apply<T>(s);
+            std::optional<Pin> pin;
+            if (pinned) pin.emplace("ormqr", C{om::Blocked{}});
+            EXPECT_EQ(traced_choice([&] {
+                UnifiedVector<std::byte> ws(ormqr_buffer_size<B, T>(*this->ctx, q.A(), q.Cm(), s.side, s.trans, q.Tau()));
+                (void)ormqr<B, T>(*this->ctx, q.A(), q.Cm(), s.side, s.trans, q.Tau(), ws.to_span());
+                this->ctx->wait();
+            }), "blocked") << (pinned ? "pinned" : "auto");
+            expect_applied(*this->ctx, q, pinned ? "cpu blocked pinned" : "cpu blocked auto");
+        }
+        return;
+    }
     auto p = make_apply<T>(s);
     {
         const Pin pin("ormqr", C{om::Blocked{}});
