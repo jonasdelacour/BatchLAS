@@ -256,15 +256,15 @@ mode_accepts() {
 }
 mode_accepts SameMajorVersion "${accept_request}" \
     || fail "probe self-check: SameMajorVersion refuses ${accept_request}"
+any_newer_caught=0
 for req in "${refuse_requests[@]}"; do
     ! mode_accepts SameMajorVersion "${req}" || fail "probe self-check: SameMajorVersion accepts ${req}"
+    mode_accepts AnyNewerVersion "${req}" && any_newer_caught=1
 done
 ! mode_accepts ExactVersion "${accept_request}" \
     || fail "probe self-check: ExactVersion accepts ${accept_request}, so that probe cannot tell it apart"
-if [[ ${hdr_major} -gt 0 ]]; then
-    mode_accepts AnyNewerVersion "$((hdr_major - 1)).99" \
-        || fail "probe self-check: AnyNewerVersion refuses $((hdr_major - 1)).99, so that probe cannot tell it apart"
-fi
+[[ ${hdr_major} -eq 0 || ${any_newer_caught} -eq 1 ]] \
+    || fail "probe self-check: AnyNewerVersion refuses all of ${refuse_requests[*]}, so no probe tells it apart"
 
 for req in "${refuse_requests[@]}"; do
     req_log="${log_dir}/configure-request-${req}.log"
