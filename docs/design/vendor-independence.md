@@ -113,8 +113,10 @@ stays GPU-only, as its `sy2sb` runs the public `geqrf`. The CTA entry points und
 (sytrd_cta, steqr_cta and steqr's dispatch, stedc_merge_cta, sytrd_sb2st, syev_cta_fused,
 syev_jacobi_cta, sytrd_blocked's \f$n \le 32\f$ arm) accept the CPU under
 `BATCHLAS_HAS_HOST_NATIVE`, where the cta library keeps its CPU image. syevx's DirectSubset
-degrades to Direct on that host (its back-transform is LAPACKE's ormqr), and stedc keeps its
-NETLIB solver, `steqr_legacy`, in every build.
+degrades to Direct on that host (its back-transform is LAPACKE's ormqr). NETLIB stedc runs the
+divide and conquer there instead of `steqr_legacy`, whose rotation store is
+\f$(n - 1) \cdot \mathit{max\_sweeps} \cdot (n/2 + 1)\f$ per item (37 GB at \f$n = 300\f$, batch
+1024, double); with netlib it stays `steqr_legacy`.
 
 ## Vendor independence: headers keyed on the library axis
 

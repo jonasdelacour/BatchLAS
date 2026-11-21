@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
+#include <batchlas/backend_config.h>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/blas/extensions.hh>
@@ -1054,6 +1055,9 @@ TYPED_TEST(SteqrTest, GradedTridiagonalRelativeAccuracy) {
 // The inverted rule measured 2.6e-12 / 1.9e-11 here, the dsteqr rule 2.4e-15 / 4.4e-15 (bound 1.7e-13).
 #if BATCHLAS_HAS_HOST_BACKEND && BATCHLAS_HAS_CPU_TARGET
 TEST(SteqrLegacy, GradedEndsConvergeInBothOrientations) {
+    // Vendor-free, NETLIB stedc runs the divide and conquer (stedc.cc), so no route reaches
+    // steqr_legacy there; the divide and conquer's host rows are stedc_tests'.
+    if (BATCHLAS_HAS_HOST_NATIVE) GTEST_SKIP() << "vendor-free: NETLIB stedc is the divide and conquer, not steqr_legacy";
     constexpr int n = 48, batch = 2;
     Queue ctx(Device("cpu"), Backend::NETLIB, true);
     Vector<double> diag(n, 0.0, batch);

@@ -46,6 +46,8 @@ inline StedcParams<Real> resolve_stedc_tuning(int64_t n, StedcParams<Real> param
         }
     } else {
         params.merge_variant = StedcMergeVariant::Baseline;
+        // The tuned leaf, not the clamp's 1 below (n - 1 merges of 1 x 1 leaves).
+        if (params.recursion_threshold <= 0) params.recursion_threshold = tuning::stedc_recursion_threshold_for_n(nn);
     }
 
     const int64_t safe_n = std::max<int64_t>(1, n);
@@ -876,7 +878,12 @@ Event stedc_dispatch(Queue& ctx, const VectorView<Real>& d_in, const VectorView<
     const auto e = stedc_masked(e_in, mask);
     const auto eigenvalues = stedc_masked(eigenvalues_in, mask);
     const auto eigvects = stedc_masked(eigvects_in, mask);
-    if constexpr (B == Backend::NETLIB) {
+    // A host with netlib solves by implicit QL (steqr_legacy). A vendor-free host
+    // (BATCHLAS_HAS_HOST_NATIVE) runs the divide and conquer below, its merge gemms native too:
+    // steqr_legacy stores (n - 1) x max_sweeps rotations per possible sub-problem, 37 GB for
+    // n = 300, batch 1024 double, where the merges need O(n^2 batch).
+    // evidence: docs/design/vendor-independence.md#the-host-native-gate
+    if constexpr (B == Backend::NETLIB && !BATCHLAS_HAS_HOST_NATIVE) {
         auto steqr_params = params.leaf_steqr_params;
         steqr_params.sort = true;
         steqr_params.sort_order = SortOrder::Ascending;
@@ -925,7 +932,7 @@ size_t stedc_buffer_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz, 
         return 0;
     }
 
-    if constexpr (B == Backend::NETLIB) {
+    if constexpr (B == Backend::NETLIB && !BATCHLAS_HAS_HOST_NATIVE) {  // as stedc_dispatch
         auto evals = VectorView<Real>(nullptr, n, batch_size, 1, 0);
         auto diag = VectorView<Real>(nullptr, n, batch_size, 1, 0);
         auto offdiag = VectorView<Real>(nullptr, n - 1, batch_size, 1, 0);

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-// stedc honours a batch mask (W3a) on tests/masked_contract.hh: the NETLIB arm (steqr_legacy), the
+// stedc honours a batch mask (W3a) on tests/masked_contract.hh: the NETLIB arm (steqr_legacy, or
+// vendor-free the divide and conquer), the
 // recursive driver and the level driver (its per-level expanded mask, the root solved in the
 // caller's packed matrix, padded trees), jobz V and N, every GPU merge variant on a GPU queue and
 // the CPU merge path on a CPU SYCL queue. d (edited in place), e, w, Z and info are all outputs;

@@ -39,8 +39,7 @@ template <int SG> inline constexpr bool is_group_v<RtGroup<Scope::Group, SG>> = 
 
 // The leader's v in every item (a loop exit on a reduced value, else a partition may diverge and
 // deadlock); work-group: portable::group_broadcast, which moves a bool too (core's group bcast moves
-// 4/8-byte words). On the DPC++ CPU a bare sycl::group_broadcast of that bool diverged the merge's
-// loops there, and the merge read out of bounds (SIGSEGV in device_lapack_stedc_tests, 2026-11-21).
+// 4/8-byte words; DPC++'s own reaches half the items of a CPU work-group at sub-group 32).
 template <class Ex, class T> BATCHLAS_DEVICE_INLINE T uniform(const Ex& ex, T v) {
     if constexpr (is_thread_v<Ex>) return v;
     else if constexpr (is_group_v<Ex>) return batchlas::portable::group_broadcast(ex.it.get_group(), v, 0);
