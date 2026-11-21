@@ -104,7 +104,11 @@ if constexpr (select::native_backend<B>) return <native kernel>; else throw batc
 
 trsm's kernels are not templated on the backend, so trsm changes only the run-time half. That
 covers its `can_run` and the alpha == 0 mask refusal in `trsm.cc`. Adopted so far: syrk, herk,
-syr2k, her2k, symm, hemm, trmm and trsm. To verify an op, read its `BATCHLAS_COVERAGE_OUT`
+syr2k, her2k, symm, hemm, trmm and trsm. gesvd and sygst change only the run-time half for their
+Blocked family (gesvd's Jacobi and Cta stay GPU-only; on NETLIB gesvd Blocked takes the unblocked
+gebrd and refuses a batch mask, since its gebrd and ormbr children cannot skip an item). sygvd's
+Compose accepts a masked batch on a vendor-free host, whose trsm and trmm are natives, and syfn
+refuses a host mask only where its syrk and herk are the host BLAS. To verify an op, read its `BATCHLAS_COVERAGE_OUT`
 `reached` rows on `NETLIB` in a vendor-free tree.
 
 ## Vendor independence: headers keyed on the library axis
