@@ -2,8 +2,7 @@
 #pragma once
 
 /// @file
-/// @brief geqrf's can_run, a header so host tests can pass a synthetic select::Device. No real test
-/// device lacks a GPU, sub-group 32 or one CTA element of SLM. @ingroup api_selection_ops
+/// @brief geqrf's can_run, a header so host tests can pass a synthetic select::Device. @ingroup api_selection_ops
 
 #include <batchlas/blas/matrix.hh>
 
@@ -23,10 +22,9 @@ using select::overloaded;
 template <typename Scalar>
 using MV = MatrixView<Scalar, MatrixFormat::Dense>;
 
-// Correctness only (R3): each clause is its driver's check. No family takes a heterogeneous batch; Cta and
-// Blocked take any m x n, Tiny only square; masked, natives or NETLIB. evidence: docs/perf/qr.md#geqrf-wide-shapes-m-less-than-n
-// The kernels take no backend parameter, so only the run-time half of the host-native gate applies
-// (as trsm). evidence: docs/design/vendor-independence.md#the-host-native-gate
+// Correctness only (R3): one clause per driver check; no family takes a heterogeneous batch, Tiny only a square
+// one (evidence: docs/perf/qr.md#geqrf-wide-shapes-m-less-than-n). The kernels take no backend parameter, so
+// natives take only the run-time host-native gate. evidence: docs/design/vendor-independence.md#the-host-native-gate
 template <Backend B, typename Scalar>
 bool can_run(const GeqrfChoice& c, const select::Device& d, const MV<Scalar>& A) {
     const bool masked = detail::any_batch_mask(A);
