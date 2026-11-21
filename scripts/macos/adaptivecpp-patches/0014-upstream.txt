@@ -79,6 +79,12 @@ the BatchLAS local series:
   5 cases, against a host reference;
 - the full BatchLAS Metal test tree was rerun serially (252 ctest entries).
   Before the patch, 139 gtest cases failed MSL compilation with this error.
+  They are the complex<float> cases of the potrf, posv, potrs, potri, sygvd
+  and ortho suites (potrf_tests, potrf_candidates_tests, potrf_mask_tests,
+  posv_tests, posv_candidates_tests, potrs_tests, potri_tests, sygvd_tests,
+  sygvd_mask_tests, ortho_tests, ortho_mask_tests, syevx_mask_tests,
+  linalg_layer_tests and device_lapack_{chol,potrf,util}_tests), and float
+  `reg:`/`wide:` tiles in gemm_tests and gemm_candidates_tests.
   After it, none do: 115 of them pass, and 24 now reach failures that the
   compile error had hidden. All 24 are on the BatchLAS side:
   - 17 are test expectations about Apple's local-memory budget. One of them
