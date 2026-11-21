@@ -73,7 +73,7 @@ struct Problem {
           Bm(test_support::padded<Scalar>(s.n, s.nrhs, s.batch)), C(test_support::padded<Scalar>(s.n, s.n, s.batch)),
           piv(std::size_t(s.n) * s.batch), info(std::size_t(s.batch)) {}
 
-    static constexpr bool kInt64Pivots = B == Backend::NETLIB;
+    static constexpr bool kInt64Pivots = B == Backend::NETLIB && !select::kHostNative;  // vendor-free: natives
 
     void fill(Matrix<Scalar>& M, int cols, int salt, bool singular) {
         Scalar* p = M.data_ptr();
@@ -207,7 +207,10 @@ protected:
     using T = typename Config::ScalarType;
     static constexpr Backend B = Config::BackendVal;
 
-    bool device() const { return this->ctx->device().type == DeviceType::GPU && B != Backend::NETLIB; }
+    // The native families run: a GPU, or a vendor-free host (select::kHostNative).
+    bool device() const {
+        return B == Backend::NETLIB ? select::kHostNative : this->ctx->device().type == DeviceType::GPU;
+    }
     bool host_loop() const { return B == Backend::NETLIB && select::kHasNetlib; }
 
     void getrs_check(const Shape& s) {

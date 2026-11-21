@@ -54,14 +54,15 @@ set(BATCHLAS_OBJECT_LIBS
     batchlas_sycl_obj
 )
 # GPU-only device-code clusters: compiled and device-linked without the CPU SYCL target. A
-# vendor-free host runs the cta and level3 kernels (BATCHLAS_HAS_HOST_NATIVE, src/select/vendor.hh
-# native_backend), so there those two keep their CPU images. posv and gesv hold only the
-# register-resident tiny tiers, which no host route launches; their CPU AOT ran over 30 min.
-set(BATCHLAS_NO_CPU_OBJECT_LIBS batchlas_extensions_posv_obj batchlas_extensions_gesv_obj)
+# vendor-free host runs the cta, level3, posv and gesv kernels (BATCHLAS_HAS_HOST_NATIVE,
+# src/select/vendor.hh native_backend), so there all four keep their CPU images; only
+# vendor-free builds pay that link time (posv/gesv tiny-tier CPU AOT is the long pole).
+set(BATCHLAS_NO_CPU_OBJECT_LIBS "")
 # The component (.so) of each such library device-links with the same targets as its objects.
 set(_batchlas_host_native_no_cpu "")
 if(NOT BATCHLAS_HAS_HOST_NATIVE)
-    list(APPEND BATCHLAS_NO_CPU_OBJECT_LIBS batchlas_extensions_cta_obj batchlas_extensions_level3_obj)
+    list(APPEND BATCHLAS_NO_CPU_OBJECT_LIBS batchlas_extensions_posv_obj batchlas_extensions_gesv_obj
+         batchlas_extensions_cta_obj batchlas_extensions_level3_obj)
     set(_batchlas_host_native_no_cpu NO_CPU_TARGETS)
 endif()
 
@@ -377,12 +378,12 @@ batchlas_configure_component(batchlas_extensions_cta ${_batchlas_host_native_no_
 add_library(batchlas_extensions_posv SHARED
     $<TARGET_OBJECTS:batchlas_extensions_posv_obj>
 )
-batchlas_configure_component(batchlas_extensions_posv NO_CPU_TARGETS)
+batchlas_configure_component(batchlas_extensions_posv ${_batchlas_host_native_no_cpu})
 
 add_library(batchlas_extensions_gesv SHARED
     $<TARGET_OBJECTS:batchlas_extensions_gesv_obj>
 )
-batchlas_configure_component(batchlas_extensions_gesv NO_CPU_TARGETS)
+batchlas_configure_component(batchlas_extensions_gesv ${_batchlas_host_native_no_cpu})
 
 # ops/{symm,hemm,herk,her2k,syrk,syr2k,trmm}.cc from backends and trsm's kernels from sycl (see above
 # and src/ops/CMakeLists.txt): GPU-only unless BATCHLAS_HAS_HOST_NATIVE.

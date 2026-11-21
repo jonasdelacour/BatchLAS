@@ -3,6 +3,7 @@
 
 // Host-side launch helpers the native launchers share; no kernel compiles differently through it.
 
+#include <batchlas/backend_config.h>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/error.hh>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -32,7 +33,9 @@ Device require_launchable(Queue& ctx, const char* who, const MatrixView<Scalar, 
     if (A.is_heterogeneous() || (ops.is_heterogeneous() || ...))
         throw batchlas::invalid_argument(w + ": heterogeneous batch is not supported");
     const Device dev = ctx.device();
-    if (dev.type != DeviceType::GPU) throw batchlas::invalid_argument(w + ": GPU queues only");
+    // A vendor-free host runs the natives too: there every native library keeps its CPU image.
+    if (dev.type != DeviceType::GPU && !BATCHLAS_HAS_HOST_NATIVE)
+        throw batchlas::invalid_argument(w + ": GPU queues only");
     if (need.sub_group > 0 && !dev.supports_sub_group_size(static_cast<std::size_t>(need.sub_group)))
         throw batchlas::unsupported(w + ": device does not offer sub-group size " + std::to_string(need.sub_group) +
                                     ", which the kernel requires");

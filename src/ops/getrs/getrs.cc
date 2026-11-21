@@ -36,14 +36,16 @@ select::Key key_of(const MV<Scalar>& A, const MV<Scalar>& B) {
 // Correctness only (R3): false means the driver would throw or answer wrongly. Both natives
 // re-check exactly this at their entry. A non-conforming pair (A not square, rows or batch
 // disagreeing) is left to the vendor, as before. NETLIB writes true int64 pivots where the
-// natives read packed 1-based int32, a silent wrong answer, so no native runs under it.
+// natives read packed 1-based int32, a silent wrong answer, so no native runs under it unless the
+// build has no LAPACKE (select::kHostNative), where native getrf wrote every pivot.
 // Masked: cta, blocked and NETLIB's host loop skip an inactive item; the strided vendor calls cannot.
 template <Backend B, typename Scalar>
 bool can_run(const GetrsChoice& c, const select::Device& d, const MV<Scalar>& A, const MV<Scalar>& Bm) {
     const bool masked = detail::any_batch_mask(A, Bm);
     const std::int64_t n = A.rows(), nrhs = Bm.cols();
     const bool conforming = A.cols() == n && Bm.rows() == n && Bm.batch_size() == A.batch_size();
-    const bool native = B != Backend::NETLIB && d.is_gpu && d.has_sg32 && conforming && !A.is_heterogeneous() &&
+    const bool native = (B != Backend::NETLIB || select::kHostNative) && select::natives_run_on(d) && d.has_sg32 &&
+                        conforming && !A.is_heterogeneous() &&
                         !Bm.is_heterogeneous() && n >= 1 && nrhs >= 1 && A.batch_size() >= 1;
     return std::visit(overloaded{
         [&](Cta) {

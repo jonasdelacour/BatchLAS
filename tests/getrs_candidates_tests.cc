@@ -232,7 +232,8 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native tiers are GPU kernels";
+        if (this->ctx->device().type != DeviceType::GPU && !(B == Backend::NETLIB && batchlas::select::kHostNative))
+            GTEST_SKIP() << "the native tiers run on a GPU or a vendor-free host";
         if (!this->ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "no sub-group size 32";
     }
 
@@ -262,7 +263,10 @@ protected:
         this->ctx->wait();
     }
     // What Auto (or, native_only, the class word `native`) must pick for `s`, from the shipped tables.
+    // A device with no table at all (the vendor-free host) takes the last resort, blocked (§5.5).
     std::string table_pick(const Spec& s, bool native_only = false) {
+        if (select::tables_in_borrow_order("getrs", select::dtype_name<T>(), select::device_of<B>(*this->ctx)).empty())
+            return "blocked";
         return test_utils::shipped_table_pick<C>("getrs", select::dtype_name<T>(), select::device_of<B>(*this->ctx),
                                                  select::Key{{"n", s.n}, {"nrhs", s.nrhs}, {"batch", s.batch}}, [&] {
                                                      auto p = make_sys<T>(s);
@@ -544,18 +548,30 @@ TYPED_TEST(GetrsCandidates, CanRunFalsePinsThrow) {
 }
 
 // Under Backend::NETLIB (true int64 pivots) no native
-// family runs even on a GPU queue, because they read packed int32.
+// family runs even on a GPU queue, because they read packed int32. Without LAPACKE
+// (select::kHostNative) every NETLIB pivot is native, so there both natives solve under NETLIB.
 TYPED_TEST(GetrsCandidates, NetlibBackendRunsNoNativeFamily) {
 #if BATCHLAS_HAS_HOST_BACKEND
     using T = typename TestFixture::T;
     auto p = make_sys<T>(Spec{40, 3, 2});
     for (const C& c : {C{gs::Cta{}}, C{gs::Blocked{}}}) {
         const Pin pin("getrs", c);
-        auto A = p.A();
-        auto Bm = p.B();
-        EXPECT_THROW(((void)getrs_buffer_size<Backend::NETLIB, T>(*this->ctx, A, Bm, Transpose::NoTrans)),
-                     std::invalid_argument)
-            << select::to_string(c);
+        if constexpr (batchlas::select::kHostNative) {
+            auto q = make_sys<T>(Spec{40, 3, 2});
+            auto qa = q.A();
+            auto qb = q.B();
+            UnifiedVector<std::byte> ws(std::max<std::size_t>(
+                1, getrs_buffer_size<Backend::NETLIB, T>(*this->ctx, qa, qb, Transpose::NoTrans)));
+            (void)getrs<Backend::NETLIB, T>(*this->ctx, qa, qb, Transpose::NoTrans, q.piv.to_span(), ws.to_span());
+            this->ctx->wait();
+            expect_solved(*this->ctx, q, "NETLIB " + select::to_string(c));
+        } else {
+            auto A = p.A();
+            auto Bm = p.B();
+            EXPECT_THROW(((void)getrs_buffer_size<Backend::NETLIB, T>(*this->ctx, A, Bm, Transpose::NoTrans)),
+                         std::invalid_argument)
+                << select::to_string(c);
+        }
         EXPECT_TRUE(this->pin_accepted(c, p)) << "guard: the same pin runs under the GPU backend";
     }
 #else
@@ -756,6 +772,7 @@ TYPED_TEST(GetrsCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     const std::string backend = B == Backend::CUDA   ? "CUDA"
                                 : B == Backend::ROCM ? "ROCM"
                                 : B == Backend::SYCL ? "SYCL"
+                                : B == Backend::NETLIB ? "NETLIB"  // a vendor-free host
                                                      : "?";
     auto as_int = [](auto e) { return std::to_string(static_cast<int>(e)); };
     for (const auto& [key, s, algo] : {std::tuple{std::string("16 4 16"), lo, "cta"},
@@ -770,8 +787,9 @@ TYPED_TEST(GetrsCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     }
 }
 
-// On a CPU queue no native
-// family runs, so native pins throw and Auto is the vendor (or no route without one).
+// On a CPU queue with netlib no native family runs, so native pins throw and Auto is the vendor.
+// A vendor-free host (select::kHostNative) runs both natives, pinned and under Auto, on the
+// factors make_sys built. evidence: docs/design/vendor-independence.md#the-host-native-gate
 template <typename Config>
 class GetrsCandidatesCpu : public test_utils::BatchLASTest<Config> {};
 TYPED_TEST_SUITE(GetrsCandidatesCpu, Types);
@@ -782,6 +800,27 @@ TYPED_TEST(GetrsCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     if (!this->ctx) GTEST_SKIP() << "no queue";
     if (this->ctx->device().type == DeviceType::GPU) GTEST_SKIP() << "a GPU queue";
     const ScopedEnvVar clear("BATCHLAS_GETRS_ROUTE", nullptr);
+    if constexpr (B == Backend::NETLIB && batchlas::select::kHostNative) {
+        auto solve = [&](Sys<T>& q) {
+            auto qa = q.A();
+            auto qb = q.B();
+            UnifiedVector<std::byte> ws(
+                std::max<std::size_t>(1, getrs_buffer_size<B, T>(*this->ctx, qa, qb, Transpose::NoTrans)));
+            (void)getrs<B, T>(*this->ctx, qa, qb, Transpose::NoTrans, q.piv.to_span(), ws.to_span());
+            this->ctx->wait();
+        };
+        for (const C& c : {C{gs::Cta{}}, C{gs::Blocked{}}}) {
+            auto q = make_sys<T>(Spec{8, 3, 2});
+            const Pin pin("getrs", c);
+            EXPECT_EQ(traced_choice([&] { solve(q); }), select::to_string(c));
+            expect_solved(*this->ctx, q, "cpu pinned " + select::to_string(c));
+        }
+        auto q = make_sys<T>(Spec{8, 3, 2});
+        const std::string got = traced_choice([&] { solve(q); });
+        EXPECT_TRUE(got == "cta" || got == "blocked") << got;
+        expect_solved(*this->ctx, q, "cpu auto " + got);
+        return;
+    }
     auto p = make_sys<T>(Spec{8, 3, 2});
     auto A = p.A();
     auto Bm = p.B();

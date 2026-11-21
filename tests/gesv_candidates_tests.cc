@@ -201,7 +201,8 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native tier is a GPU kernel";
+        if (this->ctx->device().type != DeviceType::GPU && !(B == Backend::NETLIB && batchlas::select::kHostNative))
+            GTEST_SKIP() << "the native tier runs on a GPU or a vendor-free host";
         if (!this->ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "no sub-group size 32";
     }
 
@@ -243,16 +244,15 @@ protected:
         const Pin pin("gesv", c);
         return run_auto(p);
     }
-    // What Auto must pick for an order-n, nrhs system, from the shipped tables. A child without a
-    // route (vendor-free) still means the gesv pin itself was taken.
+    // What Auto must pick for an order-n, nrhs system, from the shipped tables. A device with no
+    // table at all (the vendor-free host) takes the last resort, blocked (select.hh walk, §5.5).
     std::string table_pick(int n, int nrhs, int batch) {
-        return test_utils::shipped_table_pick<C>("gesv", select::dtype_name<T>(), select::device_of<B>(*this->ctx),
+        const auto d = select::device_of<B>(*this->ctx);
+        if (select::tables_in_borrow_order("gesv", select::dtype_name<T>(), d).empty()) return "blocked";
+        return test_utils::shipped_table_pick<C>("gesv", select::dtype_name<T>(), d,
                                                  select::Key{{"n", n}, {"nrhs", nrhs}}, [&] {
                                                      auto p = make_sys<T>(n, nrhs, batch, 7u);
-                                                     try {
-                                                         (void)run_auto(p);
-                                                     } catch (const batchlas::NoRouteError&) {
-                                                     }
+                                                     (void)run_auto(p);
                                                  });
     }
 
@@ -293,8 +293,8 @@ protected:
             return false;
         }
     }
-    // The vendor-free build may have no getrf/getrs route for a child shape.
-    static bool child_may_lack_route() { return !batchlas::select::factorization_vendor_available<B>; }
+    // No child lacks a route here: getrf and getrs run natively wherever this fixture runs (a GPU,
+    // or a vendor-free host, select::kHostNative), so a NoRouteError from a child is a failure.
 
     static std::string name(const C& c, int n, int nrhs) {
         return select::to_string(c) + " n=" + std::to_string(n) + " nrhs=" + std::to_string(nrhs);
@@ -331,12 +331,8 @@ TYPED_TEST(GesvCandidates, PinnedCandidatesStraddleTheirLimits) {
                     continue;
                 }
                 ASSERT_TRUE(this->pin_accepted(c, p.A(), p.B())) << what << " was refused";
-                try {
-                    expect_solved(*this->ctx, p, this->run_pinned(c, p), what);
-                    ++ran;
-                } catch (const batchlas::NoRouteError& e) {
-                    if (!this->child_may_lack_route()) ADD_FAILURE() << what << ": " << e.what();
-                }
+                expect_solved(*this->ctx, p, this->run_pinned(c, p), what);
+                ++ran;
             }
         }
     }
@@ -355,13 +351,7 @@ TYPED_TEST(GesvCandidates, PinnedRunIsTheDirectKernelBitForBit) {
             auto pinned = make_sys<T>(n, nrhs, 3, 4242u + n);
             auto direct = make_sys<T>(n, nrhs, 3, 4242u + n);
             const std::string what = this->name(c, n, nrhs);
-            std::vector<int32_t> info;
-            try {
-                info = this->run_pinned(c, pinned);
-            } catch (const batchlas::NoRouteError&) {
-                if (this->child_may_lack_route()) continue;
-                throw;
-            }
+            const std::vector<int32_t> info = this->run_pinned(c, pinned);
             UnifiedVector<int32_t> dinfo(3, int32_t(-7));
             ASSERT_NO_THROW(this->run_direct(c, direct, dinfo.to_span())) << what;
             for (int it = 0; it < 3; ++it) ASSERT_EQ(info[it], dinfo[it]) << what;
@@ -388,13 +378,7 @@ TYPED_TEST(GesvCandidates, SaturatingBatchIsBitIdentical) {
     for (const auto& k : cases) {
         auto p = make_sys<T>(k.n, k.nrhs, kBatch, 777u, /*identical=*/true);
         const std::string what = this->name(k.c, k.n, k.nrhs) + " batch=1024";
-        std::vector<int32_t> info;
-        try {
-            info = this->run_pinned(k.c, p);
-        } catch (const batchlas::NoRouteError&) {
-            if (this->child_may_lack_route()) continue;
-            throw;
-        }
+        const std::vector<int32_t> info = this->run_pinned(k.c, p);
         expect_solved(*this->ctx, p, info, what);
         for (int it = 1; it < kBatch; ++it) {
             for (int col = 0; col < k.nrhs; ++col)
@@ -495,13 +479,7 @@ TYPED_TEST(GesvCandidates, ExactWorkspaceInAPoisonedArena) {
             for (bool pass_info : {true, false}) {
                 auto p = make_sys<T>(n, nrhs, 5, 99u + n);
                 const Pin pin("gesv", c);
-                std::size_t bytes = 0;
-                try {
-                    bytes = gesv_buffer_size<B, T>(*this->ctx, p.A(), p.B());
-                } catch (const batchlas::NoRouteError&) {
-                    if (this->child_may_lack_route()) continue;
-                    throw;
-                }
+                const std::size_t bytes = gesv_buffer_size<B, T>(*this->ctx, p.A(), p.B());
                 UnifiedVector<std::byte> arena(bytes + kGuard);
                 std::memset(arena.data(), 0xFF, bytes);
                 std::memset(arena.data() + bytes, 0xA5, kGuard);
@@ -649,12 +627,8 @@ TYPED_TEST(GesvCandidates, AutoReadsTheShippedTables) {
         auto p = make_sys<T>(n, nrhs, 512, 41u);
         std::vector<int32_t> info;
         const std::string what = "n=" + std::to_string(n) + " nrhs=" + std::to_string(nrhs);
-        try {
-            EXPECT_EQ(traced_choice([&] { info = this->run_auto(p); }), want) << what;
-            expect_solved(*this->ctx, p, info, what);
-        } catch (const batchlas::NoRouteError& e) {
-            if (!this->child_may_lack_route()) ADD_FAILURE() << what << ": " << e.what();
-        }
+        EXPECT_EQ(traced_choice([&] { info = this->run_auto(p); }), want) << what;
+        expect_solved(*this->ctx, p, info, what);
     }
 }
 
@@ -769,8 +743,10 @@ TEST(GesvTranscribedTable, RowsHoldTheTranscribedWindowOnSm89) {
 }
 
 #if BATCHLAS_HAS_HOST_BACKEND
-// The typed suite skips NETLIB (CPU queue). Tiny refuses the NETLIB backend even on a GPU device:
-// netlib getrf writes true int64 pivots where the kernel packs int32. Blocked solves on the CPU.
+// With netlib the typed suite skips NETLIB (CPU queue). Tiny refuses the NETLIB backend even on a
+// GPU device: netlib getrf writes true int64 pivots where the kernel packs int32. Blocked solves on
+// the CPU. A vendor-free build (select::kHostNative) has only native pivots: there Tiny runs under
+// NETLIB on either device, and Blocked solves on the CPU through the native children.
 TEST(GesvNetlib, TinyRefusedBlockedSolves) {
     using T = float;
     constexpr Backend B = Backend::NETLIB;
@@ -784,21 +760,40 @@ TEST(GesvNetlib, TinyRefusedBlockedSolves) {
         if (std::string(dev) == "gpu" &&
             (q->device().type != DeviceType::GPU || !q->device().supports_sub_group_size(32)))
             continue;
-        Matrix<T, MatrixFormat::Dense> A(8, 8, 2), Bm(8, 2, 2);
-        const Pin tiny("gesv", C{gs::Tiny{}});
-        try {
-            (void)gesv_buffer_size<B, T>(*q, A, Bm);
-            ADD_FAILURE() << dev << ": a Tiny pin was accepted on NETLIB";
-        } catch (const std::invalid_argument& e) {
-            EXPECT_NE(std::string(e.what()).find("cannot run this shape"), std::string::npos) << dev << e.what();
+        if constexpr (batchlas::select::kHostNative) {
+            auto p = make_sys<T>(8, 2, 3, 73u);
+            std::vector<int32_t> info(p.batch, -7);
+            const Pin tiny("gesv", C{gs::Tiny{}});
+            EXPECT_EQ(traced_choice([&] {
+                const std::size_t bytes = gesv_buffer_size<B, T>(*q, p.A(), p.B());
+                UnifiedVector<std::byte> ws(std::max<std::size_t>(bytes, 1));
+                UnifiedVector<int32_t> inf(p.batch, int32_t(-7));
+                (void)gesv<B, T>(*q, p.A(), p.B(), p.piv.to_span(), Span<std::byte>(ws.data(), bytes), inf.to_span());
+                q->wait();
+                info.assign(inf.begin(), inf.end());
+            }), "tiny") << dev;
+            for (int it = 0; it < p.batch; ++it) ASSERT_EQ(info[it], 0) << dev << " tiny item " << it;
+            EXPECT_VERIFY(T, verify::Check::solve, p.n, residual(*q, p)) << dev << " tiny";
+        } else {
+            Matrix<T, MatrixFormat::Dense> A(8, 8, 2), Bm(8, 2, 2);
+            const Pin tiny("gesv", C{gs::Tiny{}});
+            try {
+                (void)gesv_buffer_size<B, T>(*q, A, Bm);
+                ADD_FAILURE() << dev << ": a Tiny pin was accepted on NETLIB";
+            } catch (const std::invalid_argument& e) {
+                EXPECT_NE(std::string(e.what()).find("cannot run this shape"), std::string::npos) << dev << e.what();
+            }
         }
-        // Blocked's children need netlib LAPACKE, absent from a vendor-free build.
-        if (std::string(dev) != "cpu" || !batchlas::select::factorization_vendor_available<B>) continue;
+        // Blocked's children: netlib LAPACKE, or the natives of a vendor-free host.
+        if (std::string(dev) != "cpu" ||
+            !(batchlas::select::factorization_vendor_available<B> || batchlas::select::kHostNative))
+            continue;
 #if BATCHLAS_HAS_CPU_TARGET
         auto p = make_sys<T>(8, 2, 3, 71u);
         std::vector<int32_t> info(p.batch, -7);
         const std::string got = traced_choice([&] {
-            const Pin automatic("gesv", "auto");
+            // With netlib Auto's last resort is blocked; a vendor-free host may pick tiny, so pin it.
+            const Pin automatic("gesv", batchlas::select::kHostNative ? "blocked" : "auto");
             const std::size_t bytes = gesv_buffer_size<B, T>(*q, p.A(), p.B());
             UnifiedVector<std::byte> ws(std::max<std::size_t>(bytes, 1));
             UnifiedVector<int32_t> inf(p.batch, int32_t(-7));

@@ -78,11 +78,10 @@ kernels, the ones the GPU runs; nothing is skipped and no host reference code is
 - CMake derives `BATCHLAS_HAS_HOST_NATIVE` = host backend AND a CPU SYCL target AND NOT
   (`BATCHLAS_HAS_LAPACKE` AND `BATCHLAS_HAS_CBLAS`) (`cmake/BatchLASDependencies.cmake`) and emits
   it in `backend_config.h`; the header-only default is 0 (`include/batchlas/config.hh`).
-- With it set, cta and level3 leave `BATCHLAS_NO_CPU_OBJECT_LIBS` (`src/CMakeLists.txt`) and keep
-  their CPU images. Only vendor-free builds pay that link time. posv and gesv stay GPU-only. They
-  hold only the register-resident tiny tiers: no host route launches those, and their CPU AOT ran
-  for over 30 minutes. An op that wants a tiny tier on the host must first take its library off
-  the list.
+- With it set, `BATCHLAS_NO_CPU_OBJECT_LIBS` (`src/CMakeLists.txt`) is empty: cta, level3, posv
+  and gesv keep their CPU images, so the tiny tiers of getrf, gesv, potrf and posv can run on the
+  host. Only vendor-free builds pay that link time; the posv and gesv tiny-tier CPU AOT is its
+  long pole (over 30 minutes before the split).
 - `select::native_backend<B>` (compile time) is `native_gpu_backend<B> || (B == NETLIB &&
   kHostNative)`. `select::natives_run_on(d)` (run time) is `d.is_gpu || (kHostNative &&
   !d.has_vendor)`.
@@ -103,8 +102,15 @@ if constexpr (select::native_backend<B>) return <native kernel>; else throw batc
 ```
 
 trsm's kernels are not templated on the backend, so trsm changes only the run-time half. That
-covers its `can_run` and the alpha == 0 mask refusal in `trsm.cc`. Adopted so far: syrk, herk,
-syr2k, her2k, symm, hemm, trmm and trsm. To verify an op, read its `BATCHLAS_COVERAGE_OUT`
+covers its `can_run` and the alpha == 0 mask refusal in `trsm.cc`. getrf, getri, getrs and gesv
+are the same case: their gates read `(B != NETLIB || kHostNative) && natives_run_on(d)`, which keeps
+ROCm's native routes. Their pivot format is safe on that host because a vendor-free NETLIB has no
+LAPACKE: native getrf writes every pivot, so all of them are 1-based int32 packed. gesv's tiny
+tier keeps its sub-group broadcast in a vendor-free build (`gesv_tiny_slm` in `gesv_tiny.cc`): the
+opencl:cpu image of its local-memory pivot row solves float N = 32 wrongly (residual 2.0, odd items
+never written), while the broadcast arm is right at every column bucket and RHS width. The
+`GesvTest` n = 31, 32 float rows on opencl:cpu fail without it. Adopted so far:
+syrk, herk, syr2k, her2k, symm, hemm, trmm, trsm, getrf, getri, getrs and gesv. To verify an op, read its `BATCHLAS_COVERAGE_OUT`
 `reached` rows on `NETLIB` in a vendor-free tree.
 
 ## Vendor independence: headers keyed on the library axis

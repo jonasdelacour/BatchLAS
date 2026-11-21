@@ -4,7 +4,7 @@
 // Cta in local memory; Blocked factorises Cta-sized panels and updates the rest with the public trsm and
 // gemm, each of which picks its own kernel. PIVOTS: every family packs 1-based int32 into the int64 span's
 // first half (getrf_native.hh), except NETLIB's LAPACKE, which writes int64 -- so no native family runs on
-// that backend. An m x n item has min(m, n) pivots at stride min(m, n); Cta and Blocked take it, Tiny is
+// that backend unless it has no LAPACKE (select::kHostNative: natives only, one format). An m x n item has min(m, n) pivots at stride min(m, n); Cta and Blocked take it, Tiny is
 // square-only. evidence: docs/perf/lu.md#getrf-non-square-m-x-n
 
 #include <batchlas/backend_config.h>
@@ -46,7 +46,8 @@ template <Backend B, typename Scalar>
 bool can_run(const GetrfChoice& c, const select::Device& d, const MV<Scalar>& A) {
     const bool masked = detail::any_batch_mask(A);
     const std::int64_t m = A.rows(), n = A.cols();
-    const bool native = B != Backend::NETLIB && d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && m >= 1 &&
+    const bool native = (B != Backend::NETLIB || select::kHostNative) && select::natives_run_on(d) && d.has_sg32 &&
+                        !A.is_heterogeneous() && m >= 1 &&
                         n >= 1 && A.batch_size() >= 1;
     const auto budget = static_cast<std::size_t>(d.slm_budget);
     return std::visit(overloaded{
