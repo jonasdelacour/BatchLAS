@@ -954,11 +954,13 @@ TYPED_TEST(SyrkCandidatesCpu, CpuQueueRunsNoNativeFamily) {
                 << select::to_string(c);
             EXPECT_TRUE(correct(*this->ctx, p)) << select::to_string(c);
         }
+        // The CPU borrows no GPU table (select.cc), so Auto walks syrk's last resort, triangular first.
         auto p = make_prob<T>(s);
-        EXPECT_NE(traced_choice([&] {
+        const std::string line = traced_line([&] {
             (void)syrk<B, T>(*this->ctx, p.A(), p.Cv(), p.alpha, p.beta, s.uplo, s.trans);
             this->ctx->wait();
-        }), "vendor");
+        });
+        EXPECT_NE(line.find(" -> triangular  [last resort]"), std::string::npos) << line;
         EXPECT_TRUE(correct(*this->ctx, p));
         return;
     }

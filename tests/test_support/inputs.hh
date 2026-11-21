@@ -44,8 +44,7 @@ batchlas::Matrix<Scalar> hpd(batchlas::Queue& q, int n, int batch, double cond, 
     return m;
 }
 
-/// The Cholesky factor of a's uplo triangle in place, through the public potrf; info gets one
-/// entry per item. False when the build has no potrf route for the shape.
+/// The Cholesky factor of a's uplo triangle in place, through the public potrf (info per item); false: no route.
 template <batchlas::Backend B, typename Scalar>
 bool potrf_in_place(batchlas::Queue& q, const batchlas::MatrixView<Scalar, batchlas::MatrixFormat::Dense>& a,
                     batchlas::Uplo uplo, batchlas::Span<int32_t> info) {
@@ -64,10 +63,3 @@ bool potrf_in_place(batchlas::Queue& q, const batchlas::MatrixView<Scalar, batch
 
 }  // namespace test_support
 
-/// NETLIB serves potrf, trsm and the other dense factorizations only through LAPACKE/CBLAS, so a
-/// vendor-free build has no route there: call from SetUp() of a typed fixture over backend BK.
-#define TEST_SUPPORT_SKIP_NETLIB_WITHOUT_LAPACK(BK)                                                 \
-    do {                                                                                            \
-        if ((BK) == batchlas::Backend::NETLIB && !(BATCHLAS_HAS_LAPACKE && BATCHLAS_HAS_CBLAS))     \
-            GTEST_SKIP() << "NETLIB without LAPACKE/CBLAS has no dense factorization route";       \
-    } while (0)

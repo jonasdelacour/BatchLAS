@@ -878,11 +878,13 @@ TYPED_TEST(SymmCandidatesCpu, CpuQueueRunsNoNativeFamily) {
                 << select::to_string(native);
             expect_symm(*this->ctx, p, "cpu " + select::to_string(native));
         }
+        // The CPU borrows no GPU table (select.cc), so Auto walks symm's last resort, mirror first.
         auto p = make_prob<T>(s);
-        EXPECT_NE(traced_choice([&] {
+        const std::string line = traced_line([&] {
             (void)symm<B, T>(*this->ctx, p.A(), p.B(), p.Cv(), p.alpha, p.beta, s.side, s.uplo);
             this->ctx->wait();
-        }), "vendor");
+        });
+        EXPECT_NE(line.find(" -> mirror  [last resort]"), std::string::npos) << line;
         expect_symm(*this->ctx, p, "cpu auto");
         return;
     }

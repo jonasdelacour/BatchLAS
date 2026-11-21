@@ -201,24 +201,14 @@ TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvectorsSmoke) {
 
     test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0, A_two_stage, W_two_stage, n);
 }
-// n = 320 is deliberate: it is inside the 256 < n <= 512 bucket where
-// sytrd_block_size_default<T> now returns a different panel width for complex
-// (32) than the tuning harness value used for real types (8). Every other
-// eigen test in this file runs at n <= 96, so nothing here exercised that
-// bucket at all -- the panel-width change and the workspace sizing that
-// depends on it were both untested.
-//
-// This goes through the public `syev` on Auto rather than calling syev_blocked
-// directly, so it also covers the per-type rows of
-// tuned/syev.<device>.txt: at n = 320 that is blocked for float, double
-// and complex<float>, and the vendor for complex<double>. Whichever provider
-// Auto picks, the answer must satisfy the same residual and orthogonality
-// bounds.
-//
-// The workspace is sized by syev_buffer_size, which re-derives the panel width
-// through the same sytrd_block_size_default<T>. If the query and the solve ever
-// disagreed about the width, this test would fail on the sizing check rather
-// than silently under-allocating.
+// n = 320 is deliberate: it is inside the 256 < n <= 512 bucket where sytrd_block_size_default<T> returns a
+// different panel width for complex (32) than the tuning harness value for real types (8). Every other eigen
+// test in this file runs at n <= 96, so nothing else exercises that bucket or the workspace sizing that depends
+// on it. This goes through the public `syev` on Auto rather than syev_blocked, so it also covers the per-type
+// rows of tuned/syev.<device>.txt: whichever provider Auto picks, the answer must satisfy the same residual and
+// orthogonality bounds. The workspace is sized by syev_buffer_size, which re-derives the panel width through the
+// same sytrd_block_size_default<T>: a query and a solve that disagree fail the sizing check rather than
+// silently under-allocating.
 TYPED_TEST(SyevBlockedTest, AutoEigenvectorsAtRetunedPanelWidth) {
     using Scalar = typename TestFixture::ScalarType;
     using Real = typename base_type<Scalar>::type;

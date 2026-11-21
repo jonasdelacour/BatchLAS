@@ -1130,8 +1130,9 @@ struct OpBattery {
     batchlas::UnifiedVector<int> act, ro, ci;
     batchlas::UnifiedVector<Scalar*> pa, pb, pc;  // the per-item pointer arrays a vendor batched call fills
     batchlas::Span<const std::uint8_t> mask, mask_a;  // every view's batch mask; A and the CSR take mask_a if set
-    // NETLIB pivots are int64; the GPU backends pack 1-based int32 into the same storage.
-    static constexpr std::size_t piv_bytes = B == Backend::NETLIB ? sizeof(std::int64_t) : sizeof(std::int32_t);
+    // LAPACKE's pivots are int64; every native (GPU backends, a vendor-free host) packs 1-based int32 there.
+    static constexpr std::size_t piv_bytes =
+        B == Backend::NETLIB && !sel::kHostNative ? sizeof(std::int64_t) : sizeof(std::int32_t);
 
     static Scalar sentinel() { return Dense<Scalar>::make(RealOf<Scalar>(-999), RealOf<Scalar>(777)); }
     std::size_t items() const { return std::size_t(std::max(batch, 1)); }
@@ -1455,8 +1456,8 @@ const masked_contract::Pattern& alternating4() {
 // Every op on every pin the backend runs unmasked (shape refusals are filtered first, so they
 // cannot pass as mask refusals), with a device-only mask {0, 1, 0, 1}: the call is refused, or
 // it leaves every output of items 0 and 2 bit-identical. Red under a family that ignores the mask.
-// A migrated op's non-vendor pin must run on a device backend (W1a, W1b), so a family cannot pass
-// by refusing again; the host backend's natives yield to its BLAS, which refuses.
+// A migrated op's non-vendor pin must run wherever natives run (W1a, W1b: a device backend, or the
+// vendor-free host), so a family cannot pass by refusing again; with a host BLAS the natives yield to it.
 TYPED_TEST(BatchPolicy, MaskedBatchNeverRunsAFamilyThatIgnoresIt) {
     const std::set<std::string> migrated{"gemm",  "trsm", "trmm",  "symm", "hemm",
                                          "syrk",  "herk", "syr2k", "her2k", "spmm"};  // W1a, W1b
@@ -1492,7 +1493,7 @@ TYPED_TEST(BatchPolicy, MaskedBatchNeverRunsAFamilyThatIgnoresIt) {
             } catch (const std::exception& e) {
                 refused = e.what();
                 EXPECT_TRUE(is_mask_refusal(e)) << "a masked call threw something other than a refusal: " << refused;
-                EXPECT_FALSE(migrated.count(name) && pin != "vendor" && B != Backend::NETLIB)
+                EXPECT_FALSE(migrated.count(name) && pin != "vendor" && (B != Backend::NETLIB || sel::kHostNative))
                     << "a migrated family refused: " << refused;
             }
             const auto after = masked_contract::detail::snapshot(outs, 4);

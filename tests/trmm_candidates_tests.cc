@@ -1026,11 +1026,13 @@ TYPED_TEST(TrmmCandidatesCpu, CpuQueueRunsNoNativeFamily) {
                 << select::to_string(c);
             expect_trmm(*this->ctx, p, "cpu " + select::to_string(c));
         }
+        // The CPU borrows no GPU table (select.cc), so Auto walks trmm's last resort, expand first.
         auto p = make_prob<T>(s);
-        EXPECT_NE(traced_choice([&] {
+        const std::string line = traced_line([&] {
             (void)trmm<B, T>(*this->ctx, p.A(), p.B(), p.Cm(), p.alpha, s.side, s.uplo, s.trans, s.diag);
             this->ctx->wait();
-        }), "vendor");
+        });
+        EXPECT_NE(line.find(" -> expand  [last resort]"), std::string::npos) << line;
         expect_trmm(*this->ctx, p, "cpu auto");
         return;
     }

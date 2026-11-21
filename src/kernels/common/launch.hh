@@ -19,11 +19,10 @@ struct Need {
     int min_wg = 0;       // the work-group the route launches; 0 = none
 };
 
-// can_run's launch gates, re-applied where a caller reaches a native route without choose(): A's
-// shape, every operand homogeneous (one launch reads one extent tuple), a GPU queue (or any queue in a
-// vendor-free build), the sub-group
-// size from the enumerated list (MAX_SUB_GROUP_SIZE reports entry [0], so it accepts a {64}-only
-// device and the launch aborts), and the launched work-group. An operand or the queue type throws
+// can_run's launch gates, re-applied where a caller reaches a native route without choose(): A's shape,
+// every operand homogeneous (one launch reads one extent tuple), a GPU queue (or any queue in a vendor-free
+// build), the sub-group size from the enumerated list (MAX_SUB_GROUP_SIZE reports entry [0], so it accepts a
+// {64}-only device and the launch aborts), and the launched work-group. An operand or the queue type throws
 // invalid_argument, a missing device feature unsupported; every message opens with `who`.
 template <typename Scalar, MatrixFormat MF, typename... Ops>
 Device require_launchable(Queue& ctx, const char* who, const MatrixView<Scalar, MF>& A, Need need, const Ops&... ops) {
