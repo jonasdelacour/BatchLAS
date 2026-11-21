@@ -184,9 +184,11 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        // GPU-only and sub-group 32 are can_run()'s own correctness gates.
-        if (this->ctx->device().type != DeviceType::GPU) {
-            GTEST_SKIP() << "potrf_cta is a GPU kernel";
+        // select::natives_run_on and sub-group 32 are can_run()'s own correctness gates: a GPU, or a
+        // vendor-free host (kHostNative), whose CPU image holds the kernels.
+        const bool host_native = BackendType == Backend::NETLIB && select::kHostNative;
+        if (this->ctx->device().type != DeviceType::GPU && !host_native) {
+            GTEST_SKIP() << "potrf_cta runs on a GPU or a vendor-free host";
         }
         if (!this->ctx->device().supports_sub_group_size(32)) {
             GTEST_SKIP() << "device does not offer sub-group size 32";
@@ -293,8 +295,12 @@ TYPED_TEST(PotrfCtaTest, ResidualBothTriangles) {
 TYPED_TEST(PotrfCtaTest, FirstColumnReciprocalIsAccurate) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
-    // Measured worst (eps): float/cfloat 0.96 (origin/main: 1.19-1.29), double/cdouble 1.15.
-    constexpr double kMaxEps = std::is_same_v<R, float> ? 1.0 : 1.2;
+    // Measured worst (eps): float/cfloat 0.96 (origin/main: 1.19-1.29), double/cdouble 1.15. The
+    // rsqrt.approx fold this guards is NVPTX-only; a CPU device (the vendor-free host) computes
+    // 1 / sqrt(a00) with OpenCL's default float sqrt and divide, not correctly rounded: measured
+    // 1.07 on opencl:cpu, so its float bound is 1.25.
+    const bool cpu = this->ctx->device().type == DeviceType::CPU;
+    const double kMaxEps = std::is_same_v<R, float> ? (cpu ? 1.25 : 1.0) : 1.2;
 
     // Relative error in units of eps(R): unlike ulp-of-result it does not double across a binade.
     const auto rel_err = [](R got, long double want) {
@@ -1567,7 +1573,9 @@ TYPED_TEST(PotrfBlockedTest, FacadeBlockedUpper) {
 // so a ScopedEnvVar after any potrf was silently ignored.
 TEST(PotrfBlocked, NbFollowsScopedEnv) {
     Queue q;
-    if (q.device().type != DeviceType::GPU) GTEST_SKIP() << "the blocked driver is GPU-only";
+    // A host queue (ctx.backend() NETLIB) runs the pinned native only in a vendor-free build.
+    if (q.device().type != DeviceType::GPU && !select::kHostNative)
+        GTEST_SKIP() << "the blocked driver runs on a GPU or a vendor-free host";
     constexpr int n = 512;
     Matrix<float, MatrixFormat::Dense> A(n, n, 4);
     ScopedEnvVar clear_nb("BATCHLAS_POTRF_NB", nullptr);

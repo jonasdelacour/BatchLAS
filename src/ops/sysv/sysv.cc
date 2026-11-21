@@ -43,7 +43,8 @@ bool can_run(const SysvChoice& c, const select::Device& d, const MV<Scalar>& A, 
     const bool homogeneous = !A.is_heterogeneous() && !B.is_heterogeneous();
     return std::visit(overloaded{
         [&](Cta) {
-            return d.is_gpu && d.has_sg32 && homogeneous && d.max_wg >= ops::sytrf::kSytrfCtaWg && A.rows() >= 1 &&
+            return select::natives_run_on(d) && d.has_sg32 && homogeneous && d.max_wg >= ops::sytrf::kSytrfCtaWg &&
+                   A.rows() >= 1 &&
                    A.rows() <= ops::sytrf::kSytrfCtaMaxN;
         },
         [&](Compose) { return homogeneous; },

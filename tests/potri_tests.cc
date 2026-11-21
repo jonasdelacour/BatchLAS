@@ -65,7 +65,9 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        TEST_SUPPORT_SKIP_NETLIB_WITHOUT_LAPACK(BK);
+        // A vendor-free host runs potrf (the factor), potri and its children natively (select::kHostNative).
+        if (BK == Backend::NETLIB && !select::kHasNetlib && !select::kHostNative)
+            GTEST_SKIP() << "NETLIB without LAPACKE/CBLAS or a host-native image has no potrf route";
     }
 
     Queue& q() { return *this->ctx; }
@@ -78,10 +80,13 @@ protected:
     }
 
     // The Cholesky factor in A's triangle, through the public potrf; returns its info.
-    // False when the build has no potrf route for the shape (vendor-free: the native potrf does not cover it).
+    // Every queue SetUp admits has a potrf route for every shape (the native blocked driver takes either
+    // triangle at any n), so a missing one is a failure, never a skip.
     bool factor(Sys<T>& p, UnifiedVector<int32_t>& info) {
         info = UnifiedVector<int32_t>(static_cast<size_t>(p.a.batch_size()), int32_t(-12345));
-        return ts::potrf_in_place<BK, T>(q(), p.a, p.uplo, info.to_span());
+        const bool routed = ts::potrf_in_place<BK, T>(q(), p.a, p.uplo, info.to_span());
+        if (!routed) ADD_FAILURE() << "potrf has no route for n=" << p.a.rows() << " " << ts::uplo_name(p.uplo);
+        return routed;
     }
 
     Event run_potri(Sys<T>& p, bool full, UnifiedVector<int32_t>* info = nullptr) {
@@ -270,7 +275,7 @@ TYPED_TEST(PotriTest, PotriWorkspaceAndDegenerateCalls) {
     constexpr Backend BK = TestFixture::BK;
     auto p = this->sys(100, 3, Uplo::Lower, 3u);
     UnifiedVector<int32_t> info;
-    if (!this->factor(p, info)) GTEST_SKIP() << "no potrf route for this shape in this build";
+    if (!this->factor(p, info)) return;  // factor() recorded the failure
     {
         const select::ScopedPin<PotriChoice> pin("potri", PotriChoice{ops::potri::Cta{}});
         if (100 <= cta_ceiling<BK, T>(this->q())) EXPECT_EQ((potri_buffer_size<BK, T>(this->q(), p.a, p.uplo)), 0u);
@@ -301,7 +306,7 @@ TYPED_TEST(PotriTest, PotriBlockedPartsCoverEveryItem) {
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
         auto p = this->sys(70, 10, uplo, 404u);
         UnifiedVector<int32_t> info;
-        if (!this->factor(p, info)) GTEST_SKIP() << "no potrf route for this shape in this build";
+        if (!this->factor(p, info)) return;  // factor() recorded the failure
         const select::ScopedPin<PotriChoice> pin("potri", PotriChoice{ops::potri::Blocked{64}});
         const size_t whole = potri_buffer_size<BK, T>(this->q(), p.a, p.uplo);
         const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "3");
@@ -381,7 +386,7 @@ TYPED_TEST(PotriTest, BatchBeyondTheGridYLimitIsCovered) {
     for (const PotriChoice& c : {PotriChoice{ops::potri::Cta{}}, PotriChoice{ops::potri::Blocked{64}}}) {
         auto p = this->sys(n, batch, Uplo::Upper, 4242u, 1.0, /*identical=*/true);
         UnifiedVector<int32_t> info;
-        if (!this->factor(p, info)) GTEST_SKIP() << "no potrf route for this shape in this build";
+        if (!this->factor(p, info)) return;  // factor() recorded the failure
         UnifiedVector<int32_t> pinfo(batch, int32_t(-7));
         {
             const select::ScopedPin<PotriChoice> pin("potri", c);
@@ -398,7 +403,7 @@ TYPED_TEST(PotriTest, BatchBeyondTheGridYLimitIsCovered) {
 TYPED_TEST(PotriTest, ShortInfoSpanIsRefused) {
     auto p = this->sys(4, 3, Uplo::Lower, 8u);
     UnifiedVector<int32_t> info;
-    if (!this->factor(p, info)) GTEST_SKIP() << "no potrf route for this shape in this build";
+    if (!this->factor(p, info)) return;  // factor() recorded the failure
     UnifiedVector<int32_t> short_info(2, int32_t(-7));
     EXPECT_THROW((void)this->run_potri(p, false, &short_info), batchlas::invalid_argument);
 }
@@ -410,7 +415,7 @@ TYPED_TEST(PotriTest, PotriCoverageShowsEachFamilyAndTheBlockedChildren) {
     // Factored before coverage is switched on, so potrf's own children leave no rows.
     auto lo = this->sys(16, 3, Uplo::Lower, 5u), hi = this->sys(200, 3, Uplo::Lower, 6u);
     UnifiedVector<int32_t> info;
-    if (!this->factor(lo, info) || !this->factor(hi, info)) GTEST_SKIP() << "no potrf route for this shape in this build";
+    if (!this->factor(lo, info) || !this->factor(hi, info)) return;  // factor() recorded the failure
     const auto rows = ts::reached_rows([&] {
         const ScopedEnvVar clear("BATCHLAS_POTRI_ROUTE", nullptr);
         {

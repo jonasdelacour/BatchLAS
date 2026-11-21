@@ -19,7 +19,7 @@ namespace batchlas::ops::potrs {
 template <class Scalar>
 bool fused_fits(const select::Device& d, int64_t n, int64_t nrhs) {
     const auto cap = ops::getrs::getrs_fused_max_rhs_elems<Scalar>(static_cast<std::size_t>(d.slm_budget));
-    return d.is_gpu && d.has_sg32 && n >= 1 && nrhs >= 1 && nrhs <= ops::getrs::kGetrsFusedMaxRhs &&
+    return select::natives_run_on(d) && d.has_sg32 && n >= 1 && nrhs >= 1 && nrhs <= ops::getrs::kGetrsFusedMaxRhs &&
            static_cast<std::size_t>(n) * static_cast<std::size_t>(nrhs) <= cap;
 }
 

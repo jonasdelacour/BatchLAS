@@ -36,6 +36,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <map>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -97,7 +98,9 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        TEST_SUPPORT_SKIP_NETLIB_WITHOUT_LAPACK(BK);
+        // A vendor-free host runs potrf and both potrs families natively (select::kHostNative).
+        if (BK == Backend::NETLIB && !select::kHasNetlib && !select::kHostNative)
+            GTEST_SKIP() << "NETLIB without LAPACKE/CBLAS or a host-native image has no potrf route";
     }
 
     Queue& q() { return *this->ctx; }
@@ -118,10 +121,14 @@ protected:
         return p;
     }
 
-    // The Cholesky factor in A's triangle, through the public potrf. False when the build has no potrf route.
+    // The Cholesky factor in A's triangle, through the public potrf. Every queue SetUp admits has a potrf
+    // route for every shape (the native blocked driver takes either triangle at any n), so none is a failure.
     bool factor(Sys<T>& p) {
         UnifiedVector<int32_t> info(static_cast<size_t>(p.a.batch_size()), int32_t(-12345));
-        if (!ts::potrf_in_place<BK, T>(q(), p.a, p.uplo, info.to_span())) return false;
+        if (!ts::potrf_in_place<BK, T>(q(), p.a, p.uplo, info.to_span())) {
+            ADD_FAILURE() << "potrf has no route for n=" << p.a.rows() << " " << ts::uplo_name(p.uplo);
+            return false;
+        }
         for (int it = 0; it < p.a.batch_size(); ++it) EXPECT_EQ(info[it], 0) << "potrf failed on item " << it;
         return true;
     }
@@ -259,7 +266,8 @@ TYPED_TEST(PotrsTest, NonSpdItemIsFlaggedAndTheOthersAreUndisturbed) {
 
 // The fused pin on both sides of each ceiling: the accumulator width (nrhs 8 runs, 9 is refused) and the
 // SLM capacity, LAUNCHED at the advertised ceiling (nrhs = 8, n = cap / 8 runs and solves; n + 1 is
-// refused). trsm and Auto run on both sides; an unknown spelling throws. On a CPU queue fused never runs.
+// refused). trsm and Auto run on both sides; an unknown spelling throws. A CPU queue with netlib never
+// runs fused; a vendor-free host does.
 // BREAK (run 2026-10-26): fused_fits drops `nrhs <= kGetrsFusedMaxRhs`. RED: this test (the nrhs = 9 pin is
 // refused by the kernel's entry check, not by selection) and EachFamilySolves (its fused pin at nrhs 9 and 20
 // reaches the kernel and throws), every CUDA type; every other potrs test GREEN, NETLIB GREEN.
@@ -271,15 +279,27 @@ TYPED_TEST(PotrsTest, PinnedCandidatesStraddleTheirLimits) {
     if (gpu) ASSERT_GT(ceil_n, 64) << "the fused SLM capacity reads implausibly small";
     struct Cell { int n, nrhs; bool fused_runs; };
     const Cell cells[] = {{24, 8, gpu}, {24, 9, false}, {ceil_n, 8, gpu}, {ceil_n + 1, 8, false}};
+    // A vendor-free host's 256 KiB of local memory puts the ceiling at n = cap / 8 (7932 for float), where
+    // the factor dominates: there only the ceiling's own family (fused) runs at the large cells. One factor
+    // per cell serves every family; a refused pin (selection, before any data is read) needs none.
+    const bool host = this->ctx->device().type != DeviceType::GPU;
     for (const Cell& k : cells) {
         const int batch = k.n > 256 ? 2 : 3;
+        std::optional<Sys<T>> factored;
         for (const char* family : {"fused", "trsm", "auto", "no_such_family"}) {
-            auto p = this->sys(k.n, k.nrhs, batch, Uplo::Lower, 5u + k.n);
-            if (!this->factor(p)) break;
-            const std::string what = std::string(family) + " n=" + std::to_string(k.n) + " nrhs=" + std::to_string(k.nrhs);
             const std::string_view f(family);
+            const bool refused = f == "no_such_family" || (f == "fused" && !k.fused_runs);
+            if (host && k.n > 64 && !refused && f != "fused") continue;
+            auto p = this->sys(k.n, k.nrhs, batch, Uplo::Lower, 5u + k.n);
+            if (!refused && !factored) {
+                if (!this->factor(p)) break;
+                factored = p;
+            } else if (!refused) {
+                p = *factored;
+            }
+            const std::string what = std::string(family) + " n=" + std::to_string(k.n) + " nrhs=" + std::to_string(k.nrhs);
             const Pin pin("potrs", f);
-            if (f == "no_such_family" || (f == "fused" && !k.fused_runs)) {
+            if (refused) {
                 // Refused by selection itself (can_run), not by the kernel's own entry check.
                 std::string err;
                 try {
@@ -393,7 +413,9 @@ TYPED_TEST(PotrsTest, AutoReadsTheShippedTable) {
 // so per run) AutoReadsTheShippedTable and FusedMatchesPosv for some CUDA types, with either suite.
 TYPED_TEST(PotrsTest, SaturatingBatchOfIdenticalItemsIsBitIdentical) {
     using T = typename TestFixture::T;
-    if (TestFixture::BK == Backend::NETLIB) GTEST_SKIP() << "no shared-local-memory kernel runs on the host queue";
+    // A vendor-free host runs the fused (shared-local-memory) kernel too; with netlib the host runs LAPACKE.
+    if (TestFixture::BK == Backend::NETLIB && !select::kHostNative)
+        GTEST_SKIP() << "no shared-local-memory kernel runs on the host queue";
     for (const char* family : {"fused", "trsm"})
         for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
             for (auto [n, nrhs] : {std::tuple{16, 8}, std::tuple{40, 5}, std::tuple{130, 8}}) {
