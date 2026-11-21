@@ -13,6 +13,7 @@
 // The solution vector is NOT permuted -- x_i is the i-th unknown -- so the store writes
 // rX at row `rowid`, exactly as the factor store does.
 
+#include <batchlas/backend_config.h>
 #include <src/ops/gesv/gesv_native.hh>
 #include <src/kernels/common/info_target.hh>
 #include <src/kernels/common/launch.hh>
@@ -139,15 +140,7 @@ BATCHLAS_UNROLL_FULL
         const auto px = device::wrap(part);
         const int wg_id = static_cast<int>(it.get_group_linear_id());
         const int lane = static_cast<int>(part.get_local_linear_id());
-#if defined(__SPIR__)
-        // The DPC++ CPU image of the unrolled NC = 32 float kernels reads sub-group id 0 in both
-        // sub-groups, so two partitions solved item 0 and item 1 was never written. The work-item
-        // id gives the same partition on every device (the work-group is kMpw partitions of N).
-        // evidence: docs/design/vendor-independence.md#the-host-native-gate
-        const int pidx = static_cast<int>(it.get_local_linear_id()) / N;
-#else
         const int pidx = tiny_native::tiny_partition_id(sg, part);
-#endif
         const device::MatrixSlot ms = device::matrix_slot(wg_id, kMpw, pidx, batch);
         const int prob_id = ms.b;
 
@@ -305,10 +298,14 @@ BATCHLAS_UNROLL_FULL
     }
 };
 
-// The local-memory row is for the 32-bit types at N >= 16, where it was measured.
+// The local-memory row is for the 32-bit types at N >= 16, where it was measured. A vendor-free
+// build keeps the sub-group broadcast: its opencl:cpu image of the float row kernels at N = 32 solves
+// wrongly (residual 2.0, odd items unwritten); the broadcast arm is right there at every NC and NR.
+// evidence: docs/design/vendor-independence.md#the-host-native-gate
 template <typename Scalar, int N>
 constexpr bool gesv_tiny_slm() {
-    return (std::is_same_v<Scalar, float> || std::is_same_v<Scalar, std::complex<float>>) && N >= 16;
+    return !BATCHLAS_HAS_HOST_NATIVE &&
+           (std::is_same_v<Scalar, float> || std::is_same_v<Scalar, std::complex<float>>) && N >= 16;
 }
 
 template <typename Scalar, int N, int NC, int NR, int MinBlocks, bool Masked>
