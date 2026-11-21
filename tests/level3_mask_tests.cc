@@ -141,7 +141,10 @@ protected:
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
-        if (!this->ctx || this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native families are GPU kernels here";
+        // A vendor-free host runs the native families too (select::kHostNative).
+        constexpr bool kHostRuns = B == Backend::NETLIB && select::kHostNative;
+        if (!this->ctx || (this->ctx->device().type != DeviceType::GPU && !kHostRuns))
+            GTEST_SKIP() << "the native families are GPU kernels here";
     }
 
     static T alpha() { return MV<T>::make(0.75, -0.5); }
