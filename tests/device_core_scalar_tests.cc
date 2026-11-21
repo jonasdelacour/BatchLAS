@@ -135,7 +135,11 @@ TYPED_TEST(DeviceCoreScalarTest, SafeRecipTakesEachArmAtItsThreshold) {
     using T = TypeParam;
     using R = real_of<T>;
     auto& d = this->dev;
-    const R tiny = std::numeric_limits<R>::denorm_min() * R(4);  // 1 / tiny overflows
+    // The divide arm: 1 / tiny overflows. A device that flushes subnormals (Metal) reads tiny as
+    // 0, so there the arm is reached from the other end: 1 / 2^(emax - 1) is subnormal, flushed
+    // to an exactly zero reciprocal.
+    const R tiny = d.template flushes_subnormals<R>() ? std::ldexp(R(1), std::numeric_limits<R>::max_exponent - 1)
+                                                      : std::numeric_limits<R>::denorm_min() * R(4);
     const std::vector<T> dd{T(R(3)), T(tiny), T(0), batchlas::device::lift<T>(batchlas::device::safmin<R>())};
     const std::vector<T> yy{val<T>(71), T(tiny), val<T>(73), val<T>(74)};
     T* dp = d.up(dd);
@@ -155,7 +159,7 @@ TYPED_TEST(DeviceCoreScalarTest, SafeRecipTakesEachArmAtItsThreshold) {
     EXPECT_EQ(F[0], 1);
     EXPECT_EQ(F[1], 0);
     EXPECT_LE(err(got[0], wide(yy[0]) / LD<T>(3)), tol<T>());
-    EXPECT_EQ(F[2], 0) << "1 / tiny overflows: the divide arm";
+    EXPECT_EQ(F[2], 0) << "1 / tiny is not finite and nonzero: the divide arm";
     EXPECT_EQ(F[3], 0);
     EXPECT_LE(err(got[1], LD<T>(1)), tol<T>()) << "tiny / tiny = 1 only through the division";
     EXPECT_EQ(F[4], 0);

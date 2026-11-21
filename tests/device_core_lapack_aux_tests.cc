@@ -246,7 +246,9 @@ TYPED_TEST(DeviceCoreLapackAuxTest, LarfFormsLoopsAndLaneLarfg) {
         const int l = part.lid();
         T e = xl[l];
         const T t = batchlas::device::larfg_lanes(part, 11, 0, e, e, l >= 1 && l < 11);
-        if (g < 16) xl[l] = (l < 11) ? e : xl[l];
+        // A branch, not `(l < 11) ? e : xl[l]`: that select mixes a private and a global
+        // address, which Metal (no generic address space) rejects.
+        if (g < 16 && l < 11) xl[l] = e;
         if (g == 0) tau_out[0] = t;
     });
     const auto g1 = d.down(c1, c_h.size()), g2 = d.down(c2, c_h.size()), gf = d.down(cf, c_h.size());
@@ -366,10 +368,17 @@ TYPED_TEST(DeviceCoreLapackAuxTest, NormsScalingConjugationPacking) {
     EXPECT_EQ(std::string(ge.begin(), ge.end()), "NRCB");
     const auto gs = d.down(as, a_h.size()), gc = d.down(ac, a_h.size()), gu = d.down(au, a_h.size()), gq = d.down(aq, a_h.size());
     const long double ratio = std::ldexp(1.0L, -emin / 2 - (emin + 4));  // cto / cfrom
+    // A device that flushes subnormals (Metal) reads a pre-scaled part below 2^emin as 0.
+    const bool ftz = d.template flushes_subnormals<R>();
+    const auto seen = [&](T v) {
+        const auto f = [&](R x) { return ftz && std::fpclassify(x) == FP_SUBNORMAL ? R(0) : x; };
+        if constexpr (is_cplx<T>) return wide(T(f(v.real()), f(v.imag())));
+        else return wide(f(v));
+    };
     for (int j = 0; j < n; ++j)
         for (int i = 0; i < n; ++i) {
             const std::size_t k = std::size_t(j) * ld + i;
-            if (i >= j) EXPECT_LE(static_cast<double>(std::abs(wide(gs[k]) / ratio - wide(as_h[k])) / std::abs(wide(as_h[k]))), tol<T>()) << "lascl " << i << "," << j;
+            if (i >= j) EXPECT_LE(static_cast<double>(std::abs(wide(gs[k]) / ratio - seen(as_h[k])) / std::abs(wide(as_h[k]))), tol<T>()) << "lascl " << i << "," << j;
             else EXPECT_TRUE(same_bits(gs[k], as_h[k])) << "lascl upper " << i;
             if (j == 0) EXPECT_TRUE(same_bits(gc[k], conj_t(a_h[k]))) << "lacgv " << i;
             if (i <= j) EXPECT_TRUE(same_bits(gu[k], a_h[k])) << "packed round trip " << i << "," << j;

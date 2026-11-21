@@ -12,6 +12,7 @@
 #include <complex>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <optional>
 #include <vector>
 
@@ -70,6 +71,15 @@ struct Dev {
                  f(it, batchlas::util::get_raw_ptr(lm));
              });
          }).wait_and_throw();
+    }
+    // True when the device flushes a subnormal Real operand to zero (Metal). Probed by a
+    // kernel: AdaptiveCpp reports fp_config::denorm on every device.
+    template <class Real> bool flushes_subnormals() {
+        Real* p = up(std::vector<Real>{std::numeric_limits<Real>::denorm_min() * Real(4), Real(1)});
+        run<32>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
+            if (it.get_local_linear_id() == 0) p[0] = p[0] * p[1];
+        });
+        return down(p, 1)[0] == Real(0);
     }
     ~Dev() {
         if (ctx)
