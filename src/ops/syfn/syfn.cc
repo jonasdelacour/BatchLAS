@@ -16,6 +16,7 @@
 #include <src/util/batch_mask.hh>
 #include <src/ops/syfn/syfn_native.hh>
 #include <src/queue.hh>
+#include <src/select/vendor.hh>
 #include <src/util/template-instantiations.hh>
 
 #include <sycl/sycl.hpp>
@@ -116,11 +117,11 @@ void check_call(const Queue& q, const char* op, Span<int32_t> info, int64_t batc
         detail::require_arg_accessible(q, fn.weights, std::string(op) + ": weights");
 }
 
-// The host backend's syrk and herk are its BLAS, which would refuse a mask only after syev has
-// written info: refuse up front there.
+// A LAPACKE host's syrk and herk are its BLAS, which would refuse a mask only after syev has
+// written info: refuse up front there. A vendor-free host runs them natively (select::kHostNative).
 template <Backend B, typename... V>
 void refuse_host_mask(const char* op, const V&... v) {
-    if constexpr (B == Backend::NETLIB) ::batchlas::detail::refuse_batch_mask(op, v...);
+    if constexpr (B == Backend::NETLIB && !select::kHostNative) ::batchlas::detail::refuse_batch_mask(op, v...);
 }
 
 }  // namespace ops::syfn

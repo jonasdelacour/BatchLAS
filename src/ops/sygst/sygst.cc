@@ -40,7 +40,8 @@ select::Key key_of(const MV<Scalar>& A, int itype, Uplo uplo) {
 inline bool blocked_nb_compiled(int nb) { return nb == 32 || nb == 64 || nb == 128 || nb == 256; }
 
 // Correctness only. The children refuse what they cannot run; a heterogeneous batch has no family.
-// Blocked's children are GPU level-3 natives, and its diagonal kernel must fit the device's SLM.
+// Blocked's children are level-3 natives (a GPU, or a vendor-free host: select::natives_run_on), and
+// its diagonal kernel must fit the device's SLM.
 template <Backend B, class Scalar>
 bool can_run(const SygstChoice& c, const select::Device& d, const MV<Scalar>& A, const MV<Scalar>& Bf) {
     const bool homogeneous = !A.is_heterogeneous() && !Bf.is_heterogeneous() && A.rows() >= 1;
@@ -49,7 +50,7 @@ bool can_run(const SygstChoice& c, const select::Device& d, const MV<Scalar>& A,
     return std::visit(overloaded{
         [&](const Blocked& b) {
             const int kb = std::min(ops::sygst::kDiagMaxOrder, A.rows());
-            return homogeneous && d.is_gpu && blocked_nb_compiled(b.nb) && d.max_wg >= ops::sygst::kDiagWg &&
+            return homogeneous && select::natives_run_on(d) && blocked_nb_compiled(b.nb) && d.max_wg >= ops::sygst::kDiagWg &&
                    static_cast<std::int64_t>(ops::sygst::diag_slm_bytes<Scalar>(kb)) <= d.slm_budget;
         },
         [&](TwoSided) { return homogeneous; },
