@@ -25,12 +25,17 @@
 #include <batchlas/blas/options.hh>
 #include <batchlas/device/lapack/syev.hh>
 #include <batchlas/device/sg_partition.hh>
+#include <src/select/vendor.hh>
+#include <tests/host_eigen_reference.hh>
 
 #include <algorithm>
 #include <cmath>
+#include <complex>
 #include <limits>
 #include <string>
+#include <type_traits>
 #include <utility>
+#include <vector>
 
 using namespace device_core_test;
 
@@ -417,7 +422,8 @@ template <class T, Uplo UL> void blocked_graded(Dev& dev) {
 TYPED_TEST(DeviceApiSyevBlockedTest, GradedSpectrumLower) { blocked_graded<TypeParam, Uplo::Lower>(this->dev); }
 TYPED_TEST(DeviceApiSyevBlockedTest, GradedSpectrumUpper) { blocked_graded<TypeParam, Uplo::Upper>(this->dev); }
 
-// Random input against the host syev's eigenvalues (another route: no self-reference).
+// Random input against the host syev's eigenvalues (the vendor solver: no self-reference), or
+// vendor-free, where that syev is BatchLAS's own, against host_eigen_reference.hh.
 TYPED_TEST(DeviceApiSyevBlockedTest, ValuesMatchTheHostSyev) {
     using T = TypeParam;
     using Re = real_of<T>;
@@ -434,12 +440,25 @@ TYPED_TEST(DeviceApiSyevBlockedTest, ValuesMatchTheHostSyev) {
                     x = T(x.real(), 0);
                 }
         const auto g = blocked_device<kN, Uplo::Lower, T>(dev, n, ld, kBlockedBatch, a0);
-        T* Ah = dev.up(a0);
-        Re* wh = dev.alloc<Re>(std::size_t(n) * kBlockedBatch, std::numeric_limits<Re>::quiet_NaN());
-        MatrixView<T, MatrixFormat::Dense> Av(Ah, n, n, ld, ld * n, kBlockedBatch);
-        (void)syev<kB>(*dev.ctx, Av, Span<Re>(wh, std::size_t(n) * kBlockedBatch), SyevOptions{kN, Uplo::Lower});
-        dev.ctx->wait();
-        const auto ref = dev.down(wh, std::size_t(n) * kBlockedBatch);
+        std::vector<double> ref(std::size_t(n) * kBlockedBatch);
+        if constexpr (batchlas::select::solver_vendor_available<kB>) {
+            T* Ah = dev.up(a0);
+            Re* wh = dev.alloc<Re>(std::size_t(n) * kBlockedBatch, std::numeric_limits<Re>::quiet_NaN());
+            MatrixView<T, MatrixFormat::Dense> Av(Ah, n, n, ld, ld * n, kBlockedBatch);
+            (void)syev<kB>(*dev.ctx, Av, Span<Re>(wh, std::size_t(n) * kBlockedBatch), SyevOptions{kN, Uplo::Lower});
+            dev.ctx->wait();
+            const auto w = dev.down(wh, std::size_t(n) * kBlockedBatch);
+            std::copy(w.begin(), w.end(), ref.begin());
+        } else {
+            // Vendor-free: the host syev is a BatchLAS route, so the host Householder + bisection
+            // reference (host_eigen_reference.hh) stands in for the vendor solver.
+            using D = std::conditional_t<is_cplx<T>, std::complex<double>, double>;
+            for (int b = 0; b < kBlockedBatch; ++b) {
+                const auto h = herm_of(a0, n, ld, Uplo::Lower, b);
+                const auto w = test_utils::host_hermitian_eigenvalues<D>(n, std::vector<D>(h.begin(), h.end()));
+                std::copy(w.begin(), w.end(), ref.begin() + std::ptrdiff_t(b) * n);
+            }
+        }
         double worst = 0;
         for (int b = 0; b < kBlockedBatch; ++b) {
             long double fro = 0;
