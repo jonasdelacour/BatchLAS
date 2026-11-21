@@ -809,7 +809,7 @@ void expect_graded_fill_deterministic(Queue& ctx, int n, int batch) {
 // Real types reach no reading route at n <= 40; their guards are the heavy
 // AutoReadsOnlyTheNamedTriangleAtLargeN (sy2sb) and SyevCandidates.OtherTriangleIsNeverRead.
 TYPED_TEST(SyevTest, AutoIgnoresUnreferencedTriangle) {
-    if (TestFixture::BackendType == Backend::NETLIB && !BATCHLAS_HAS_LAPACKE)
+    if (TestFixture::BackendType == Backend::NETLIB && !BATCHLAS_HAS_LAPACKE && !kNativesRun<TestFixture::BackendType>)
         GTEST_SKIP() << "no LAPACKE: NETLIB syev has no route in this build";
     expect_auto_ignores_other_triangle<typename TestFixture::ScalarType, TestFixture::BackendType>(*this->ctx,
                                                                                                    {5, 32, 40});
@@ -817,10 +817,11 @@ TYPED_TEST(SyevTest, AutoIgnoresUnreferencedTriangle) {
 
 // Heavy tier (*AutoReads*): two_stage is Auto's choice for jobz=N here and for float V at n = 1024.
 // NETLIB is skipped: its route is reference LAPACK, which reads only `uplo` and is never mirrored,
-// and its n = 1024 solves cost ~100 s per dtype.
+// or vendor-free blocked, whose mirror AutoIgnoresUnreferencedTriangle runs at n = 40; and its
+// n = 1024 solves cost ~100 s per dtype.
 TYPED_TEST(SyevTest, AutoReadsOnlyTheNamedTriangleAtLargeN) {
     if constexpr (TestFixture::BackendType == Backend::NETLIB) {
-        GTEST_SKIP() << "reference LAPACK reads only uplo; covered at small n by AutoIgnoresUnreferencedTriangle";
+        GTEST_SKIP() << "host route covered at small n by AutoIgnoresUnreferencedTriangle (n = 1024: ~100 s per dtype)";
     } else {
         expect_auto_ignores_other_triangle<typename TestFixture::ScalarType, TestFixture::BackendType>(*this->ctx,
                                                                                                        {400, 1024});
