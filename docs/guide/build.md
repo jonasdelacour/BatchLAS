@@ -28,8 +28,8 @@ tested by hand, or untested.
 | --- | --- | --- | --- |
 | Primary | `intel/llvm` DPC++ (clang 22) built `--cuda`, CUDA 13.3, Ubuntu 26.04 | RTX 4090, `sm_89` | Library, tests, benchmarks; CI GPU gate |
 | Second GPU box | same toolchain | RTX PRO 6000, `sm_120` | Built and tested; `sm_120` tables measured here |
-| AdaptiveCpp generic | AdaptiveCpp 25.10.0, LLVM 20, SSCP, CUDA 13.2 | RTX PRO 6000, `sm_120` | Built and tested; ledger `tests/known-failures-acpp.txt` |
-| AdaptiveCpp multipass CUDA | AdaptiveCpp `develop` (25.10.0+), `BATCHLAS_ACPP_TARGETS=cuda:sm_89`, CUDA 12.8 | RTX 4090, `sm_89` | Built and tested; ledger `tests/known-failures-acpp-cuda.txt` ([multipass CUDA](../design/sycl-implementations.md#sycl-impl-cuda-aot)) |
+| AdaptiveCpp generic | AdaptiveCpp 25.10.0, LLVM 20, SSCP, CUDA 13.2 | RTX PRO 6000, `sm_120` | Experimental: built and tested; ledger `tests/known-failures-acpp.txt` |
+| AdaptiveCpp multipass CUDA | AdaptiveCpp `develop` (25.10.0+), `BATCHLAS_ACPP_TARGETS=cuda:sm_89`, CUDA 12.8 | RTX 4090, `sm_89` | Experimental: built and tested; ledger `tests/known-failures-acpp-cuda.txt` ([multipass CUDA](../design/sycl-implementations.md#sycl-impl-cuda-aot)) |
 | Apple GPU | AdaptiveCpp + local patches, Homebrew `llvm@21`, macOS 27 | M5 Max, Metal | float and complex<float> on the GPU ([below](#macos-apple-gpu-through-adaptivecpp-metal)) |
 | CPU only | oneAPI `icpx` 2025.x | none | Builds; no NVIDIA support |
 | AMD / ROCm | — | — | Unsupported (code paths only): no build or CI job compiles them, nothing runs them |

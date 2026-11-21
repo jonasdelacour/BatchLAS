@@ -13,12 +13,20 @@ every measurement behind a routing decision).
 
 ## Status
 
-- **Research code, no release tag.** Pin to a commit. `main` carries known test failures, tracked
-  in `tests/known-failures.txt` ([CI](../docs/ci.md)).
+- **Release 1.0.0**, the first tagged release: what changed is in the
+  [changelog](../docs/changelog.md), and what 1.x keeps stable in
+  [versioning and compatibility](../docs/cpp-api.md#versioning-and-compatibility). Tests with known
+  failures per toolchain are tracked in `tests/known-failures*.txt` ([CI](../docs/ci.md)).
 - **Scalar types**: `float`, `double`, `std::complex<float>`, `std::complex<double>`.
 - **SYCL implementations**: DPC++ (`intel/llvm` built with CUDA) and AdaptiveCpp 25.10
   (`-DBATCHLAS_SYCL_IMPL=ACPP`) from one tree
   ([two SYCL implementations](../docs/design/sycl-implementations.md)).
+- **Tested platforms** ([full table](../docs/guide/build.md#tested-platforms)): DPC++ with CUDA on
+  RTX 4090 (`sm_89`, CI gate) and RTX PRO 6000 (`sm_120`); vendor-free builds on the same GPUs and
+  their host CPU. AdaptiveCpp on Linux (generic SSCP and multipass CUDA) is **experimental**. Apple
+  GPUs need AdaptiveCpp with every local patch in `scripts/macos/adaptivecpp-patches/` (0001 to
+  0014; [macOS](../docs/guide/build.md#macos-apple-gpu-through-adaptivecpp-metal)). ROCm is
+  **unsupported (code paths only)**.
 
 | Backend | Runs on | Status |
 | --- | --- | --- |
