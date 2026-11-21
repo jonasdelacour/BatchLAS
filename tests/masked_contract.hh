@@ -221,14 +221,18 @@ void check(batchlas::Queue& q, const char* op, const std::string& spelling, cons
     std::optional<ScopedPin<Choice>> pin;
     if (op) pin.emplace(op, spelling, StrictPin{});
     const bool bitwise = !c.verify_active;
+    // On an Apple GPU (Metal) bits agree only within one kernel build, and the masked and unmasked
+    // calls' builds differ in their last bits: there the reference is the all-active masked call.
+    const bool masked_reference = c.masked_reference || (q.device().type == batchlas::DeviceType::GPU &&
+                                                         q.device().get_vendor() == batchlas::Vendor::APPLE);
     const auto is_reference = [&](const Pattern& p) {
-        return c.masked_reference ? p.name == "all-active" && p.chunk_items == 0 : p.bytes.empty();
+        return masked_reference ? p.name == "all-active" && p.chunk_items == 0 : p.bytes.empty();
     };
     detail::Workspace ws(q);
     std::optional<std::size_t> size;
     std::map<int, detail::Bytes> refs;  // per chunk setting
     for (const Pattern& p : patterns_for(c)) {
-        if (p.bytes.empty() && c.masked_reference && bitwise) continue;
+        if (p.bytes.empty() && masked_reference && bitwise) continue;
         SCOPED_TRACE(std::string(op ? op : "op") + " " + spelling + " pattern " + p.name);
         const DeviceMask mask(q, p.bytes);
         std::size_t need = 0;
@@ -242,7 +246,7 @@ void check(batchlas::Queue& q, const char* op, const std::string& spelling, cons
         // The reference first, so the reach capture below sees masked calls only.
         const bool self_reference = bitwise && is_reference(p) && !refs.count(p.chunk_items);
         if (bitwise && !self_reference && !refs.count(p.chunk_items)) {
-            const Pattern r = c.masked_reference ? by_rule("all-active", c.batch, [](int) { return true; }, p.chunk_items)
+            const Pattern r = masked_reference ? by_rule("all-active", c.batch, [](int) { return true; }, p.chunk_items)
                                                  : Pattern{"none", {}, p.chunk_items};
             const DeviceMask rm(q, r.bytes);
             refs[p.chunk_items] = detail::run(q, c, r, rm, c.buffer_size ? c.buffer_size(rm.span()) : 0, ws, nullptr);

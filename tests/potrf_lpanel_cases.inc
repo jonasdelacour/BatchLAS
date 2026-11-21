@@ -544,8 +544,9 @@ TYPED_TEST(PotrfLpanelTest, FirstColumnReciprocalIsAccurate) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
     // Measured worst (eps), RTX 4090: float and cfloat 1.053 with rsqrt + Newton (origin/main's
-    // bare rsqrt.approx fold: 1.306), double and cdouble 1.148.
-    constexpr double kMaxEps = std::is_same_v<R, float> ? 1.1 : 1.2;
+    // bare rsqrt.approx fold: 1.306), double and cdouble 1.148; float and cfloat on the 1 / sqrt
+    // path (rsqrt_newton_path() false, Metal M5 Max) 1.163.
+    const double kMaxEps = std::is_same_v<R, float> && this->rsqrt_newton_path() ? 1.1 : 1.2;
 
     const auto rel_err = [](R got, long double want) {
         constexpr long double eps = std::numeric_limits<R>::epsilon();

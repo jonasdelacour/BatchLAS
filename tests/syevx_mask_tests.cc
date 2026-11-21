@@ -212,16 +212,24 @@ protected:
         SCOPED_TRACE(what);
         Queue& q = *this->ctx;
         Problem<T, B> pr(q, n, batch, neigs, JobType::EigenVectors, p, false);
+        // sy2sb's larft needs 32-wide sub-groups, which the AdaptiveCpp host device (size 1) lacks:
+        // there the unmasked call is refused too, and only the size query's refusal is checked.
+        const bool sg32 = q.device().supports_sub_group_size(32);
         {
             UnifiedVector<std::byte> ws(std::max<std::size_t>(pr.buffer_size({}), 1));
             pr.prepare();
-            ASSERT_NO_THROW(pr.call({}, ws.to_span())) << "the unmasked call must run";
+            if (sg32) {
+                ASSERT_NO_THROW(pr.call({}, ws.to_span())) << "the unmasked call must run";
+            } else {
+                EXPECT_THROW(pr.call({}, ws.to_span()), batchlas::unsupported) << "larft ran without 32-wide sub-groups";
+            }
             q.wait();
         }
         std::vector<std::uint8_t> bytes(static_cast<std::size_t>(batch));
         for (int b = 0; b < batch; ++b) bytes[std::size_t(b)] = b % 2;
         const mc::DeviceMask mask(q, bytes);
         EXPECT_THROW((void)pr.buffer_size(mask.span()), batchlas::unsupported) << "the size query must refuse too";
+        if (!sg32) return;
         UnifiedVector<std::byte> ws(std::max<std::size_t>(pr.buffer_size({}), 1));
         pr.prepare();
         q.wait();
