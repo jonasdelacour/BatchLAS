@@ -45,9 +45,9 @@ select::Key key_of(const MV<Scalar>& A, JobType jobz) {
 // Correctness only (R3): false means the driver would throw or compute garbage. The native
 // drivers run on a GPU backend, or on the NETLIB host of a vendor-free build (select::kHostNative
 // and natives_run_on; elsewhere a NETLIB instantiation would call netlib on device memory, and
-// the CTA kernels have no CPU image), and need a square A with n >= 1; the small solvers add n <= 32 and a 32-wide
-// sub-group, Blocked and TwoStage a batch >= 1 (the small drivers do not check it). Blocked and
-// TwoStage take Upper by mirroring into Lower (uplo_mirror.hh). Every family, the vendor included,
+// the CTA kernels have no CPU image), and need a square A with n >= 1; the small solvers add
+// n <= 32 and a 32-wide sub-group, Blocked and TwoStage a batch >= 1 (the small drivers do not
+// check it). Blocked and TwoStage take Upper by mirroring into Lower (uplo_mirror.hh). Every family, the vendor included,
 // runs each item at the top-level order, so none takes a heterogeneous batch. Cta and CtaFused also
 // exclude ROCm, where steqr_cta gives wrong eigenvalues (gfx1200). A batch mask runs on every native
 // family and the NETLIB vendor; the device vendors cannot skip an item.

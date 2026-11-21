@@ -284,8 +284,10 @@ fullerene workloads are double: C120 is \f$n = 480\f$ at batch about 1819, C300 
 
 **Routes.** No table or `can_run` change was needed: every row in the band lists native families after
 `vendor`, so `select::choose` takes the next entry (sm_89: `blocked` for `jobz=V`, `two_stage` for `jobz=N`;
-sm_120: whatever the deep row ranks next), never the last resort. The CPU (NETLIB) queue has no route and throws
-`NoRouteError` by design.
+sm_120: whatever the deep row ranks next), never the last resort. The CPU (NETLIB) queue runs the native families
+itself (@ref design_vendor_independence, "The host-native gate"): it has no table, so Auto takes the last resort, `blocked`;
+`cta`, `cta_fused` and `jacobi` run there by pin, and `two_stage` does not (its `sy2sb` runs the public `geqrf`,
+which has no host route).
 
 **Workspace at the fullerene batch.** Blocked once sized its workspace for the whole batch: 22831 MiB at C120,
 which with A does not fit 24 GB (the test passed only because managed memory oversubscribes). Each driver now
@@ -300,7 +302,7 @@ A `batch_range` view has no pointer array, but `two_stage`'s panel `geqrf` reads
 two-stage call reserves one array (largest part's length) after the part workspace.
 
 **Tests** (`tests/syev_tests.cc`, `DoubleBand*`, `BatchPartsUnderAScratchBudget`,
-`NativeFamiliesFitTheScratchBudgetAtFullereneShapes`, `VendorFreeCpuHasNoRoute`): graded Hermitian input,
+`NativeFamiliesFitTheScratchBudgetAtFullereneShapes`, `VendorFreeCpuRunsNativeRoutes`): graded Hermitian input,
 condition \f$10^6\f$, mostly padded ld/stride with a poisoned unnamed triangle; the saturating cases are heavy-tier.
 
 **Still to time:** vendor-free `blocked` against `two_stage` for `jobz=V` at \f$480 \le n \le 1600\f$, batch \f$\ge 128\f$ and the
