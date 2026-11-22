@@ -616,7 +616,7 @@ def page(root):
             "the qualified name after the brief links to the member's documentation when Doxygen has it. "
             "Signatures are grouped by the child groups of @ref %s, then by header. `detail` and anonymous "
             "namespaces, class members, specialisations and variable templates are left out, and so are "
-            "the export and inlining macros. Conventions, tiers and the launch frame: @ref design_device_la."
+            "the export and inlining macros. Conventions, tiers and the launch frame: @ref guide_device_api."
             % (WIDTH, PARENT), "",
             "%d signatures; %d of them are low-level helpers, listed last and not covered by the "
             "compatibility promise." % (total, low), ""]
