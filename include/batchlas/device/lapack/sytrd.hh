@@ -1,12 +1,23 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// xSYTRD / xHETRD: sytd2 (the unblocked reduction on a resident tile, one row per item),
-// sytrd<UL, tier::Cta<N>> (one matrix per SgpPartition<N>, the tile in local memory) and
-// sytrd<Lower, tier::Blocked<NB>> (one matrix per WorkGroup<256>, any n: xLATRD panels on A in
-// global memory, the trailing update on the in-group her2k). Strict port: arith::Native and the
-// replaced kernels' expression shapes. detail holds the CTA body (sytrd_cta_run, the host
-// sytrd_cta kernel's too), the xLATRD lower panel (latrd_lower_run, the host latrd kernel's too)
-// and the forms core does not reproduce bit for bit yet: Fit gemv / her2.
+/// @file
+/// @brief Reduction of a symmetric or Hermitian matrix to real tridiagonal form, `sytrd`
+/// (xSYTRD / xHETRD), inside a kernel.
+///
+/// `sytrd<UL, Tier>` leaves the diagonal d, the off-diagonal e and the reflector scalars tau of
+/// \f$A = Q T Q^H\f$, with the reflectors in A in LAPACK's packing. Two tiers:
+/// - `tier::Cta<N>`, N in {4, 8, 16, 32}: the unblocked xSYTD2 on a tile in local memory, n <= N,
+///   one matrix per `SgpPartition<N>`, either triangle.
+/// - `tier::Blocked<NB>`: `Uplo::Lower` only, any n, one matrix per `WorkGroup<256>` with A in
+///   global memory (xLATRD panels and the in-group her2k trailing update).
+///
+/// Both tiers need 32-wide sub-groups (`tier_info::sg_size` is 32). The tile-level `sytd2` the
+/// Cta tier runs is in @ref api_device_lowlevel.
+/// @ingroup api_device_lapack_eig
+// Strict port: arith::Native and the replaced kernels' expression shapes. detail holds the CTA
+// body (sytrd_cta_run, the host sytrd_cta kernel's too), the xLATRD lower panel (latrd_lower_run,
+// the host latrd kernel's too) and the forms core does not reproduce bit for bit yet: Fit gemv /
+// her2.
 
 #include <algorithm>
 #include <cstddef>
@@ -118,14 +129,26 @@ BATCHLAS_DEVICE_INLINE void sytd2_step(const Ex& ex, int i, int m, int ar, const
 
 }  // namespace detail
 
-// xSYTD2 / xHETD2 on the n x n leading block of a resident tile held in FULL storage (both
-// triangles, real diagonal), one row per item (n <= Ex::size); v and w are length >= n scratch.
-// Leaves LAPACK's packing, every element's conjugate mirror kept:
-//   d(i) = A(i,i); Upper: e(i) = A(i,i+1), reflector i in A(0:i-1, i+1) (unit at row i);
-//                  Lower: e(i) = A(i+1,i), reflector i in A(i+2:n-1, i) (unit at row i+1).
-// on_step(i, beta, tau) runs on the item holding reflector i's alpha right after it is formed.
-// Upper returns tau(lid) on item lid (0 past n-2); Lower returns 0 (tau goes through on_step).
-// Step k touches only its active block, so column k is final once step k has run. COLLECTIVE.
+/// @brief xSYTD2 / xHETD2 on the n x n leading block of a resident tile held in full storage
+/// (both triangles, real diagonal), one row per item.
+///
+/// Leaves LAPACK's packing with every element's conjugate mirror kept: d(i) = A(i,i), and
+/// - `Uplo::Upper`: e(i) = A(i,i+1), reflector i in A(0:i-1, i+1) with its unit at row i;
+/// - `Uplo::Lower`: e(i) = A(i+1,i), reflector i in A(i+2:n-1, i) with its unit at row i+1.
+///
+/// Step k touches only its active block, so column k is final once step k has run. COLLECTIVE
+/// over `ex`.
+/// @tparam UL  the packing to leave (both triangles are read)
+/// @param[in]     ex       the executor, one row per item (n <= `Ex::size`)
+/// @param[in,out] a        the tile, full storage
+/// @param         v        scratch of at least n elements
+/// @param         w        scratch of at least n elements
+/// @param[in]     n        the order of the leading block
+/// @param[in]     on_step  `on_step(i, beta, tau)` runs on the item holding reflector i's alpha
+///                         right after the reflector is formed
+/// @return `Uplo::Upper`: tau(lid) on item lid (0 past n - 2); `Uplo::Lower`: 0 (tau reaches the
+///         caller through `on_step`)
+/// @ingroup api_device_lowlevel
 template <Uplo UL, class Ops = arith::Native, class Ex, class MA, class V, class W, class F = NoOp>
 BATCHLAS_DEVICE_INLINE typename MA::value_type sytd2(const Ex& ex, const MA& a, const V& v, const W& w, int n, F&& on_step = {}) {
     using T = typename MA::value_type;
@@ -454,12 +477,20 @@ BATCHLAS_DEVICE_INLINE void sytrd_blocked_run(const WorkGroup<WG>& ex, const l3:
 }  // namespace detail
 
 namespace routine {
-// xSYTRD / xHETRD, triangle UL.
+/// @brief The routine tag of `sytrd` (xSYTRD / xHETRD) for `with_tier`, `launch` and
+/// `buffer_size`.
+/// @tparam UL  the triangle of A that is read
+/// @ingroup api_device_lapack_eig
 template <Uplo UL> struct sytrd {
+    /// The name `with_tier` puts in its error message.
     static constexpr const char* name = "sytrd";
 };
 }  // namespace routine
 
+/// @brief The `tier::Cta<N>` tier of `sytrd`: n <= N, N in {4, 8, 16, 32}, one matrix per
+/// `SgpPartition<N>`, `wg_size` 32, `sg_size` 32, 32 / N matrices per work-group, local workspace
+/// only.
+/// @ingroup api_device_lapack_eig
 template <Uplo UL, int N, class Alg, class Scalar> struct tier_info<routine::sytrd<UL>, tier::Cta<N, Alg>, Scalar> {
     static_assert(N == 4 || N == 8 || N == 16 || N == 32, "sytrd: tier::Cta<N> has N in {4, 8, 16, 32}");
     static constexpr int wg_size = 32;  // the smallest launch: one sub-group, 32 / N problems
@@ -469,8 +500,13 @@ template <Uplo UL, int N, class Alg, class Scalar> struct tier_info<routine::syt
     static constexpr bool admits(int n) { return n >= 1 && n <= N; }
     static constexpr WorkspaceSize buffer_size(int) { return detail::sytrd_cta_plan<N, Scalar>{}.plan.size(); }
 };
-// tier::Blocked<NB>: Uplo::Lower only (the host sytrd_blocked's restriction; mirror an Upper input
-// with core mirror<Uplo::Upper, Transpose::ConjTrans> first, as syev_blocked does).
+/// @brief The `tier::Blocked<NB>` tier of `sytrd`, `Uplo::Lower` only: any n >= 1, one matrix per
+/// `WorkGroup<256>` (`wg_size` 256, `sg_size` 32), global and local workspace.
+///
+/// Mirror an Upper input into the lower triangle first, with
+/// `mirror<Uplo::Upper, Transpose::ConjTrans>`, as the Blocked tier of `syev` does.
+/// @ingroup api_device_lapack_eig
+// The host sytrd_blocked's restriction.
 template <int NB, class Alg, class Scalar> struct tier_info<routine::sytrd<Uplo::Lower>, tier::Blocked<NB, Alg>, Scalar> {
     static constexpr int wg_size = detail::blocked_cfg<Scalar>::threads;  // 256: the her2k tile's items
     static constexpr int sg_size = 32;
@@ -479,24 +515,42 @@ template <int NB, class Alg, class Scalar> struct tier_info<routine::sytrd<Uplo:
     static constexpr bool admits(int n) { return n >= 1; }
     static constexpr WorkspaceSize buffer_size(int n) { return detail::sytrd_blocked_plan<NB, Scalar>(n).plan.size(); }
 };
+/// @brief The tiers `with_tier` tries for `sytrd`, smallest first: `tier::Cta<4>` to
+/// `tier::Cta<32>`, then `tier::Blocked<32>` for `Uplo::Lower` only.
+/// @ingroup api_device_lapack_eig
 template <Uplo UL, class Scalar> struct tiers<routine::sytrd<UL>, Scalar> {
     using cta = tier::list<tier::Cta<4>, tier::Cta<8>, tier::Cta<16>, tier::Cta<32>>;
     using type = std::conditional_t<UL == Uplo::Lower, tier::list<tier::Cta<4>, tier::Cta<8>, tier::Cta<16>, tier::Cta<32>, tier::Blocked<32>>, cta>;
 };
 
-/// xSYTRD / xHETRD on one n x n matrix A, reading only A's UL triangle (Im(diag) ignored); d(i) =
-/// A(i,i), e(i) the off-diagonal, tau(i) (i < n-1) the reflector scalars, all of A's scalar type.
-///   tier::Cta<N>      (unblocked: xSYTD2) n = A.rows() <= N, one matrix per SgpPartition<N>; A
-///                     leaves in LAPACK's packing with BOTH triangles written (the reflectors in UL,
-///                     the conjugate mirror in the other). ws.local only.
-///   tier::Blocked<NB> Uplo::Lower, any n, one matrix in global memory per WorkGroup<256>; A leaves
-///                     in LAPACK's lower packing plus A(i, i+1) = conj(e(i)); the rest of the upper
-///                     triangle is not referenced. ws.global is this matrix's slice.
-/// ws: `buffer_size<routine::sytrd<UL>, Tier, T>(n)` for ONE problem (Cta: local tile + v + w;
-/// Blocked: global W, v, wcol and local vip, wip and the L3 stage). COLLECTIVE over the executor.
-/// Returns 0, or -2 when A is not square with 1 <= n (<= N for Cta). live == false (a dead slot of
-/// a packed launch, same n): A, d, e and tau are neither read nor written (ws is its scratch),
-/// every collective is reached; returns 0.
+/// @brief xSYTRD / xHETRD on one n x n symmetric or Hermitian matrix A inside a kernel:
+/// \f$A = Q T Q^H\f$ with T real tridiagonal.
+///
+/// Only the UL triangle of A is read, and the imaginary part of its diagonal is ignored. d(i) =
+/// T(i,i), e(i) the off-diagonal and tau(i), i < n - 1, the reflector scalars, all of A's scalar
+/// type.
+/// - `tier::Cta<N>` (unblocked, xSYTD2): n <= N, one matrix per `SgpPartition<N>`. A leaves in
+///   LAPACK's packing with both triangles written: the reflectors in UL and the conjugate mirror
+///   in the other. Local workspace only.
+/// - `tier::Blocked<NB>`: `Uplo::Lower`, any n, one matrix in global memory per
+///   `WorkGroup<256>`. A leaves in LAPACK's lower packing plus A(i, i+1) = conj(e(i)); the rest of
+///   the upper triangle is not referenced. `ws.global` is this matrix's slice.
+///
+/// COLLECTIVE over the executor; both tiers run at sub-group size 32.
+/// @tparam UL    the triangle of A that is read (`tier::Blocked<NB>`: `Uplo::Lower`)
+/// @tparam Tier  `tier::Cta<N>` or `tier::Blocked<NB>`, from `with_tier`
+/// @param[in]     ex    the executor the tier names (`launch<R, Tier, T>::exec(it)`)
+/// @param[in,out] A     the n x n matrix (a `Mat`); the reflectors on return
+/// @param[out]    d     n elements, the diagonal of T
+/// @param[out]    e     n - 1 elements, the off-diagonal of T
+/// @param[out]    tau   n - 1 elements, the reflector scalars
+/// @param         ws    this matrix's slices of `buffer_size<routine::sytrd<UL>, Tier, T>(n)`
+/// @param[in]     live  false for a dead slot of a packed launch (same n): A, d, e and tau are
+///                      neither read nor written, `ws` is used as scratch and every collective is
+///                      reached
+/// @retval 0   success, and always when `live` is false
+/// @retval -2  A is not square, or n < 1 (or n > N for `tier::Cta<N>`)
+/// @ingroup api_device_lapack_eig
 template <Uplo UL, class Tier, class Ex, class MA, class DV, class EV, class TV>
 BATCHLAS_DEVICE_INLINE int sytrd(const Ex& ex, const MA& A, const DV& d, const EV& e, const TV& tau, const Workspace& ws,
                                  bool live = true) {

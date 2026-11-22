@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// xSTEDC: eigenvalues and eigenvectors of a symmetric tridiagonal (d, e) by divide and conquer,
-// one matrix inside one work-group, any n (design C.7, syev Blocked's "stedc (risky)").
-//   stedc                    the public op, tier::Blocked<1>: every off-diagonal is a tear, so
-//                            the leaves are 1 x 1 (no leaf solver) and the merges run bottom-up,
-//                            widths 1, 2, 4, ...; each merge is the host merge's bodies:
-//                            laed2_merge_vector, a rank sort, laed2 (deflation), laed3 (roots on
-//                            one sub-group each, rescale, vectors), then the back-transform
-//                            Q[:, map] * Q' on the in-group level 3 gemm
-//   detail::dc_layout  the workspace plan: the gemm's staging and one slot in local
-//                            memory; per-matrix vectors and two n x n blocks in global memory
-// Eigenvalues are returned ascending, Z(:, j) the vector of w(j). Real T only.
+/// @file
+/// @brief The divide-and-conquer tridiagonal eigensolver `stedc` (xSTEDC) inside a kernel: the
+/// eigenvalues, ascending, and optionally the eigenvectors of a real symmetric tridiagonal (d, e).
+///
+/// One matrix per work-group, any n, in one tier, `tier::Blocked<1>`, on a `WorkGroup<256, 32>`:
+/// every off-diagonal is a tear, so the leaves are 1 x 1 and the merges run bottom-up, widths 1,
+/// 2, 4 and so on. Each merge deflates (`laed2`), solves the secular equation one root per
+/// sub-group (`laed3`, `laed4`) and back-transforms with the in-group gemm. The tier needs
+/// 32-wide sub-groups. Real types only. The merge kernels are in @ref api_device_lowlevel.
+/// @ingroup api_device_lapack_eig
+// Design C.7, syev Blocked's "stedc (risky)". detail::dc_layout is the workspace plan: the gemm's
+// staging and one slot in local memory; per-matrix vectors and two n x n blocks in global memory.
 
 #include <cstddef>
 #include <cstdint>
@@ -30,8 +31,12 @@
 
 namespace batchlas::device {
 
-// stedc's options. max_sec_iter: the secular iteration cap per root (StedcParams::max_sec_iter, >= 1).
+/// @brief Run-time options of `stedc`.
+/// @tparam Real  the tridiagonal's real type
+/// @ingroup api_device_lapack_eig
 template <class Real> struct StedcOptions {
+    /// The secular iteration cap per root, >= 1 (the host StedcParams::max_sec_iter); a root that
+    /// reaches it makes `info` 1.
     std::int32_t max_sec_iter = 50;
 };
 
@@ -233,16 +238,27 @@ template <class Ex, class D, class Real> constexpr void assert_types() {
 }  // namespace detail
 
 namespace routine {
+/// @brief The routine tag of `stedc` (xSTEDC) for `with_tier`, `launch` and `buffer_size`.
+/// @tparam J  `JobType::EigenVectors` (Z is an argument) or `JobType::NoEigenVectors` (Z lives
+///            in the workspace)
+/// @ingroup api_device_lapack_eig
 template <JobType J> struct stedc {
+    /// The name `with_tier` puts in its error message.
     static constexpr const char* name = "stedc";
 };
 }  // namespace routine
 
+/// @brief The tiers `with_tier` tries for `stedc`: `tier::Blocked<1>` only.
+/// @ingroup api_device_lapack_eig
 template <JobType J, class Real> struct tiers<routine::stedc<J>, Real> {
     using type = tier::list<tier::Blocked<1>>;
 };
-// One tier for every n: the merges never hold the matrix in local memory. The executor is
-// WorkGroup<256, 32> (the gemm's item count) at sub-group size 32 (one root per sub-group).
+/// @brief The one tier of `stedc`, `tier::Blocked<1>`: real data, any n >= 1, one matrix per
+/// `WorkGroup<256, 32>` (`wg_size` 256, the gemm's item count; `sg_size` 32, one secular root per
+/// sub-group), global and local workspace.
+///
+/// The merges never hold the matrix in local memory, so one tier serves every n.
+/// @ingroup api_device_lapack_eig
 template <JobType J, class Real> struct tier_info<routine::stedc<J>, tier::Blocked<1>, Real> {
     static_assert(std::is_floating_point_v<Real>, "stedc: a real T");
     static constexpr int wg_size = detail::wg_size, sg_size = detail::sg_size;
@@ -252,13 +268,25 @@ template <JobType J, class Real> struct tier_info<routine::stedc<J>, tier::Block
     static constexpr WorkspaceSize buffer_size(int n) { return detail::dc_layout<Real>(n, J == JobType::NoEigenVectors).size; }
 };
 
-/// Eigenvalues w (ascending) and eigenvectors Z of one symmetric tridiagonal (d, e), argument order
-/// (d, e, w, Z, ws, opts) with jobz the template J = EigenVectors. COLLECTIVE over ex, a
-/// WorkGroup<256, 32> launched at sub-group size 32; d and e must be visible to every item on
-/// entry and are not written; w and Z (n x n or larger: its leading n x n block) are visible on
-/// return. Returns xSTEDC's info, uniform: 0, or 1 when a secular root ran out of
-/// opts.max_sec_iter. Workspace: buffer_size<routine::stedc<J>, Tier, T>(n), ws.global this
-/// matrix's slice.
+/// @brief xSTEDC with eigenvectors on one real symmetric tridiagonal (d, e) inside a kernel: the
+/// eigenvalues in w, ascending, and Z(:, j) the unit eigenvector of w(j).
+///
+/// n = `d.size()`. COLLECTIVE over `ex`, a `WorkGroup<256, 32>` launched at sub-group size 32
+/// (`BATCHLAS_REQD_SG_SIZE(L::sg_size)`). d and e must be visible to every item on entry and are
+/// not written; w and Z are visible on return. n <= 0 returns 0 at once.
+/// @tparam J     `JobType::EigenVectors` (the overload without Z takes `NoEigenVectors`)
+/// @tparam Tier  `tier::Blocked<1>`
+/// @param[in]  ex    the work-group executor
+/// @param[in]  d     n reals, the diagonal
+/// @param[in]  e     n - 1 reals, the off-diagonal
+/// @param[out] w     n reals, the eigenvalues ascending
+/// @param[out] z     n x n or larger (its leading n x n block), the eigenvectors
+/// @param      ws    this matrix's slices of `buffer_size<routine::stedc<J>, Tier, T>(n)`
+/// @param[in]  opts  the secular iteration cap
+/// @retval 0  success
+/// @retval 1  a secular root ran out of `opts.max_sec_iter` (xSTEDC's info)
+/// @return    The value is uniform over the executor.
+/// @ingroup api_device_lapack_eig
 template <JobType J, class Tier, class Ex, class D, class E, class W, class Z, class Real>
 BATCHLAS_DEVICE_HELPER int stedc(const Ex& ex, const D& d, const E& e, const W& w, const Z& z, const Workspace& ws,
                               const StedcOptions<Real>& opts) {
@@ -272,7 +300,23 @@ BATCHLAS_DEVICE_HELPER int stedc(const Ex& ex, const D& d, const E& e, const W& 
     return detail::bottom_up(ex, d, e, w, l3::Global<Real>{g.p, g.ld, n, n}, detail::ptrs(ws, L), opts.max_sec_iter);
 }
 
-/// Eigenvalues only (J = NoEigenVectors): the merges still form the vectors, in the workspace.
+/// @brief xSTEDC without eigenvectors on one real symmetric tridiagonal (d, e) inside a kernel:
+/// the eigenvalues in w, ascending.
+///
+/// The merges still form the vectors, in the workspace, so the workspace is larger than with
+/// `JobType::EigenVectors`. Otherwise as the overload with Z.
+/// @tparam J     `JobType::NoEigenVectors`
+/// @tparam Tier  `tier::Blocked<1>`
+/// @param[in]  ex    the work-group executor
+/// @param[in]  d     n reals, the diagonal
+/// @param[in]  e     n - 1 reals, the off-diagonal
+/// @param[out] w     n reals, the eigenvalues ascending
+/// @param      ws    this matrix's slices of `buffer_size<routine::stedc<J>, Tier, T>(n)`
+/// @param[in]  opts  the secular iteration cap
+/// @retval 0  success
+/// @retval 1  a secular root ran out of `opts.max_sec_iter`
+/// @return    The value is uniform over the executor.
+/// @ingroup api_device_lapack_eig
 template <JobType J, class Tier, class Ex, class D, class E, class W, class Real>
 BATCHLAS_DEVICE_HELPER int stedc(const Ex& ex, const D& d, const E& e, const W& w, const Workspace& ws, const StedcOptions<Real>& opts) {
     static_assert(J == JobType::NoEigenVectors, "stedc: J = EigenVectors takes Z");

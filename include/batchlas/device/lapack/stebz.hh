@@ -1,15 +1,19 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// xSTEBZ / xLAEBZ on a symmetric tridiagonal (d, e): d has n entries, e(i) couples rows i and
-// i + 1. Each keeps the legacy stebz kernel's expression shape (bit-identical ports):
-//   stebz_gershgorin   the Gershgorin interval and dstebz's pivmin scale (three reductions)
-//   laebz_count        the Sturm sign count, number of eigenvalues <= x
-//   laebz_bisect       one eigenvalue by bisection on that count
-//   stebz              the public op (design C): selected eigenvalues of one matrix on one
-//                      executor, any n; one item per wanted eigenvalue
-// Tier: one body for every n (no panel, nothing of the matrix in local memory): tier::Blocked<1>.
-// RANGE and ORDER stay run-time (StebzOptions): the host route serves every range from one
-// kernel, and the paths differ by one pair of Sturm counts (design C.2's tax is nil).
+/// @file
+/// @brief Selected eigenvalues of a real symmetric tridiagonal by bisection, `stebz` (xSTEBZ),
+/// inside a kernel.
+///
+/// d has n entries and e(i) couples rows i and i + 1. `stebz` selects by index or by value range
+/// (`StebzOptions`) and bisects one wanted eigenvalue per item on any executor, any n, in one
+/// tier, `tier::Blocked<1>` (nothing of the matrix in local memory). `with_tier` checks a
+/// `WorkGroup<256>` at sub-group size 32. Pair it with `stein` for the eigenvectors. The
+/// Gershgorin bound, the Sturm count and the bisection step (`stebz_gershgorin`, `laebz_count`,
+/// `laebz_bisect`) are in @ref api_device_lowlevel.
+/// @ingroup api_device_lapack_eig
+// Each keeps the legacy stebz kernel's expression shape (bit-identical ports). RANGE and ORDER
+// stay run-time (StebzOptions): the host route serves every range from one kernel, and the paths
+// differ by one pair of Sturm counts (design C.2's tax is nil).
 
 #include <cstdint>
 #include <limits>
@@ -23,15 +27,24 @@
 
 namespace batchlas::device {
 
-/// stebz's options, dstebz's selection. value_range: RANGE = 'V', the eigenvalues in (vl, vu];
-/// else RANGE = 'I' (or 'A' with il = 0, iu = n - 1), indices il..iu, 0-based (the defaults select
-/// index 0 alone). descending: ORDER = descending output. abstol <= 0: eps * max(||T||, 1).
-/// max_iter: the bisection cap per eigenvalue (>= 1; StebzParams::max_iterations).
+/// @brief Run-time options of `stebz`: dstebz's selection, order and tolerance.
+///
+/// With `value_range` the eigenvalues in (vl, vu] are selected (LAPACK's RANGE = 'V'); otherwise
+/// the indices il to iu, 0-based (RANGE = 'I', or 'A' with il = 0 and iu = n - 1). The defaults
+/// select index 0 alone.
+/// @tparam Real  the tridiagonal's real type
+/// @ingroup api_device_lapack_eig
 template <class Real> struct StebzOptions {
+    /// Select by value range (vl, vu] instead of by index.
     bool value_range = false;
+    /// The first and last selected index, 0-based (index selection only).
     std::int64_t il = 0, iu = 0;
+    /// The value range (vl, vu], and the absolute tolerance of each eigenvalue: abstol <= 0 means
+    /// eps * max(norm(T), 1).
     Real vl = Real(0), vu = Real(0), abstol = Real(0);
+    /// Write the selected eigenvalues in descending order (LAPACK's ORDER).
     bool descending = false;
+    /// The bisection cap per eigenvalue, >= 1 (the host StebzParams::max_iterations).
     std::int32_t max_iter = 128;
 };
 
@@ -56,7 +69,17 @@ template <class Real> constexpr StebzLayout<Real> stebz_layout() {
 }
 }  // namespace detail
 
-// [min_i d_i - r_i, max_i d_i + r_i], r_i = |e_{i-1}| + |e_i|: min, then max, then max.
+/// @brief The Gershgorin interval of a tridiagonal and dstebz's pivmin scale.
+///
+/// The interval is \f$[\min_i (d_i - r_i), \max_i (d_i + r_i)]\f$ with
+/// \f$r_i = |e_{i-1}| + |e_i|\f$; three reductions over `ex` (min, then max, then max), so the
+/// result is the same on every item.
+/// @tparam S  the reduction scope
+/// @param[in] ex  the executor
+/// @param[in] d   n reals, the diagonal
+/// @param[in] e   n - 1 reals, the off-diagonal
+/// @return `{lo, hi, e2max}`, e2max the largest \f$e_i^2\f$
+/// @ingroup api_device_lowlevel
 template <Scope S = Scope::Own, class Ex, class D, class E>
 BATCHLAS_DEVICE_INLINE auto stebz_gershgorin(const Ex& ex, const D& d, const E& e) {
     using R = elem_t<D>;
@@ -76,8 +99,17 @@ BATCHLAS_DEVICE_INLINE auto stebz_gershgorin(const Ex& ex, const D& d, const E& 
     return detail::Interval<R>{glo, ghi, ge2};
 }
 
-// Sign count of q_i = d_i - x - e_{i-1}^2 / q_{i-1}; |q| < pivmin is clamped to -pivmin
-// (dlaebz), which keeps the count monotone in x.
+/// @brief The Sturm count of a tridiagonal at x: the number of eigenvalues <= x, serial on one
+/// item.
+///
+/// Counts the nonpositive \f$q_i = d_i - x - e_{i-1}^2 / q_{i-1}\f$; a \f$|q_i|\f$ below pivmin is
+/// clamped to -pivmin (dlaebz), which keeps the count monotone in x.
+/// @param[in] d       n reals, the diagonal
+/// @param[in] e       n - 1 reals, the off-diagonal
+/// @param[in] x       the shift
+/// @param[in] pivmin  the smallest pivot magnitude allowed
+/// @return the count, 0 to n
+/// @ingroup api_device_lowlevel
 template <class D, class E, class Real> BATCHLAS_DEVICE_INLINE int laebz_count(const Thread&, const D& d, const E& e, Real x, Real pivmin) {
     const int n = d.size();
     int count = 0;
@@ -93,8 +125,21 @@ template <class D, class E, class Real> BATCHLAS_DEVICE_INLINE int laebz_count(c
     return count;
 }
 
-// Eigenvalue j (0-based, ascending) in (lo, hi] with count(lo) <= j < count(hi): halves until
-// width <= tol, a midpoint that no longer moves, or max_iter; returns the final midpoint.
+/// @brief Eigenvalue j of a tridiagonal by bisection on the Sturm count, serial on one item.
+///
+/// Halves (lo, hi] until its width is at most tol, the midpoint no longer moves, or max_iter
+/// steps have run.
+/// @param[in] th        the calling item
+/// @param[in] d         n reals, the diagonal
+/// @param[in] e         n - 1 reals, the off-diagonal
+/// @param[in] j         the eigenvalue's index, 0-based ascending
+/// @param[in] lo        the lower end, with count(lo) <= j
+/// @param[in] hi        the upper end, with j < count(hi)
+/// @param[in] tol       the absolute width to stop at
+/// @param[in] pivmin    the smallest pivot magnitude allowed, as for laebz_count()
+/// @param[in] max_iter  the step cap
+/// @return the final midpoint
+/// @ingroup api_device_lowlevel
 template <class D, class E, class Real>
 BATCHLAS_DEVICE_INLINE Real laebz_bisect(const Thread& th, const D& d, const E& e, int j, Real lo, Real hi, Real tol, Real pivmin, int max_iter) {
     Real left = lo, right = hi;
@@ -109,16 +154,24 @@ BATCHLAS_DEVICE_INLINE Real laebz_bisect(const Thread& th, const D& d, const E& 
 }
 
 namespace routine {
+/// @brief The routine tag of `stebz` (xSTEBZ) for `with_tier`, `launch` and `buffer_size`.
+/// @ingroup api_device_lapack_eig
 struct stebz {
+    /// The name `with_tier` puts in its error message.
     static constexpr const char* name = "stebz";
 };
 }  // namespace routine
 
+/// @brief The tiers `with_tier` tries for `stebz`: `tier::Blocked<1>` only.
+/// @ingroup api_device_lapack_eig
 template <class Real> struct tiers<routine::stebz, Real> {
     using type = tier::list<tier::Blocked<1>>;
 };
-// wg_size is the work-group with_tier checks and the host route's ceiling; the op itself runs
-// on any executor width (items past the wanted count idle). Real types only (xSTEBZ).
+/// @brief The one tier of `stebz`, `tier::Blocked<1>`: real data, any n >= 1, local workspace only.
+///
+/// `wg_size` 256 and `sg_size` 32 are what `with_tier` checks and the host route's ceiling; the
+/// op itself runs on any executor width (items past the wanted count idle).
+/// @ingroup api_device_lapack_eig
 template <class Real> struct tier_info<routine::stebz, tier::Blocked<1>, Real> {
     static_assert(std::is_floating_point_v<Real>, "stebz: a real T");
     static constexpr int wg_size = 256, sg_size = 32;
@@ -128,12 +181,22 @@ template <class Real> struct tier_info<routine::stebz, tier::Blocked<1>, Real> {
     static constexpr WorkspaceSize buffer_size(int) { return detail::stebz_layout<Real>().size; }
 };
 
-/// Selected eigenvalues of one tridiagonal (d, e) by bisection, host order (d, e, w, m, ws,
-/// opts). COLLECTIVE over ex; d and e must be visible to every item on entry. w receives the
-/// m selected eigenvalues (ascending unless p.descending); m is set on every item. Returns 0
-/// (xSTEBZ's info: the bisection is capped, never fails). Exit: outputs visible on return.
-/// Workspace: buffer_size<routine::stebz, Tier, T>(n) (local only). The interval and the
-/// selection are published through local memory by the leader, as the host route does.
+/// @brief xSTEBZ on one real symmetric tridiagonal (d, e) inside a kernel: the selected
+/// eigenvalues by bisection, one item per wanted eigenvalue.
+///
+/// Arguments in the host order (d, e, w, m, ws, opts). COLLECTIVE over `ex`; d and e must be
+/// visible to every item on entry, and every output is visible on return. The leader publishes
+/// the interval and the selection through local memory, as the host route does.
+/// @tparam Tier  `tier::Blocked<1>`
+/// @param[in]  ex  the executor, any width
+/// @param[in]  d   n reals, the diagonal
+/// @param[in]  e   n - 1 reals, the off-diagonal
+/// @param[out] w   the m selected eigenvalues, ascending unless `p.descending`
+/// @param[out] m   the number selected, set on every item
+/// @param      ws  this matrix's slice of `buffer_size<routine::stebz, Tier, T>(n)` (local only)
+/// @param[in]  p   the selection, order, tolerance and iteration cap
+/// @retval 0  always: the bisection is capped and never fails (xSTEBZ's info)
+/// @ingroup api_device_lapack_eig
 template <class Tier, class Ex, class D, class E, class W, class Real>
 BATCHLAS_DEVICE_INLINE int stebz(const Ex& ex, const D& d, const E& e, const W& w, int& m, const Workspace& ws,
                                  const StebzOptions<Real>& p) {

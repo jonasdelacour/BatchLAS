@@ -1,5 +1,15 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+/// @file
+/// @brief The selection step of the host syevx routes (xSYEVX by index or value range on a known
+/// eigendecomposition). It declares no public device routine: there is no device `syevx`.
+///
+/// Everything here is in `batchlas::device::detail` and is not API. `lapack.hh` includes it for
+/// the host routes. The host DirectSubset route runs `sy2sb` (its larft) and `sb2st_hh_chase`,
+/// which need 32-wide sub-groups: on a device without them a DirectSubset pin throws
+/// batchlas::unsupported, at the call and at the workspace query alike, and the automatic choice
+/// walks on to the Direct route.
+/// @ingroup api_device_lowlevel
 // xSYEVX's selection step on one matrix with a known eigendecomposition (the Direct route).
 
 #include <cstdint>
