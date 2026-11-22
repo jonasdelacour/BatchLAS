@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-/// @file
-/// @brief Device arithmetic: the Arith trait, the `arith::` policies a routine's loop takes, the
-/// scalar helpers built on them, and the store epilogue.
-/// @ingroup api_device_arith
-///
-/// Arith has one specialisation per scalar kind: real, `std::complex`, and any POD {re, im}
-/// complex such as Cx. The policies are Explicit, Native, ExplicitInline, Fma and FmaSplit; the
-/// helpers include abs1, abs2, conj, select, tag_mul, tag_mac and store_epi.
+/** @file
+ * @brief Device arithmetic: the Arith trait, the `arith::` policies a routine's loop takes, the
+ * scalar helpers built on them, and the store epilogue.
+ * @ingroup api_device_arith
+ *
+ * Arith has one specialisation per scalar kind: real, `std::complex`, and any POD {re, im}
+ * complex such as Cx. The policies are Explicit, Native, ExplicitInline, Fma and FmaSplit; the
+ * helpers include abs1, abs2, conj, select, tag_mul, tag_mac and store_epi.
+ */
 
 #include <complex>
 #include <type_traits>

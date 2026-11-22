@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-/// @file
-/// @brief Host views to device operands: vec and mat from a VectorView or KernelMatrixView, and
-/// item(view, b), one batch item addressed as the view addresses it.
-/// @ingroup api_device_operands
-///
-/// Call vec and mat after `batch_item(b)`: the view's item-0 pointer is then the item's. They
-/// only re-type, to int32 extents and Dyn strides.
+/** @file
+ * @brief Host views to device operands: vec and mat from a VectorView or KernelMatrixView, and
+ * item(view, b), one batch item addressed as the view addresses it.
+ * @ingroup api_device_operands
+ *
+ * Call vec and mat after `batch_item(b)`: the view's item-0 pointer is then the item's. They
+ * only re-type, to int32 extents and Dyn strides.
+ */
 
 #include <cassert>
 #include <cstdint>

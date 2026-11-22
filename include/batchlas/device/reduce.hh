@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-/// @file
-/// @brief Reductions and lane exchanges: the complex-aware xor shuffle, the butterfly, the
-/// leader-only shift fold, the reduce-scatter, and the ArgMax pair with its merge rule.
-/// @ingroup api_device_blas1
-///
-/// A `part` is a sycl::sub_group or a SubGroupPartition. allreduce, with or without Scratch, is in
-/// level1.hh.
+/** @file
+ * @brief Reductions and lane exchanges: the complex-aware xor shuffle, the butterfly, the
+ * leader-only shift fold, the reduce-scatter, and the ArgMax pair with its merge rule.
+ * @ingroup api_device_blas1
+ *
+ * A `part` is a sycl::sub_group or a SubGroupPartition. allreduce, with or without Scratch, is in
+ * level1.hh.
+ */
 
 #include <climits>
 #include <cstdint>

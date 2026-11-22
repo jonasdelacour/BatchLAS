@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-/// @file
-/// @brief Device operands: Vec, Mat, Frag, Tile and the views and factories built on them.
-/// @ingroup api_device_operands
-///
-/// Operands are thin views whose extents, strides, memory space and layout are types: a Dyn
-/// extent is one int, an `Ext<N>` extent is free. Indexing is int32 unless an operand's Idx says
-/// otherwise.
+/** @file
+ * @brief Device operands: Vec, Mat, Frag, Tile and the views and factories built on them.
+ * @ingroup api_device_operands
+ *
+ * Operands are thin views whose extents, strides, memory space and layout are types: a Dyn
+ * extent is one int, an `Ext<N>` extent is free. Indexing is int32 unless an operand's Idx says
+ * otherwise.
+ */
 
 #include <cstddef>
 #include <type_traits>

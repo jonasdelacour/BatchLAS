@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-/// @file
-/// @brief The Partition executor over a SubGroupPartition: masked P-lane chunks of a sub-group on
-/// every backend.
-/// @ingroup api_device_exec
+/** @file
+ * @brief The Partition executor over a SubGroupPartition: masked P-lane chunks of a sub-group on
+ * every backend.
+ * @ingroup api_device_exec
+ */
 
 #include <batchlas/device/exec.hh>
 #include <batchlas/device/detail/sg_partition/sg_partition.hh>

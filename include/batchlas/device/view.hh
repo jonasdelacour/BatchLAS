@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-/// @file
-/// @brief Lazy views: index maps over any operand (flip, conj, op, Hermitian and symmetric,
-/// shifted, sliced, gathered), packed triangles and the Packet load/store unit.
-/// @ingroup api_device_operands
-///
-/// A view works over any operand: a Vec-like x(i) with size(), or a Mat-like a(i, j) with
-/// rows() and cols(). It holds its base by value and computes the index; nothing is copied. A
-/// view whose element is a function of the stored one (conj, op with ConjTrans, herm off its
-/// stored triangle) is read-only and returns values.
+/** @file
+ * @brief Lazy views: index maps over any operand (flip, conj, op, Hermitian and symmetric,
+ * shifted, sliced, gathered), packed triangles and the Packet load/store unit.
+ * @ingroup api_device_operands
+ *
+ * A view works over any operand: a Vec-like x(i) with size(), or a Mat-like a(i, j) with
+ * rows() and cols(). It holds its base by value and computes the index; nothing is copied. A
+ * view whose element is a function of the stored one (conj, op with ConjTrans, herm off its
+ * stored triangle) is read-only and returns values.
+ */
 
 #include <cstddef>
 #include <type_traits>

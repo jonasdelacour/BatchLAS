@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-/// @file
-/// @brief Scalar LAPACK: the 2x2 and reflector kernels every eigen, SVD and QR family recomputes
-/// per item.
-/// @ingroup api_device_arith
-///
-/// They are pure functions of their arguments with no executor, and callable on the host:
-/// safmin and safmax (dlamch('S') and its reciprocal), lamch, lartg (a plane rotation, LAPACK
-/// 3.10), lae2 and laev2 (the eigenvalues and eigenvector of a symmetric 2x2), las2 (the singular
-/// values of an upper triangular 2x2), lapack_shift and eig2x2_nearest (dsteqr's shifts),
-/// larfg_scalars (the reflector scalars of xLARFG under four conventions), house2, Givens, qnan,
-/// phase, inv_sqrt and SafeRecip.
+/** @file
+ * @brief Scalar LAPACK: the 2x2 and reflector kernels every eigen, SVD and QR family recomputes
+ * per item.
+ * @ingroup api_device_arith
+ *
+ * They are pure functions of their arguments with no executor, and callable on the host:
+ * safmin and safmax (dlamch('S') and its reciprocal), lamch, lartg (a plane rotation, LAPACK
+ * 3.10), lae2 and laev2 (the eigenvalues and eigenvector of a symmetric 2x2), las2 (the singular
+ * values of an upper triangular 2x2), lapack_shift and eig2x2_nearest (dsteqr's shifts),
+ * larfg_scalars (the reflector scalars of xLARFG under four conventions), house2, Givens, qnan,
+ * phase, inv_sqrt and SafeRecip.
+ */
 
 #include <array>
 #include <cmath>

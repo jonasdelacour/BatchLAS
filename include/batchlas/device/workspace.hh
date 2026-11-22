@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-/// @file
-/// @brief The device workspace protocol: one constexpr Plan sizes a matrix's workspace on the
-/// host and carves it in the kernel.
-/// @ingroup api_device_launch
-///
-/// An op with a tier states its memory as a constexpr Plan. The host sizes a launch with
-/// `launch<R, Tier, T>::buffer_size(extents...)` (the plan's size()) and the op carves its
-/// pointers with the same plan, so size and use cannot drift apart. WorkspaceSize is one matrix's
-/// local and global bytes, Workspace is that matrix's slice of both spaces, and Plan is the bump
-/// allocator over them.
+/** @file
+ * @brief The device workspace protocol: one constexpr Plan sizes a matrix's workspace on the
+ * host and carves it in the kernel.
+ * @ingroup api_device_launch
+ *
+ * An op with a tier states its memory as a constexpr Plan. The host sizes a launch with
+ * `launch<R, Tier, T>::buffer_size(extents...)` (the plan's size()) and the op carves its
+ * pointers with the same plan, so size and use cannot drift apart. WorkspaceSize is one matrix's
+ * local and global bytes, Workspace is that matrix's slice of both spaces, and Plan is the bump
+ * allocator over them.
+ */
 
 #include <cstddef>
 #include <cstdint>

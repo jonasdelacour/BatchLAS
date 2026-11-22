@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-/// @file
-/// @brief The batched 2-D executor Grid2D and its host launcher batched2d: one work-item per
-/// matrix element.
-/// @ingroup api_device_exec
-///
-/// Indices are 2-D (no `%` or `/`), and the batch dimension is grid-strided past the dimension-0
-/// group limit. for_each_owned_2d (level1.hh) on a Grid2D visits the item's one element.
+/** @file
+ * @brief The batched 2-D executor Grid2D and its host launcher batched2d: one work-item per
+ * matrix element.
+ * @ingroup api_device_exec
+ *
+ * Indices are 2-D (no `%` or `/`), and the batch dimension is grid-strided past the dimension-0
+ * group limit. for_each_owned_2d (level1.hh) on a Grid2D visits the item's one element.
+ */
 
 #include <cstddef>
 #include <type_traits>

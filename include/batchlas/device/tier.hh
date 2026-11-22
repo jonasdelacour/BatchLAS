@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-/// @file
-/// @brief Device tiers: how a LAPACK-level routine runs inside a kernel, chosen at compile time,
-/// and with_tier, which picks one on the host for a run-time n.
-/// @ingroup api_device_launch
-///
-/// A tier is a type, so one kernel never pays the registers of two paths. Per routine (a tag type
-/// in device::routine) and scalar T, `tier_info<Routine, Tier, T>` states the executor type,
-/// `wg_size`, `sg_size`, `per_group`, `admits(n)` and `buffer_size(n)`; `tiers_t<Routine, T>` lists
-/// the routine's tiers smallest first. launch.hh turns a tier into a launch (nd_range, executor,
-/// matrix slot, workspace).
+/** @file
+ * @brief Device tiers: how a LAPACK-level routine runs inside a kernel, chosen at compile time,
+ * and with_tier, which picks one on the host for a run-time n.
+ * @ingroup api_device_launch
+ *
+ * A tier is a type, so one kernel never pays the registers of two paths. Per routine (a tag type
+ * in device::routine) and scalar T, `tier_info<Routine, Tier, T>` states the executor type,
+ * `wg_size`, `sg_size`, `per_group`, `admits(n)` and `buffer_size(n)`; `tiers_t<Routine, T>` lists
+ * the routine's tiers smallest first. launch.hh turns a tier into a launch (nd_range, executor,
+ * matrix slot, workspace).
+ */
 // A run-time `if (n <= 32)` between two tiers compiles both, and the kernel carries the larger
 // register count of the two: the old design's failure.
 
@@ -299,9 +300,10 @@ template <class Routine, class Scalar, class F, class... Tiers> bool visit_first
 ///
 /// A tier admits n when its bound and tier_info's `admits(n)` hold, its `per_group` local slices
 /// fit the device's local memory less the per-item launch scratch, its `wg_size` fits the maximum
-/// work-group size, its `sg_size` is one of the device's sub-group sizes, and, for a double
-/// Scalar, the device has fp64. Each listed tier is a separate instantiation of whatever kernel f
-/// launches; exactly one runs.
+/// work-group size, its `sg_size` is one of the device's sub-group sizes, and, when the real type
+/// of Scalar (`Arith<Scalar>::real_t`) is double, so for double and `std::complex<double>`, the
+/// device has fp64. Each listed tier is a separate instantiation of whatever kernel f launches;
+/// exactly one runs.
 /// @tparam Routine a routine tag from device::routine
 /// @tparam Scalar the scalar type
 /// @tparam List the tiers to try, smallest first (default: the routine's tiers_t)

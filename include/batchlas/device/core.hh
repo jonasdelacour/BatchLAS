@@ -1,22 +1,23 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-/// @file
-/// @brief The device vocabulary: extents, memory spaces, layouts, scalar tags and algorithm tags.
-/// @ingroup api_device_operands
-///
-/// Every choice a kernel's machine code depends on is a type here, never a run-time value. The
-/// Arith trait is in arith.hh, which this header includes.
-///
-/// Inline policy: an op takes the attribute of the code it replaces.
-/// - `BATCHLAS_DEVICE_INLINE` (always_inline): leaf arithmetic, accessors, ops that replace
-///   expression text.
-/// - `BATCHLAS_DEVICE_HELPER` (plain inline): ops that replace a plain-inline hand helper (phases,
-///   reductions, bcast, epilogues); LLVM unrolls the caller's loop while the call is still there,
-///   as it did for the hand helper.
-/// - `BATCHLAS_DEVICE_BODY`: on a lambda passed to a loop op,
-///   `[&](int i) BATCHLAS_DEVICE_BODY {...}`; a lambda body is otherwise optimised alone.
-///
-/// Each is overridable with `-D` for a backend whose inliner needs another spelling.
+/** @file
+ * @brief The device vocabulary: extents, memory spaces, layouts, scalar tags and algorithm tags.
+ * @ingroup api_device_operands
+ *
+ * Every choice a kernel's machine code depends on is a type here, never a run-time value. The
+ * Arith trait is in arith.hh, which this header includes.
+ *
+ * Inline policy: an op takes the attribute of the code it replaces.
+ * - `BATCHLAS_DEVICE_INLINE` (always_inline): leaf arithmetic, accessors, ops that replace
+ *   expression text.
+ * - `BATCHLAS_DEVICE_HELPER` (plain inline): ops that replace a plain-inline hand helper (phases,
+ *   reductions, bcast, epilogues); LLVM unrolls the caller's loop while the call is still there,
+ *   as it did for the hand helper.
+ * - `BATCHLAS_DEVICE_BODY`: on a lambda passed to a loop op,
+ *   `[&](int i) BATCHLAS_DEVICE_BODY {...}`; a lambda body is otherwise optimised alone.
+ *
+ * Each is overridable with `-D` for a backend whose inliner needs another spelling.
+ */
 
 #include <complex>
 #include <type_traits>

@@ -1,27 +1,28 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-/// @file
-/// @brief Device executors: the work-item teams that own one matrix, and the barriers over them.
-/// @ingroup api_device_exec
-///
-/// The size of every executor is a type constant (RtGroup's is a launch value), so loop strides,
-/// trip counts and team counts fold at compile time. Only WorkGroup, RtGroup and Grid2D have a work-group
-/// barrier. Common interface: the constants `size` (the work-items sharing a Cyclic operand; item
-/// lid owns index i when i mod size == lid), `team_size`, `nteams` and `sub_whole` (true when one
-/// team is the whole executor, so a Scope::Sub result is uniform), and the members `lid()`,
-/// `lane()`, `team()`, `leader()`, `team_reduce(v, op)` and `group_reduce(v, op)`. A team is the
-/// unit a Scope::Sub reduction spans: a sub-group, a partition or one item.
-///
-/// Lane movement on every launch executor: `bcast(v, src)` (collective, src uniform: item src's v
-/// to every item), `uniform(v)` (`bcast(v, 0)`), `shuffle(v, src)` (collective, src per item: v of
-/// lane src of the item's team) and `shift(v, d)` (collective: v of lane `lane + d` of the item's
-/// team, unspecified past its end). On WorkGroup and `RtGroup<Scope::Group>` shuffle and shift act
-/// inside the item's sub-group; on Thread all four return v. The index-only executors (Slot,
-/// ElemAt, Grid1D) have none.
-///
-/// Each launch executor (WorkGroup, Teams, SubGroup, Partition, RtGroup, Thread) is built from the
-/// kernel's item as `Ex ex{it}` (`launch<R, Tier, T>::exec`). Fit and the index-only executors
-/// wrap an executor or a caller-mapped index instead.
+/** @file
+ * @brief Device executors: the work-item teams that own one matrix, and the barriers over them.
+ * @ingroup api_device_exec
+ *
+ * The size of every executor is a type constant (RtGroup's is a launch value), so loop strides,
+ * trip counts and team counts fold at compile time. Only WorkGroup, RtGroup and Grid2D have a work-group
+ * barrier. Common interface: the constants `size` (the work-items sharing a Cyclic operand; item
+ * lid owns index i when i mod size == lid), `team_size`, `nteams` and `sub_whole` (true when one
+ * team is the whole executor, so a Scope::Sub result is uniform), and the members `lid()`,
+ * `lane()`, `team()`, `leader()`, `team_reduce(v, op)` and `group_reduce(v, op)`. A team is the
+ * unit a Scope::Sub reduction spans: a sub-group, a partition or one item.
+ *
+ * Lane movement on every launch executor: `bcast(v, src)` (collective, src uniform: item src's v
+ * to every item), `uniform(v)` (`bcast(v, 0)`), `shuffle(v, src)` (collective, src per item: v of
+ * lane src of the item's team) and `shift(v, d)` (collective: v of lane `lane + d` of the item's
+ * team, unspecified past its end). On WorkGroup and `RtGroup<Scope::Group>` shuffle and shift act
+ * inside the item's sub-group; on Thread all four return v. The index-only executors (Slot,
+ * ElemAt, Grid1D) have none.
+ *
+ * Each launch executor (WorkGroup, Teams, SubGroup, Partition, RtGroup, Thread) is built from the
+ * kernel's item as `Ex ex{it}` (`launch<R, Tier, T>::exec`). Fit and the index-only executors
+ * wrap an executor or a caller-mapped index instead.
+ */
 
 #include <cstdint>
 #include <type_traits>

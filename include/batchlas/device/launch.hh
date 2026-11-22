@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-/// @file
-/// @brief launch: one tier of a routine as a kernel launch, from tier_info alone.
-/// @ingroup api_device_launch
-///
-/// `launch<Routine, Tier, T>` gives the workspace of one matrix (buffer_size), the kernel's
-/// nd_range, each item's executor, its matrix slot and its workspace slices. A packed tier
-/// (`per_group > 1`) has dead slots in its last work-group: they run the op with `live = false`.
+/** @file
+ * @brief launch: one tier of a routine as a kernel launch, from tier_info alone.
+ * @ingroup api_device_launch
+ *
+ * `launch<Routine, Tier, T>` gives the workspace of one matrix (buffer_size), the kernel's
+ * nd_range, each item's executor, its matrix slot and its workspace slices. A packed tier
+ * (`per_group > 1`) has dead slots in its last work-group: they run the op with `live = false`.
+ */
 
 #include <cstddef>
 #include <cstdint>
