@@ -14,39 +14,11 @@
 # type_param is the macOS libc++abi spelling (`std::__1::complex<float>`, a space after
 # the comma): copy it from the gtest XML, never from the Linux ledgers.
 #
-# PRESET: verified 2026-10-14 on an Apple M5 Max (applegpu_g17s), macOS 27, tree
-# build-acpp-metal-tests, full serial ctest after merging main (105 tests: 99 passed, 5 failed,
-# 1 skipped; the binaries touched by the merge fixes re-run).
-# Backend::SYCL here is float and complex<float> only (Backend 5); the double
-# configurations run as NETLIB on the host (Backend 6). The gtest identities below were
-# checked against real GTEST_OUTPUT XML from a rerun of the failing binaries.
+# EMPTY as of 1.0.0 (2026-11-22). The 11 complex<float> hemm/herk/her2k/posv entries (Backend 5) were
+# removed after they passed in a full serial ctest of release/1.0 on the Apple M5 Max
+# (acpp-metal-tests, 252 entries). They were the AdaptiveCpp llvm-to-metal address-space bug, fixed by
+# the local patch 0014 (scripts/macos/adaptivecpp-patches). This tree NEEDS the patched toolchain
+# (0001-0015): docs/guide/build.md, macOS section.
 #
-# DELIBERATELY ABSENT: device_calls_tests is a SKIP (exit 77, no NVPTX in this build),
-# not a failure.
-
-# --- BatchLAS: vendor-free routing (inherent to a build with no vendor GPU library) ---
-# hemm, herk and her2k choose only by the hand-written vendor rule in cublas.cc and have
-# no native family, so a vendor-free build throws NoRouteError (agent guide section 9,
-# docs/design/flat-kernel-selection.md section 11 lists the migration).
-hemm_tests::HemmTest/2.IgnoresUnreferencedTriangleAndImaginaryDiagonal;type_param=HemmConfig<std::__1::complex<float>, (batchlas::Backend)5>
-hemm_tests::HemmTest/2.OptionStructMatchesPositional;type_param=HemmConfig<std::__1::complex<float>, (batchlas::Backend)5>
-hemm_tests::HemmTest/2.QuadraticFormIsReal;type_param=HemmConfig<std::__1::complex<float>, (batchlas::Backend)5>
-herk_tests::HerkTest/2.IgnoresUnreferencedTriangleOfC;type_param=HerkConfig<std::__1::complex<float>, (batchlas::Backend)5>
-herk_tests::HerkTest/2.TrianglesAgreeAcrossUplo;type_param=HerkConfig<std::__1::complex<float>, (batchlas::Backend)5>
-herk_tests::HerkTest/2.OptionStructMatchesPositional;type_param=HerkConfig<std::__1::complex<float>, (batchlas::Backend)5>
-herk_tests::HerkTest/2.MatchesGemmReference;type_param=HerkConfig<std::__1::complex<float>, (batchlas::Backend)5>
-her2k_tests::Her2kTest/2.IgnoresUnreferencedTriangleOfC;type_param=Her2kConfig<std::__1::complex<float>, (batchlas::Backend)5>
-her2k_tests::Her2kTest/2.TrianglesAgreeAcrossUplo;type_param=Her2kConfig<std::__1::complex<float>, (batchlas::Backend)5>
-her2k_tests::Her2kTest/2.OptionStructMatchesPositional;type_param=Her2kConfig<std::__1::complex<float>, (batchlas::Backend)5>
-
-# posv pinned Blocked, Uplo::Upper, n=33: its potrf<complex<float>> child has no
-# vendor-free route, so it throws NoRouteError. Not a hardware limit: cta needs ~9 KiB
-# at n=33, but its can_run caps n at the 4-blocks-per-CU occupancy slice of the
-# 20 KiB budget (~5 KiB, cfloat n<=23); lpanel and blocked refuse Upper
-# (docs/perf/potrf.md). A can_run that falls back to 1 block would serve it, on every
-# backend. Lower and n=4,16 pass.
-posv_tests::PosvTest/5.PublicPosvSolvesOnBothTriangles;type_param=(anonymous namespace)::PosvConfig<std::__1::complex<float>, (batchlas::Backend)5>
-
-# --- BatchLAS: shared with DPC++ (tests/known-failures.txt) and acpp generic ---
-# lanczos (LanczosTest, ToeplitzEigenpairs, ClosedFormSpectrum): fixed 2026-10-30, removed; cause in
-# docs/design/known-defects.md, "lanczos returned a spectrum about three times too wide".
+# DELIBERATELY ABSENT: device_calls_tests and sass_parity_tests are SKIPs (exit 77: no NVPTX image,
+# no cuobjdump), and syev_blocked_tests_heavy selects 0 cases on this tree; none is a failure.

@@ -309,6 +309,14 @@ Located to a line, not confirmed by a test.
 - **`gesvdj_cta` global rescale ignores columns 32..63 on the C=64 rung**
   (`src/ops/gesvd/kernels/gesvdj_cta.cc:356`): overflow headroom is narrower than designed; see
   [global power-of-two scaling](gesvd.md#gesvdj_cta-global-power-of-two-scaling).
+- **Unscaled sums of squares left after 1.0.0** (the flush-to-zero trap in
+  [toolchain traps](#known-defects-toolchain-traps)): `ortho`'s normalisation (`ortho.hh:80`),
+  `lanczos`' beta (`lanczos.cc:152`), `ritz_values.hh:50`, `syevx` LOBPCG
+  (`syevx_lobpcg.cc:730-732`, `:931`, `:1118`), `house2` (`scalar.hh:463`, tridiagonal solver) and
+  `lange` Frobenius (`src/util/norm.cc`). Each loses accuracy only when every entry of the vector is
+  below about \f$2^{-63}\f$ on a device that flushes subnormals; each needs its own graded test,
+  scheduled for 1.x. The reflector norms (`larfg_lanes`, `latrd`, `sb2st`, `gebrd`, legacy `sytrd`)
+  are scaled.
 - Matrix containers and the environment parser are tracked on their pages:
   [matrix model](matrix-model.md#matrix-model-open-debts),
   [environment](environment.md#environment-parser-defects-recorded-not-fixed).

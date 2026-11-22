@@ -16,7 +16,7 @@ short hexadecimal ids are commits of the 1.0 release branch.
 
 Nothing yet.
 
-## [1.0.0] - 2026-11-XX {#changelog-1-0-0}
+## [1.0.0] - 2026-11-22 {#changelog-1-0-0}
 
 First release. Everything below is new relative to "no release"; the groups say what a user of a
 pre-release commit (version 0.1.0) will notice.
@@ -114,8 +114,10 @@ pre-release commit (version 0.1.0) will notice.
   #170). The consumer test checks that `find_package` accepts 1.0 and refuses 0.99, 1.1 and 2.0
   (955fc341, 2b905dcf, 54847b98).
 
-<!-- wave-3b placeholder (Added): host routes and other additions from rel4/skip-burn and the
-     other wave-3b packages' integration_needs; filled at integration, then this comment goes. -->
+- Vendor-free hosts also run `syevx`'s DirectSubset, LOBPCG and Filtered families and `ormbr` natively,
+  each honouring a batch mask (fd7f8fc7, 88092f2c, e485696e). Tests that used to skip there run: `gemm`
+  with k = 0, blocked `sytrs` parts, the level-3 and `syfn` mask cases, the `sytrf` device API and
+  blocked `gesvd` parity (c7d34ace, a6ed12c3, 953f010f).
 
 ### Changed {#changelog-1-0-0-changed}
 
@@ -128,8 +130,9 @@ pre-release commit (version 0.1.0) will notice.
 - `Matrix` is a `MatrixView`; the owning-argument forwarders are gone (#183).
 - Headers install under `<prefix>/include/batchlas/`, included as `<batchlas/...>` (#70, #184).
 - The Apple GPU build needs AdaptiveCpp with every local patch in
-  `scripts/macos/adaptivecpp-patches/`, now 0001 to 0014. Patch 0014 infers Metal pointer address
-  spaces over PHI and select cycles; without it the `complex<float>` paths of `potrf`, `posv`,
+  `scripts/macos/adaptivecpp-patches/`, now 0001 to 0015. Patch 0014 infers Metal pointer address
+  spaces over PHI and select cycles, and 0015 binds null pointer kernel arguments as null; without
+  0014 the `complex<float>` paths of `potrf`, `posv`,
   `potrs`, `potri`, `sygvd` and `ortho` fail to compile their shaders (388da162, cb7244fe,
   3bc8fa93, b2284df3). See
   [macOS: Apple GPU through AdaptiveCpp Metal](guide/build.md#macos-apple-gpu-through-adaptivecpp-metal).
@@ -148,8 +151,11 @@ pre-release commit (version 0.1.0) will notice.
 - On a vendor-free host, `gesvd` refuses a masked batch (its `gebrd` and `ormbr` children cannot
   skip an item), and `syev` runs `blocked` only (f3110eca, e9e516da).
 
-<!-- wave-3b placeholder (Changed): behaviour changes from the wave-3b packages' integration_needs;
-     filled at integration, then this comment goes. -->
+- `gesvd` with `BATCHLAS_GESVD_BIDIAG=normal`: a thin tall U is forced to the direct bidiagonal
+  solve in CTA mode too, as in blocked mode, and complex types never take the normal equations
+  (d166fba4).
+- `her2k` past the device's grid runs as `fold` slices on every CUDA build, vendor-free included
+  (3fe1b945).
 
 ### Fixed {#changelog-1-0-0-fixed}
 
@@ -167,10 +173,10 @@ pre-release commit (version 0.1.0) will notice.
   - Jacobi's float rotation cosine on AdaptiveCpp takes the FMA Newton step the NVPTX path uses
     (53fcac77).
   - `potri` admitted orders its CTA kernel could not launch (7e5d7baa).
-  - `steqr_wg` returned a non-orthonormal `Z` for masked `float` batches: a large per-pass fill
-    of the rotation slots lost writes in AdaptiveCpp's batched Metal command buffer (mechanism not
-    isolated). The sweep kernel now writes every rotation slot itself and the fill is gone
-    (2dea7e5a).
+  - `steqr_wg` returned a non-orthonormal `Z` for masked `float` batches: a per-pass fill of the
+    rotation slots lost writes in AdaptiveCpp's batched Metal command buffer (the null-binding bug
+    patch 0015 fixes, below). The sweep kernel now writes every rotation slot itself and the fill is
+    gone (2dea7e5a).
   - `latrd_lower_run` (the blocked `sytrd` panel), the `latrd` grid kernel and `sb2st_hh_chase`
     scale a reflector's norm by a power of two before the sum of squares, as `larfg_lanes` does, so
     tiny entries keep their norm where subnormals flush (da319bdf, a66f431d, 02b51e38, 28a0b78a).
@@ -204,8 +210,33 @@ pre-release commit (version 0.1.0) will notice.
   #176).
 - CPU-only builds (#126) and builds for NVIDIA architectures DPC++ has no alias for (#129).
 
-<!-- wave-3b placeholder (Fixed): fixes from rel4/skip-burn and the other wave-3b packages'
-     integration_needs; filled at integration, then this comment goes. -->
+- Apple GPU (Metal): AdaptiveCpp's Metal runtime left a null pointer kernel argument's buffer slot
+  unset in flat argument mode, so a kernel read a stale pointer bound by an earlier encoder of the
+  same command buffer. That was the lost `steqr_wg` fill above; patch 0015 binds null as null
+  (cc59373d, ee120f5a).
+- `gebrd` (`gebd2` and the group panel) and the legacy `sytrd` small path scale their reflector
+  norms by a power of two, so entries below 2^-63 keep their reflector; the unused unscaled `larfg`
+  branch is gone (bbad010e, b7907a00).
+- The spectral norm (blocked `syev`) of a rank-deficient float matrix turned NaN: a column whose
+  entries had all decayed to subnormals got an infinite reflector scale. `larfg_scalars` now
+  returns the identity when 1 / (alpha - beta) overflows; every finite case is bit-identical
+  (19794733).
+- `syevx` Direct, Filtered and DirectSubset under-reported their workspace by up to one alignment
+  quantum on an unaligned workspace base and threw `workspace_error`; they now size it with a
+  `measuring()` replay (7dd5cbb4, 88092f2c).
+- `gesvd` in CTA mode under `BATCHLAS_GESVD_BIDIAG=normal` could write past a thin tall U; only the
+  CTA entry's thin-job refusal kept it unreachable (d166fba4).
+
+### Known limitations {#changelog-1-0-0-known-limitations}
+
+- Some norms still use an unscaled sum of squares: `ortho`'s normalisation, `lanczos`' beta,
+  `ritz_values`, `syevx` LOBPCG, `house2` in the tridiagonal solver and `lange` (Frobenius). On a
+  device that flushes subnormals (Apple GPUs) they lose accuracy when every entry of a vector is
+  below about 2^-63; no test input reaches that, and they are scheduled for 1.x
+  ([known defects](design/known-defects.md)).
+- AdaptiveCpp on Linux (generic and multipass CUDA) is experimental in 1.0.0: it is built and tested,
+  but its known failures (`tests/known-failures-acpp*.txt`) are not release-blocking. ROCm is
+  unsupported (code paths only).
 
 [Unreleased]: https://github.com/jonasdelacour/BatchLAS/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/jonasdelacour/BatchLAS/releases/tag/v1.0.0
