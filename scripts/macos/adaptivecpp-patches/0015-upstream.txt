@@ -1,0 +1,82 @@
+[Metal] Bind every pointer kernel argument, nil for a null pointer
+
+Problem
+-------
+In flat argument mode (at most metal_max_args_for_flat_mode = 6 kernel
+parameters), encode_arguments() calls setBuffer only for a pointer argument
+that get_usm_block() resolves:
+
+    if (buffer) {
+      encoder->setBuffer(buffer, offset, buf_idx);
+    }
+
+A null pointer therefore leaves its [[buffer(N)]] slot unset. On Apple GPUs an
+unset slot keeps the binding an earlier compute encoder of the same command
+buffer set there, so the kernel reads a stale, non-null pointer. An in-order
+queue with AdaptiveCpp_coarse_grained_events batches up to 32 operations into
+one command buffer (max_ops_per_command_buffer), so any small kernel that is
+passed nullptr after another kernel is exposed. The argument-buffer path
+already handles this case ("stale pointer slots must be explicitly zeroed").
+
+Reproducer
+----------
+Two kernels with the same captures on one in-order, coarse-grained queue, no
+wait between them. The second is passed nullptr for a mask it tests:
+
+    #include <sycl/sycl.hpp>
+    #include <array>
+    #include <cstdio>
+    #include <cstring>
+    using V2 = std::array<float, 2>;
+    int main() {
+      sycl::queue q{sycl::gpu_selector_v,
+                    {sycl::property::queue::in_order{},
+                     sycl::property::queue::AdaptiveCpp_coarse_grained_events{}}};
+      const size_t n = 368550;
+      V2* data = sycl::malloc_shared<V2>(n, q);
+      float* other = sycl::malloc_shared<float>(n, q);
+      unsigned char* bytes = sycl::malloc_shared<unsigned char>(n, q);
+      std::memset(bytes, 0, n);
+      std::memset(data, 0xA5, n * sizeof(V2));
+      {
+        float* out = other; const size_t total = n; const unsigned char* m = bytes;
+        const size_t span = 1; const V2 v{2.f, 3.f};
+        q.parallel_for(sycl::range<1>(n), [=](sycl::id<1> id) {
+          const size_t i = id[0];
+          if (i < total && m[i / span] == 0xFF) out[i] = v[0];
+        });
+      }
+      {
+        V2* p = data; const size_t total = n; const unsigned char* mask = nullptr;
+        const size_t span = 1; const V2 value{1.f, 0.f};
+        q.parallel_for(sycl::range<1>(n), [=](sycl::id<1> id) {
+          const size_t idx = id[0];
+          if (idx >= total || (mask && !mask[idx / span])) return;
+          p[idx] = value;
+        });
+      }
+      q.wait();
+      size_t lost = 0;
+      for (size_t k = 0; k < n; ++k) lost += !(data[k][0] == 1.f && data[k][1] == 0.f);
+      std::printf("lost %zu of %zu\n", lost, n);
+    }
+
+On an M5 Max (macOS 27, develop at 9ec394ef): "lost 368550 of 368550" on
+every run. With q.wait() between the two kernels, or a queue without
+coarse_grained_events (one command buffer per operation): "lost 0".
+
+Found in BatchLAS: the masked float Givens-rotation fill of a tridiagonal
+QR solver (a MatrixView fill kernel whose mask is nullptr when unmasked)
+lost 72k-85k of its 368550 writes after masked kernels in the same command
+buffer; the skipped slots kept the workspace's previous bytes.
+
+Fix
+---
+Set every pointer slot: the resolved buffer and offset, or nil, which the
+kernel reads as a null pointer. A non-null pointer that resolves to no
+allocation was a stale binding as well; it is now bound nil, with a
+HIPSYCL_DEBUG_WARNING.
+
+    encoder->setBuffer(buffer, buffer ? offset : 0, buf_idx);
+
+With the fix the reproducer prints "lost 0".

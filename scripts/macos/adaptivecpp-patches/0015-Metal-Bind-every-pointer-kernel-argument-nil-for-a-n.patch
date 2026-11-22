@@ -1,0 +1,72 @@
+From a73ff0015838079974eed00257487cb9c4bc536a Mon Sep 17 00:00:00 2001
+From: jonaslacour <jonaslacour1@gmail.com>
+Date: Sun, 22 Nov 2026 01:10:44 +0100
+Subject: [PATCH] [Metal] Bind every pointer kernel argument, nil for a null
+ pointer
+
+encode_arguments() (flat argument mode, at most six kernel parameters)
+called setBuffer only for a pointer argument that resolves to a USM
+allocation. A null pointer left its [[buffer(N)]] slot unset, and an
+unset slot keeps whatever an earlier compute encoder of the same command
+buffer bound there. An in-order queue with coarse-grained events batches
+up to 32 operations into one command buffer, so a kernel passed nullptr
+read a stale, non-null pointer to another kernel's buffer. The
+argument-buffer path already sets such slots to nil.
+
+Reproducer: two kernels with the same captures, no wait between, the
+second passed nullptr for a mask it tests with `if (mask && !mask[i])`.
+On an M5 Max the second skipped all 368550 of its writes; with a wait
+between them, or without coarse_grained_events, it skipped none
+(0015-upstream.txt in BatchLAS has the program).
+
+In BatchLAS, MatrixView::fill's null mask read an earlier kernel's
+bytes this way, and the 2.9 MB Givens rotation fill of the masked float
+steqr_wg lost about a fifth of its writes (the skipped slots kept the
+workspace's previous bytes).
+
+Every pointer slot is now set: the buffer and offset when the pointer
+resolves, nil otherwise, which the kernel reads as a null pointer. A
+non-null pointer that resolves to no allocation was a stale binding as
+well; it is now bound nil and logged as a warning. A null pointer is
+logged at info level, so ACPP_DEBUG_LEVEL=3 names the launches that an
+unpatched runtime left on a stale slot.
+
+Measured with the patch: the reproducer skips 0 of 368550 writes, and
+the BatchLAS steqr_wg build that failed before (per-pass fill) passes
+SteqrMask/2.* 3 times out of 3 (it failed 3 of 3 without the patch).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/runtime/metal/metal_queue.cpp | 15 +++++++++++++--
+ 1 file changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/src/runtime/metal/metal_queue.cpp b/src/runtime/metal/metal_queue.cpp
+index ed0779eb..7337296b 100644
+--- a/src/runtime/metal/metal_queue.cpp
++++ b/src/runtime/metal/metal_queue.cpp
+@@ -54,9 +54,20 @@ void encode_arguments(
+     if (is_pointer_arg[i]) {
+       void* usm_ptr = *(void**)args[i];
+       auto [buffer, offset, _] = allocator->get_usm_block(usm_ptr);
+-      if (buffer) {
+-        encoder->setBuffer(buffer, offset, buf_idx);
++      // Set every pointer slot, nil for a null or unknown pointer. A slot this
++      // encoder leaves unset keeps the binding of an earlier encoder in the
++      // same command buffer, so the kernel would read a stale, non-null
++      // pointer where it was passed nullptr.
++      if (!buffer && usm_ptr) {
++        HIPSYCL_DEBUG_WARNING << "metal_queue: kernel pointer argument " << i
++                              << " (" << usm_ptr
++                              << ") is not in a USM allocation; binding null"
++                              << std::endl;
++      } else if (!buffer) {
++        HIPSYCL_DEBUG_INFO << "metal_queue: binding null for kernel pointer argument "
++                           << i << std::endl;
+       }
++      encoder->setBuffer(buffer, buffer ? offset : 0, buf_idx);
+     } else {
+       encoder->setBytes(args[i], arg_sizes[i], buf_idx);
+     }
+-- 
+2.54.0 (Apple Git-157)
+
