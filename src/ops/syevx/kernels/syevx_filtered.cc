@@ -722,18 +722,16 @@ size_t syevx_filtered_buffer_size(Queue& ctx,
     if (params.extra_directions == 0) m = k + std::max<int64_t>(2, k / 4);
     m = std::min(m, n);
 
-    size_t bytes = 0;
+    // A measuring() replay of syevx_filtered's allocations, in its order (the five blocks, then
+    // their pointer arrays): a hand sum misses the padding below an unaligned workspace base.
+    BumpAllocator pool = BumpAllocator::measuring();
     const size_t block_elems = static_cast<size_t>(n) * m * batch;
-    for (int i = 0; i < 5; ++i) {
-        bytes += BumpAllocator::allocation_size<Scalar>(ctx, block_elems);
-        bytes += BumpAllocator::allocation_size<Scalar*>(ctx, static_cast<size_t>(batch));
-    }
-    bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(m) * m * batch);
-    bytes += BumpAllocator::allocation_size<Scalar*>(ctx, static_cast<size_t>(batch));
-    bytes += BumpAllocator::allocation_size<Real>(ctx, static_cast<size_t>(m) * batch);
-    for (int i = 0; i < 9; ++i) {
-        bytes += BumpAllocator::allocation_size<Real>(ctx, static_cast<size_t>(batch));
-    }
+    for (int i = 0; i < 5; ++i) (void)pool.allocate<Scalar>(ctx, block_elems);
+    for (int i = 0; i < 5; ++i) (void)pool.allocate<Scalar*>(ctx, static_cast<size_t>(batch));
+    (void)pool.allocate<Scalar>(ctx, static_cast<size_t>(m) * m * batch);
+    (void)pool.allocate<Scalar*>(ctx, static_cast<size_t>(batch));
+    (void)pool.allocate<Real>(ctx, static_cast<size_t>(m) * batch);
+    for (int i = 0; i < 9; ++i) (void)pool.allocate<Real>(ctx, static_cast<size_t>(batch));
 
     // Shapes must match the runtime views so the providers agree.
     const auto blk_dummy =
@@ -743,17 +741,14 @@ size_t syevx_filtered_buffer_size(Queue& ctx,
         MatrixView<Scalar, MatrixFormat::Dense>(nullptr, m, m, m, static_cast<int64_t>(m) * m,
                                                 batch).with_batch_mask(mask);
     if constexpr (MFormat == MatrixFormat::CSR) {
-        bytes += BumpAllocator::allocation_size<std::byte>(ctx,
-            spmm_buffer_size<B>(ctx, A, blk_dummy, blk_dummy, Scalar(1), Scalar(0),
-                                Transpose::NoTrans, Transpose::NoTrans));
+        (void)pool.allocate<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, blk_dummy, blk_dummy, Scalar(1), Scalar(0),
+                                                                Transpose::NoTrans, Transpose::NoTrans));
     }
-    bytes += BumpAllocator::allocation_size<std::byte>(ctx,
-        ortho_buffer_size<B>(ctx, blk_dummy, Transpose::NoTrans, params.algorithm));
-    bytes += BumpAllocator::allocation_size<std::byte>(ctx,
-        syev_buffer_size<B>(ctx, h_dummy, Span<Real>(), JobType::EigenVectors, Uplo::Lower));
-    bytes += BumpAllocator::allocation_size<Real>(ctx, static_cast<size_t>(k) * batch);
-
-    return bytes;
+    (void)pool.allocate<std::byte>(ctx, ortho_buffer_size<B>(ctx, blk_dummy, Transpose::NoTrans, params.algorithm));
+    (void)pool.allocate<std::byte>(ctx,
+                                   syev_buffer_size<B>(ctx, h_dummy, Span<Real>(), JobType::EigenVectors, Uplo::Lower));
+    (void)pool.allocate<Real>(ctx, static_cast<size_t>(k) * batch);
+    return pool.required_bytes();
 }
 
 #define SYEVX_FILTERED_INSTANTIATE(back, fp, fmt) \

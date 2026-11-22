@@ -190,19 +190,18 @@ size_t syevx_direct_buffer_size(Queue& ctx,
         const int64_t n = A.rows();
         const int64_t batch_size = A.batch_size();
 
-        size_t work_size = 0;
-        work_size += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(n * n * batch_size));
-        work_size += BumpAllocator::allocation_size<Scalar*>(ctx, static_cast<size_t>(batch_size));
-        work_size += BumpAllocator::allocation_size<float_type>(ctx, static_cast<size_t>(n * batch_size));
+        // A measuring() replay of syevx_direct's allocations, in its order: a hand sum misses the
+        // padding below a workspace base under the device alignment.
+        BumpAllocator pool = BumpAllocator::measuring();
+        (void)pool.allocate<Scalar>(ctx, static_cast<size_t>(n * n * batch_size));
+        (void)pool.allocate<Scalar*>(ctx, static_cast<size_t>(batch_size));
+        (void)pool.allocate<float_type>(ctx, static_cast<size_t>(n * batch_size));
 
         // The masked view picks the masked syev family; only the mask's presence matters.
         const auto mask = ::batchlas::detail::call_mask("syevx_direct_buffer_size", A, V);
         auto A_copy = packed_copy_view<Scalar>(nullptr, n, batch_size, nullptr).with_batch_mask(mask);
-        work_size += BumpAllocator::allocation_size<std::byte>(
-            ctx, syev_buffer_size<B>(ctx, A_copy, Span<float_type>(), jobz, Uplo::Lower));
-
-        // The sum assumes an aligned base; the caller's may be one quantum short (syev_blocked.cc).
-        return work_size + BumpAllocator::alignment<std::byte>(ctx.device());
+        (void)pool.allocate<std::byte>(ctx, syev_buffer_size<B>(ctx, A_copy, Span<float_type>(), jobz, Uplo::Lower));
+        return pool.required_bytes();
     }
 }
 
