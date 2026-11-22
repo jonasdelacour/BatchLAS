@@ -341,24 +341,26 @@ div.contents div.fragment a.el, div.contents pre.fragment a.el {
 }
 div.contents td code a, div.contents td code a.el, div.contents td .tt a, div.contents td .tt a.el { overflow-wrap: break-word; }
 
-/* Fragments scroll sideways; macOS overlay scrollbars hide that, so give them a thin bar that is
-   always drawn, in the theme's colours. Chromium and Safari draw ::-webkit-scrollbar only while
-   scrollbar-width and scrollbar-color are auto; Firefox gets the standard properties instead. */
-div.contents div.fragment, div.contents pre.fragment, pre.bl-proto, div.contents div.memproto {
+/* Code blocks and tables scroll sideways; macOS overlay scrollbars hide that, so they get a thin
+   bar that is always drawn, in the theme's colours. Chromium and Safari draw ::-webkit-scrollbar
+   only while scrollbar-width and scrollbar-color are auto; Firefox gets the standard properties. */
+:is(div.contents div.fragment, div.contents pre.fragment, pre.bl-proto, div.contents div.memproto, div.contents table.markdownTable) {
     scrollbar-width: auto; scrollbar-color: auto;
 }
-div.contents div.fragment::-webkit-scrollbar, div.contents pre.fragment::-webkit-scrollbar,
-pre.bl-proto::-webkit-scrollbar, div.contents div.memproto::-webkit-scrollbar { height: 6px; width: 6px; background: transparent; }
-div.contents div.fragment::-webkit-scrollbar-thumb, div.contents pre.fragment::-webkit-scrollbar-thumb,
-pre.bl-proto::-webkit-scrollbar-thumb, div.contents div.memproto::-webkit-scrollbar-thumb {
+:is(div.contents div.fragment, div.contents pre.fragment, pre.bl-proto, div.contents div.memproto, div.contents table.markdownTable)::-webkit-scrollbar {
+    height: 6px; width: 6px; background: transparent;
+}
+:is(div.contents div.fragment, div.contents pre.fragment, pre.bl-proto, div.contents div.memproto, div.contents table.markdownTable)::-webkit-scrollbar-thumb {
     background: var(--bl-fg-3); border: 0; border-radius: 3px;
 }
-div.contents div.fragment:hover::-webkit-scrollbar-thumb, div.contents pre.fragment:hover::-webkit-scrollbar-thumb,
-pre.bl-proto:hover::-webkit-scrollbar-thumb, div.contents div.memproto:hover::-webkit-scrollbar-thumb { background: var(--bl-fg-2); }
-div.contents div.fragment::-webkit-scrollbar-track, div.contents pre.fragment::-webkit-scrollbar-track,
-pre.bl-proto::-webkit-scrollbar-track, div.contents div.memproto::-webkit-scrollbar-track { background: var(--bl-line); }
+:is(div.contents div.fragment, div.contents pre.fragment, pre.bl-proto, div.contents div.memproto, div.contents table.markdownTable):hover::-webkit-scrollbar-thumb {
+    background: var(--bl-fg-2);
+}
+:is(div.contents div.fragment, div.contents pre.fragment, pre.bl-proto, div.contents div.memproto, div.contents table.markdownTable)::-webkit-scrollbar-track {
+    background: var(--bl-line);
+}
 @supports not selector(::-webkit-scrollbar) {
-    div.contents div.fragment, div.contents pre.fragment, pre.bl-proto, div.contents div.memproto {
+    :is(div.contents div.fragment, div.contents pre.fragment, pre.bl-proto, div.contents div.memproto, div.contents table.markdownTable) {
         scrollbar-width: thin; scrollbar-color: var(--bl-fg-3) var(--bl-line);
     }
 }
