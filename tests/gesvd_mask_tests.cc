@@ -663,7 +663,9 @@ TYPED_TEST(GesvdMask, BdsqrFailureFoldIgnoresInactiveItems) {
 TYPED_TEST(GesvdMask, OrmbrLeavesInactiveItemsUntouched) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::B;
-    if (!this->device() || !this->sg32()) GTEST_SKIP() << "ormbr runs masked on a device (NETLIB's gemm refuses)";
+    constexpr bool kHostNative = B == Backend::NETLIB && select::kHostNative;  // no host BLAS to refuse
+    if (!(this->device() || kHostNative) || !this->sg32())
+        GTEST_SKIP() << "ormbr runs masked on a device or a vendor-free host (a host BLAS gemm refuses)";
     const Transpose C = Transpose::ConjTrans, N = Transpose::NoTrans;
     this->check_ormbr('P', 13, 13, 13, 13, 40, C, 32);
     this->check_ormbr('P', 7, 7, 7, 7, 40, N, 32);

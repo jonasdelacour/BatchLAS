@@ -506,7 +506,7 @@ TYPED_TEST(SyevMask, SyfnLeavesInactiveItemsUntouched) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
     constexpr Backend B = TestFixture::B;
-    if (!this->gpu()) GTEST_SKIP() << "syfn refuses a mask on the host backend (refuse_host_mask, vendor-free too)";
+    if (!this->natives()) GTEST_SKIP() << "beside a host BLAS syfn refuses a mask (refuse_host_mask)";
     Queue& q = *this->ctx;
     for (const int n : {7, 45}) {
         SCOPED_TRACE("syfn n " + std::to_string(n));

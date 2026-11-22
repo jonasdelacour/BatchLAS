@@ -22,6 +22,9 @@
 #include <type_traits>
 #include <src/ops/syev/vendor.hh>
 #include <src/select/select.hh>
+#include <src/select/vendor.hh>
+#include <tests/test_support/coverage_rows.hh>
+#include <memory>
 #include <tests/shipped_table_pick.hh>
 #include <map>
 #include <set>
@@ -527,10 +530,12 @@ void check_direct_subset(int n, int batch, int neig, bool find_largest, bool wan
     Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
     auto V_view = want_vectors ? V.view() : MatrixView<float, MatrixFormat::Dense>();
 
-    auto ws = UnifiedVector<std::byte>(syevx_buffer_size(
-        *ctx, A, W.to_span(), neig, jobz, V_view, params));
+    // The workspace starts 8 bytes past its USM base, below every device alignment: a size that
+    // ignored the base padding ran out whenever a CPU queue's USM came back unaligned.
+    const size_t ws_bytes = syevx_buffer_size(*ctx, A, W.to_span(), neig, jobz, V_view, params);
+    auto ws = UnifiedVector<std::byte>(ws_bytes + 8);
     (void)syevx(
-        *ctx, A, W.to_span(), neig, ws, jobz, V_view, params);
+        *ctx, A, W.to_span(), neig, Span<std::byte>(ws.data() + 8, ws_bytes), jobz, V_view, params);
     ctx->wait();
 
     const auto ref = lapacke_spectrum(A);
@@ -582,6 +587,91 @@ TEST_P(SyevxDirectSubsetTest, FullSpectrumThroughSubsetPath) {
     if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
     SYEVX_REQUIRE_LAPACKE();
     check_direct_subset(40, 2, 40, std::get<0>(GetParam()), std::get<1>(GetParam()));
+}
+
+// The host route against LAPACKE on a CPU queue. The cases above run on the default device (the
+// GPU in the gate) and syevx_mask_tests' subset oracle is the same route unmasked. Graded spectra,
+// ld and batch stride past n, a workspace 8 bytes past its USM base. A vendor-free host runs every
+// stage natively and masks item 0 off (its W and V keep their poison); a host BLAS refuses a mask.
+TEST_P(SyevxDirectSubsetTest, HostQueueMatchesReference) {
+    if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
+    SYEVX_REQUIRE_LAPACKE();
+    const bool find_largest = std::get<0>(GetParam());
+    const bool want_vectors = std::get<1>(GetParam());
+    const JobType jobz = want_vectors ? JobType::EigenVectors : JobType::NoEigenVectors;
+    std::unique_ptr<Queue> cpu;
+    try {
+        cpu = std::make_unique<Queue>(Device("cpu"), true);
+    } catch (const std::exception& e) {
+        GTEST_SKIP() << "no CPU device: " << e.what();
+    }
+    Queue& q = *cpu;
+    ASSERT_EQ(q.backend(), Backend::NETLIB);
+    constexpr bool kMasked = select::kHostNative;
+    constexpr float kPoison = 7777.25f;
+    constexpr int batch = 3;
+    using MV = MatrixView<float, MatrixFormat::Dense>;
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::DirectSubset;
+    params.find_largest = find_largest;
+    UnifiedVector<std::uint8_t> mask(batch, 1);
+    if (kMasked) mask[0] = 0;
+    const int first = kMasked ? 1 : 0;
+
+    for (int n : {5, 33, 65, 130}) {
+        SCOPED_TRACE(::testing::Message() << "n=" << n);
+        const int neig = std::min(n, 6);
+        Matrix<float, MatrixFormat::Dense> Abig(n + 3, n, batch);
+        const MV A = Abig.view()({0, n}, {0, n});
+        (void)A.fill_graded_hermitian(q, 3.0, 17u + static_cast<unsigned>(n));
+        q.wait();
+        Matrix<float, MatrixFormat::Dense> Vbig(n + 2, neig, batch);
+        const MV Vfull = Vbig.view()({0, n}, {0, neig});
+        UnifiedVector<float> W(static_cast<size_t>(neig) * batch, kPoison);
+        float* vp = Vbig.view().data_ptr();
+        const auto v_at = [&](int i, int j, int b) -> float& {
+            return vp[static_cast<size_t>(b) * Vbig.view().stride() + static_cast<size_t>(j) * Vbig.view().ld() + i];
+        };
+        for (int b = 0; b < batch; ++b)
+            for (int j = 0; j < neig; ++j)
+                for (int i = 0; i < n + 2; ++i) v_at(i, j, b) = kPoison;
+        const MV Am = kMasked ? A.with_batch_mask(mask.to_span()) : A;
+        const MV Vm = !want_vectors ? MV() : kMasked ? Vfull.with_batch_mask(mask.to_span()) : Vfull;
+
+        const size_t ws_bytes = syevx_buffer_size(q, Am, W.to_span(), neig, jobz, Vm, params);
+        // Poisoned: an inactive item's stebz count is never written, and a zero there would hide a
+        // finalize kernel that ignored the mask.
+        UnifiedVector<std::byte> ws(ws_bytes + 8, std::byte{0x01});
+        const auto rows = test_support::reached_rows([&] {
+            (void)syevx(q, Am, W.to_span(), neig, Span<std::byte>(ws.data() + 8, ws_bytes), jobz, Vm, params);
+            q.wait();
+        });
+        const auto has = [&](const char* op) {
+            return std::any_of(rows.begin(), rows.end(), [&](const auto& r) { return r.op == op; });
+        };
+        if (kMasked) EXPECT_TRUE(has("geqrf")) << "never reached DirectSubset's sy2sb";
+        EXPECT_FALSE(has("syev")) << "ran syev: Direct, not DirectSubset";
+
+        auto ref = lapacke_spectrum(A);
+        auto want = Extremal(ref, neig, find_largest);
+        if (kMasked) want[0].clear();
+        expect_values(W.data(), neig, want, ref.norm2, n);
+        for (int j = 0; kMasked && j < neig; ++j) EXPECT_EQ(W[j], kPoison) << "inactive item 0 wrote W[" << j << "]";
+        if (!want_vectors) continue;
+
+        std::vector<int> items;
+        for (int b = first; b < batch; ++b) items.push_back(b);
+        const VectorView<float> w(W, neig, batch);
+        EXPECT_VERIFY(float, verify::Check::eigen_residual, n, MV::eigen_residual(q, A, Vfull, w, items));
+        EXPECT_VERIFY(float, verify::Check::orthogonality_rotations, neig, MV::orthogonality(q, Vfull, items));
+        int touched = 0;
+        for (int b = 0; b < batch; ++b)
+            for (int j = 0; j < neig; ++j)
+                for (int i = 0; i < n + 2; ++i)
+                    touched += (b < first || i >= n) && v_at(i, j, b) != kPoison;
+        EXPECT_EQ(touched, 0) << "V entries outside the active items' n x neig blocks were written";
+    }
 }
 
 INSTANTIATE_TEST_SUITE_P(
