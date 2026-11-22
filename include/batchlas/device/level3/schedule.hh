@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Level 3 tile bodies and schedules:
-//   reg_tile_mma   acc += op(A) op(B) over one output tile of a RegGeom: staging, k loop, micro
-//                  kernel; the body of GemmRegisterTiledKernel and of the in-group ops
-//   for_each_tile  Persistent: every tile of one matrix on one work-group, a barrier after each
+/// @file
+/// @brief Level 3 tile bodies and schedules (@ref api_device_lowlevel, not covered by the
+/// compatibility promise).
+///
+///   - `l3::reg_tile_mma`: `acc += op(A) op(B)` over one output tile of a `RegGeom`: staging, k
+///     loop and micro-kernel; the body of the host's register-tiled gemm and of the in-group
+///     operations.
+///   - `l3::for_each_tile`: every tile of one matrix on one work-group, a barrier after each.
+/// @ingroup api_device_lowlevel
 // The host kernels take OneTile (their entry reads the group ids); a persistent loop is a separate
 // instantiation (it makes m0 / n0 loop-carried) and never a host route (agent-guide section 11).
 
@@ -21,12 +26,25 @@ namespace detail {
 inline int slab_count(int value, int divisor) { return (value + divisor - 1) / divisor; }
 }  // namespace detail
 
-/// acc += op(A)(m0 + :, 0 : k) op(B)(0 : k, n0 + :) for the item (local_row, local_col) of a G
-/// tile. stage(kk0, dst_a, dst_b) writes op(A)'s TileM x TileK slab at k offset kk0 through
-/// dst_a(r, c) and op(B)'s TileK x TileN slab through dst_b(r, c) (both zero outside the matrix).
-/// tile_a / tile_b (a pointer or a local_accessor, indexed as the tuned kernel indexed it):
-/// Stages * StageASize / StageBSize local elements. Exact: k % TileK == 0, no tail tests. Ends
-/// on a barrier after the last read of both stages (kloop), so an epilogue may reuse them.
+/// @brief `acc += op(A)(m0 + :, 0 : k) op(B)(0 : k, n0 + :)` for the item `(local_row, local_col)` of a `G` tile.
+///
+/// Ends on a barrier after the last read of both stages (`kloop`), so an epilogue may reuse them.
+/// COLLECTIVE.
+/// @ingroup api_device_lowlevel
+/// @tparam G the geometry (`RegGeom`).
+/// @tparam Exact `true`: `k % TileK == 0`, no tail tests.
+/// @tparam Ops the arithmetic policy (default `arith::Native`).
+/// @param ex the executor.
+/// @param local_row this item's tile row.
+/// @param local_col this item's tile column.
+/// @param tile_a the `op(A)` stages: `Stages * StageASize` local elements (a pointer or a
+///   `local_accessor`).
+/// @param tile_b the `op(B)` stages: `Stages * StageBSize` local elements.
+/// @param stage called as `stage(int kk0, dst_a, dst_b)`: write `op(A)`'s `TileM` x `TileK` slab at
+///   k offset `kk0` through `dst_a(r, c)` and `op(B)`'s `TileK` x `TileN` slab through
+///   `dst_b(r, c)`, both zero outside the matrix.
+/// @param k the depth.
+/// @param[in,out] accum this item's register tile.
 template <class G, bool Exact, class Ops = arith::Native, class Ex, class Mem, class Stage, class Scalar>
 BATCHLAS_DEVICE_INLINE void reg_tile_mma(const Ex& ex, int local_row, int local_col, const Mem& tile_a, const Mem& tile_b, Stage&& stage,
                                       const int& k, Tile<Scalar, G::ThreadTileRows, G::ThreadTileCols>& accum) {
@@ -48,8 +66,15 @@ BATCHLAS_DEVICE_INLINE void reg_tile_mma(const Ex& ex, int local_row, int local_
     kloop<G::Stages, Exact, G::TileK>(ex, tile_count, load_stage, accumulate_stage);
 }
 
-/// f(t) for t = 0 .. count - 1 on the whole executor, one barrier after each: the staged
-/// epilogue reuses the stage memory the next tile's first load writes. f must be uniform in t.
+/// @brief Calls `f(t)` for every `t` in `[0, count)` on the whole executor, with a barrier after each.
+///
+/// The barrier lets the staged epilogue reuse the stage memory the next tile's first load
+/// writes. COLLECTIVE.
+/// @ingroup api_device_lowlevel
+/// @pre `f` is uniform in `t`: every item makes the same calls.
+/// @param ex the executor.
+/// @param count the number of tiles.
+/// @param f called as `f(int t)`.
 template <class Ex, class F> BATCHLAS_DEVICE_INLINE void for_each_tile(const Ex& ex, int count, F&& f) {
     for (int t = 0; t < count; ++t) {
         f(t);

@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Level 3 k loops, moved from the tuned gemm kernels unchanged; the barriers are
-// the pipeline's contract. Any executor with barrier().
-//   kloop             1-stage or 2-stage double-buffered local stages
-//   kloop_prefetch2   register-prefetched double buffer, one barrier per slab
-//   kloop_async       Stages - 1 slabs in flight through asynchronous copies
-//   kloop_async_ring  the same with a run-time ring index (the wide kernels)
+/// @file
+/// @brief Level 3 k loops of the tuned gemm (@ref api_device_lowlevel, not covered by the
+/// compatibility promise).
+///
+/// The barriers are each loop's contract; any executor with `barrier()` runs them.
+///   - `l3::kloop`: one local stage, or two double-buffered.
+///   - `l3::kloop_prefetch2`: a register-prefetched double buffer, one barrier per slab.
+///   - `l3::kloop_async`: `Stages - 1` slabs in flight through asynchronous copies.
+///   - `l3::kloop_async_ring`: the same with a run-time ring index.
+/// @ingroup api_device_lowlevel
+// Moved from the tuned gemm kernels unchanged.
 
 #include <type_traits>
 #include <utility>
@@ -16,9 +21,18 @@
 
 namespace batchlas::device::l3 {
 
-// load(kk0, stage) fills local stage `stage` with k slab kk0; compute(stage, kk0) consumes it.
-// Stages 1: load, barrier, compute, barrier per slab. Stages 2: slab t + 1 loads while slab t
-// computes, one barrier per slab. Exact: no tail, and the first load sits behind tiles > 0.
+/// @brief The staged k loop over `tile_count` slabs.
+///
+/// `Stages = 1`: load, barrier, compute, barrier per slab. `Stages = 2`: slab `t + 1` loads while
+/// slab `t` computes, one barrier per slab. Ends on a barrier after the last compute. COLLECTIVE.
+/// @ingroup api_device_lowlevel
+/// @tparam Stages 1 or 2.
+/// @tparam Exact `true`: no tail, and the first load sits behind `tile_count > 0`.
+/// @tparam TileK the slab depth.
+/// @param ex the executor.
+/// @param tile_count the number of slabs.
+/// @param load called as `load(int kk0, int stage)`: fill local stage `stage` with the slab at `kk0`.
+/// @param compute called as `compute(int stage, int kk0)`: consume it.
 template <int Stages, bool Exact, int TileK, class Ex, class Load, class Compute>
 BATCHLAS_DEVICE_INLINE void kloop(const Ex& ex, int tile_count, Load&& load, Compute&& compute) {
     static_assert(Stages == 1 || Stages == 2, "kloop: one or two local stages");
@@ -59,10 +73,18 @@ BATCHLAS_DEVICE_INLINE void kloop(const Ex& ex, int tile_count, Load&& load, Com
     }
 }
 
-// Register-prefetched double buffer: gload(k0) reads slab k0 into registers, sstore(buf) writes
-// them to local buffer buf, compute(buf) consumes one. One barrier per slab: slab s + 1 goes into
-// the buffer slab s - 1 was read from, and that read ended before the barrier closing iteration
-// s - 1. Unrolled by two so buf is a constant. Ends without a barrier.
+/// @brief A register-prefetched double-buffered k loop, one barrier per slab.
+///
+/// Slab `s + 1` goes into the buffer slab `s - 1` was read from, and that read ended before the
+/// barrier closing iteration `s - 1`. Unrolled by two, so `buf` is a constant. Ends without a
+/// barrier. COLLECTIVE.
+/// @ingroup api_device_lowlevel
+/// @tparam TileK the slab depth.
+/// @param ex the executor.
+/// @param slabs the number of slabs.
+/// @param gload called as `gload(int k0)`: read the slab at `k0` into registers.
+/// @param sstore called as `sstore(int buf)`: write them to local buffer `buf`.
+/// @param compute called as `compute(int buf)`: consume a buffer.
 template <int TileK, class Ex, class GLoad, class SStore, class Compute>
 BATCHLAS_DEVICE_INLINE void kloop_prefetch2(const Ex& ex, int slabs, GLoad&& gload, SStore&& sstore, Compute&& compute) {
     gload(0);
@@ -83,10 +105,21 @@ BATCHLAS_DEVICE_INLINE void kloop_prefetch2(const Ex& ex, int slabs, GLoad&& glo
     if (s < slabs) compute(0);  // an odd slab count leaves the last slab in buffer 0
 }
 
-// Stages - 1 slabs in flight through asynchronous copies: issue(k0, buf) starts slab k0's copies
-// into buffer buf (an integral_constant), commit() closes a copy group, wait() waits until at most
-// Stages - 2 groups are pending, drain() until none. Step s waits for slab s, barriers, refills the
-// buffer slab s - 1 was read from and computes; one commit per step (empty past the end).
+/// @brief `Stages - 1` slabs in flight through asynchronous copies, the buffer index a compile-time constant.
+///
+/// Step `s` waits for slab `s`, takes a barrier, refills the buffer slab `s - 1` was read from and
+/// computes; one commit per step (an empty group past the end). Ends drained. COLLECTIVE.
+/// @ingroup api_device_lowlevel
+/// @tparam Stages the ring size.
+/// @tparam TileK the slab depth.
+/// @param ex the executor.
+/// @param slabs the number of slabs.
+/// @param issue called as `issue(int k0, buf)` with `buf` a `std::integral_constant<int, b>`: start
+///   the slab's copies into buffer `b`.
+/// @param commit called as `commit()`: close a copy group.
+/// @param wait called as `wait()`: wait until at most `Stages - 2` groups are pending.
+/// @param drain called as `drain()`: wait until none is.
+/// @param compute called as `compute(int b)`: consume buffer `b`.
 template <int Stages, int TileK, class Ex, class Issue, class Commit, class Wait, class Drain, class Compute>
 BATCHLAS_DEVICE_INLINE void kloop_async(const Ex& ex, int slabs, Issue&& issue, Commit&& commit, Wait&& wait, Drain&& drain,
                                      Compute&& compute) {
@@ -109,12 +142,21 @@ BATCHLAS_DEVICE_INLINE void kloop_async(const Ex& ex, int slabs, Issue&& issue, 
     drain();
 }
 
-/// Stages - 1 slabs in flight through cp.async (copy_async.hh) into a ring whose buffer index is a
-/// run-time value (an unrolled ring is Stages x the code): issue(k0, buf) starts slab k0's copies
-/// into buffer buf, slab s being k_lo + s * TileK, in slab order. Step s waits for slab s (own
-/// copies, then the barrier for everyone's), refills the buffer slab s - 1 was read from and runs
-/// compute(buf); one commit per step, empty past the end, keeps the wait count at Stages - 2.
-/// Ends drained, without a barrier.
+/// @brief `Stages - 1` slabs in flight through `copy_async_zfill` into a ring whose buffer index is a
+/// run-time value (an unrolled ring is `Stages` times the code).
+///
+/// Slab `s` is at `k_lo + s * TileK`, issued in slab order. Step `s` waits for slab `s` (its own
+/// copies, then the barrier for everyone's), refills the buffer slab `s - 1` was read from and
+/// runs `compute(buf)`; one commit per step, empty past the end, keeps the wait count at
+/// `Stages - 2`. Ends drained, without a barrier. COLLECTIVE.
+/// @ingroup api_device_lowlevel
+/// @tparam Stages the ring size.
+/// @tparam TileK the slab depth.
+/// @param ex the executor.
+/// @param slabs the number of slabs.
+/// @param k_lo the first slab's k offset.
+/// @param issue called as `issue(int k0, int buf)`: start the slab's copies into buffer `buf`.
+/// @param compute called as `compute(int buf)`: consume buffer `buf`.
 template <int Stages, int TileK, class Ex, class Issue, class Compute>
 BATCHLAS_DEVICE_INLINE void kloop_async_ring(const Ex& ex, int slabs, int k_lo, Issue&& issue, Compute&& compute) {
 BATCHLAS_UNROLL_FULL
