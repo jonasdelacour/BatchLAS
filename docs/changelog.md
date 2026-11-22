@@ -62,7 +62,11 @@ pre-release commit (version 0.1.0) will notice.
   `sygst` blocked, `sygvd` (masked batches too) and `syfn` (f3110eca); `syev` blocked, `syevx`
   Direct, `steqr` and `stedc` divide and conquer (5d813bbd, 021e11db). `gemm`, `gemv` and `spmm`
   already ran natively on a vendor-free host. Which families stay GPU-only there, and why, is in
-  [the host-native gate](design/vendor-independence.md#the-host-native-gate).
+  [the host-native gate](design/vendor-independence.md#the-host-native-gate). These host routes
+  honour a batch mask where a host BLAS refuses one: `gemm`, the level-3 ops, `potrf`, `posv`,
+  `potrs`, `sygvd_factored`, blocked `ormqr`, `ortho`, `ritz_values`, `syfn`, `syfn_from_eigen`,
+  `syev_align` and `lanczos` (tested in 8684a076).
+
 - Two SYCL implementations from one tree: DPC++ (`intel/llvm` with CUDA) and AdaptiveCpp 25.10
   (#162, #178, #180); AdaptiveCpp on Linux is **experimental** and carries its own failure ledgers.
 - Apple GPUs through AdaptiveCpp Metal (`Backend::SYCL`, `float` and `complex<float>` on the GPU,
@@ -110,6 +114,9 @@ pre-release commit (version 0.1.0) will notice.
   #170). The consumer test checks that `find_package` accepts 1.0 and refuses 0.99, 1.1 and 2.0
   (955fc341, 2b905dcf, 54847b98).
 
+<!-- wave-3b placeholder (Added): host routes and other additions from rel4/skip-burn and the
+     other wave-3b packages' integration_needs; filled at integration, then this comment goes. -->
+
 ### Changed {#changelog-1-0-0-changed}
 
 - The library version is 1.0.0 and `SOVERSION` is 1 (`libbatchlas*.so.1`, `libbatchlas*.1.dylib`);
@@ -141,6 +148,9 @@ pre-release commit (version 0.1.0) will notice.
 - On a vendor-free host, `gesvd` refuses a masked batch (its `gebrd` and `ormbr` children cannot
   skip an item), and `syev` runs `blocked` only (f3110eca, e9e516da).
 
+<!-- wave-3b placeholder (Changed): behaviour changes from the wave-3b packages' integration_needs;
+     filled at integration, then this comment goes. -->
+
 ### Fixed {#changelog-1-0-0-fixed}
 
 - `gesvd_cta` left singular vectors lost orthogonality as eps times kappa squared
@@ -157,6 +167,13 @@ pre-release commit (version 0.1.0) will notice.
   - Jacobi's float rotation cosine on AdaptiveCpp takes the FMA Newton step the NVPTX path uses
     (53fcac77).
   - `potri` admitted orders its CTA kernel could not launch (7e5d7baa).
+  - `steqr_wg` returned a non-orthonormal `Z` for masked `float` batches: a large per-pass fill
+    of the rotation slots lost writes in AdaptiveCpp's batched Metal command buffer (mechanism not
+    isolated). The sweep kernel now writes every rotation slot itself and the fill is gone
+    (2dea7e5a).
+  - `latrd_lower_run` (the blocked `sytrd` panel), the `latrd` grid kernel and `sb2st_hh_chase`
+    scale a reflector's norm by a power of two before the sum of squares, as `larfg_lanes` does, so
+    tiny entries keep their norm where subnormals flush (da319bdf, a66f431d, 02b51e38, 28a0b78a).
 - DPC++ OpenCL CPU (vendor-free host) wrong answers and crashes:
   - `portable::group_broadcast` reached only lanes 0..15 of a 32-wide sub-group, which broke the
     blocked device `syev` from n = 18; it is now exact for every trivially copyable type (34eb2e99,
@@ -186,6 +203,9 @@ pre-release commit (version 0.1.0) will notice.
 - Backend parity and kernel-numerics fixes from the readiness audit (#168, #169, #171, #173, #175,
   #176).
 - CPU-only builds (#126) and builds for NVIDIA architectures DPC++ has no alias for (#129).
+
+<!-- wave-3b placeholder (Fixed): fixes from rel4/skip-burn and the other wave-3b packages'
+     integration_needs; filled at integration, then this comment goes. -->
 
 [Unreleased]: https://github.com/jonasdelacour/BatchLAS/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/jonasdelacour/BatchLAS/releases/tag/v1.0.0
