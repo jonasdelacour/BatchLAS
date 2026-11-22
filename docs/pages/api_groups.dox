@@ -94,17 +94,250 @@ Which kernel runs for a shape is decided by flat kernel selection (developer doc
 Lower-level functions (algorithm-specific variants, workspace queries, validation and helpers): @ref api_config_lowlevel.
 
 @defgroup api_device In-kernel BLAS and LAPACK (batchlas::device)
-@brief Device-side linear algebra for user kernels: `#include <batchlas/device.hh>` (core) and
-`<batchlas/device/lapack/<routine>.hh>`, namespace `batchlas::device`.
+@brief BLAS and LAPACK you call from inside your own SYCL kernel, one matrix per work-item,
+sub-group or work-group, in namespace batchlas::device.
 
-The launch frame, the conventions, executors, tiers (`tier::Reg` / `Cta` / `Blocked`, chosen on
-the host by `with_tier`), the workspace protocol, info values and one example per family:
-@ref design_device_la; every public signature: @ref design_device_la_api.
+The device API is header-only: it needs a SYCL compiler and the `include/` directory, not the
+built library (see "The device API without building BatchLAS" in @ref guide_cpp_api). A kernel
+picks an *executor* (who cooperates on one matrix), wraps its memory in *operands* (typed int32
+views), and calls routines whose sizes, layouts and algorithms are template parameters, so a
+kernel compiles only the path it takes. LAPACK-level routines run in a *tier* (`tier::Reg`,
+`tier::Cta` or `tier::Blocked`) chosen on the host by `with_tier`, size their workspace with
+`<op>_buffer_size`, and report failure through an `info` value, as LAPACK does.
+
+@par Which header to include
+- `#include <batchlas/device.hh>`: the core. Launch, tiers and workspace; executors; operands,
+  views and interop; scalars and arithmetic; level 1, level 2, register-tier level 3 and the
+  LAPACK auxiliaries.
+- `#include <batchlas/device/lapack.hh>`: every LAPACK routine (it includes the core), or one
+  routine with `<batchlas/device/lapack/<routine>.hh>`, e.g. `<batchlas/device/lapack/potrf.hh>`.
+- `#include <batchlas/device/level3/group.hh>`: in-group level 3 (gemm and friends on one matrix
+  per work-group, operands in global memory). Not in either umbrella.
+- `#include <batchlas/device/sparse.hh>`: CSR operands, spmm and ILU(k). Not in either umbrella.
+
+@par What it contains
+- @ref api_device_launch &ndash; turning a routine and a tier into a kernel launch.
+- @ref api_device_exec &ndash; executors, the work-item teams that own one matrix.
+- @ref api_device_operands &ndash; matrices, vectors, fragments, lazy views and host-view interop.
+- @ref api_device_arith &ndash; scalar kernels and the arithmetic policies.
+- @ref api_device_blas1, @ref api_device_blas2, @ref api_device_blas3 &ndash; BLAS levels 1 to 3.
+- LAPACK &ndash; @ref api_device_lapack_chol, @ref api_device_lapack_lu, @ref api_device_lapack_ldl,
+  @ref api_device_lapack_qr, @ref api_device_lapack_eig, @ref api_device_lapack_svd and
+  @ref api_device_lapack_aux.
+- @ref api_device_sparse &ndash; sparse-dense products and incomplete LU.
+- @ref api_device_lowlevel &ndash; helpers in batchlas::device that are **not** covered by the
+  compatibility promise.
+
+@par Where to read more
+The guide to the launch frame, the conventions, the workspace protocol, info values and one
+example per family is @ref design_device_la. Every public signature, by header, is on
+@ref design_device_la_api.
+
+@par Compatibility
+The semantic-versioning promise ("Versioning and compatibility" in @ref guide_cpp_api) covers
+the members of the groups above except @ref api_device_lowlevel. Anything in
+batchlas::device that is in none of them, and everything in `batchlas::device::detail` and
+`<batchlas/device/detail/...>`, is not API.
 
 @defgroup api_internal_helpers Kernel helpers (installed, not API)
 @brief Headers installed because public headers include them. Not a stable interface.
 
 @}
+*/
+
+/**
+@namespace batchlas::device
+@brief In-kernel BLAS and LAPACK for user SYCL kernels; the reference is @ref api_device.
+*/
+
+/**
+@defgroup api_device_launch Launch, tiers and workspace
+@ingroup api_device
+@brief Turning a routine and a tier into a kernel launch: `launch`, `with_tier`, the tiers, the
+workspace plan and the per-item slots.
+
+A LAPACK-level routine runs in one tier, fixed at compile time: `tier::Reg` (the matrix in
+registers), `tier::Cta` (in local memory) or `tier::Blocked` (any n, blocked through global
+workspace). On the host, `with_tier` visits the first tier the device admits for a run-time n, and
+`launch<Routine, Tier, T>` gives that tier's buffer size, nd-range, executor, batch slot and
+workspace slices, so the host sizes exactly what the kernel carves. Include
+`<batchlas/device.hh>` (`tier.hh`, `launch.hh`, `workspace.hh`). Guide: @ref design_device_la.
+*/
+
+/**
+@defgroup api_device_exec Executors
+@ingroup api_device
+@brief The work-item teams that own one matrix: a single work-item, a sub-group or a partition of
+one, a work-group, and the batched 2-D grid.
+
+An executor's size is a type constant, so strides, trip counts and team counts fold at compile
+time, and every routine distributes its work over the executor's cyclic layout; only `WorkGroup`
+has a work-group barrier. Include `<batchlas/device.hh>` (`exec.hh`, `sg_partition.hh`,
+`grid.hh`). Guide: @ref design_device_la.
+*/
+
+/**
+@defgroup api_device_operands Operands, views and interop
+@ingroup api_device
+@brief `Mat`, `Vec` and `Frag` operands, the extent, memory-space and layout tags they carry,
+lazy views over them, and conversion from host views.
+
+Operands are thin int32 views whose extents, strides, memory space and layout are types: a `Dyn`
+extent costs one int, an `Ext<N>` extent is free. Views (`op_view`, `herm_view`, `sym_view`,
+rows, columns and slices) compute an index and copy nothing. Interop re-types a host
+batchlas::KernelMatrixView or batchlas::VectorView for one batch item. Include `<batchlas/device.hh>` (`core.hh`, `operand.hh`,
+`view.hh`, `interop.hh`). Guide: @ref design_device_la.
+*/
+
+/**
+@defgroup api_device_arith Scalars and arithmetic
+@ingroup api_device
+@brief The `Arith` trait, the `arith::` policies a routine's inner loop takes, and the scalar
+LAPACK kernels (`lartg`, `safmin` and friends).
+
+`Arith` covers real types, `std::complex` and any plain `{re, im}` complex; the policies choose
+explicit or native complex arithmetic and fused multiply-add. The scalar kernels are pure
+functions with no executor and are also callable on the host. Include `<batchlas/device.hh>`
+(`arith.hh`, `scalar.hh`). Guide: @ref design_device_la.
+*/
+
+/**
+@defgroup api_device_blas1 BLAS level 1 and reductions
+@ingroup api_device
+@brief Vector operations on an executor (copy, swap, fill, axpy, axpby, dot, dotc, sumsq, iamax
+and friends) and the reductions and lane exchanges they are built from.
+
+Every operation distributes over the executor's cyclic layout, so two operations on the same
+executor compose with no barrier; the only barrier is in the packed scratch exchange, which names
+it in its signature. Include `<batchlas/device.hh>` (`level1.hh`, `reduce.hh`). Guide:
+@ref design_device_la.
+*/
+
+/**
+@defgroup api_device_blas2 BLAS level 2
+@ingroup api_device
+@brief Matrix-vector operations on an executor: gemv, symv / hemv, trmv, trsv, and the rank
+updates ger, geru, gerc and her2.
+
+Arguments come in BLAS order, `(ex, alpha, A, x, beta, y)`; the algorithm is a template parameter
+whose default is computed from the executor and the transpose, so a kernel never compiles the path
+it does not take. Include `<batchlas/device.hh>` (`level2.hh`). Guide: @ref design_device_la.
+*/
+
+/**
+@defgroup api_device_blas3 BLAS level 3
+@ingroup api_device
+@brief Matrix-matrix operations: the register-tier forms on one work-item's tiles, and the
+in-group gemm, symm / hemm, syrk / herk, syr2k / her2k, trmm and trsm on one matrix per
+work-group.
+
+The register tier keeps whole operands in registers. The in-group forms take operands in global
+memory, stage tiles in the local memory at the start of the workspace, take the host's run-time
+modes as template parameters and are tuned through an `l3::` configuration. Include
+`<batchlas/device.hh>` for the register tier (`level3.hh`) and
+`<batchlas/device/level3/group.hh>` for the in-group forms. Guide: @ref design_device_la.
+*/
+
+/**
+@defgroup api_device_lapack_chol Cholesky: potrf, potrs, posv, potri
+@ingroup api_device
+@brief Cholesky factorization of a symmetric or Hermitian positive definite matrix, the solve with
+its factor, the combined driver and the inverse from the factor.
+
+`potrf` returns LAPACK's `info`: 0, or the order of the first leading minor that is not
+positive definite.
+Include `<batchlas/device/lapack/potrf.hh>` (or `potrs.hh`, `posv.hh`, `potri.hh`), or
+`<batchlas/device/lapack.hh>` for all routines. Guide: @ref design_device_la.
+*/
+
+/**
+@defgroup api_device_lapack_lu LU: getrf, getrs, gesv, getri
+@ingroup api_device
+@brief LU factorization with partial pivoting, the solve with its factors, the combined driver,
+the inverse from the factors, and the copy-preserving inverse `inv`.
+
+Pivots are 1-based int32, as in LAPACK; a zero pivot is reported in `info`. Include
+`<batchlas/device/lapack/getrf.hh>` (or `getrs.hh`, `gesv.hh`, `getri.hh`, `inv.hh`), or
+`<batchlas/device/lapack.hh>`. Guide: @ref design_device_la.
+*/
+
+/**
+@defgroup api_device_lapack_ldl Symmetric indefinite LDL^T: sytrf, sytrs, sysv
+@ingroup api_device
+@brief Bunch-Kaufman \f$ A = L D L^T \f$ factorization of a symmetric indefinite matrix, the solve
+with its factors and the combined driver.
+
+Include `<batchlas/device/lapack/sytrf.hh>` (or `sytrs.hh`, `sysv.hh`), or
+`<batchlas/device/lapack.hh>`. Guide: @ref design_device_la.
+*/
+
+/**
+@defgroup api_device_lapack_qr QR and orthogonal transforms: geqrf, larft, larfb, orgqr, ormqr, gebrd, ormbr
+@ingroup api_device
+@brief Householder QR, the block reflector and its application, forming and applying Q,
+bidiagonal reduction and applying its transforms, and orthogonalisation.
+
+Include `<batchlas/device/lapack/geqrf.hh>` (or `larft.hh`, `larfb.hh`, `orgqr.hh`, `ormqr.hh`,
+`gebrd.hh`, `ormbr.hh`, `ortho.hh`), or `<batchlas/device/lapack.hh>`. Guide:
+@ref design_device_la.
+*/
+
+/**
+@defgroup api_device_lapack_eig Symmetric eigensolvers: syev, syevx, sytrd, sy2sb, sb2st, steqr, stedc, stebz, stein, sygst, jacobi
+@ingroup api_device
+@brief The symmetric and Hermitian eigensolver drivers and their stages: tridiagonal and band
+reduction, the tridiagonal solvers, the generalized-problem reduction and one-sided Jacobi.
+
+`syev` computes all eigenvalues (and optionally eigenvectors), `syevx` a selected range; both
+report non-convergence in `info`. The stages (`sytrd`, `sy2sb` then `sb2st`; `steqr`, `stedc`,
+`stebz` with `stein`) can be called on their own. Include `<batchlas/device/lapack/syev.hh>` (or
+the stage's header, e.g. `steqr.hh`), or `<batchlas/device/lapack.hh>`. Guide:
+@ref design_device_la.
+*/
+
+/**
+@defgroup api_device_lapack_svd Singular value decomposition: gesvd, bdsqr, bdsdc
+@ingroup api_device
+@brief The SVD driver and the bidiagonal singular value solvers it runs after `gebrd`.
+
+`gesvd` reduces to bidiagonal form, solves with `bdsqr` (QR iteration) or `bdsdc` (divide and
+conquer), and applies the transforms with `ormbr`; non-convergence is reported in `info`. Include
+`<batchlas/device/lapack/gesvd.hh>` (or `bdsqr.hh`, `bdsdc.hh`), or
+`<batchlas/device/lapack.hh>`. Guide: @ref design_device_la.
+*/
+
+/**
+@defgroup api_device_lapack_aux LAPACK auxiliaries
+@ingroup api_device
+@brief The building blocks LAPACK routines share: lacpy, laset, lange, laswp, plane rotations
+(rot, lasr) and Householder reflectors (larfg, larf).
+
+They run on an executor with its cyclic layout, so they compose with level 1 and level 2
+operations on the same executor without a barrier. Include `<batchlas/device.hh>`
+(`lapack_aux.hh`). Guide: @ref design_device_la.
+*/
+
+/**
+@defgroup api_device_sparse Sparse: spmm, iluk
+@ingroup api_device
+@brief CSR operands, the sparse-dense product `spmm`, and incomplete LU, `iluk_factorize` and
+`iluk_apply`.
+
+Each operation runs one batch item on one executor for any extent; the host sparse routes launch
+the same bodies. Include `<batchlas/device/sparse.hh>`, which neither umbrella includes. Guide:
+@ref design_device_la.
+*/
+
+/**
+@defgroup api_device_lowlevel Low-level helpers (not covered)
+@ingroup api_device
+@brief Helpers that live in batchlas::device because public routines and the examples use them.
+They are **not** covered by the compatibility promise.
+
+A member of this group may change its signature or disappear in any release, minor or patch
+("Versioning and compatibility" in @ref guide_cpp_api). They are documented so that the public
+routines' signatures can be read; do not build on them. Everything in `batchlas::device::detail`
+is private and is not documented at all. Guide: @ref design_device_la.
 */
 
 /**
