@@ -265,8 +265,8 @@ Event steqr_wg(Queue& ctx,
     (void)VectorView<Real>::copy(ctx, e, e_in);
 
     // No fill of givens_rotations per pass: the sweep kernel writes every slot the rotation kernel
-    // reads. A 3 MB fill here was the one write a masked float call on Metal lost (about a fifth of
-    // its slots kept the workspace's old bytes, and Z took non-unit rotations).
+    // reads, which saves a 3 MB fill per pass. Without AdaptiveCpp patch 0015 that fill also lost a
+    // fifth of its writes on Metal after masked kernels: its null mask read a stale binding.
     for (int64_t i = 0; i < n - 1; ++i) {
         (void)steqr_wg_impl(ctx,
                       d,

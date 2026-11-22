@@ -199,6 +199,7 @@ group's local-memory target is the device budget at its own work-group size, so 
 | blocked device `syev` wrong from \f$n = 18\f$ on the OpenCL CPU | `sycl::group_broadcast` reached lanes 0..15 only ([trap](#known-defects-toolchain-traps)) | 34eb2e99, 1066d690: `portable::group_broadcast` ORs the bits on SPIR | `group_collectives_tests` |
 | device `stedc` SIGSEGV on the OpenCL CPU | `joint_exclusive_scan` carried a wrong value between chunks, so `laed2` gathered out of bounds | ed2c6148: chunked scan on SPIR | `device_lapack_stedc_tests` |
 | `sytrd_sb2st` work-group kernel: \f$d\f$, \f$e\f$ off by \f$6 \times 10^{4}\f$ of the band norm on the OpenCL CPU | an `nr == 0` step has no barrier between the read of the published counters and the next publish | ef5757dc: two alternating slots | `DeviceApiSb2stTest.WideBandMatchesTheWorkGroupRoute` |
+| masked float `steqr_wg` on Metal: \f$Z\f$ not orthonormal (\f$\lvert Z \rvert \approx 400\f$) | `MatrixView::fill`'s null mask read an earlier kernel's buffer binding ([trap](#known-defects-toolchain-traps)), so a fifth of the 2.9 MB rotation fill was skipped | AdaptiveCpp patch 0015; 2dea7e5a also drops that fill | `QueueTest.NullPointerArgumentReadsNullAfterAKernelThatBoundItsSlot`, `BatchMaskUtilities.UnmaskedUtilityAfterAKernelThatBoundItsSlotsWritesEveryItem` |
 | `steqr_wg` NaN on an all-subnormal block (CUDA too); `stedc` graded float leaves info 2 | `ssfmin / anorm` overflowed to inf | 84782e3e: `block_scale` capped at `1 / min` | `SteqrTest.SubnormalBlockConverges`, `StedcTest.GradedSubnormalLeavesConverge` |
 | `syev` blocked, `syevx` Direct: "only 16 remaining" at \f$n = 4\f$ on the OpenCL CPU | slices sized as if the workspace began on the device's 128-byte alignment | 09d24192: one alignment quantum counted | `syev`, `syev_mask` and `syevx` on opencl:cpu; `BatchPartsUnderAScratchBudget` |
 | `linalg_layer_tests` SIGSEGV when a wrapped call threw | the wrapper freed its buffers while its enqueued copy ran | 81b11727: every multi-launch wrapper waits before rethrowing | `LinalgWrappers.QrDrainsItsCopyWhenGeqrfThrows` |
@@ -221,6 +222,11 @@ none is fixed in the toolchain.
   it the `complex<float>` shaders of `potrf`, `posv`, `potrs`, `potri`, `sygvd` and `ortho` fail
   to compile ("incompatible operand types"). A true private-vs-device select still fails: write a
   branch, not a select (`scripts/macos/adaptivecpp-patches/0014-upstream.txt`).
+- **AdaptiveCpp Metal needs patch 0015** to pass a null pointer kernel argument as null. Without
+  it, a kernel with at most six parameters, batched into a command buffer after another kernel,
+  reads that kernel's buffer binding instead of the null pointer. An unmasked utility's null mask
+  then skips every item whose stale byte is zero. A wait between the two launches, or
+  `BATCHLAS_METAL_FLUSH_EACH_OP=1`, hides it (`scripts/macos/adaptivecpp-patches/0015-upstream.txt`).
 - **DPC++ OpenCL CPU, `reqd_sub_group_size(32)`:** a work-group `sycl::group_broadcast` reaches
   lanes 0..15 of each sub-group only, and `joint_exclusive_scan` over a work-group carries a wrong
   value between chunks once \f$n\f$ exceeds the group. Use `portable::group_broadcast` and
