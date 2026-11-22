@@ -35,10 +35,12 @@ int run(sycl::queue& q, int n, int nrhs, int batch) {
     device::with_tier<R, T>(q.get_device(), n, [&]<class Tier>(Tier) {
         using L = device::launch<R, Tier, T>;
         const auto sz = L::buffer_size(n);
-        std::byte* gws = sz.global_bytes ? sycl::malloc_device<std::byte>(sz.global_bytes * batch, q) : nullptr;
+        const std::size_t gbytes = sz.global_bytes * batch;
+        auto* gws = gbytes ? sycl::malloc_device<std::byte>(gbytes, q) : nullptr;
         q.submit([&](sycl::handler& h) {
              auto slm = device::local_workspace<L>(h, sz);
-             h.parallel_for(L::nd_range(batch), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(L::sg_size) {
+             h.parallel_for(L::nd_range(batch),
+                 [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(L::sg_size) {
                  const auto ex = L::exec(it);
                  const auto s = L::slot(it, batch);
                  const auto ws = L::workspace(it, slm, gws, sz);

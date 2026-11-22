@@ -35,18 +35,24 @@ int run(sycl::queue& q, int m, int n, int k, int batch) {
     constexpr std::size_t stage = device::l3::smem_bytes<Cfg>();
     q.submit([&](sycl::handler& h) {
          device::LocalWorkspace slm(sycl::range<1>((stage + 15) / 16), h);
-         h.parallel_for(sycl::nd_range<1>(std::size_t(batch) * Cfg::threads, Cfg::threads),
-                        [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
-                            const Ex ex{it};
-                            const long g = long(it.get_group_linear_id());
-                            auto* base = reinterpret_cast<std::byte*>(slm.get_multi_ptr<sycl::access::decorated::no>().get());
-                            const device::Workspace ws{
-                                sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(base),
-                                nullptr};
-                            device::gemm<Transpose::NoTrans, Transpose::Trans, Cfg>(
-                                ex, alpha, device::mat(a + g * sa, m, k, lda), device::mat(b + g * sb, n, k, ldb), beta,
-                                device::mat(c + g * sc, m, n, ldc), ws);
-                        });
+         const std::size_t items = std::size_t(batch) * Cfg::threads;
+         const sycl::nd_range<1> range(items, Cfg::threads);
+         h.parallel_for(range, [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
+             using sycl::access::address_space;
+             using sycl::access::decorated;
+             const Ex ex{it};
+             const long g = long(it.get_group_linear_id());
+             auto* base = reinterpret_cast<std::byte*>(
+                 slm.get_multi_ptr<decorated::no>().get());
+             const auto local = sycl::address_space_cast<
+                 address_space::local_space, decorated::yes>(base);
+             const device::Workspace ws{local, nullptr};
+             const auto A = device::mat(a + g * sa, m, k, lda);
+             const auto B = device::mat(b + g * sb, n, k, ldb);
+             const auto C = device::mat(c + g * sc, m, n, ldc);
+             device::gemm<Transpose::NoTrans, Transpose::Trans, Cfg>(
+                 ex, alpha, A, B, beta, C, ws);
+         });
      }).wait_and_throw();
     // [device-guide-gemm] end
 

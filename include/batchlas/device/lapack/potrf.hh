@@ -1118,7 +1118,9 @@ template <Uplo UL, class Scalar> struct tiers<routine::potrf<UL>, Scalar> {
 ///                      the factor
 /// @param[in]     ws    this matrix's workspace slice (unused by `tier::Reg`)
 /// @param[in]     live  false: a dead slot of a packed launch (`launch::slot`); nothing is read or
-///                      written and 0 is returned, but every item still makes the call
+///                      written, but every item still makes the call. It returns 0, except
+///                      that `tier::Reg` checks the extents first and returns -2 for a
+///                      malformed `A` even in a dead slot
 /// @return LAPACK's info, the same on every item of `ex`:
 /// @retval 0   success
 /// @retval k   (k > 0) the leading minor of order k is not positive definite (a pivot that is
