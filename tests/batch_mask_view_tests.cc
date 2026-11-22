@@ -343,14 +343,15 @@ class BindEverySlotKernel;
 namespace {
 constexpr std::size_t kZeroBytes = 4096;
 
-// Six pointers into `zeros` (all zero bytes) as the kernel's only arguments: AdaptiveCpp Metal's
-// flat argument mode binds them to slots 3-8, every slot a later small kernel's pointer can take.
+// Four pointers into `zeros` (all zero bytes) and the range: five parameters, so AdaptiveCpp
+// Metal binds them flat to the first slots, where a later small kernel's pointers sit (six or
+// more pointers spill into an argument buffer, which binds one slot).
 void bind_every_slot(Queue& ctx, std::uint8_t* zeros) {
     std::uint8_t* w = zeros;
-    const std::uint8_t *p1 = zeros, *p2 = zeros + 1, *p3 = zeros + 2, *p4 = zeros + 3, *p5 = zeros + 4;
+    const std::uint8_t *p1 = zeros, *p2 = zeros + 1, *p3 = zeros + 2;
     ctx->parallel_for<BindEverySlotKernel>(sycl::range<1>(64), [=](sycl::id<1> id) {
         const std::size_t i = id[0];
-        w[kZeroBytes / 2 + i] = std::uint8_t(p1[i] | p2[i] | p3[i] | p4[i] | p5[i]);
+        w[kZeroBytes / 2 + i] = std::uint8_t(p1[i] | p2[i] | p3[i]);
     });
 }
 
@@ -369,7 +370,7 @@ void check_after_bound_slots(Queue& ctx, const MatOp<Scalar>& op, const char* wh
     ctx->memset(zeros, 0, kZeroBytes);
     ctx.wait();
     for (int k = 0; k < 2; ++k) {
-        const char* lead = k == 0 ? "after the masked call" : "after a kernel binding six zero buffers";
+        const char* lead = k == 0 ? "after the masked call" : "after a kernel binding zero buffers";
         Matrix<Scalar> first(rows, cols, kBatch, ld, stride);
         Matrix<Scalar> got(rows, cols, kBatch, ld, stride);
         fill_poison<Scalar>(first, 5);
