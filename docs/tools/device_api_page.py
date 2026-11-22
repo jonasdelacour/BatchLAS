@@ -714,6 +714,10 @@ def check_page(root):
             bad.append("doc command in the text: %s" % ln[:60])
     if "@section device-api-group-unplaced " in text:
         bad.append("a header in no api_device child group")
+    groups = child_groups(root)
+    if groups:
+        known = {name for name, _, _ in groups}
+        bad += ["group %s is not defined in %s" % (g, GROUPS_DOX) for g in entries(root, groups) if g and g not in known]
     if not re.search(r"^\d+ signatures;", text, re.M) or text.count("```cpp") < 100:
         bad.append("fewer than 100 signature blocks")
     return bad
