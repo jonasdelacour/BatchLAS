@@ -479,7 +479,7 @@ BATCHLAS_DEVICE_INLINE void scatter_row(int width, Scalar alpha, const OB& b, in
 /// @brief `C := alpha op(A) op(B) + beta C` for one batch item, `A` sparse (CSR) and `B`, `C` dense.
 ///
 /// Runs on any executor size and any extents. `beta == 0` never reads `C`; `alpha == 0` never
-/// reads `A` or `B`. With `NoTrans` `A`, each item owns its (row, column block) units of the host
+/// reads `A`'s values or `B`. With `NoTrans` `A`, each item owns its (row, column block) units of the host
 /// route's gather, so the result is bit-identical to the host's. With `Trans` / `ConjTrans` `A`:
 /// `C := beta C`, a barrier, then a scatter by relaxed atomics in global memory, whose order is
 /// unspecified (results may differ in the last bits from run to run). COLLECTIVE: the inputs are
