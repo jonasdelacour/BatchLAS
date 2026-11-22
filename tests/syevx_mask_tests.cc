@@ -221,11 +221,13 @@ protected:
         Queue& q = *this->ctx;
         Problem<T, B> pr(q, n, batch, neigs, JobType::EigenVectors, p, false);
         // DirectSubset's sy2sb runs larft, which needs 32-wide sub-groups; the AdaptiveCpp host
-        // device (size 1) lacks them, so there its unmasked call is refused too, and only the size
-        // query's refusal is checked.
+        // device (size 1) lacks them, so there its unmasked size query and call are refused too,
+        // and only the masked size query's refusal is checked.
         const bool larft_refused = uses_larft && !q.device().supports_sub_group_size(32);
         {
-            UnifiedVector<std::byte> ws(std::max<std::size_t>(pr.buffer_size({}), 1));
+            if (larft_refused)
+                EXPECT_THROW((void)pr.buffer_size({}), batchlas::unsupported) << "sized without 32-wide sub-groups";
+            UnifiedVector<std::byte> ws(larft_refused ? 1024 : std::max<std::size_t>(pr.buffer_size({}), 1));
             pr.prepare();
             if (larft_refused) {
                 EXPECT_THROW(pr.call({}, ws.to_span()), batchlas::unsupported) << "larft ran without 32-wide sub-groups";
