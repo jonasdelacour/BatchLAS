@@ -34,7 +34,7 @@ HEADER_DIR = os.path.join("include", "batchlas", "device")
 SUBDIRS = ("", "lapack", "level3")
 UMBRELLAS = ("device", "lapack")
 PRIVATE_NS = ("detail", "")
-WIDTH = 90
+WIDTH = 80
 FALLBACK = {
     "level3/cfg.hh": "api_device_blas3",
     "lapack/laed3.hh": LOWLEVEL, "lapack/laed4.hh": LOWLEVEL,
@@ -468,6 +468,8 @@ def wrap(s, indent="", width=WIDTH):
     head, args, tail = s[:a + 1], split_args(s[a + 1:b]), s[b:]
     col = len(indent) + len(head)
     out = []
+    if len(args) == 1:
+        return [indent + head] + wrap(args[0] + tail, indent + "    ", width)
     if col <= 40:
         pad = " " * col
         for k, arg in enumerate(args):
@@ -557,8 +559,7 @@ def render_header(rel, summary, items, ids, suffix):
     if types:
         out.append("Types:")
         for _, name, ns, _, brief in types:
-            short = "::".join(ns[2:] + [name])
-            out.append("- `%s`: %s%s" % (short, brief + " &rarr; " if brief else "", "::".join(ns + [name])))
+            out.append("- %s%s" % ("::".join(ns + [name]), ": " + brief if brief else ""))
         out.append("")
     k = 0
     while k < len(funcs):
