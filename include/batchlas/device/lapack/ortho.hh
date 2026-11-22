@@ -1,15 +1,22 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Public device ortho, the column arm (TR = NoTrans):
-//   CGS2          tier::Cta<N>       k <= N; per column twice h := A(:, :i)^H a_i, a_i -= A(:, :i) h,
-//                                    then normalize (the host CGS2 route's normalize kernel calls it)
-//                 tier::Blocked<NB>  any k: block CGS2 over NB-column blocks on the in-group gemm
-//   Cholesky, Chol2, ShiftChol3
-//                 tier::Cta<N>       k <= N, any m: G := A^H A (herk), potrf<Lower, Cta<N>> on G,
-//                                    A := A L^-H (trsm); the host's passes and ShiftChol3 shift
-// The Level 3 forms take an l3::cfg preset Cfg (Cfg::threads == ex.size, Cfg::value_type == T).
-// Not yet device ops: the rows arm, the Cholesky algorithms on tier::Blocked (potrf tier::Blocked,
-// not yet written), SVQB (a device syev) and Householder (geqrf + orgqr).
+/// @file
+/// @brief Orthonormalising the columns of a matrix inside a kernel: `ortho`, the host `ortho()`
+/// on one matrix per work-group.
+///
+/// The column arm (`Transpose::NoTrans`) only, with these algorithms and tiers:
+/// - `OrthoAlgorithm::CGS2` in `tier::Cta<N>` (k <= N): per column, twice
+///   \f$h = A_{:, :i}^H a_i\f$, \f$a_i \leftarrow a_i - A_{:, :i} h\f$, then normalise.
+/// - `OrthoAlgorithm::CGS2` in `tier::Blocked<NB>` (any k): block CGS2 over NB-column blocks on
+///   the in-group gemm.
+/// - `Cholesky`, `Chol2` and `ShiftChol3` in `tier::Cta<N>` (k <= N, any m): \f$G = A^H A\f$
+///   (herk), `potrf<Uplo::Lower, tier::Cta<N>>` on G, then \f$A \leftarrow A L^{-H}\f$ (trsm), with
+///   the host's passes and ShiftChol3's shift.
+///
+/// The Level 3 forms take an `l3::cfg` preset `Cfg` with `Cfg::threads` the work-group size and
+/// `Cfg::value_type` the scalar type. Not device operations: the rows arm, the Cholesky
+/// algorithms in `tier::Blocked`, SVQB and Householder. Reference: @ref api_device_lapack_qr.
+/// @ingroup api_device_lapack_qr
 
 #include <cmath>
 #include <cstddef>
@@ -148,8 +155,12 @@ BATCHLAS_DEVICE_INLINE int cholqr_pass(const Ex& ex, const MA& a, Scalar* gp, co
 }  // namespace detail
 
 namespace routine {
-// ortho's tag: everything of ortho<TR, Tier, Cfg, Alg> but the tier, since Cfg (the Level 3 forms'
-// l3::cfg preset, void for CGS2 tier::Cta) sizes the stages and Alg the plan.
+/// @brief The routine tag of `ortho`, for `with_tier`, `launch` and `buffer_size`.
+///
+/// It carries every template argument of `ortho<TR, Tier, Cfg, Alg>` but the tier, since `Cfg`
+/// (the Level 3 forms' `l3::cfg` preset, `void` for CGS2 in `tier::Cta`) sizes the stages and
+/// `Alg` the workspace plan.
+/// @ingroup api_device_lapack_qr
 template <Transpose TR, class Cfg, OrthoAlgorithm Alg> struct ortho {
     static constexpr const char* name = "ortho";
 };
@@ -164,8 +175,13 @@ template <class Cfg> constexpr int ortho_wg_size() {
 }
 }  // namespace detail
 
-/// buffer_size(k): ONE matrix's local and global bytes for ortho() on k columns; the caller's
-/// global buffer holds batch times global_bytes.
+/// @brief `ortho` in `tier::Cta<N, A>`: k <= N columns, one matrix per work-group.
+///
+/// The executor is `WorkGroup<Cfg::threads, 32>` for the Level 3 forms and `WorkGroup<128, 32>`
+/// for CGS2 (`Cfg` void). `buffer_size(k)` is ONE matrix's local and global bytes for k columns;
+/// the caller's global buffer holds batch times `global_bytes`. The kernel must run at sub-group
+/// size 32 (`BATCHLAS_REQD_SG_SIZE(sg_size)`).
+/// @ingroup api_device_lapack_qr
 template <Transpose TR, class Cfg, OrthoAlgorithm Alg, int N, class A, class Scalar>
 struct tier_info<routine::ortho<TR, Cfg, Alg>, tier::Cta<N, A>, Scalar> {
     static constexpr int wg_size = detail::ortho_wg_size<Cfg>(), sg_size = 32;
@@ -177,6 +193,11 @@ struct tier_info<routine::ortho<TR, Cfg, Alg>, tier::Cta<N, A>, Scalar> {
         return detail::ortho_layout<Alg, tier::Cta<N, A>, Cfg, Scalar>(k).size;
     }
 };
+/// @brief `ortho` in `tier::Blocked<NB, A>`: CGS2 on any k columns, one matrix per work-group.
+///
+/// The executor is `WorkGroup<Cfg::threads, 32>`; the kernel must run at sub-group size 32
+/// (`BATCHLAS_REQD_SG_SIZE(sg_size)`). `buffer_size(k)` is ONE matrix's local and global bytes.
+/// @ingroup api_device_lapack_qr
 template <Transpose TR, class Cfg, OrthoAlgorithm Alg, int NB, class A, class Scalar>
 struct tier_info<routine::ortho<TR, Cfg, Alg>, tier::Blocked<NB, A>, Scalar> {
     static constexpr int wg_size = detail::ortho_wg_size<Cfg>(), sg_size = 32;
@@ -189,21 +210,29 @@ struct tier_info<routine::ortho<TR, Cfg, Alg>, tier::Blocked<NB, A>, Scalar> {
     }
 };
 
-/// @brief The host ortho() inside a kernel: the k columns of the m x k A (k <= m) become an
+/// @brief The host `ortho()` inside a kernel: the k columns of the m x k A (k <= m) become an
 /// orthonormal basis of their span, one matrix per work-group.
-/// @tparam TR    Transpose::NoTrans (the columns)
-/// @tparam Tier  CGS2: tier::Cta<N> (k <= N, the coefficients in local memory) or tier::Blocked<NB>
-///               (any k, block CGS2 over NB columns on the in-group gemm); Cholesky, Chol2,
-///               ShiftChol3: tier::Cta<N> (k <= N, any m; herk + potrf<Lower, Cta<N>> + trsm)
-/// @tparam Cfg   the l3::cfg preset of every form except CGS2 tier::Cta (void there)
-/// @tparam Alg   CGS2, Cholesky, Chol2 or ShiftChol3
-/// @param[in]     ex  a WorkGroup (collective; WorkGroup<Cfg::threads, 32> on the Level 3 forms, an
-///                    RtGroup also runs CGS2 tier::Cta); A visible to every item on entry
-/// @param[in,out] a   A, a Mat over global memory (col(), sub()); visible to every item on return
-/// @param[in]     ws  this matrix's slice of buffer_size<routine::ortho<TR, Cfg, Alg>, Tier, T>(k)
-/// @return 0; -2 when k exceeds a tier::Cta<N> bound (A untouched); for the Cholesky algorithms
-///         potrf's info k > 0 when a pass's Gram matrix is not positive definite (that pass leaves
-///         A as the previous pass left it); uniform
+///
+/// Collective over `ex`, every item with the same arguments; A visible to every item on entry
+/// and on return.
+/// @pre The kernel runs at sub-group size 32 (`BATCHLAS_REQD_SG_SIZE(32)`).
+/// @tparam TR    `Transpose::NoTrans` (the columns), the only arm
+/// @tparam Tier  CGS2: `tier::Cta<N>` (k <= N, the coefficients in local memory) or
+///               `tier::Blocked<NB>` (any k, block CGS2 over NB columns on the in-group gemm);
+///               Cholesky, Chol2, ShiftChol3: `tier::Cta<N>` (k <= N, any m; herk, then
+///               `potrf<Uplo::Lower, tier::Cta<N>>`, then trsm)
+/// @tparam Cfg   the `l3::cfg` preset of every form except CGS2 in `tier::Cta` (`void` there)
+/// @tparam Alg   `OrthoAlgorithm::CGS2`, `Cholesky`, `Chol2` or `ShiftChol3`
+/// @param[in]     ex  a `WorkGroup`: `WorkGroup<Cfg::threads, 32>` for the Level 3 forms; an
+///                    `RtGroup` also runs CGS2 in `tier::Cta`
+/// @param[in,out] a   A, a `Mat` over global memory (it needs `col()` and `sub()`)
+/// @param[in]     ws  this matrix's slice of `buffer_size<routine::ortho<TR, Cfg, Alg>, Tier, T>(k)`
+/// @return `info`, the same on every item
+/// @retval 0    success
+/// @retval -2   k exceeds the `tier::Cta<N>` bound N (A untouched)
+/// @retval k>0  Cholesky algorithms only: `potrf`'s info when a pass's Gram matrix is not
+///              positive definite; that pass leaves A as the previous pass left it
+/// @ingroup api_device_lapack_qr
 template <Transpose TR, class Tier, class Cfg, OrthoAlgorithm Alg, class Ex, class MA>
 BATCHLAS_DEVICE_INLINE int ortho(const Ex& ex, const MA& a, const Workspace& ws) {
     using T = typename MA::value_type;

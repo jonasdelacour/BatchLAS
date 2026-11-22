@@ -1,9 +1,16 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// LAPACK xORGQR / xUNGQR in a kernel: A := the first n columns of Q = H_1 ... H_n from geqrf's
-// storage, as the host blocked route forms it (src/ops/orgqr/kernels/orgqr_blocked.cc): ormqr
-// (Left, NoTrans) applied to an identity in the caller's global workspace, then copied over A.
-//   tier::Blocked<NB, Alg>  any m >= n; Q, V, T and larfb's W1 / W2 in the global workspace
+/// @file
+/// @brief Forming Q inside a kernel: `orgqr`, LAPACK's xORGQR / xUNGQR on one matrix per
+/// work-group.
+///
+/// `orgqr<Tier>(ex, a, tau, ws)` overwrites `geqrf`'s storage with the first n columns of
+/// \f$Q = H_0 H_1 \cdots H_{n-1}\f$, for any m >= n, with `tier::Blocked<NB, Alg>`. Reference:
+/// @ref api_device_lapack_qr.
+/// @ingroup api_device_lapack_qr
+// As the host blocked route forms it (src/ops/orgqr/kernels/orgqr_blocked.cc): ormqr (Left,
+// NoTrans) applied to an identity in the caller's global workspace, then copied over A. Q, V, T
+// and larfb's W1 / W2 in the global workspace.
 
 #include <cstddef>
 #include <type_traits>
@@ -16,6 +23,8 @@
 namespace batchlas::device {
 
 namespace routine {
+/// @brief The routine tag of `orgqr`, for `with_tier`, `launch` and `buffer_size`.
+/// @ingroup api_device_lapack_qr
 struct orgqr {
     static constexpr const char* name = "orgqr";
 };
@@ -40,6 +49,13 @@ template <int NB, class Cfg, class Scalar> constexpr WorkspaceSize orgqr_size(in
 }
 }  // namespace detail
 
+/// @brief `orgqr` in `tier::Blocked<NB, A>`: one m x n matrix (m >= n) per work-group.
+///
+/// The executor is `WorkGroup<cfg::threads, 32>` with `cfg = larfb_cfg_t<A, Scalar>`, as for
+/// `geqrf`; the kernel must run at sub-group size 32 (`BATCHLAS_REQD_SG_SIZE(sg_size)`).
+/// `buffer_size(m, n)` is one matrix's local and global bytes (the global part holds an m x n Q
+/// besides `ormqr`'s V, T and work); `buffer_size(n)` is the square case.
+/// @ingroup api_device_lapack_qr
 template <int NB, class A, class Scalar> struct tier_info<routine::orgqr, tier::Blocked<NB, A>, Scalar> {
     using cfg = larfb_cfg_t<A, Scalar>;
     static constexpr int wg_size = cfg::threads, sg_size = 32;
@@ -49,22 +65,36 @@ template <int NB, class A, class Scalar> struct tier_info<routine::orgqr, tier::
     static constexpr WorkspaceSize buffer_size(int m, int n) { return detail::orgqr_size<NB, cfg, Scalar>(m, n); }
     static constexpr WorkspaceSize buffer_size(int n) { return buffer_size(n, n); }
 };
+/// @brief The tiers `with_tier` tries for `orgqr`: `tier::Blocked<larfb_default_nb<Scalar>()>`.
+/// @ingroup api_device_lapack_qr
 template <class Scalar> struct tiers<routine::orgqr, Scalar> {
     using type = tier::list<tier::Blocked<larfb_default_nb<Scalar>()>>;
 };
 
-/// @brief ?ORGQR / ?UNGQR in a kernel: a (m x n, m >= n) := the first n columns of Q.
+/// @brief xORGQR / xUNGQR inside a kernel: the m x n `a` (m >= n) := the first n columns of Q.
 ///
-/// a holds geqrf's n reflectors below its diagonal on entry (its diagonal and upper triangle are
-/// not read) and Q, with orthonormal columns, on return. Collective over a
-/// WorkGroup<tier_info<...>::wg_size, 32>; a and tau visible on entry, a visible on return.
-/// @param ex   the executor
-/// @param a    this matrix (l3::Global, a global Mat or device::item), overwritten with Q
-/// @param tau  n scalars, a unit-stride vector operand (device::vec)
-/// @param ws   ws.local >= local_bytes, ws.global this matrix's slice of global_bytes of
-///             buffer_size<routine::orgqr, Tier, T>(m, n)
-/// @return 0, or -i for a bad i-th argument after the executor (1: m < n, 2: tau shorter than n,
-///         3: no global workspace), uniform
+/// On entry `a` holds the n reflectors `geqrf` stored below its diagonal (the diagonal and upper
+/// triangle are not read), and `tau` their scalars; on return `a` holds Q's first n columns,
+/// which are orthonormal. Collective over `tier_info<routine::orgqr, Tier, T>::executor`, every
+/// item with the same arguments; `a` and `tau` visible to every item on entry, `a` visible on
+/// return. One tier per kernel (`with_tier<routine::orgqr, T>` on the host).
+/// @pre The kernel runs at sub-group size 32 (`BATCHLAS_REQD_SG_SIZE(32)`).
+/// @tparam Tier  `tier::Blocked<NB, Alg>`, the only tier
+/// @tparam Ex    the executor type, `WorkGroup<cfg::threads, 32>`
+/// @tparam MA    a global matrix operand: `l3::Global`, a `Mat` over global memory, or
+///               `device::item`
+/// @tparam Tau   a unit-stride vector operand (`device::vec`), not a pointer
+/// @param[in]     ex   the executor
+/// @param[in,out] a    this matrix: the reflectors on entry, Q on return
+/// @param[in]     tau  at least n scalars
+/// @param[in]     ws   `ws.local` at least `local_bytes` and `ws.global` this matrix's slice of
+///                     `global_bytes`, both of `buffer_size<routine::orgqr, Tier, T>(m, n)`
+/// @return `info`, the same on every item
+/// @retval 0   success, including n = 0
+/// @retval -1  m < n (nothing written)
+/// @retval -2  `tau` is shorter than n (nothing written)
+/// @retval -3  `ws.global` is null (nothing written)
+/// @ingroup api_device_lapack_qr
 template <class Tier, class Ex, class MA, class Tau>
 BATCHLAS_DEVICE_INLINE int orgqr(const Ex& ex, const MA& a, const Tau& tau, const Workspace& ws) {
     using T = std::remove_cvref_t<decltype(a(0, 0))>;

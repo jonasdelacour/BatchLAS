@@ -1,13 +1,19 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// LAPACK xGESVD on the device, and the driver's own steps on the real upper bidiagonal B = (d, e)
-// of gebrd (detail): bdgram forms B^T B or B B^T (the gesvd-via-tridiagonal route),
-// bdmv_div recovers a left singular vector B x / sigma, tridiag_abs_offdiag makes a tridiagonal's
-// off-diagonal non-negative by a diagonal sign similarity (Thread / Grid1D / WorkGroup executors
-// through core for_each_owned).
-// device::gesvd<JU, JVT, tier::Blocked<NB>>: any m x n inside one work-group, the host blocked
-// route's pipeline with bdsqr as the bidiagonal solver: gebrd (labrd + in-group gemm), bdsqr
-// into identity-seeded U / V^H, then ormbr 'Q' / 'P'; m < n solves A^H and returns the adjoints.
+/// @file
+/// @brief The singular value decomposition inside a kernel: `gesvd`, LAPACK's xGESVD on one
+/// matrix per work-group.
+///
+/// `gesvd<JU, JVT, Tier>(ex, A, S, U, Vh, ws)` computes \f$A = U \Sigma V^H\f$ for any m x n with
+/// `tier::Blocked<NB>`: the host blocked route's pipeline, `gebrd`, then `bdsqr` into
+/// identity-seeded U and \f$V^H\f$, then `ormbr` with Q and P. Reference:
+/// @ref api_device_lapack_svd.
+/// @ingroup api_device_lapack_svd
+// detail: the driver's own steps on the real upper bidiagonal B = (d, e) of gebrd: bdgram forms
+// B^T B or B B^T (the gesvd-via-tridiagonal route), bdmv_div recovers a left singular vector
+// B x / sigma, tridiag_abs_offdiag makes a tridiagonal's off-diagonal non-negative by a diagonal
+// sign similarity (Thread / Grid1D / WorkGroup executors through core for_each_owned).
+// m < n solves A^H and returns the adjoints.
 
 #include <cstddef>
 
@@ -101,6 +107,8 @@ template <class Ex, class E, class S> BATCHLAS_DEVICE_INLINE void tridiag_abs_of
 namespace batchlas::device {
 
 namespace routine {
+/// @brief The routine tag of `gesvd<JU, JVT>`, for `with_tier`, `launch` and `buffer_size`.
+/// @ingroup api_device_lapack_svd
 template <SvdVectors JU, SvdVectors JVT> struct gesvd {
     static constexpr const char* name = "gesvd";
 };
@@ -194,11 +202,18 @@ BATCHLAS_DEVICE_INLINE int gesvd_tall(const Ex& ex, const MA& A, const SV& S, co
 }
 }  // namespace detail
 
+/// @brief The tiers `with_tier` tries for `gesvd<JU, JVT>`: `tier::Blocked<16>`.
+/// @ingroup api_device_lapack_svd
 template <SvdVectors JU, SvdVectors JVT, class Scalar> struct tiers<routine::gesvd<JU, JVT>, Scalar> {
     using type = tier::list<tier::Blocked<detail::blocked_nb>>;
 };
-// tier::Blocked<NB> (NB: gebrd's panel width): any m x n, every Scalar, on a WorkGroup<256, 32>.
-// buffer_size(n) is the square problem's, buffer_size(m, n) any other.
+/// @brief `gesvd<JU, JVT>` in `tier::Blocked<NB>` (NB: `gebrd`'s panel width): any m x n, every
+/// scalar type, one matrix per `WorkGroup<256, 32>`.
+///
+/// The kernel must run at sub-group size 32 (`BATCHLAS_REQD_SG_SIZE(sg_size)`).
+/// `buffer_size(n)` is the square problem's local and global bytes, `buffer_size(m, n)` any
+/// other; they include the nested `gebrd` and `bdsqr` slices.
+/// @ingroup api_device_lapack_svd
 template <SvdVectors JU, SvdVectors JVT, int NB, class A, class Scalar> struct tier_info<routine::gesvd<JU, JVT>, tier::Blocked<NB, A>, Scalar> {
     static constexpr int wg_size = detail::blocked_wg, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
@@ -209,14 +224,36 @@ template <SvdVectors JU, SvdVectors JVT, int NB, class A, class Scalar> struct t
                                                int n) { return detail::driver_plan<JU, JVT, NB, Scalar>(m, n).size; }
 };
 
-// xGESVD of ONE m x n matrix A (any m, n >= 1), host order (A, S, U, Vh, ws) with jobu / jobvh as
-// template parameters: S receives the k = min(m, n) singular values, descending; U the m x m (All)
-// or m x k (Thin) left vectors, Vh the n x n (All) or k x n (Thin) right vectors as rows (a None
-// job's operand is not touched: pass an empty device::mat). A, U, Vh are global matrices (Mat,
-// ItemMat or l3::Global); A is overwritten. COLLECTIVE over a WorkGroup<256, 32> with the same
-// arguments; A visible on entry; outputs visible on return. Workspace: device::buffer_size<
-// routine::gesvd<JU, JVT>, Tier, T>(m, n). Returns the host blocked route's info: 0, 1 when bdsqr did not converge (or a
-// singular value is NaN); -2 / -3 / -4 for an S / U / Vh of the wrong size (nothing written).
+/// @brief xGESVD inside a kernel: \f$A = U \Sigma V^H\f$ of one m x n matrix (any m, n >= 1).
+///
+/// `S` receives the k = min(m, n) singular values, descending; `U_` the m x m (`SvdVectors::All`)
+/// or m x k (`SvdVectors::Thin`) left vectors as columns; `Vh_` the n x n (All) or k x n (Thin)
+/// right vectors as rows. A `SvdVectors::None` job's operand is not touched: pass an empty
+/// `device::mat`. `A_` is overwritten. Arguments in the host order (A, S, U, Vh, ws), with jobu
+/// and jobvt as template parameters.
+///
+/// Collective over a `WorkGroup<256, 32>`, every item with the same arguments; `A_` visible to
+/// every item on entry, outputs visible on return.
+/// @pre The kernel runs at sub-group size 32 (`BATCHLAS_REQD_SG_SIZE(32)`).
+/// @tparam JU    the left vectors: `SvdVectors::None`, `Thin` or `All`
+/// @tparam JVT   the right vectors: `SvdVectors::None`, `Thin` or `All`
+/// @tparam Tier  `tier::Blocked<NB>`, the only tier
+/// @tparam MA    a global matrix operand: a `Mat` over global memory, `device::item` (an
+///               `ItemMat`) or `l3::Global`
+/// @param[in]     ex   the executor
+/// @param[in,out] A_   the matrix; overwritten
+/// @param[out]    S    at least k reals, the singular values
+/// @param[out]    U_   the left singular vectors, a global matrix operand as `A_`
+/// @param[out]    Vh_  the right singular vectors as rows, a global matrix operand as `A_`
+/// @param[in]     ws   `ws.local` and this matrix's `ws.global` slice of
+///                     `device::buffer_size<routine::gesvd<JU, JVT>, Tier, T>(m, n)`
+/// @return `info`, the same on every item (the host blocked route's values)
+/// @retval 0   success
+/// @retval 1   `bdsqr` did not converge, or a singular value is NaN
+/// @retval -2  `S` holds fewer than k values (nothing written)
+/// @retval -3  `U_` has the wrong shape for JU (nothing written)
+/// @retval -4  `Vh_` has the wrong shape for JVT (nothing written)
+/// @ingroup api_device_lapack_svd
 template <SvdVectors JU, SvdVectors JVT, class Tier, class Ex, class MA, class SV, class MU, class MV>
 BATCHLAS_DEVICE_INLINE int gesvd(const Ex& ex, const MA& A_, const SV& S, const MU& U_, const MV& Vh_, const Workspace& ws) {
     using T = typename MA::value_type;

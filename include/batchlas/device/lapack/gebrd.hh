@@ -1,10 +1,18 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// LAPACK xGEBRD's unblocked step xGEBD2 (bidiagonal reduction Q^H A P = B, B upper bidiagonal):
-// gebd2(ex, A, d, e, tauq, taup) on one matrix per work-item, every T (the unblocked route); detail::gebd2_tile, its lane
-// form on one problem's n x n tile in local memory (gebrd<tier::Cta<P>>, on core larfg_lanes).
-// labrd is xLABRD on one matrix (real d, e: ZLARFG's real beta), on core gemv_acc: the host's
-// panel (gebrd_blocked.cc labrd_panel, every T) and the panel of gebrd<tier::Blocked<NB>>, whose
+/// @file
+/// @brief Bidiagonal reduction inside a kernel: `gebrd`, LAPACK's xGEBRD,
+/// \f$Q^H A P = B\f$ with B upper bidiagonal.
+///
+/// `gebrd<tier::Cta<P>>(ex, it, A, d, e, tauq, taup, ws, live)` reduces one real n x n matrix
+/// (n <= P) per P-lane partition of a sub-group;
+/// `gebrd<tier::Blocked<NB>>(ex, A, d, e, tauq, taup, ws)` reduces one m x n matrix (m >= n,
+/// every scalar type) per work-group. `ormbr` applies Q and P. The unblocked step `gebd2` (one matrix per work-item) and the panel `labrd` are in
+/// @ref api_device_lowlevel. Reference: @ref api_device_lapack_qr.
+/// @ingroup api_device_lapack_qr
+// detail::gebd2_tile is gebd2's lane form on one problem's n x n tile in local memory (the Cta
+// tier, on core larfg_lanes). labrd (real d, e: ZLARFG's real beta) is on core gemv_acc: the
+// host's panel (gebrd_blocked.cc labrd_panel, every T) and the Blocked tier's panel, whose
 // trailing update is the in-group L3 gemm.
 
 #include <algorithm>
@@ -49,12 +57,25 @@ template <class Alg, class Ex, class X> BATCHLAS_DEVICE_INLINE auto pow2_scaled_
 }
 }  // namespace detail
 
-// xGEBD2 of the m x n matrix A (m >= n) on one work-item (ex a Thread), every T: H(i) from the
-// left, then G(i) from the right. d, e are real (ZLARFG's real beta); row i holds conj(u_i) on
-// exit (unmbr 'P' order) and H(i) is applied as H^H = I - conj(tau) v v^H (real T: every conj and
-// lacgv is the identity). The norm is pow2_scaled_norm over sumsq's policy, chosen by T: Fused
-// for real (dot(x, x)'s FFMA chain), Unfused for complex. tauq / taup past the reflectors are zeroed. Returns 0. A
-// function, not the kernel lambda's body, so the lambda calls no view operator() (SemaSYCL quirk).
+/// @brief xGEBD2 inside a kernel: unblocked reduction of the m x n `A` (m >= n) to upper
+/// bidiagonal form on one work-item, every scalar type.
+///
+/// Reflector \f$H_i\f$ from the left, then \f$G_i\f$ from the right, as LAPACK stores them: `A`
+/// holds the reflectors' vectors on exit, row i holding \f$\overline{u_i}\f$ (`ormbr`'s P order),
+/// and \f$H_i\f$ is applied as \f$H_i^H = I - \overline{\tau} v v^H\f$ (on a real type every
+/// conjugation is the identity). `d` and `e` are real (ZLARFG's real beta); entries of `tauq` and
+/// `taup` past the reflectors are zeroed.
+/// @param[in]     ex    a `Thread`
+/// @param[in,out] A     the matrix; the reflectors on exit
+/// @param[out]    d     the n diagonal entries of B
+/// @param[out]    e     the n - 1 superdiagonal entries of B
+/// @param[out]    tauq  the left reflectors' scalars
+/// @param[out]    taup  the right reflectors' scalars
+/// @return 0
+/// @ingroup api_device_lowlevel
+// The norm is pow2_scaled_norm over sumsq's policy, chosen by T: Fused for real (dot(x, x)'s FFMA
+// chain), Unfused for complex. A function, not the kernel lambda's body, so the lambda calls no
+// view operator() (SemaSYCL quirk).
 template <class Ex, class MA, class RV, class TV>
 BATCHLAS_DEVICE_INLINE int gebd2(const Ex& ex, const MA& A, const RV& d, const RV& e, const TV& tauq, const TV& taup) {
     static_assert(is_thread_v<Ex>, "gebd2: one matrix per work-item (Thread)");
@@ -195,6 +216,8 @@ BATCHLAS_DEVICE_INLINE void gebd2_tile(const Ex& ex, const sycl::nd_item<1>& it,
 
 // ---- the public op: device::gebrd<Tier> ------------------------------------------------------
 namespace routine {
+/// @brief The routine tag of `gebrd`, for `with_tier`, `launch` and `buffer_size`.
+/// @ingroup api_device_lapack_qr
 struct gebrd {
     static constexpr const char* name = "gebrd";
 };
@@ -234,9 +257,14 @@ template <int NB, class Scalar> constexpr GebrdBlockedPlan<Scalar> labrd_plan(in
 }
 }  // namespace detail
 
-// tier::Cta<P>, P in {4, 8, 16, 32}: one matrix per P-lane partition (SgpPartition<P>) of a
-// sub-group-32 launch, its P x P tile in local memory; the work-group size is any multiple of 32
-// (32 / P matrices per sub-group). Real Scalar only.
+/// @brief `gebrd` in `tier::Cta<P>`, P one of 4, 8, 16 and 32: one real n x n matrix (n <= P) per
+/// P-lane partition.
+///
+/// The executor is `SgpPartition<P>` of a launch at sub-group size 32
+/// (`BATCHLAS_REQD_SG_SIZE(sg_size)`), with `32 / P` matrices per sub-group
+/// (`matrices_per_sub_group`); the work-group size is any multiple of 32 (`wg_size` is 32). Each
+/// matrix's P x P tile is in local memory, `buffer_size(n)`. Real scalar types only.
+/// @ingroup api_device_lapack_qr
 template <int P, class Scalar> struct tier_info<routine::gebrd, tier::Cta<P>, Scalar> {
     static_assert(detail::cta_width_v<P>, "gebrd: tier::Cta<P> needs P in {4, 8, 16, 32}");
     static constexpr int wg_size = 32, sg_size = 32;
@@ -246,8 +274,13 @@ template <int P, class Scalar> struct tier_info<routine::gebrd, tier::Cta<P>, Sc
     static constexpr bool admits(int n) { return !Arith<Scalar>::is_complex && n >= 1 && n <= P; }
     static constexpr WorkspaceSize buffer_size(int) { return detail::gebrd_cta_plan<P, Scalar>().size; }
 };
-// tier::Blocked<NB> (1 <= NB <= 64, the panel width): any m >= n, every Scalar, on a WorkGroup<256, 32>.
-// buffer_size(n) is the square problem's, buffer_size(m, n) any other (Cta has no (m, n) form).
+/// @brief `gebrd` in `tier::Blocked<NB>` (1 <= NB <= 64, the panel width): any m x n with
+/// m >= n, every scalar type, one matrix per `WorkGroup<256, 32>`.
+///
+/// The kernel must run at sub-group size 32 (`BATCHLAS_REQD_SG_SIZE(sg_size)`).
+/// `buffer_size(n)` is the square problem's local and global bytes, `buffer_size(m, n)` any other
+/// (the Cta tier has no (m, n) form).
+/// @ingroup api_device_lapack_qr
 template <int NB, class A, class Scalar> struct tier_info<routine::gebrd, tier::Blocked<NB, A>, Scalar> {
     static_assert(NB >= 1 && NB <= 64, "gebrd: tier::Blocked<NB> needs 1 <= NB <= 64 (the host panel's bound)");
     static constexpr int wg_size = detail::blocked_wg, sg_size = 32;
@@ -257,18 +290,37 @@ template <int NB, class A, class Scalar> struct tier_info<routine::gebrd, tier::
     static constexpr WorkspaceSize buffer_size(int n) { return detail::labrd_plan<NB, Scalar>(n, n).size; }
     static constexpr WorkspaceSize buffer_size(int m, int n) { return detail::labrd_plan<NB, Scalar>(m, n).size; }
 };
+/// @brief The tiers `with_tier` tries for `gebrd`, in order: `tier::Cta<4>`, `tier::Cta<8>`,
+/// `tier::Cta<16>`, `tier::Cta<32>`, then `tier::Blocked<16>`; a complex type gets only
+/// `tier::Blocked<16>`.
+/// @ingroup api_device_lapack_qr
 template <class Scalar> struct tiers<routine::gebrd, Scalar> {
     using type = std::conditional_t<Arith<Scalar>::is_complex, tier::list<tier::Blocked<detail::blocked_nb>>,
                                     tier::list<tier::Cta<4>, tier::Cta<8>, tier::Cta<16>, tier::Cta<32>,
                                                tier::Blocked<detail::blocked_nb>>>;
 };
 
-// xGEBRD of the n x n matrix A (n = A.rows() <= P) owned by this P-lane partition ex: A is
-// overwritten with the reflectors (xGEBD2's layout), d / e receive the bidiagonal, tauq / taup
-// the reflector scalars. ws is this matrix's slice (launch<routine::gebrd, tier::Cta<P>,
-// T>::workspace). Collective over the work-group of it: the barriers are work-group wide, so
-// every partition calls it with the same n, and a partition without a matrix passes live = false
-// (a zero tile, nothing read or stored). Returns 0 (no info).
+/// @brief xGEBRD inside a kernel, `tier::Cta<P>`: the real n x n `A` (n = A.rows() <= P) of this
+/// P-lane partition to upper bidiagonal form.
+///
+/// `A` is overwritten with the reflectors (xGEBD2's layout), `d` and `e` receive the bidiagonal,
+/// `tauq` and `taup` the reflector scalars. Collective over the work-group of `it`: the barriers
+/// are work-group wide, so every partition calls it with the same n, and a partition without a
+/// matrix passes `live = false` (a zero tile; nothing is read or stored). The outputs are stored
+/// by the lanes that own them, after the last barrier: barrier before another item reads them.
+/// @pre The kernel runs at sub-group size 32 (`BATCHLAS_REQD_SG_SIZE(32)`).
+/// @tparam Tier  `tier::Cta<P>`, P one of 4, 8, 16 and 32
+/// @param[in]     ex    this matrix's `SgpPartition<P>`
+/// @param[in]     it    the kernel's `nd_item`, for the work-group barriers
+/// @param[in,out] A     this matrix; the reflectors on return
+/// @param[out]    d     the n diagonal entries of B
+/// @param[out]    e     the n - 1 superdiagonal entries of B
+/// @param[out]    tauq  the n left reflector scalars
+/// @param[out]    taup  the n right reflector scalars (the last is 0)
+/// @param[in]     ws    this matrix's slice, `launch<routine::gebrd, tier::Cta<P>, T>::workspace`
+/// @param[in]     live  false for a partition with no matrix
+/// @return 0 (there is no failure mode)
+/// @ingroup api_device_lapack_qr
 template <class Tier, class Ex, class MA, class RV, class TV>
 BATCHLAS_DEVICE_INLINE int gebrd(const Ex& ex, const sycl::nd_item<1>& it, const MA& A, const RV& d, const RV& e, const TV& tauq,
                               const TV& taup, const Workspace& ws, bool live = true) {
@@ -285,12 +337,18 @@ BATCHLAS_DEVICE_INLINE int gebrd(const Ex& ex, const sycl::nd_item<1>& it, const
     return 0;
 }
 
-// xLABRD on panel columns j0 .. j0+ib-1 of ONE m x n matrix A (m >= n), its X (m x nb) and Y
-// (n x nb) indexed by A's global rows; ex a WorkGroup whose size is a compile-time constant, so
-// every Cyclic loop strides by a constant. Rows hold conj(u) on exit, d and e are real (ZLARFG's
-// real beta; real T: every conj is the identity). wa / wx (nb each, local) hold the negated small
-// products, so every update below is one gemv_acc: y := y0 + alpha (sum of the terms). The body of
-// the host's panel (gebrd_blocked.cc labrd_panel, every T) and of gebrd<tier::Blocked>.
+/// @brief xLABRD inside a kernel: reduce panel columns j0 to j0 + ib - 1 of one m x n matrix
+/// (m >= n), the panel of `gebrd<tier::Blocked<NB>>`.
+///
+/// `Xb` (m x nb) and `Yb` (n x nb) are indexed by the global rows of `Ab`; rows hold
+/// \f$\overline{u}\f$ on exit; `d` and `e` are real (ZLARFG's real beta). `wa` and `wx` (nb each,
+/// local memory) are scratch. `ex` is a `WorkGroup` whose size is a compile-time constant.
+/// Collective; outputs visible on return except `taup(n - 1)`, which the leader zeroes after the
+/// last barrier.
+/// @ingroup api_device_lowlevel
+// wa / wx hold the negated small products, so every update below is one gemv_acc: y := y0 + alpha
+// (sum of the terms). The body of the host's panel (gebrd_blocked.cc labrd_panel, every T) and of
+// gebrd<tier::Blocked>.
 template <class Ex, class MA, class MX, class MY, class RV, class TV, class WV>
 BATCHLAS_DEVICE_INLINE void labrd(const Ex& ex, const MA& Ab, const MX& Xb, const MY& Yb, const RV& d, const RV& e, const TV& tauq,
                                const TV& taup, const WV& wa, const WV& wx, int j0, int ib) {
@@ -379,14 +437,30 @@ BATCHLAS_DEVICE_INLINE void labrd(const Ex& ex, const MA& Ab, const MX& Xb, cons
     }
 }
 
-// xGEBRD of ONE m x n matrix A (m >= n, any n) on the work-group ex (WorkGroup<256, 32>), host
-// order (A, d, e, tauq, taup, ws): LAPACK's blocked loop, one labrd panel of NB columns, then
-// A22 -= V Y^H + X U with the in-group L3 gemm (the host route's two gemm calls), then d / e back
-// on A's diagonal and superdiagonal (gebrd_blocked's restore). A is a Mat over T* in global memory
-// (device::mat), d / e real vectors of n / n - 1, tauq / taup vectors of n. COLLECTIVE: every item
-// calls with the same arguments, A visible on entry; outputs visible on return. Workspace:
-// device::buffer_size<routine::gebrd, Tier, T>(m, n), ws.global this matrix's slice. Returns 0, or -1 when m < n
-// (the host's rows >= cols precondition; nothing is written).
+/// @brief xGEBRD inside a kernel, `tier::Blocked<NB>`: one m x n `A` (m >= n, any n) to upper
+/// bidiagonal form on one work-group.
+///
+/// LAPACK's blocked loop: a `labrd` panel of NB columns, then
+/// \f$A_{22} \leftarrow A_{22} - V Y^H - X U\f$ with the in-group gemm, then d and e written back
+/// on A's diagonal and superdiagonal (as the host route does). On return `A` holds the reflectors
+/// in xGEBRD's layout with B on its diagonal and superdiagonal. Arguments in the host order
+/// (A, d, e, tauq, taup, ws). Collective: every item calls it with the same arguments, `A`
+/// visible on entry, outputs visible on return.
+/// @pre The kernel runs at sub-group size 32 (`BATCHLAS_REQD_SG_SIZE(32)`).
+/// @tparam Tier  `tier::Blocked<NB>`, 1 <= NB <= 64
+/// @tparam Ex    `WorkGroup<256, 32>`
+/// @param[in]     ex    the executor
+/// @param[in,out] A     a `Mat` over global memory (`device::mat`)
+/// @param[out]    d     the n diagonal entries of B, real
+/// @param[out]    e     the n - 1 superdiagonal entries of B, real
+/// @param[out]    tauq  the n left reflector scalars
+/// @param[out]    taup  the n right reflector scalars
+/// @param[in]     ws    `ws.local` and this matrix's `ws.global` slice of
+///                      `device::buffer_size<routine::gebrd, Tier, T>(m, n)`
+/// @return `info`, the same on every item
+/// @retval 0   success
+/// @retval -1  m < n (nothing written)
+/// @ingroup api_device_lapack_qr
 template <class Tier, class Ex, class MA, class RV, class TV>
     requires tier::is_blocked_v<resolve_tier_t<routine::gebrd, typename MA::value_type, Tier>>
 BATCHLAS_DEVICE_INLINE int gebrd(const Ex& ex, const MA& A, const RV& d, const RV& e, const TV& tauq, const TV& taup, const Workspace& ws) {
