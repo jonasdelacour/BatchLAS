@@ -30,7 +30,7 @@ int run(sycl::queue& q, int n, int nrhs, int batch) {
     q.copy(ha.data(), a, ha.size()).wait();
     q.copy(hb.data(), x, hb.size()).wait();
 
-    // [device-guide-getrs]
+    // [device-guide-getrs] begin: the frame docs/guide/device-api.md quotes
     using R = device::routine::getrs<Transpose::NoTrans>;
     device::with_tier<R, T>(q.get_device(), n, [&]<class Tier>(Tier) {
         using L = device::launch<R, Tier, T>;
@@ -52,7 +52,7 @@ int run(sycl::queue& q, int n, int nrhs, int batch) {
          }).wait_and_throw();
         if (gws) sycl::free(gws, q);
     });
-    // [device-guide-getrs]
+    // [device-guide-getrs] end
 
     std::vector<T> hx(hb.size());
     std::vector<int> hinfo(batch);

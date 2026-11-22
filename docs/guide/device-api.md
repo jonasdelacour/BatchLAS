@@ -139,7 +139,8 @@ Where a header does not yet follow a rule, the design record lists it under
 
 Per routine, tier and scalar, `tier_info<Routine, Tier, T>` states `executor`, `wg_size`,
 `sg_size`, `per_group`, `admits(n)` and `buffer_size(extents...)`. `tiers_t<Routine, T>` lists the
-routine's tiers, smallest first. `ortho` and `ritz_values` have a `tier_info` but no tier list:
+routine's tiers in the order `with_tier` tries them: by bound, smallest first, except a fallback
+that follows the tier it replaces (sygst's `Blocked<16>` after `Blocked<32>`). `ortho` and `ritz_values` have a `tier_info` but no tier list:
 name their tier yourself.
 
 `with_tier<Routine, T, List = tiers_t<Routine, T>>(device_or_limits, n, f, name = Routine::name)`
@@ -235,7 +236,7 @@ Scalars are `float`, `double`, `std::complex<float>`, `std::complex<double>` and
 ## Routines by family {#device-guide-routines-by-family}
 
 Each family links its reference group, where every member has its contract. Tier lists are
-`tiers_t<routine::<op>, T>`, smallest first.
+`tiers_t<routine::<op>, T>`, in the order `with_tier` tries them.
 
 ### Launch, tiers and workspace {#device-guide-family-launch}
 
@@ -328,15 +329,15 @@ The getrs tiers share getrf's executor and local plan, so both run in one kernel
 
 ### QR and orthogonal transforms {#device-guide-family-qr}
 
-@ref api_device_lapack_qr. `NB` is `larfb_default_nb<T>()` (16 for `double`, else 32).
+@ref api_device_lapack_qr.
 
 | Routine | Tiers |
 | --- | --- |
-| `geqrf<Tier>(ex, A, tau, ws)`, `orgqr<Tier>(ex, A, tau, ws)`, `ormqr<SD, TR, Tier>(ex, A, tau, C, ws)` | `Blocked<NB>` |
+| `geqrf<Tier>(ex, A, tau, ws)`, `orgqr<Tier>(ex, A, tau, ws)`, `ormqr<SD, TR, Tier>(ex, A, tau, C, ws)` | `Blocked<larfb_default_nb<T>()>`: `Blocked<16>` for `double`, `Blocked<32>` for `float` and both complex types |
 | `larft(ex, V, tau, T)`, `larfb<SD, TR, Direct, Cfg>(ex, V, T, C, ws)` | no tier; `larfb` takes an `l3::cfg` preset |
-| `gebrd<Tier>(ex, A, d, e, tauq, taup, ws)` (m >= n) | `Blocked<NB>`; real T also `Cta<4>` .. `Cta<32>`, called as `gebrd<Tier>(ex, it, A, d, e, tauq, taup, ws, live)` |
+| `gebrd<Tier>(ex, A, d, e, tauq, taup, ws)` (m >= n) | `Blocked<16>` for every T; real T first `Cta<4>` .. `Cta<32>`, called as `gebrd<Tier>(ex, it, A, d, e, tauq, taup, ws, live)`; another `Blocked<NB>`, 1 <= NB <= 64, when named |
 | `ormbr<Vect, SD, TR>(ex, A, tau, C, ws)` | `Blocked<1>` |
-| `ortho<TR, Tier, Cfg, Alg>(ex, A, ws)` (CGS2, Cholesky QR) | `Cta<N>` or `Blocked<NB>`, named by you |
+| `ortho<TR, Tier, Cfg, Alg>(ex, A, ws)` (CGS2, Cholesky QR) | no list: `Cta<N>`, or for CGS2 also `Blocked<NB>`, with N or NB named by you |
 
 ### Symmetric eigensolvers {#device-guide-family-eig}
 
@@ -349,10 +350,10 @@ The getrs tiers share getrf's executor and local plan, so both run in one kernel
 | `steqr<J, Tier>(ex, d, e, z, ws, SteqrOptions{}, live)` (eigenvalues unsorted in `d`) | `Cta<4>` .. `Cta<32>`, `Blocked<1>` |
 | `stedc<J, Tier>(ex, d, e, w[, z], ws, StedcOptions<R>{})` | `Blocked<1>` |
 | `stebz<Tier>(ex, d, e, w, m, ws, StebzOptions<R>{})` (`m` an `int&` out), `stein<Tier>(ex, d, e, w, kb, z, ws, SteinOptions<R>{})` | `Blocked<1>` |
-| `sygst<Itype, UL, Tier>(ex, A, B, ws)` | `Cta<8>`, `Cta<16>`, `Cta<32>`, `Blocked<32>`, `Blocked<16>` |
-| `sy2sb<UL, Tier>(ex, A, AB, tau, kd, ws)` (dense to band) | `Blocked<32>`; `Blocked<64>` when named |
+| `sygst<Itype, UL, Tier>(ex, A, B, ws)` | `Cta<8>`, `Cta<16>`, `Cta<32>`, `Blocked<32>`, then `Blocked<16>` where the `Blocked<32>` diagonal block does not fit local memory |
+| `sy2sb<UL, Tier>(ex, A, AB, tau, kd, ws)` (dense to band, `Uplo::Lower` only) | `Blocked<32>`; `Blocked<64>` when named |
 | `sb2st<UL, Tier>(ex, ab, d, e, tau, kd, ws)` (band to tridiagonal) | `Cta<4096>`, `Blocked<32>` |
-| `ritz_values<Tier, Cfg>(ex, A, V, w, ws)`; tier-free `ritz_values(ex, A, V, w)` | `Blocked<NB>`, named by you |
+| `ritz_values<Tier, Cfg>(ex, A, V, w, ws)`; tier-free `ritz_values(ex, A, V, w)` | no list: `Blocked<NB>`, with NB named by you |
 
 `syevx.hh` provides the selection step `syevx_select`, and `jacobi.hh` the rotation kernels of
 one-sided Jacobi; neither is a driver. The merge kernels of `stedc` and `stein` (`laed2`, `laed3`,
@@ -380,7 +381,7 @@ one-sided Jacobi; neither is a driver. The merge kernels of `stedc` and `stein` 
 
 | Routine | Tiers |
 | --- | --- |
-| `spmm<TA, TB, Tier>(ex, alpha, A, B, beta, C, ws)`, `A` a CSR item from `csr_item(view, b)` | `Blocked<NC>`, one tier per scalar type |
+| `spmm<TA, TB, Tier>(ex, alpha, A, B, beta, C, ws)`, `A` a CSR item from `csr_item(view, b)` | `Blocked<64 / sizeof(T)>`: `Blocked<16>` for `float`, `Blocked<8>` for `double` and `complex<float>`, `Blocked<4>` for `complex<double>` |
 | `iluk_factorize<Tier>(ex, A, plan, M, opts, ws)` (options before `ws`), `iluk_apply<Tier>(ex, M, rhs, y, ws)` | `Blocked<1>` |
 
 ### Low-level helpers {#device-guide-family-lowlevel}

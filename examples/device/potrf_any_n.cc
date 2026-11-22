@@ -28,7 +28,7 @@ int run(sycl::queue& q, int n, int batch) {
     q.copy(host.data(), a, host.size()).wait();
 
     const char* tier = "";
-    // [device-guide-frame]
+    // [device-guide-frame] begin: the launch frame docs/guide/device-api.md quotes
     using R = device::routine::potrf<Uplo::Lower>;
     device::with_tier<R, T>(q.get_device(), n, [&]<class Tier>(Tier) {
         tier = device::tier::is_reg_v<Tier> ? "Reg" : device::tier::is_cta_v<Tier> ? "Cta" : "Blocked";
@@ -47,7 +47,7 @@ int run(sycl::queue& q, int n, int batch) {
          }).wait_and_throw();
         if (gws) sycl::free(gws, q);
     });
-    // [device-guide-frame]
+    // [device-guide-frame] end
 
     std::vector<T> l(host.size());
     std::vector<int> hinfo(batch);

@@ -128,4 +128,4 @@ CI on it. Fix with `git lfs install`, then `git add --renormalize benchmarks/res
 
 @subpage perf_sycl_implementations "DPC++ vs AdaptiveCpp"
 
-@subpage perf_device_la "Device LA (in-kernel API)"
+@subpage perf_device_la "Device API migration"

@@ -31,7 +31,7 @@ int run(sycl::queue& q, int m, int n, int k, int batch) {
     q.copy(hc.data(), c, hc.size()).wait();
     const T alpha = T(1.5), beta = T(-0.5);
 
-    // [device-guide-gemm]
+    // [device-guide-gemm] begin: the frame docs/guide/device-api.md quotes
     constexpr std::size_t stage = device::l3::smem_bytes<Cfg>();
     q.submit([&](sycl::handler& h) {
          device::LocalWorkspace slm(sycl::range<1>((stage + 15) / 16), h);
@@ -48,7 +48,7 @@ int run(sycl::queue& q, int m, int n, int k, int batch) {
                                 device::mat(c + g * sc, m, n, ldc), ws);
                         });
      }).wait_and_throw();
-    // [device-guide-gemm]
+    // [device-guide-gemm] end
 
     std::vector<T> got(hc.size());
     q.copy(c, got.data(), got.size()).wait();

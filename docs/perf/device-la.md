@@ -1,4 +1,4 @@
-# Device LA: the cost of the v1 layer and the migration exceptions {#perf_device_la}
+# Device API migration measurements {#perf_device_la}
 
 > **Status:** current · RTX 4090 (sm_89), CUDA backend · measured during the migration onto
 > `batchlas::device`, before 1.0.0
@@ -26,14 +26,14 @@ The scaled `nrm2<alg::Blue>` costs 2.9-4.5x the instructions and a median 2.3x t
 `nrm2<alg::Unscaled>`, against a 10% bar, which is why `nrm2` has no default algorithm
 ([the rules](../design/device-la.md#device-la-the-rules)).
 
-## Device LA migration timings {#device-la-migration-timings}
+## Migration timings {#device-la-migration-timings}
 
 Lab parity: 84/84 device LA lab kernels have SASS identical to the hand code. Timing (RTX 4090,
 device LA / legacy median, < 1 is faster; selected): trsm SgLeft 0.840 f / 0.931 cf, gesvdj 0.737,
 larft 0.581, sb2st chase cf 0.486, sygst 0.850 cf / 0.901 f, syevx 0.924, tridiag 0.919, sytrf /
 sytrs Cta 0.985-1.0025.
 
-## Device LA accepted exceptions {#device-la-accepted-exceptions}
+## Accepted exceptions {#device-la-accepted-exceptions}
 
 Migrated kernels that miss a threshold of [the SASS-parity
 gate](../design/device-la.md#device-la-the-sass-parity-gate), or give up bit identity with the code
