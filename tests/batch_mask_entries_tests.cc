@@ -549,6 +549,12 @@ std::vector<Entry<Scalar>> host_direct_entries() {
     const auto add = [&](const char* name, std::function<void(P&)> f) { out.push_back({name, false, std::move(f)}); };
     add("ormqr_blocked",
         [=](P& p) { ormqr_blocked<B, Scalar>(p.q, p.mat(p.a), p.mat(p.c), Side::Left, N, p.tspan(), p.ws); });
+    add("ormbr", [=](P& p) {
+        const VectorView<Scalar> t(p.tau.data(), kN, kBatch, 1, kN);  // ormbr's tau is packed by batch
+        (void)ormbr<B, Scalar>(p.q, p.mat(p.a), p.masks(p.tau.data()) ? t.with_batch_mask(p.mask) : t, p.mat(p.c), 'Q',
+                               Side::Left, N, p.ws);
+    });
+    out.back().packed = {"tau"};
     out.push_back({"ortho(M)", true,
                    [=](P& p) { ortho<B, Scalar>(p.q, p.mat(p.a, kN, 2), p.mat(p.z, kN, 2), N, N, p.ws); }});
     out.push_back({"ritz_values", true, [=](P& p) {
@@ -609,19 +615,16 @@ std::vector<Entry<Scalar>> direct_entries() {
     // Cholesky family included. bdsdc honours it on either backend (gesvd_mask_tests).
     // Every syev and gesvd family honours the mask on a device (lift 2: syev_mask_tests and
     // gesvd_mask_tests); on the host backend their CTA leaves are not built, and gesvd_blocked refuses
-    // outright (refuse_batch_mask), host BLAS or not. So do gebrd_blocked, ormbr and DirectSubset.
+    // outright (refuse_batch_mask), host BLAS or not. So does gebrd_blocked.
     if constexpr (B == Backend::NETLIB)
         add("gesvd_blocked", [=](P& p) {
             gesvd_blocked<B, Scalar>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, p.ws, p.ispan());
         });
-    // gebrd_blocked and ormbr honour the mask on a device (W4a).
-    if constexpr (B == Backend::NETLIB) {
+    // gebrd_blocked and ormbr honour the mask on a device (W4a); ormbr sits in host_direct_entries.
+    if constexpr (B == Backend::NETLIB)
         add("gebrd_blocked", [=](P& p) {
             gebrd_blocked<B, Scalar>(p.q, p.mat(p.a), p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.tq), p.vec(p.tp), p.ws);
         });
-        add("ormbr",
-            [=](P& p) { ormbr<B, Scalar>(p.q, p.mat(p.a), p.vec(p.tau), p.mat(p.c), 'Q', Side::Left, N, p.ws); });
-    }
     // syevx and syevx_direct honour the mask (W4c): syevx_mask_tests holds their contract. LOBPCG,
     // Filtered and DirectSubset (real only) sit in host_direct_entries: a host BLAS refuses them, a
     // GPU and a vendor-free host honour the mask (syevx_mask_tests).
