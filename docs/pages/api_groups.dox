@@ -121,9 +121,14 @@ kernel compiles only the path it takes. LAPACK-level routines run in a *tier* (`
 - @ref api_device_operands &ndash; matrices, vectors, fragments, lazy views and host-view interop.
 - @ref api_device_arith &ndash; scalar kernels and the arithmetic policies.
 - @ref api_device_blas1, @ref api_device_blas2, @ref api_device_blas3 &ndash; BLAS levels 1 to 3.
-- LAPACK &ndash; @ref api_device_lapack_chol, @ref api_device_lapack_lu, @ref api_device_lapack_ldl,
-  @ref api_device_lapack_qr, @ref api_device_lapack_eig, @ref api_device_lapack_svd and
-  @ref api_device_lapack_aux.
+- LAPACK:
+  - @ref api_device_lapack_chol
+  - @ref api_device_lapack_lu
+  - @ref api_device_lapack_ldl
+  - @ref api_device_lapack_qr
+  - @ref api_device_lapack_eig
+  - @ref api_device_lapack_svd
+  - @ref api_device_lapack_aux
 - @ref api_device_sparse &ndash; sparse-dense products and incomplete LU.
 - @ref api_device_lowlevel &ndash; helpers in batchlas::device that are **not** covered by the
   compatibility promise.
@@ -262,7 +267,7 @@ Pivots are 1-based int32, as in LAPACK; a zero pivot is reported in `info`. Incl
 */
 
 /**
-@defgroup api_device_lapack_ldl Symmetric indefinite LDL^T: sytrf, sytrs, sysv
+@defgroup api_device_lapack_ldl Symmetric indefinite: sytrf, sytrs, sysv
 @ingroup api_device
 @brief Bunch-Kaufman \f$ A = L D L^T \f$ factorization of a symmetric indefinite matrix, the solve
 with its factors and the combined driver.
