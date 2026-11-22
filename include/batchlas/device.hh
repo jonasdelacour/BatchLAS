@@ -1,7 +1,17 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Device LA (batchlas::device): zero-overhead in-kernel linear algebra. The LAPACK-level ops
-// are in batchlas/device/lapack.hh.
+/** @file
+ * @brief The device umbrella: in-kernel BLAS and the launch frame of batchlas::device in one
+ * include.
+ * @ingroup api_device
+ *
+ * It includes the core vocabulary, arithmetic, scalar kernels, executors, operands, views,
+ * interop, reductions, BLAS levels 1 to 3 (the register tier of level 3), the LAPACK
+ * auxiliaries, tiers, the launch frame and the workspace protocol. The LAPACK-level routines are
+ * in `<batchlas/device/lapack.hh>`, the in-group level-3 forms in
+ * `<batchlas/device/level3/group.hh>` and the sparse routines in `<batchlas/device/sparse.hh>`.
+ * The reference is @ref api_device.
+ */
 
 #include <batchlas/device/core.hh>
 #include <batchlas/device/arith.hh>
