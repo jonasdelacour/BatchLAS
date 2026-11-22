@@ -20,6 +20,7 @@ on an older page no longer exists, its window lives on as table rows.
 | [tuning.md](tuning.md), [blackwell.md](blackwell.md) | the `tuning_params.hh` constants and `BATCHLAS_TUNE_*`; the sm_120 retune |
 | [batch-sensitivity.md](batch-sensitivity.md) | why per-item time depends on batch, and the cold protocol |
 | [sycl-implementations.md](sycl-implementations.md) | DPC++ against AdaptiveCpp, performance and accuracy |
+| [device-la.md](device-la.md) | the in-kernel `batchlas::device` layer: the v1 cost, migration timings, accepted exceptions |
 
 ## perf index: two rules
 
@@ -126,3 +127,5 @@ CI on it. Fix with `git lfs install`, then `git add --renormalize benchmarks/res
 @subpage perf_batch_sensitivity "Batch-size sensitivity"
 
 @subpage perf_sycl_implementations "DPC++ vs AdaptiveCpp"
+
+@subpage perf_device_la "Device LA (in-kernel API)"

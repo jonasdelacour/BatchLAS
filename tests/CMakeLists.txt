@@ -1008,7 +1008,7 @@ if(BATCHLAS_TEST_TARGET_SET STREQUAL "all")
     endif()
 endif()
 
-# examples/device/: the device API guide's worked examples (docs/design/device-la.md), each a
+# examples/device/: the device API guide's worked examples (docs/guide/device-api.md), each a
 # smoke ctest that exits 0 when its numbers check out. Label 'blas' with the device_lapack_* tests.
 if(BATCHLAS_TEST_TARGET_SET STREQUAL "all")
     foreach(_example potrf_any_n getrs_any_n syev_any_n gemm_group)

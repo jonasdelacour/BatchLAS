@@ -328,10 +328,11 @@ ledgers and staleness: @ref design_tuning_data.
 - The workspace arena belongs to the `Queue`: never a per-call `Queue`. Leak long-lived SYCL
   objects held in statics (destruction after the runtime hangs).
 - Pivots are packed 1-based int32 everywhere; `cusolverDnXgetrs` wants int64.
-- In-kernel `batchlas::device` ops follow the conventions C1-C11 of @ref design_device_la (netlib
+- In-kernel `batchlas::device` ops follow the conventions C1-C11 of @ref guide_device_api (netlib
   name and argument order, ws then opts then live, `int info`, one `buffer_size<R, Tier, T>`);
-  write a call from its launch frame and the four checked programs in `examples/device/`, and read
-  an exact signature on the generated @ref design_device_la_api page, never from memory.
+  write a call from its launch frame and the checked programs in `examples/device/`, and read
+  an exact signature on the generated @ref design_device_la_api page, never from memory. Design
+  rules and the SASS-parity gate: @ref design_device_la.
 - `linalg::qr` is absent on purpose; located-but-unfixed defects: `docs/design/known-defects.md`.
 
 ## 10. Measurement Rules (benchmarks lie silently here)

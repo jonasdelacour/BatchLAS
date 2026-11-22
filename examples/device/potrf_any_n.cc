@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The device API guide's worked example (docs/design/device-la.md#device-la-worked-examples):
+// The device API guide's worked example (docs/guide/device-api.md#device-guide-example-potrf):
 // a user kernel that factors a batch of n x n SPD matrices with device::potrf, for any n.
 // with_tier picks ONE tier on the host from n and the device's limits; each tier is a separate
 // kernel, so no kernel carries the registers of a path it never takes. launch<R, Tier, T> gives
@@ -28,6 +28,7 @@ int run(sycl::queue& q, int n, int batch) {
     q.copy(host.data(), a, host.size()).wait();
 
     const char* tier = "";
+    // [device-guide-frame]
     using R = device::routine::potrf<Uplo::Lower>;
     device::with_tier<R, T>(q.get_device(), n, [&]<class Tier>(Tier) {
         tier = device::tier::is_reg_v<Tier> ? "Reg" : device::tier::is_cta_v<Tier> ? "Cta" : "Blocked";
@@ -46,6 +47,7 @@ int run(sycl::queue& q, int n, int batch) {
          }).wait_and_throw();
         if (gws) sycl::free(gws, q);
     });
+    // [device-guide-frame]
 
     std::vector<T> l(host.size());
     std::vector<int> hinfo(batch);
