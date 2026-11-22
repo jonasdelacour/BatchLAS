@@ -123,7 +123,7 @@ Event steqr_wg_impl(Queue& ctx,
                     // The rotation kernel reads rotation (j, k) of this block for every j < n_local - 1
                     // and every sweep column k. The sweeps write theirs and this kernel writes the
                     // identity into the columns no sweep used, so the buffer needs no fill per pass.
-                    const auto identity_from = [&](size_t k0) {
+                    const auto identity_from = [&](size_t k0) BATCHLAS_DEVICE_BODY {
                         if (!store_givens) return;
                         for (int k = static_cast<int>(k0); k < rotations_view.cols(); ++k)
                             for (int j = 0; j < n_local - 1; ++j) rotations_view(j, k, gid) = {Real(1), Real(0)};
@@ -265,8 +265,8 @@ Event steqr_wg(Queue& ctx,
     (void)VectorView<Real>::copy(ctx, e, e_in);
 
     // No fill of givens_rotations per pass: the sweep kernel writes every slot the rotation kernel
-    // reads. A 3 MB fill here was the one write a masked float call on Metal lost (about a fifth of
-    // its slots kept the workspace's old bytes, and Z took non-unit rotations).
+    // reads, which saves a 3 MB fill per pass. Without AdaptiveCpp patch 0015 that fill also lost a
+    // fifth of its writes on Metal after masked kernels: its null mask read a stale binding.
     for (int64_t i = 0; i < n - 1; ++i) {
         (void)steqr_wg_impl(ctx,
                       d,
