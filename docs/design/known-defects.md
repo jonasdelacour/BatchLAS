@@ -112,14 +112,15 @@ Fixed 2026-11-20 (61d8703e). CTA mode always took the normal-equations branch, a
 \f$\sigma_{\max}/\sigma_i\f$: \f$\max|U^T U - I|\f$ reached \f$\varepsilon\kappa^2\f$ (float
 \f$1.7 \times 10^{-3}\f$, double \f$8.4 \times 10^{-12}\f$ at \f$n = 16\f$). Same root as
 [gesvd defect A](../perf/gesvd.md#gesvd-defect-a-the-normal-equations-square-kappa).
-Only the default changed: the zero-argument `gesvd_direct_bidiag()`
-(`src/ops/gesvd/kernels/gesvd_blocked.cc`) no longer depends on the mode, so CTA and blocked both
-default to a direct bidiagonal solve. The two-argument overload `gesvd_direct_bidiag(mode,
-thin_tall_u)` (`gesvd_blocked.cc:73-74`) still reads the mode: in blocked mode a thin tall U forces
-the direct solve. CTA keeps `gebrd_cta` and `ormqx_cta` and solves \f$B\f$ with `bdsdc`/`bdsqr`
-like blocked; `BATCHLAS_GESVD_BIDIAG=normal` still reaches the normal equations, except for a
-blocked thin tall U. Guard:
-`GesvdTest.CtaProviderCoversAllJobCombinations`, float and double.
+Only the default changed: `gesvd_direct_bidiag()` (`src/ops/gesvd/kernels/gesvd_blocked.cc`) no
+longer depends on the mode, so CTA and blocked both default to a direct bidiagonal solve, and its
+one-argument overload `gesvd_direct_bidiag(thin_tall_u)` forces the direct solve for a thin tall U in
+either mode (CTA's entries refuse a thin job anyway). CTA keeps `gebrd_cta` and `ormqx_cta` and
+solves \f$B\f$ with `bdsdc`/`bdsqr` like blocked. `BATCHLAS_GESVD_BIDIAG=normal` still reaches the
+normal equations for real types without a thin tall U; complex types never do (the run path and
+`buffer_size` compute `kComplex || gesvd_direct_bidiag(thin_tall_u)`). Guards:
+`GesvdTest.CtaProviderCoversAllJobCombinations`, float and double;
+`GesvdTest.CtaThinTallUnderNormalEquationsIsRefused`.
 
 ## Defect 19: Upper potrf beyond the CTA ceiling has no vendor-free route
 

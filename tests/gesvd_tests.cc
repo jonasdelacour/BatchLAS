@@ -1159,6 +1159,57 @@ TYPED_TEST(GesvdTest, CtaRejectsGenuinelyThinAndItsPinThrows) {
     }
 }
 
+// gesvd_cta under BATCHLAS_GESVD_BIDIAG=normal with a thin tall U: the normal equations would
+// write m columns into a k-column U. The run entry itself must refuse (not only the size query
+// and can_run), with a workspace large enough for the full-U path and a U inside a wider, padded
+// buffer whose every entry, the k..m-1 overrun columns included, keeps its poison.
+TYPED_TEST(GesvdTest, CtaThinTallUnderNormalEquationsIsRefused) {
+    using Scalar = typename TestFixture::Scalar;
+    using Real = typename TestFixture::Real;
+    constexpr Backend B = TestFixture::B;
+
+    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
+        GTEST_SKIP() << "native CTA provider is only dispatched on GPU backends.";
+    } else {
+        ScopedEnvVar bidiag("BATCHLAS_GESVD_BIDIAG", "normal");
+        const int m = 32, n = 8, k = 8, batch = 3;
+        constexpr Real kPoison = Real(7777.25);
+        auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(m, n, false, batch, 8106);
+        Matrix<Scalar, MatrixFormat::Dense> Ubig(m + 3, m, batch), Ufull(m, m, batch), Vh(k, n, batch);
+        Scalar* up = Ubig.view().data_ptr();
+        const size_t u_elems = static_cast<size_t>(Ubig.view().stride()) * batch;
+        for (size_t i = 0; i < u_elems; ++i) up[i] = Scalar(kPoison);
+        const auto U = Ubig.view()({0, m}, {0, k});
+        UnifiedVector<Real> s(static_cast<size_t>(k) * batch, kPoison);
+
+        EXPECT_THROW((gesvd_cta_buffer_size<B, Scalar>(*this->ctx, A, s.to_span(), U, Vh, SvdVectors::Thin,
+                                                       SvdVectors::Thin)),
+                     std::invalid_argument);
+        const size_t ws_bytes = gesvd_cta_buffer_size<B, Scalar>(*this->ctx, A, s.to_span(), Ufull, Vh,
+                                                                 SvdVectors::All, SvdVectors::Thin);
+        UnifiedVector<std::byte> ws(ws_bytes);
+        EXPECT_THROW(((void)gesvd_cta<B, Scalar>(*this->ctx, A, s.to_span(), U, Vh, SvdVectors::Thin,
+                                                 SvdVectors::Thin, ws.to_span()),
+                      this->ctx->wait()),
+                     std::invalid_argument);
+        this->ctx->wait();
+        size_t inside = 0, outside = 0;
+        const int64_t ld = Ubig.view().ld(), stride = Ubig.view().stride();
+        for (size_t i = 0; i < u_elems; ++i) {
+            const int64_t r = (static_cast<int64_t>(i) % stride) % ld, c = (static_cast<int64_t>(i) % stride) / ld;
+            (r < m && c < k ? inside : outside) += up[i] != Scalar(kPoison);
+        }
+        EXPECT_EQ(inside, 0u) << "gesvd_cta wrote U on a refused thin call";
+        EXPECT_EQ(outside, 0u) << "gesvd_cta wrote past U's m x k block (the m-column overrun)";
+        for (size_t i = 0; i < s.size(); ++i) EXPECT_EQ(s[i], kPoison) << "wrote s[" << i << "]";
+
+        Matrix<Scalar, MatrixFormat::Dense> Uthin(m, k, batch);
+        const std::string pinned = run_gesvd_with_provider<Scalar, B>(*this->ctx, A, s, Uthin, Vh,
+                                                                      SvdVectors::Thin, SvdVectors::Thin, "cta");
+        EXPECT_NE(pinned.find("cannot run this shape"), std::string::npos) << pinned;
+    }
+}
+
 // The only test of the direct-bidiag forcing rule. Without it, a thin tall U
 // under BATCHLAS_GESVD_BIDIAG=normal reaches patch_zero_left_vectors, which
 // writes m columns into a U that has only k.
