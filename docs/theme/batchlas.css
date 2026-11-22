@@ -306,10 +306,13 @@ nav.bl-crumbs a:hover { color: var(--bl-link) !important; }
 nav.bl-crumbs + div.headertitle { padding-top: 4px; }
 
 /* Inline code (paths, flags, long expressions) wraps instead of running past the column. */
-div.contents p .tt, div.contents li .tt, div.contents dd .tt, div.contents td .tt, div.contents blockquote .tt,
-div.contents p code, div.contents li code, div.contents td code {
+div.contents p .tt, div.contents li .tt, div.contents dd .tt, div.contents blockquote .tt,
+div.contents p code, div.contents li code {
     white-space: normal; overflow-wrap: anywhere; word-break: normal;
 }
+/* Table cells already scroll (markdownTable is a block), so their code breaks only a token that
+   alone overflows the cell, never mid-identifier to shrink the column. */
+div.contents td .tt, div.contents td code { white-space: normal; overflow-wrap: break-word; word-break: normal; }
 table.memberdecls a.el, div.contents table.directory a.el { overflow-wrap: anywhere; }
 
 /* Nothing may widen the page: wide blocks scroll inside their own box. */
@@ -330,6 +333,35 @@ div.contents div.textblock ul li a.el, div.contents .contents li { overflow-wrap
 div.contents a, div.contents a.el { overflow-wrap: anywhere; white-space: normal; }
 div.contents ul li, div.contents ul li a.el { white-space: normal !important; }
 div.contents li, div.contents p { overflow-wrap: anywhere; }
+/* The link rules above must not reach code: a fragment line never wraps (it scrolls), and a link
+   in table code breaks no more freely than the code around it. */
+div.contents div.fragment a, div.contents pre.fragment a,
+div.contents div.fragment a.el, div.contents pre.fragment a.el {
+    white-space: pre !important; overflow-wrap: normal !important;
+}
+div.contents td code a, div.contents td code a.el, div.contents td .tt a, div.contents td .tt a.el { overflow-wrap: break-word; }
+
+/* Fragments scroll sideways; macOS overlay scrollbars hide that, so give them a thin bar that is
+   always drawn, in the theme's colours. Chromium and Safari draw ::-webkit-scrollbar only while
+   scrollbar-width and scrollbar-color are auto; Firefox gets the standard properties instead. */
+div.contents div.fragment, div.contents pre.fragment, pre.bl-proto, div.contents div.memproto {
+    scrollbar-width: auto; scrollbar-color: auto;
+}
+div.contents div.fragment::-webkit-scrollbar, div.contents pre.fragment::-webkit-scrollbar,
+pre.bl-proto::-webkit-scrollbar, div.contents div.memproto::-webkit-scrollbar { height: 6px; width: 6px; background: transparent; }
+div.contents div.fragment::-webkit-scrollbar-thumb, div.contents pre.fragment::-webkit-scrollbar-thumb,
+pre.bl-proto::-webkit-scrollbar-thumb, div.contents div.memproto::-webkit-scrollbar-thumb {
+    background: var(--bl-fg-3); border: 0; border-radius: 3px;
+}
+div.contents div.fragment:hover::-webkit-scrollbar-thumb, div.contents pre.fragment:hover::-webkit-scrollbar-thumb,
+pre.bl-proto:hover::-webkit-scrollbar-thumb, div.contents div.memproto:hover::-webkit-scrollbar-thumb { background: var(--bl-fg-2); }
+div.contents div.fragment::-webkit-scrollbar-track, div.contents pre.fragment::-webkit-scrollbar-track,
+pre.bl-proto::-webkit-scrollbar-track, div.contents div.memproto::-webkit-scrollbar-track { background: var(--bl-line); }
+@supports not selector(::-webkit-scrollbar) {
+    div.contents div.fragment, div.contents pre.fragment, pre.bl-proto, div.contents div.memproto {
+        scrollbar-width: thin; scrollbar-color: var(--bl-fg-3) var(--bl-line);
+    }
+}
 
 /* Declaration boxes: the background belongs to the whole declaration (template row + signature
    row), not to each cell, so a wrapped signature stays inside its box. */

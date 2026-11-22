@@ -33,7 +33,7 @@ The grid starts at batch 128; smaller batches take the batch-128 rows. Provenanc
 
 | table | source | first entry |
 |---|---|---|
-| `trsm.sm_89.txt`, every dtype | transcribed, untimed (`8b9adeb3`) | `cta \| blocked \| vendor` at order \f$\le 32\f$, `blocked \| vendor` above. `sg_left` in no row |
+| `trsm.sm_89.txt`, every dtype | transcribed, untimed (`8b9adeb3`) | `cta` / `blocked` / `vendor` at order \f$\le 32\f$, `blocked` / `vendor` above. `sg_left` in no row |
 | `trsm.sm_120.txt` | deep (complex rows partly transcribed) | order \f$\le 32\f$: Left mostly `sg_left` / `cta`, Right `cta`; above 32: `blocked` first in most rows, `vendor` in the rest |
 
 On sm_89, `sg_left` runs only when pinned, and the vendor only where no native family can (a

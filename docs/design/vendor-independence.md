@@ -245,7 +245,7 @@ is present is not a kernel that runs.
 
 | script | what it is for | why it can be trusted |
 |---|---|---|
-| `scripts/route_diff.sh capture\|compare` | prove a change moved no selection decision | zero `reached` rows is a hard error. Keys on `(kind, op, scalar, backend, shape_class, origin, algo, native flags, uplo, side, diag, transA, transB)`; drops `m`, `n`, `k`, `batch`, call count. The only tool that sees a vendor-to-vendor change. |
+| `scripts/route_diff.sh capture` / `compare` | prove a change moved no selection decision | zero `reached` rows is a hard error. Keys on `(kind, op, scalar, backend, shape_class, origin, algo, native flags, uplo, side, diag, transA, transB)`; drops `m`, `n`, `k`, `batch`, call count. The only tool that sees a vendor-to-vendor change. |
 | `scripts/coverage_merge.sh` | merge the per-pid shards of a ctest run | sums `calls`, de-duplicates `linked` |
 | `scripts/facade_symbol_check.sh` | public entry points are not defined in a vendor component | matches Itanium mangling; `nm -C` fails on concept-constrained templates |
 | `scripts/rocm_syntax_check.sh` | `-fsyntax-only` the three ROCm vendor TUs | only `sycl::get_native<ext_oneapi_hip>` errors are expected on a CUDA-only DPC++; anything else is real |
