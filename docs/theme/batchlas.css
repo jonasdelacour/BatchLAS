@@ -343,25 +343,26 @@ div.contents td code a, div.contents td code a.el, div.contents td .tt a, div.co
 
 /* Code blocks and tables scroll sideways; macOS overlay scrollbars hide that, so they get a thin
    bar that is always drawn, in the theme's colours. Chromium and Safari draw ::-webkit-scrollbar
-   only while scrollbar-width and scrollbar-color are auto; Firefox gets the standard properties. */
-:is(div.contents div.fragment, div.contents pre.fragment, pre.bl-proto, div.contents div.memproto, div.contents table.markdownTable) {
-    scrollbar-width: auto; scrollbar-color: auto;
+   only while scrollbar-width and scrollbar-color are auto; Firefox gets the standard properties.
+   !important: doxygen-awesome's tbody rules carry four :not() classes of specificity. */
+:is(div.contents div.fragment, div.contents pre.fragment, pre.bl-proto, div.contents div.memproto, div.contents table.markdownTable tbody) {
+    scrollbar-width: auto !important; scrollbar-color: auto !important;
 }
-:is(div.contents div.fragment, div.contents pre.fragment, pre.bl-proto, div.contents div.memproto, div.contents table.markdownTable)::-webkit-scrollbar {
-    height: 6px; width: 6px; background: transparent;
+:is(div.contents div.fragment, div.contents pre.fragment, pre.bl-proto, div.contents div.memproto, div.contents table.markdownTable tbody)::-webkit-scrollbar {
+    height: 6px !important; width: 6px !important; background: transparent !important;
 }
-:is(div.contents div.fragment, div.contents pre.fragment, pre.bl-proto, div.contents div.memproto, div.contents table.markdownTable)::-webkit-scrollbar-thumb {
-    background: var(--bl-fg-3); border: 0; border-radius: 3px;
+:is(div.contents div.fragment, div.contents pre.fragment, pre.bl-proto, div.contents div.memproto, div.contents table.markdownTable tbody)::-webkit-scrollbar-thumb {
+    background: var(--bl-fg-3) !important; border: 0 !important; border-radius: 3px !important;
 }
-:is(div.contents div.fragment, div.contents pre.fragment, pre.bl-proto, div.contents div.memproto, div.contents table.markdownTable):hover::-webkit-scrollbar-thumb {
-    background: var(--bl-fg-2);
+:is(div.contents div.fragment, div.contents pre.fragment, pre.bl-proto, div.contents div.memproto, div.contents table.markdownTable tbody):hover::-webkit-scrollbar-thumb {
+    background: var(--bl-fg-2) !important;
 }
-:is(div.contents div.fragment, div.contents pre.fragment, pre.bl-proto, div.contents div.memproto, div.contents table.markdownTable)::-webkit-scrollbar-track {
-    background: var(--bl-line);
+:is(div.contents div.fragment, div.contents pre.fragment, pre.bl-proto, div.contents div.memproto, div.contents table.markdownTable tbody)::-webkit-scrollbar-track {
+    background: var(--bl-line) !important;
 }
 @supports not selector(::-webkit-scrollbar) {
-    :is(div.contents div.fragment, div.contents pre.fragment, pre.bl-proto, div.contents div.memproto, div.contents table.markdownTable) {
-        scrollbar-width: thin; scrollbar-color: var(--bl-fg-3) var(--bl-line);
+    :is(div.contents div.fragment, div.contents pre.fragment, pre.bl-proto, div.contents div.memproto, div.contents table.markdownTable tbody) {
+        scrollbar-width: thin !important; scrollbar-color: var(--bl-fg-3) var(--bl-line) !important;
     }
 }
 
