@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// LAPACK xPOTRS inside a kernel: A X = B with A = L L^H (Lower) or
-// U^H U (Upper) from potrf, X overwriting B. Public entry:
-//   int potrs<UL, Tier>(ex, A, B, ws)          0, or -i for argument i (uniform over ex)
-//   WorkspaceSize buffer_size<routine::potrs<UL>, Tier, T>(n)
-//   tier::Blocked<NB>  ex = WorkGroup<256, 32>, any n and nrhs: the two triangular solves are the
-//                      in-group L3 trsm (level3/group.hh) over NB-wide diagonal blocks;
-//                      ws.local = the L3 stages (the same slot potrf's Blocked plan starts with)
-// The small tiers (the host posv tiny and potrs fused bodies) land with WP7. Collective: every
-// item of ex calls with the same arguments; inputs visible on entry; X visible on return.
-// -2: A not square; -3: B's rows differ from n; -4: ws.local missing or misaligned.
+/// @file
+/// @ingroup api_device_lapack_chol
+/// @brief ?POTRS in a kernel: the solve \f$A X = B\f$ for one matrix from potrf()'s Cholesky
+/// factor, X overwriting B.
+///
+/// The routine is potrs(); its routine tag is routine::potrs. Its one tier is `tier::Blocked<32>`:
+/// the two triangular solves run on the in-group level 3 trsm over NB-wide diagonal blocks.
+// The small tiers (the host posv tiny and potrs fused bodies) land with WP7.
 
 #include <cstddef>
 #include <type_traits>
@@ -82,12 +80,22 @@ BATCHLAS_DEVICE_INLINE int potrs_blocked_op(const WorkGroup<WG, SG>& ex, const M
 }  // namespace detail
 
 namespace routine {
+/// @ingroup api_device_lapack_chol
+/// @brief The routine tag of potrs() for the triangle `UL`: names the routine to `with_tier`,
+/// `launch`, `tier_info`, `tiers_t` and `buffer_size`.
 template <Uplo UL> struct potrs {
-    static constexpr const char* name = "potrs";
-    static constexpr Uplo uplo = UL;
+    static constexpr const char* name = "potrs";  ///< The routine's name, "potrs".
+    static constexpr Uplo uplo = UL;              ///< The triangle that holds the factor.
 };
 }  // namespace routine
 
+/// @ingroup api_device_lapack_chol
+/// @brief potrs()'s blocked tier `tier::Blocked<NB>`: any n and nrhs, one matrix per 256-item
+/// work-group, `A` and `B` in global memory.
+///
+/// The executor is `WorkGroup<256, 32>`. `admits(n)` is n >= 0. `buffer_size(n)` is the level 3
+/// stage slot alone: local memory only, independent of n and nrhs (the same slot potrf()'s
+/// Blocked plan starts with).
 template <Uplo UL, int NB, class Alg, class Scalar> struct tier_info<routine::potrs<UL>, tier::Blocked<NB, Alg>, Scalar> {
     static constexpr int wg_size = detail::kBlockedWg;
     static constexpr int sg_size = 32;
@@ -96,12 +104,39 @@ template <Uplo UL, int NB, class Alg, class Scalar> struct tier_info<routine::po
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int) { return detail::BlockedSolvePlan<Scalar>::make().size; }
 };
+/// @ingroup api_device_lapack_chol
+/// @brief potrs()'s tiers for every `Scalar`: `Blocked<32>`.
 template <Uplo UL, class Scalar> struct tiers<routine::potrs<UL>, Scalar> {
     using type = tier::list<tier::Blocked<32>>;
 };
 
-// B := A^-1 B for the n x nrhs B, A's UL triangle holding potrf's factor (the other triangle not
-// read); returns 0 or -i (see the file head).
+/// @ingroup api_device_lapack_chol
+/// @brief ?POTRS in a kernel: \f$B := A^{-1} B\f$ for one matrix, from potrf()'s factor in the
+/// `UL` triangle of `A`.
+///
+/// `A`'s `UL` triangle holds \f$L\f$ (`Uplo::Lower`, \f$A = L L^H\f$) or \f$U\f$ (`Uplo::Upper`,
+/// \f$A = U^H U\f$); the other triangle is not read and `A` is not written. The n x nrhs `B` is
+/// overwritten with the solution X.
+/// - `tier::Blocked<NB>`: `ex` a `WorkGroup<256, 32>`; any n and nrhs; `A` and `B` in global
+///   memory. The small tiers are not offered yet.
+/// - `tier::upto<N>`: the first tier of `tiers_t<routine::potrs<UL>, T>` that admits N.
+///
+/// Workspace: `ws` is this matrix's slice of `buffer_size<routine::potrs<UL>, Tier, T>(n)`: local
+/// memory only, 16-byte aligned.
+///
+/// @pre Collective: every item of `ex` calls potrs() with the same arguments; `A` and `B` are
+/// visible to every item on entry, and X is visible to every item on return.
+/// @tparam UL    `Uplo::Lower` or `Uplo::Upper`: the triangle that holds the factor
+/// @tparam Tier  `tier::Blocked<NB>` or `tier::upto<N>`
+/// @param[in]     ex  the executor that owns this matrix
+/// @param[in]     A   potrf()'s factor of the n x n matrix
+/// @param[in,out] B   the n x nrhs right-hand sides; overwritten with X
+/// @param[in]     ws  this matrix's workspace slice
+/// @return 0 or a negative argument number, the same on every item of `ex`:
+/// @retval 0   success
+/// @retval -2  `A` is not square
+/// @retval -3  `B` does not have n rows
+/// @retval -4  `ws.local` is null or not 16-byte aligned (checked when n and nrhs are positive)
 template <Uplo UL, class Tier, class Ex, class MA, class MB>
 BATCHLAS_DEVICE_INLINE int potrs(const Ex& ex, const MA& A, const MB& B, const Workspace& ws) {
     using T = typename MA::value_type;

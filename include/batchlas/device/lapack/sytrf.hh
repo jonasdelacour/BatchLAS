@@ -1,11 +1,20 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// LAPACK ?sytrf on device: Bunch-Kaufman L D L^T, written once for the lower
-// form. sytf2 is the unblocked factor; lasyf / lasyf_undo are one panel of the blocked factor
-// and its last loop. Uplo::Upper runs the same steps on the index-reversed matrix (logical i is
-// physical n-1-i): the reversal maps ?sytf2's upper loop onto its lower loop step for step, so
-// the stored factor, D and ipiv are LAPACK's for either uplo. evidence:
-// docs/perf/sytrf.md#sytrf-the-reversal-map
+/// @file
+/// @ingroup api_device_lapack_ldl
+/// @brief ?SYTRF in a kernel: the Bunch-Kaufman \f$A = L D L^T\f$ (`Uplo::Lower`) or
+/// \f$A = U D U^T\f$ (`Uplo::Upper`) factorization of one symmetric indefinite matrix.
+///
+/// The routine is sytrf(); its routine tag is routine::sytrf. Its tiers are `tier::Cta<32>` and
+/// `tier::Blocked<1>` (the unblocked ?SYTF2 in global memory, any n); `tier::Blocked<NB>` with
+/// NB > 1 (LAPACK's blocked loop) is offered but not in `tiers_t`, so name it to use it. The
+/// stored factor, D and ipiv are LAPACK's for either `Uplo`. The complex form is symmetric
+/// (\f$L D L^T\f$, no conjugation), as LAPACK's ?SYTRF. The unblocked kernels sytf2(), lasyf()
+/// and lasyf_undo() are in @ref api_device_lowlevel.
+// Written once for the lower form. sytf2 is the unblocked factor; lasyf / lasyf_undo are one
+// panel of the blocked factor and its last loop. Uplo::Upper runs the same steps on the
+// index-reversed matrix (logical i is physical n-1-i): the reversal maps ?sytf2's upper loop onto
+// its lower loop step for step. evidence: docs/perf/sytrf.md#sytrf-the-reversal-map
 //
 // Every item of the executor calls these with the same arguments. Each pivot decision is item
 // 0's, broadcast (ex.uniform): a decision that differed between items (a NaN compare, items
@@ -153,10 +162,21 @@ template <class D> BATCHLAS_DEVICE_HELPER RevMat<D> w_tile(D* p, std::ptrdiff_t 
 
 }  // namespace detail
 
-// ?sytf2, lower form, on the logical n x n tile S (any matrix operand; Upper passes the reversed
-// view and rev). `piv_out(phys_k, value)` stores LAPACK's ipiv entry (1-based; a 2x2 pivot writes
-// -(p+1) at both of its positions); item 0 calls it. Returns info. am: the pivot search's
-// standalone, Global-fenced ArgMaxSlots (unread on a SubGroup).
+/// @ingroup api_device_lowlevel
+/// @brief ?SYTF2, the unblocked Bunch-Kaufman factorization, lower form, on the logical n x n
+/// tile `S`.
+///
+/// Not covered by the compatibility promise: this is the body of sytrf()'s `tier::Cta` and
+/// `tier::Blocked<1>` and of the host routes. Every item of `ex` calls it with the same
+/// arguments; each pivot decision is item 0's, broadcast to every item.
+/// @param[in]     ex       the executor (whole 32-wide sub-groups)
+/// @param[in,out] S        the tile, any matrix operand; Upper passes the reversed view
+/// @param[in]     n        the order
+/// @param[in]     rev      true: `S` is the index-reversed view of an Upper matrix
+/// @param[in]     am       the pivot search's arg-max slots (unread on a `SubGroup`)
+/// @param[in]     piv_out  `piv_out(phys_k, value)` stores LAPACK's ipiv entry (1-based; a 2 x 2
+///                         pivot writes -(p + 1) at both of its positions); item 0 calls it
+/// @return LAPACK's info: 0, or k > 0 when D(k, k) is exactly zero
 template <class Ex, class MS, class AM, class PivOut>
 inline int sytf2(const Ex& ex, const MS& S, int n, bool rev, AM am, PivOut&& piv_out) {
     using D = typename MS::value_type;
@@ -233,12 +253,28 @@ inline int sytf2(const Ex& ex, const MS& S, int n, bool rev, AM am, PivOut&& piv
     return info;
 }
 
-// ?lasyf, lower form, on the uniform panel [k0, k0 + nb) of the logical matrix, starting at
-// `start` (k0, or k0 + 1 when the previous panel's last \f$2 \times 2\f$ block took column k0). The step at
-// the panel's last column is always taken, so a \f$2 \times 2\f$ block may take column k0 + nb (W's column nb):
-// the panel ends at k0 + nb or k0 + nb + 1, and the trailing update has one uniform rank, nb + 1.
-// W's columns the item did not compute are zero. Returns the end; *info as sytf2's.
-// evidence: docs/perf/sytrf.md#sytrf-the-blocked-route
+/// @ingroup api_device_lowlevel
+/// @brief ?LASYF, lower form: one panel [`k0`, `k0` + `nb`) of the blocked Bunch-Kaufman
+/// factorization of the logical matrix `S`, with the panel's update columns in `W`.
+///
+/// Not covered by the compatibility promise: this is a step of sytrf()'s `tier::Blocked<NB>`
+/// and of the host blocked route. The step at the panel's last column is always taken, so a
+/// 2 x 2 block may take column `k0` + `nb` (W's column `nb`): the panel ends at `k0` + `nb` or
+/// `k0` + `nb` + 1. W's columns the item did not compute are zero. Every item of `ex` calls it
+/// with the same arguments.
+/// @param[in]     ex       the executor
+/// @param[in,out] S        the logical matrix
+/// @param[out]    W        the n x (`nb` + 1) panel workspace
+/// @param[in]     n        the order
+/// @param[in]     k0       the panel's first column
+/// @param[in]     nb       the panel width
+/// @param[in]     start    `k0`, or `k0` + 1 when the previous panel's last 2 x 2 block took `k0`
+/// @param[in]     rev      true: `S` is the index-reversed view of an Upper matrix
+/// @param[in]     am       the pivot search's arg-max slots
+/// @param[in,out] info     LAPACK's info, as sytf2()'s
+/// @param[in]     piv_out  stores LAPACK's ipiv entries, as sytf2()'s
+/// @return the panel's end column
+// The trailing update has one uniform rank, nb + 1. evidence: docs/perf/sytrf.md#sytrf-the-blocked-route
 // The loops stay hand-written: as device ops the W zero-fill unrolled fully at device link and the
 // column update moved loads and FMAs (complex<float> registers 68 -> 128).
 template <class Ex, class MS, class MW, class AM, class PivOut>
@@ -331,9 +367,18 @@ inline int lasyf(const Ex& ex, const MS& S, const MW& W, int n, int k0, int nb, 
     return k;
 }
 
-// ?lasyf's last loop: undo the panel's interchanges on its own finished columns [start, end), in
-// reverse, so they hold ?sytf2's form. `logical_partner(j)` is ipiv's partner of logical column j
-// (rows j / j-1 for a 2 x 2 block ending at j) and its sign. Runs after the trailing update.
+/// @ingroup api_device_lowlevel
+/// @brief ?LASYF's last loop: undo the panel's interchanges on its own finished columns
+/// [`start`, `end`), in reverse, so they hold ?SYTF2's form.
+///
+/// Not covered by the compatibility promise. Runs after the trailing update; every item of `ex`
+/// calls it with the same arguments.
+/// @param[in]     ex               the executor
+/// @param[in,out] S                the logical matrix
+/// @param[in]     start            the panel's first finished column
+/// @param[in]     end              one past its last
+/// @param[in]     logical_partner  `logical_partner(j)`: ipiv's partner of logical column j (rows j
+///                                 and j - 1 for a 2 x 2 block ending at j) and its sign
 template <class Ex, class MS, class PivIn>
 inline void lasyf_undo(const Ex& ex, const MS& S, int start, int end, PivIn&& logical_partner) {
     const int lid = ex.lid(), nl = detail::size_of(ex);
@@ -367,9 +412,12 @@ inline void lasyf_undo(const Ex& ex, const MS& S, int start, int end, PivIn&& lo
 // both and the kernel names stay.
 
 namespace routine {
+/// @ingroup api_device_lapack_ldl
+/// @brief The routine tag of sytrf() for the triangle `UL`: names the routine to `with_tier`,
+/// `launch`, `tier_info`, `tiers_t` and `buffer_size`.
 template <Uplo UL> struct sytrf {
     static_assert(UL == Uplo::Lower || UL == Uplo::Upper, "sytrf: Uplo::Lower or Uplo::Upper");
-    static constexpr const char* name = "sytrf";
+    static constexpr const char* name = "sytrf";  ///< The routine's name, "sytrf".
 };
 }  // namespace routine
 
@@ -569,9 +617,19 @@ BATCHLAS_DEVICE_INLINE int sytrf_run(tier::Blocked<NB>, const Ex& ex, const MA& 
 
 }  // namespace detail
 
+/// @ingroup api_device_lapack_ldl
+/// @brief sytrf()'s tiers for every `Scalar`, smallest first: `Cta<32>`, `Blocked<1>`.
+/// `Blocked<NB>` with NB > 1 is offered but not listed: name it, or pass `with_tier` a
+/// `tier::list` that holds it.
 template <Uplo UL, class Scalar> struct tiers<routine::sytrf<UL>, Scalar> {
     using type = tier::list<tier::Cta<32>, tier::Blocked<1>>;
 };
+/// @ingroup api_device_lapack_ldl
+/// @brief sytrf()'s local-memory tier `tier::Cta<N>`, N <= 32: the logical lower triangle in local
+/// memory, factored by sub-group 0 of a 32-item work-group.
+///
+/// The executor is `WorkGroup<32, 32>`. `admits(n)` is 0 <= n <= N. `buffer_size(n)` is local
+/// memory only: the (N + 1) x N tile.
 template <Uplo UL, int N, class Scalar> struct tier_info<routine::sytrf<UL>, tier::Cta<N>, Scalar> {
     static_assert(N <= 32, "sytrf tier::Cta<N>: N <= 32 (one sub-group factors)");
     static constexpr int wg_size = 32, sg_size = 32;
@@ -580,6 +638,13 @@ template <Uplo UL, int N, class Scalar> struct tier_info<routine::sytrf<UL>, tie
     static constexpr bool admits(int n) { return n >= 0 && n <= N; }
     static constexpr WorkspaceSize buffer_size(int) { return detail::sytrf_cta_plan<N, Scalar>().size; }
 };
+/// @ingroup api_device_lapack_ldl
+/// @brief sytrf()'s unblocked tier `tier::Blocked<1>`: any n, ?SYTF2 in place in global memory
+/// (LAPACK's NB = 1).
+///
+/// The executor is `WorkGroup<256, 32>`; any executor of whole 32-wide sub-groups, at most 256
+/// items, also works. `admits(n)` is n >= 0. `buffer_size(n)` is local memory only and does not
+/// depend on n: the reduction and arg-max scratch.
 template <Uplo UL, class Scalar> struct tier_info<routine::sytrf<UL>, tier::Blocked<1>, Scalar> {
     static constexpr int wg_size = detail::sytrf_wg_max, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
@@ -587,6 +652,14 @@ template <Uplo UL, class Scalar> struct tier_info<routine::sytrf<UL>, tier::Bloc
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int) { return detail::sytrf_wg_plan<real_t<Scalar>>().size; }
 };
+/// @ingroup api_device_lapack_ldl
+/// @brief sytrf()'s blocked tier `tier::Blocked<NB>`, NB > 1: any n, LAPACK's blocked ?SYTRF loop
+/// in one work-group.
+///
+/// ?LASYF panels of NB columns, the trailing update on the in-group level 3, then ?SYTF2 on the
+/// last columns. NB = 31 is the host route's (the update's k = 32). The executor is
+/// `WorkGroup<256, 32>`. `admits(n)` is n >= 0. `buffer_size(n)` has a local part and a global
+/// part per matrix, the n x (NB + 1) panel W.
 template <Uplo UL, int NB, class Scalar> struct tier_info<routine::sytrf<UL>, tier::Blocked<NB>, Scalar> {
     static constexpr int wg_size = detail::sytrf_blocked_wg, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
@@ -595,15 +668,41 @@ template <Uplo UL, int NB, class Scalar> struct tier_info<routine::sytrf<UL>, ti
     static constexpr WorkspaceSize buffer_size(int n) { return detail::sytrf_blocked_plan<NB, Scalar>(n).size; }
 };
 
-// ?sytrf of one matrix inside a kernel: A := its Bunch-Kaufman factor in LAPACK's storage for UL,
-// ipiv (a Vec<int> of n) := LAPACK's ipiv (1-based; a 2 x 2 block negative at both of its rows).
-// Collective: every item of ex calls it with the same arguments, A and ipiv's memory visible to
-// all on entry; both are visible to every item on return. Returns LAPACK's info, the same on
-// every item: 0; k > 0 (D(k, k) is exactly zero; the factor is complete); -2 (A not square, or n
-// outside the tier); -4 (ld < max(1, n)); -1 (ex: a run-time width that is not whole 32-wide
-// sub-groups, or wider than Blocked<1>'s 256). The executor needs sub-group size 32. ws holds
-// buffer_size<routine::sytrf<UL>, Tier, T>(n): its local bytes, and its global bytes for this
-// matrix alone (Blocked<NB>'s W; the caller offsets it per matrix, global_slice).
+/// @ingroup api_device_lapack_ldl
+/// @brief ?SYTRF in a kernel: `A` := its Bunch-Kaufman factor in LAPACK's storage for `UL`, and
+/// `ipiv` := LAPACK's pivots, for one matrix.
+///
+/// Only the `UL` triangle of `A` is read and overwritten. `ipiv` is LAPACK's: 1-based, a 1 x 1
+/// pivot positive, a 2 x 2 block negative at both of its rows. The executor needs sub-group
+/// size 32 and must be whole 32-wide sub-groups.
+/// - `tier::Cta<N>`, N <= 32: `ex` a `WorkGroup<32, 32>`; n <= N; the lower triangle is factored
+///   in local memory by sub-group 0.
+/// - `tier::Blocked<1>`: any n; ?SYTF2 in place in global memory; `ex` at most 256 items.
+/// - `tier::Blocked<NB>`, NB > 1: any n; LAPACK's blocked loop; `ex` a `WorkGroup<256, 32>`;
+///   W in the global workspace. Not in `tiers_t`.
+/// - `tier::upto<N>`: the first tier of `tiers_t<routine::sytrf<UL>, T>` that admits N.
+///
+/// Workspace: `ws` holds `buffer_size<routine::sytrf<UL>, Tier, T>(n)`: its local bytes, and its
+/// global bytes for this matrix alone (`tier::Blocked<NB>`'s W; the caller offsets it per matrix,
+/// `global_slice`).
+///
+/// @pre Collective: every item of `ex` calls sytrf() with the same arguments; `A` and `ipiv`'s
+/// memory visible to every item on entry. Both are visible to every item on return.
+/// @tparam UL    `Uplo::Lower` or `Uplo::Upper`: the triangle to factor
+/// @tparam Tier  `tier::Cta<N>`, `tier::Blocked<NB>` or `tier::upto<N>`
+/// @param[in]     ex    the executor that owns this matrix
+/// @param[in,out] A     the n x n symmetric matrix; its `UL` triangle is overwritten with the
+///                      factor
+/// @param[out]    ipiv  the n pivots (a `Vec<int>`)
+/// @param[in]     ws    this matrix's workspace slice
+/// @return LAPACK's info, the same on every item of `ex`. The negative values are LAPACK's
+/// argument numbers (N is 2, LDA is 4), not positions in this call:
+/// @retval 0   success
+/// @retval k   (k > 0) D(k, k) is exactly zero: the factor is complete, but D is singular
+/// @retval -1  `ex` has a run-time width that is not whole 32-wide sub-groups, or is wider than
+///             `tier::Blocked<1>`'s 256 items
+/// @retval -2  `A` is not square, or n is outside the tier
+/// @retval -4  `A`'s leading dimension is less than max(1, n)
 template <Uplo UL, class Tier, class Ex, class MA, class PV>
 BATCHLAS_DEVICE_INLINE int sytrf(const Ex& ex, const MA& A, const PV& ipiv, const Workspace& ws) {
     using D = std::remove_cv_t<typename MA::value_type>;

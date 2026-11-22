@@ -1,6 +1,16 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Every LAPACK-level device op (include/batchlas/device/lapack/*.hh) over the core umbrella.
+/// @file
+/// @ingroup api_device
+/// @brief Every LAPACK-level device routine in one include, on top of `<batchlas/device.hh>`.
+///
+/// Including this header gives every routine of @ref api_device_lapack_chol,
+/// @ref api_device_lapack_lu, @ref api_device_lapack_ldl, @ref api_device_lapack_qr,
+/// @ref api_device_lapack_eig and @ref api_device_lapack_svd, together with the core
+/// (`<batchlas/device.hh>`) and the in-group level 3 that the blocked tiers use
+/// (`<batchlas/device/level3/group.hh>`). To compile less, include one routine's header
+/// instead, e.g. `<batchlas/device/lapack/potrf.hh>`; each one includes what it needs.
+/// `<batchlas/device/sparse.hh>` is not included.
 
 #include <batchlas/device.hh>
 

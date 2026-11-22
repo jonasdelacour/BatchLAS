@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// LAPACK xPOTRI, xTRTRI and xLAUUM inside a kernel. Public entry:
-//   int potri<UL, Tier>(ex, A, ws)        A's UL triangle: potrf's factor -> that of A^-1
-//   int trtri<UL, DG, Tier>(ex, A, ws)    the UL triangle T -> T^-1 (DG = Unit: diagonal implied)
-//   int lauum<UL, Tier>(ex, A, ws)        L -> L^H L (Lower), U -> U U^H (Upper), in its triangle
-//   WorkspaceSize buffer_size<routine::potri<UL> | trtri<UL, DG> | lauum<UL>, Tier, T>(n)
-//   tier::Blocked<NB>  ex = WorkGroup<256, 32>, any n: LAPACK's blocked trtri and lauum over
-//                      NB-wide blocks on the in-group L3 (trsm, trmm, gemm, herk); ws.local = the
-//                      L3 stages, ws.global = an n x NB panel of T per matrix (trmm is out of place)
-// The CTA tier (the host potri cta body) lands with WP7. Every op reads and writes only the UL
-// triangle; the diagonal of a potri / lauum result is real. Collective; inputs visible on entry,
-// results visible on return. info (potri, trtri NonUnit) = i > 0: the factor's diagonal entry i is
-// exactly zero and A is unchanged; -2: A not square; -3: ws.local or ws.global missing or misaligned.
+/// @file
+/// @ingroup api_device_lapack_chol
+/// @brief ?POTRI, ?TRTRI and ?LAUUM in a kernel: the inverse of a Hermitian positive definite
+/// matrix from potrf()'s factor, and the two steps it is made of.
+///
+/// The routines are potri(), trtri() (the inverse of a triangular matrix) and lauum() (the
+/// product of a triangle with its conjugate transpose); their routine tags are routine::potri,
+/// routine::trtri and routine::lauum. Each has one tier, `tier::Blocked<32>`: LAPACK's blocked
+/// trtri and lauum over NB-wide blocks on the in-group level 3 (trsm, trmm, gemm, herk). Every
+/// routine here reads and writes only the `UL` triangle.
+// The CTA tier (the host potri cta body) lands with WP7.
 
 #include <cstddef>
 #include <type_traits>
@@ -174,21 +173,35 @@ BATCHLAS_DEVICE_INLINE int potri_blocked_op(const WorkGroup<WG, SG>& ex, const M
 }  // namespace detail
 
 namespace routine {
+/// @ingroup api_device_lapack_chol
+/// @brief The routine tag of potri() for the triangle `UL`: names the routine to `with_tier`,
+/// `launch`, `tier_info`, `tiers_t` and `buffer_size`.
 template <Uplo UL> struct potri {
-    static constexpr const char* name = "potri";
-    static constexpr Uplo uplo = UL;
+    static constexpr const char* name = "potri";  ///< The routine's name, "potri".
+    static constexpr Uplo uplo = UL;              ///< The triangle that holds the factor.
 };
+/// @ingroup api_device_lapack_chol
+/// @brief The routine tag of trtri() for the triangle `UL` and diagonal `DG`.
 template <Uplo UL, Diag DG> struct trtri {
-    static constexpr const char* name = "trtri";
-    static constexpr Uplo uplo = UL;
-    static constexpr Diag diag = DG;
+    static constexpr const char* name = "trtri";  ///< The routine's name, "trtri".
+    static constexpr Uplo uplo = UL;              ///< The triangle that is inverted.
+    static constexpr Diag diag = DG;              ///< `Diag::Unit`: the diagonal is implied.
 };
+/// @ingroup api_device_lapack_chol
+/// @brief The routine tag of lauum() for the triangle `UL`.
 template <Uplo UL> struct lauum {
-    static constexpr const char* name = "lauum";
-    static constexpr Uplo uplo = UL;
+    static constexpr const char* name = "lauum";  ///< The routine's name, "lauum".
+    static constexpr Uplo uplo = UL;              ///< The triangle that is read and written.
 };
 }  // namespace routine
 
+/// @ingroup api_device_lapack_chol
+/// @brief potri()'s blocked tier `tier::Blocked<NB>`: any n, one matrix per 256-item work-group,
+/// `A` in global memory.
+///
+/// The executor is `WorkGroup<256, 32>`. `admits(n)` is n >= 0. `buffer_size(n)` has a local
+/// part (the level 3 stages, independent of n) and a global part per matrix (an n x NB panel:
+/// the level 3 trmm works out of place).
 template <Uplo UL, int NB, class Alg, class Scalar> struct tier_info<routine::potri<UL>, tier::Blocked<NB, Alg>, Scalar> {
     static constexpr int wg_size = detail::kBlockedWg;
     static constexpr int sg_size = 32;
@@ -197,6 +210,9 @@ template <Uplo UL, int NB, class Alg, class Scalar> struct tier_info<routine::po
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int n) { return detail::BlockedPanelPlan<Scalar>::make(n, NB).size; }
 };
+/// @ingroup api_device_lapack_chol
+/// @brief trtri()'s blocked tier `tier::Blocked<NB>`: as potri()'s, the same executor and the
+/// same local and global workspace.
 template <Uplo UL, Diag DG, int NB, class Alg, class Scalar> struct tier_info<routine::trtri<UL, DG>, tier::Blocked<NB, Alg>, Scalar> {
     static constexpr int wg_size = detail::kBlockedWg;
     static constexpr int sg_size = 32;
@@ -205,6 +221,9 @@ template <Uplo UL, Diag DG, int NB, class Alg, class Scalar> struct tier_info<ro
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int n) { return detail::BlockedPanelPlan<Scalar>::make(n, NB).size; }
 };
+/// @ingroup api_device_lapack_chol
+/// @brief lauum()'s blocked tier `tier::Blocked<NB>`: as potri()'s, the same executor and the
+/// same local and global workspace.
 template <Uplo UL, int NB, class Alg, class Scalar> struct tier_info<routine::lauum<UL>, tier::Blocked<NB, Alg>, Scalar> {
     static constexpr int wg_size = detail::kBlockedWg;
     static constexpr int sg_size = 32;
@@ -213,18 +232,49 @@ template <Uplo UL, int NB, class Alg, class Scalar> struct tier_info<routine::la
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int n) { return detail::BlockedPanelPlan<Scalar>::make(n, NB).size; }
 };
+/// @ingroup api_device_lapack_chol
+/// @brief potri()'s tiers for every `Scalar`: `Blocked<32>`.
 template <Uplo UL, class Scalar> struct tiers<routine::potri<UL>, Scalar> {
     using type = tier::list<tier::Blocked<32>>;
 };
+/// @ingroup api_device_lapack_chol
+/// @brief trtri()'s tiers for every `Scalar`: `Blocked<32>`.
 template <Uplo UL, Diag DG, class Scalar> struct tiers<routine::trtri<UL, DG>, Scalar> {
     using type = tier::list<tier::Blocked<32>>;
 };
+/// @ingroup api_device_lapack_chol
+/// @brief lauum()'s tiers for every `Scalar`: `Blocked<32>`.
 template <Uplo UL, class Scalar> struct tiers<routine::lauum<UL>, Scalar> {
     using type = tier::list<tier::Blocked<32>>;
 };
 
-// A's UL triangle, potrf's factor of the Hermitian positive definite A, := that of A^-1 (the other
-// triangle neither read nor written); returns info (see the file head).
+/// @ingroup api_device_lapack_chol
+/// @brief ?POTRI in a kernel: the `UL` triangle of `A`, potrf()'s factor of a Hermitian positive
+/// definite matrix, := the same triangle of \f$A^{-1}\f$.
+///
+/// The other triangle is neither read nor written, and the result's diagonal is real. potri() is
+/// trtri() of the factor followed by lauum() of the inverted factor. When info > 0, `A` is
+/// unchanged.
+/// - `tier::Blocked<NB>`: `ex` a `WorkGroup<256, 32>`; any n; `A` in global memory. The local-memory
+///   tier is not offered yet.
+/// - `tier::upto<N>`: the first tier of `tiers_t<routine::potri<UL>, T>` that admits N.
+///
+/// Workspace: `ws` is this matrix's slice of `buffer_size<routine::potri<UL>, Tier, T>(n)`: a
+/// local part and a global part (an n x NB panel), both 16-byte aligned.
+///
+/// @pre Collective: every item of `ex` calls potri() with the same arguments; `A` is visible to
+/// every item on entry and on return.
+/// @tparam UL    `Uplo::Lower` or `Uplo::Upper`: the triangle that holds the factor
+/// @tparam Tier  `tier::Blocked<NB>` or `tier::upto<N>`
+/// @param[in]     ex  the executor that owns this matrix
+/// @param[in,out] A   the n x n factor; its `UL` triangle is overwritten with that of the inverse
+/// @param[in]     ws  this matrix's workspace slice
+/// @return LAPACK's info, the same on every item of `ex`:
+/// @retval 0   success
+/// @retval i   (i > 0) the factor's diagonal entry i is exactly zero, so A is singular; `A` is
+///             unchanged
+/// @retval -2  `A` is not square
+/// @retval -3  `ws.local` or `ws.global` is null or not 16-byte aligned
 template <Uplo UL, class Tier, class Ex, class MA> BATCHLAS_DEVICE_INLINE int potri(const Ex& ex, const MA& A, const Workspace& ws) {
     using T = typename MA::value_type;
     using Tr = resolve_tier_t<routine::potri<UL>, T, Tier>;
@@ -232,7 +282,32 @@ template <Uplo UL, class Tier, class Ex, class MA> BATCHLAS_DEVICE_INLINE int po
     return detail::potri_blocked_op<detail::BlockedChain::Potri, UL, Diag::NonUnit, Tr::nb, typename Tr::alg_type>(ex, A, ws);
 }
 
-// A's UL triangle := its inverse; DG = Unit never reads or writes the diagonal.
+/// @ingroup api_device_lapack_chol
+/// @brief ?TRTRI in a kernel: the `UL` triangle T of `A` := \f$T^{-1}\f$, for one matrix.
+///
+/// The other triangle is neither read nor written; with `DG` = `Diag::Unit` the diagonal is
+/// taken as one and is neither read nor written either. With `Diag::NonUnit`, an exactly zero
+/// diagonal entry is reported in info and `A` is left unchanged.
+/// - `tier::Blocked<NB>`: `ex` a `WorkGroup<256, 32>`; any n; `A` in global memory.
+/// - `tier::upto<N>`: the first tier of `tiers_t<routine::trtri<UL, DG>, T>` that admits N.
+///
+/// Workspace: `ws` is this matrix's slice of `buffer_size<routine::trtri<UL, DG>, Tier, T>(n)`: a
+/// local part and a global part (an n x NB panel), both 16-byte aligned.
+///
+/// @pre Collective: every item of `ex` calls trtri() with the same arguments; `A` is visible to
+/// every item on entry and on return.
+/// @tparam UL    `Uplo::Lower` or `Uplo::Upper`: the triangle to invert
+/// @tparam DG    `Diag::NonUnit`, or `Diag::Unit` for a unit triangle (diagonal not stored)
+/// @tparam Tier  `tier::Blocked<NB>` or `tier::upto<N>`
+/// @param[in]     ex  the executor that owns this matrix
+/// @param[in,out] A   the n x n matrix; its `UL` triangle is overwritten with the inverse
+/// @param[in]     ws  this matrix's workspace slice
+/// @return LAPACK's info, the same on every item of `ex`:
+/// @retval 0   success
+/// @retval i   (i > 0, `Diag::NonUnit` only) the diagonal entry i is exactly zero; `A` is
+///             unchanged
+/// @retval -2  `A` is not square
+/// @retval -3  `ws.local` or `ws.global` is null or not 16-byte aligned
 template <Uplo UL, Diag DG, class Tier, class Ex, class MA> BATCHLAS_DEVICE_INLINE int trtri(const Ex& ex, const MA& A, const Workspace& ws) {
     using T = typename MA::value_type;
     using Tr = resolve_tier_t<routine::trtri<UL, DG>, T, Tier>;
@@ -240,7 +315,28 @@ template <Uplo UL, Diag DG, class Tier, class Ex, class MA> BATCHLAS_DEVICE_INLI
     return detail::potri_blocked_op<detail::BlockedChain::Trtri, UL, DG, Tr::nb, typename Tr::alg_type>(ex, A, ws);
 }
 
-// A's UL triangle := L^H L (Lower) or U U^H (Upper) of that triangle; returns 0 or -i.
+/// @ingroup api_device_lapack_chol
+/// @brief ?LAUUM in a kernel: the `UL` triangle of `A` := \f$L^H L\f$ (`Uplo::Lower`, L that
+/// triangle) or \f$U U^H\f$ (`Uplo::Upper`), for one matrix.
+///
+/// The other triangle is neither read nor written, and the result's diagonal is real.
+/// - `tier::Blocked<NB>`: `ex` a `WorkGroup<256, 32>`; any n; `A` in global memory.
+/// - `tier::upto<N>`: the first tier of `tiers_t<routine::lauum<UL>, T>` that admits N.
+///
+/// Workspace: `ws` is this matrix's slice of `buffer_size<routine::lauum<UL>, Tier, T>(n)`: a
+/// local part and a global part (an n x NB panel), both 16-byte aligned.
+///
+/// @pre Collective: every item of `ex` calls lauum() with the same arguments; `A` is visible to
+/// every item on entry and on return.
+/// @tparam UL    `Uplo::Lower` or `Uplo::Upper`: the triangle to read and overwrite
+/// @tparam Tier  `tier::Blocked<NB>` or `tier::upto<N>`
+/// @param[in]     ex  the executor that owns this matrix
+/// @param[in,out] A   the n x n matrix; its `UL` triangle is overwritten with the product
+/// @param[in]     ws  this matrix's workspace slice
+/// @return 0 or a negative argument number, the same on every item of `ex`:
+/// @retval 0   success
+/// @retval -2  `A` is not square
+/// @retval -3  `ws.local` or `ws.global` is null or not 16-byte aligned
 template <Uplo UL, class Tier, class Ex, class MA> BATCHLAS_DEVICE_INLINE int lauum(const Ex& ex, const MA& A, const Workspace& ws) {
     using T = typename MA::value_type;
     using Tr = resolve_tier_t<routine::lauum<UL>, T, Tier>;
