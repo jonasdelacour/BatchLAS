@@ -53,9 +53,9 @@ BATCHLAS_DEVICE_HELPER void laed2_merge_vector(const Ex& ex, const Z& z, int m, 
 /// @brief xLAED2: the deflation of the n-pole merge \f$\mathrm{diag}(D) + \rho z z^T\f$, D sorted,
 /// on a work-group.
 ///
-/// Givens rotations merge poles closer than the tolerance (z(j) becomes 0 and the two
+/// %Givens rotations merge poles closer than the tolerance (z(j) becomes 0 and the two
 /// eigenvector columns are rotated), then every \f$|\rho z_k|\f$ below it deflates. The tolerance
-/// is LAPACK's absolute \f$8 \epsilon \max(\|D\|_\infty, \|z\|_\infty)\f$, taken before the Givens
+/// is LAPACK's absolute \f$8 \epsilon \max(\|D\|_\infty, \|z\|_\infty)\f$, taken before the %Givens
 /// loop so that proximity deflation uses it too. COLLECTIVE over `ex`, with no trailing barrier:
 /// the caller syncs before it reads the outputs. Every operand it writes is a callable
 /// `(i) -> T&`.

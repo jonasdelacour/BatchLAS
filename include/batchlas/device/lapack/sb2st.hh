@@ -5,7 +5,7 @@
 /// Hermitian matrix in lower band storage to real tridiagonal form by bulge chasing, inside a
 /// kernel.
 ///
-/// `sb2st<UL, Tier>` runs xSBTRD / xHBTRD's Givens chase on one `SgpPartition<P>` per matrix, any
+/// `sb2st<UL, Tier>` runs xSBTRD / xHBTRD's %Givens chase on one `SgpPartition<P>` per matrix, any
 /// n and any kd >= 0; the band is overwritten. Tiers: `tier::Cta<N>` (band and rotation scratch in
 /// local memory, n <= N) and `tier::Blocked<NB>` (the band chased in place, scratch in the
 /// caller's global slice; NB is unused, a band chase has no panel). Size the workspace with
@@ -178,7 +178,7 @@ BATCHLAS_DEVICE_INLINE void hemv_band(const Ex& ex, AS alpha_, const MA& a, cons
 
 }  // namespace detail
 
-/// @brief xSBTRD / xHBTRD's Givens bulge chase on a lower band, kd >= 2, for one matrix on one
+/// @brief xSBTRD / xHBTRD's %Givens bulge chase on a lower band, kd >= 2, for one matrix on one
 /// sub-group partition.
 ///
 /// On return the band holds the tridiagonal in rows 0 and 1; for complex data the off-diagonal
@@ -697,7 +697,7 @@ template <Uplo UL, int KDMax, class Scalar> struct tiers<routine::sb2st<UL, KDMa
 };
 
 /// @brief xSBTRD / xHBTRD on one symmetric or Hermitian matrix in lower band storage inside a
-/// kernel: the real tridiagonal (d, e) by a Givens bulge chase.
+/// kernel: the real tridiagonal (d, e) by a %Givens bulge chase.
 ///
 /// n = `ab.cols()`. ab is overwritten: rows 0 and 1 hold the tridiagonal (made real for complex
 /// data), the rest is scratch. tau(0..n-2) is set to 0, since the chase keeps no reflectors.
