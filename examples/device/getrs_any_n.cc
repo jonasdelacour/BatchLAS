@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// docs/design/device-la.md#device-la-shortest-correct-calls, getrs: a user kernel that solves
+// docs/guide/device-api.md#device-guide-example-getrs: a user kernel that solves
 // A X = B for a batch of n x n matrices, any n, by device::getrf then device::getrs in one kernel
 // (getrs's tiers share getrf's executor and local plan). Exit 0 when every residual
 // max |A X - B| / (n max|A| max|X|) is small and every info is 0, else 1.
@@ -30,6 +30,7 @@ int run(sycl::queue& q, int n, int nrhs, int batch) {
     q.copy(ha.data(), a, ha.size()).wait();
     q.copy(hb.data(), x, hb.size()).wait();
 
+    // [device-guide-getrs] begin: the frame docs/guide/device-api.md quotes
     using R = device::routine::getrs<Transpose::NoTrans>;
     device::with_tier<R, T>(q.get_device(), n, [&]<class Tier>(Tier) {
         using L = device::launch<R, Tier, T>;
@@ -51,6 +52,7 @@ int run(sycl::queue& q, int n, int nrhs, int batch) {
          }).wait_and_throw();
         if (gws) sycl::free(gws, q);
     });
+    // [device-guide-getrs] end
 
     std::vector<T> hx(hb.size());
     std::vector<int> hinfo(batch);

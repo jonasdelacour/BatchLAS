@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// docs/design/device-la.md#device-la-shortest-correct-calls, syev: a user kernel that computes the
+// docs/guide/device-api.md#device-guide-example-syev: a user kernel that computes the
 // eigenvalues (ascending) and eigenvectors of a batch of n x n symmetric matrices with
 // device::syev, any n: Cta<N> runs one matrix per SgpPartition<N> (32 / N per work-group),
 // Blocked<32> one per WorkGroup<256>. Exit 0 when every max |A v - w v| / (n max|A|) and

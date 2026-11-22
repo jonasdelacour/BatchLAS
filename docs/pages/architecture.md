@@ -26,7 +26,7 @@ Design records: decisions and their rationale. Measured evidence is in @ref perf
 | @subpage design_environment "Environment" | Every `BATCHLAS_*` variable the library reads. |
 | @subpage design_symbol_visibility "Symbol visibility" | What `BATCHLAS_API` must cover. |
 | @subpage design_runtime_internals "Runtime internals" | Queue implementation, settings snapshot, embedded tables, template instantiation. |
-| @subpage design_device_la "Device LA" | The public in-kernel BLAS/LAPACK API reference (`batchlas::device`): the launch frame, the conventions, the four shortest calls as checked programs, executors, tiers and `with_tier`, workspace, info, every public signature (generated); why v1 cost performance. |
+| @subpage design_device_la "Device API design record" | The rules behind the in-kernel `batchlas::device` API, the SASS-parity gate, migration status and open debts. User guide: @ref guide_device_api; measurements: @ref perf_device_la. |
 | @subpage design_verification "Verification library" | `batchlas::verify`: the inputs, references, residuals and tolerances shared by tests, benchmarks and the tuner. |
 
 ## Operations

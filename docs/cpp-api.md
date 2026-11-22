@@ -109,7 +109,7 @@ neither variable.
 
 ### The device API without building BatchLAS
 
-The in-kernel API (`<batchlas/device.hh>`, `<batchlas/device/...>`, @ref design_device_la) is
+The in-kernel API (`<batchlas/device.hh>`, `<batchlas/device/...>`, @ref guide_device_api) is
 header-only. Point the compiler at a checkout and add your usual SYCL flags; nothing is
 configured, installed or linked:
 
@@ -164,8 +164,9 @@ the promise is kept by review.
   functions in [Interop](#interop-with-cuda-and-with-your-own-sycl) below).
 - `<batchlas/config.hh>`: including it, and the three override macros in
   [the header-only table](#the-device-api-without-building-batchlas).
-- The device API, `<batchlas/device.hh>` and `<batchlas/device/...>` (the documented signatures,
-  not `device/detail/`).
+- The device API, `<batchlas/device.hh>` and `<batchlas/device/...>`: the members of the
+  @ref api_device groups except @ref api_device_lowlevel (not `device/detail/` and not
+  `batchlas::device::detail`).
 - The names the Python module `batchlas` and `batchlas.linalg` export.
 
 **Not covered** (may change in any release, minor or patch):

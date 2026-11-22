@@ -28,6 +28,7 @@ Every entry point enqueues and returns an Event. Matrices are column-major in de
 (USM) memory. Use one Queue per thread. The full contract is in @ref guide_cpp_api.
 
 Supported operations, backends and install: the @ref md__8github_2README "project README".
+BLAS and LAPACK inside your own SYCL kernel, header-only: @ref guide_device_api.
 
 ## Performance against cuSOLVER
 
