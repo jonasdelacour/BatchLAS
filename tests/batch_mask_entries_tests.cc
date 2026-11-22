@@ -169,7 +169,9 @@ struct Entry {
     std::function<void(Pool<Scalar>&)> prepare{};  ///< unmasked setup run before the snapshot (honouring checks)
     std::vector<std::string> packed{};  ///< buffers passed as a flat span, items packed_stride elements apart (wspan)
     std::size_t packed_stride = kN;     ///< syevx's W: items neigs apart
-    bool active_exact = true;  ///< false: active items are not compared here; syevx_mask_tests bounds them
+    /// Buffers whose ACTIVE items verify_active bounds to a tolerance instead of a byte compare.
+    std::vector<std::string> active_close{};
+    std::function<void(Pool<Scalar>& got, Pool<Scalar>& want, const std::vector<int>& active)> verify_active{};
 };
 
 // The host backend's natives yield to its BLAS, which cannot skip an item. A vendor-free host
@@ -272,6 +274,8 @@ void expect_honoured(Queue& q, const Entry<Scalar>& entry, Span<const std::uint8
         for (std::size_t i = 0; i < bufs.size(); ++i) {
             const std::string name = std::get<0>(bufs[i]);
             const bool packed = std::find(entry.packed.begin(), entry.packed.end(), name) != entry.packed.end();
+            const bool close =
+                std::find(entry.active_close.begin(), entry.active_close.end(), name) != entry.active_close.end();
             // Every buffer holds kBatch equal items; a packed one kBatch items of packed_stride elements, then a tail.
             const std::size_t item =
                 packed ? entry.packed_stride * (after[i].size() / Pool<Scalar>::vec_len()) : after[i].size() / kBatch;
@@ -279,12 +283,16 @@ void expect_honoured(Queue& q, const Entry<Scalar>& entry, Span<const std::uint8
                 << name << " written past its last item";
             for (int b = 0; b < kBatch; ++b) {
                 const bool active = kAlternating[std::size_t(b)] != 0;
-                if (active && !entry.active_exact) continue;
+                if (active && close) continue;
                 const auto& ref = active ? want[i] : before[i];
                 EXPECT_EQ(std::memcmp(after[i].data() + b * item, ref.data() + b * item, item), 0)
                     << name << " item " << b << (active ? " differs from the unmasked call" : " was written");
             }
         }
+        std::vector<int> active;
+        for (int b = 0; b < kBatch; ++b)
+            if (kAlternating[std::size_t(b)] != 0) active.push_back(b);
+        if (entry.verify_active) entry.verify_active(p, plain, active);
     }
 }
 
@@ -590,10 +598,31 @@ std::vector<Entry<Scalar>> host_direct_entries() {
             syevx_filtered<B, Scalar, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z), SyevxParams<Scalar>());
         });
         // Its batch filter degree folds over the active items, so they need not match the unmasked
-        // call bit for bit (complex<float> does not). Only its inactive items are checked here;
-        // syevx_mask_tests' FilteredLeavesInactiveItemsUntouched bounds the active W, m and info to
-        // the solver's tolerance against the unmasked call.
-        out.back().active_exact = false;
+        // call bit for bit (complex<float> does not): their W and Z are bounded instead, every
+        // other buffer byte-compared. W against the unmasked call's; the two Z columns as
+        // eigenpairs of A (A itself byte-compared); Z past those columns untouched.
+        out.back().active_close = {"w", "Z"};
+        out.back().verify_active = [](P& got, P& want, const std::vector<int>& active) {
+            constexpr int kNeigs = 2;
+            double dw = 0;
+            for (const int b : active)
+                for (int i = 0; i < kNeigs; ++i) {
+                    const std::size_t e = std::size_t(b) * kNeigs + i;
+                    dw = std::max(dw, double(std::abs(got.w[e] - want.w[e])) / std::max(1.0, double(std::abs(want.w[e]))));
+                }
+            EXPECT_VERIFY(Scalar, verify::Check::values, kN, dw) << "active W against the unmasked call";
+            const MV<Scalar> A(got.a.data(), kN, kN, kLd, kStride, kBatch), Z(got.z.data(), kN, kNeigs, kLd, kStride, kBatch);
+            const VectorView<R> w(got.w.data(), kNeigs, kBatch, 1, kNeigs);
+            EXPECT_VERIFY(Scalar, verify::Check::eigen_residual, kN, MV<Scalar>::eigen_residual(got.q, A, Z, w, active));
+            EXPECT_VERIFY(Scalar, verify::Check::orthogonality, kNeigs, MV<Scalar>::orthogonality(got.q, Z, active));
+            int outside = 0;
+            for (const int b : active)
+                for (int k = 0; k < kStride; ++k) {
+                    const std::size_t at = std::size_t(b) * kStride + k;
+                    if (k / kLd >= kNeigs || k % kLd >= kN) outside += std::memcmp(&got.z[at], &want.z[at], sizeof(Scalar)) != 0;
+                }
+            EXPECT_EQ(outside, 0) << "active Z written outside its n x neigs block";
+        };
     }
     return out;
 }

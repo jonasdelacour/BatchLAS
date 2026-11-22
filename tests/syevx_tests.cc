@@ -477,10 +477,11 @@ TEST_P(SyevxDirectTest, MatchesVendorSyevAndProducesValidEigenpairs) {
     UnifiedVector<float> W(neig * batch);
     Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
 
-    auto ws = UnifiedVector<std::byte>(syevx_buffer_size(
-        *ctx, A, W.to_span(), neig, JobType::EigenVectors, V, params));
-    (void)syevx(
-        *ctx, A, W.to_span(), neig, ws, JobType::EigenVectors, V, params);
+    // 8 bytes past the USM base, below every device alignment: the size must cover the padding.
+    const size_t ws_bytes = syevx_buffer_size(*ctx, A, W.to_span(), neig, JobType::EigenVectors, V, params);
+    auto ws = UnifiedVector<std::byte>(ws_bytes + 8, std::byte{0x01});
+    (void)syevx(*ctx, A, W.to_span(), neig, Span<std::byte>(ws.data() + 8, ws_bytes), JobType::EigenVectors, V,
+                params);
     ctx->wait();
 
     SYEVX_REQUIRE_LAPACKE();
@@ -710,10 +711,10 @@ void check_filtered(int n, int batch, int neig, bool find_largest, bool want_vec
     Matrix<float, MatrixFormat::Dense> V(n, neig, batch);
     auto V_view = want_vectors ? V.view() : MatrixView<float, MatrixFormat::Dense>();
 
-    auto ws = UnifiedVector<std::byte>(syevx_buffer_size(
-        *ctx, A, W.to_span(), neig, jobz, V_view, params));
-    (void)syevx(
-        *ctx, A, W.to_span(), neig, ws, jobz, V_view, params);
+    // 8 bytes past the USM base, below every device alignment: the size must cover the padding.
+    const size_t ws_bytes = syevx_buffer_size(*ctx, A, W.to_span(), neig, jobz, V_view, params);
+    auto ws = UnifiedVector<std::byte>(ws_bytes + 8, std::byte{0x01});
+    (void)syevx(*ctx, A, W.to_span(), neig, Span<std::byte>(ws.data() + 8, ws_bytes), jobz, V_view, params);
     ctx->wait();
 
     const auto ref = lapacke_spectrum(A);

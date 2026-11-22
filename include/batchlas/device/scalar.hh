@@ -344,6 +344,10 @@ template <class Conv, class Scalar> BATCHLAS_DEVICE_HELPER LarfgScalars<Scalar> 
         out.tau = (out.beta - alpha) / out.beta;
     }
     out.scale = Scalar(1) / (alpha - out.beta);
+    // |alpha - beta| below 1 / realmax (every entry subnormal) has no finite reciprocal, and
+    // x * scale would be inf or NaN. Identity, as an unscaled ||x|| (x^2 underflows to 0) or a
+    // flush-to-zero device gives: a scaled ||x|| keeps such a column's norm nonzero.
+    if (!Arith<Scalar>::isfinite(out.scale)) return {Scalar(0), alpha, Scalar(0), true, true};
     out.identity = false;
     return out;
 }

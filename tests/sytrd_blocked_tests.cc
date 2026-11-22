@@ -251,6 +251,41 @@ TYPED_TEST(SytrdBlockedTest, LatrdPanelNormSurvivesSquaresBelowTheNormalRange) {
     }
 }
 
+// A rank-one c * ones(n): past the first reflector every column is rounding noise, and each
+// panel shrinks it by about eps, so by n = 64 at nb = 8 the float columns are all subnormal.
+// A scaled ||x|| keeps their norm nonzero, and 1 / (alpha - beta) then overflowed: inf scale,
+// NaN tridiagonal (NormTest.SpectralOutOfOrder, d from i = 44 on). Both latrd paths pinned;
+// item b holds c = b + 1, padded storage. Every d and e finite, the spectrum {n c, 0, ...}.
+TYPED_TEST(SytrdBlockedTest, RankOneNoiseDecaysThroughSubnormals) {
+    using Real = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    const int n = 64, batch = 4, nb = 8;
+    for (const char* latrd : {"legacy", "grid"}) {
+        ScopedEnvVar impl("BATCHLAS_LATRD_IMPL", latrd);
+        SCOPED_TRACE(::testing::Message() << "latrd " << latrd);
+        Matrix<Real, MatrixFormat::Dense> A0 = test_support::padded<Real>(n, n, batch);
+        Matrix<Real, MatrixFormat::Dense> A = test_support::padded<Real>(n, n, batch);
+        for (int b = 0; b < batch; ++b)
+            for (int c = 0; c < n; ++c)
+                for (int r = 0; r < n; ++r) {
+                    const std::size_t at = std::size_t(b) * A0.stride() + std::size_t(c) * A0.ld() + r;
+                    A0.data_ptr()[at] = A.data_ptr()[at] = Real(b + 1);
+                }
+        Vector<Real> d(n, batch);
+        Vector<Real> e(n - 1, batch);
+        Vector<Real> tau(n - 1, batch);
+        const size_t ws_bytes = sytrd_blocked_buffer_size<B, Real>(*this->ctx, A, d, e, tau, Uplo::Lower, nb);
+        UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
+        sytrd_blocked<B, Real>(*this->ctx, A, d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
+        int nonfinite = 0;
+        for (int b = 0; b < batch; ++b)
+            for (int i = 0; i < n; ++i)
+                nonfinite += !std::isfinite(d(i, b)) + (i < n - 1 && !std::isfinite(e(i, b)));
+        EXPECT_EQ(nonfinite, 0) << "non-finite d or e";
+        expect_spectrum<Real>(A0, d, e, std::nullopt, A0.all_items());
+    }
+}
+
 #if BATCHLAS_HAS_CUDA_BACKEND
 TEST(SytrdBlockedFloatCudaTest, Syr2kTrailingUpdateMatchesNetlibReference) {
     using Real = float;
