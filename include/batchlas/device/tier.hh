@@ -301,7 +301,7 @@ template <class Routine, class Scalar, class F, class... Tiers> bool visit_first
 /// A tier admits n when its bound and tier_info's `admits(n)` hold, its `per_group` local slices
 /// fit the device's local memory less the per-item launch scratch, its `wg_size` fits the maximum
 /// work-group size, its `sg_size` is one of the device's sub-group sizes, and, when the real type
-/// of Scalar (`Arith<Scalar>::real_t`) is double, so for double and `std::complex<double>`, the
+/// of %Scalar (`Arith<Scalar>::real_t`) is double, so for double and `std::complex<double>`, the
 /// device has fp64. Each listed tier is a separate instantiation of whatever kernel f launches;
 /// exactly one runs.
 /// @tparam Routine a routine tag from device::routine
