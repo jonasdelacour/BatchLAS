@@ -164,14 +164,17 @@ the promise is kept by review.
   functions in [Interop](#interop-with-cuda-and-with-your-own-sycl) below).
 - `<batchlas/config.hh>`: including it, and the three override macros in
   [the header-only table](#the-device-api-without-building-batchlas).
-- The device API, `<batchlas/device.hh>` and `<batchlas/device/...>`: the members of the
-  @ref api_device groups except @ref api_device_lowlevel (not `device/detail/` and not
-  `batchlas::device::detail`).
+- The device API, `<batchlas/device.hh>` and `<batchlas/device/...>`: the members of the child
+  groups of @ref api_device (launch, executors, operands, arithmetic, BLAS levels 1 to 3, the
+  LAPACK groups and sparse), except @ref api_device_lowlevel.
 - The names the Python module `batchlas` and `batchlas.linalg` export.
 
 **Not covered** (may change in any release, minor or patch):
 
 - `<batchlas/internal/...>`: installed because public headers include them, not API.
+- In the device headers: the members of @ref api_device_lowlevel, anything in `batchlas::device`
+  that is in no child group of @ref api_device, `<batchlas/device/detail/...>` and
+  `batchlas::device::detail`.
 - The other `<batchlas/util/...>` headers: `env.hh`, `mempool.hh` (`BumpAllocator`),
   `group-collectives.hh`, `group-invoke.hh`, `kernel-heuristics.hh`, `miniacc.hh` and
   `sycl-local-accessor-helpers.hh`, the library's and the benchmarks' own helpers.

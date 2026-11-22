@@ -91,6 +91,10 @@ pre-release commit (version 0.1.0) will notice.
 - `batchlas::linalg`: `matmul`, `solve`, `eigh`, `svd` and elementwise operations (#185).
 - `batchlas::device`: BLAS and LAPACK callable from inside your own SYCL kernels (#250), usable
   header-only from a plain checkout with `-I <checkout>/include` (#259; f5b78b5c, fffe59a0).
+- Four new ctest-checked device API examples in `examples/device/`: `geqrf_orgqr.cc` (QR with Q
+  formed), `sytrf_sytrs.cc` (an LDL^T solve), `gesvd_any_n.cc` (the SVD at any n) and
+  `spmm_csr.cc` (a CSR sparse-dense product), each in `float` and, where the device has fp64,
+  `double` (ctest `device_example_geqrf_orgqr`, `_sytrf_sytrs`, `_gesvd_any_n`, `_spmm_csr`).
 - `<batchlas/version.hh>` with `BATCHLAS_VERSION_MAJOR`, `_MINOR`, `_PATCH` and
   `BATCHLAS_VERSION_STRING`, included by `<batchlas.hh>` and usable header-only; the Python module
   exports the same string as `batchlas.__version__` (48ddcc27).
@@ -113,6 +117,37 @@ pre-release commit (version 0.1.0) will notice.
 - CI: static checks, AdaptiveCpp compile and consumer jobs, and a GPU build-and-test gate (#111,
   #170). The consumer test checks that `find_package` accepts 1.0 and refuses 0.99, 1.1 and 2.0
   (955fc341, 2b905dcf, 54847b98).
+
+**Docs (the device API reference):**
+
+- A user guide to the in-kernel device API, [the device API](guide/device-api.md), with the
+  compiled examples; [device-la.md](design/device-la.md) is now the design record, and the
+  device measurements moved to [perf/device-la.md](perf/device-la.md).
+- The API reference "In-kernel BLAS and LAPACK" is split into child groups (launch, executors,
+  operands, arithmetic, BLAS levels 1 to 3, seven LAPACK families, sparse, and low-level);
+  `batchlas::device::detail` is hidden, and the device inline macros no longer appear in
+  signatures.
+- The semantic-versioning promise for the device API covers the members of those child groups
+  except the low-level group
+  ([versioning and compatibility](cpp-api.md#versioning-and-compatibility)).
+- Every device header has a Doxygen file brief and lists its members in its group: the core,
+  launch and operand headers (`device.hh`, `core`, `arith`, `exec`, `grid`, `operand`, `interop`,
+  `view`, `scalar`, `reduce`, `sg_partition`, `tier`, `launch`, `workspace`); BLAS levels 1 to 3,
+  the LAPACK auxiliaries and sparse, with each routine's contract; the solvers (`potrf`, `potrs`,
+  `posv`, `potri`, `trtri`, `lauum`, `getrf`, `getrs`, `getri`, `gesv`, `inv`, `sytrf`, `sytrs`,
+  `sysv`, `sygst`) with their tiers, workspace and every `info` value; QR and SVD (`geqrf`,
+  `larft`, `larfb`, `orgqr`, `ormqr`, `ormbr`, `ortho`, `gebrd`, `gesvd`, `bdsqr`, `bdsdc`); and
+  the eigensolvers (`syev`, `sytrd`, `sy2sb`, `sb2st`, `steqr`, `stedc`, `stebz`, `stein`,
+  `ritz_values`), each with its 32-wide sub-group requirement.
+- Panel kernels, tuned-gemm internals and kernel-specific helpers are listed in the low-level
+  group, which the compatibility promise does not cover.
+- The device signature index moves under API reference, In-kernel BLAS and LAPACK. It is grouped
+  by device API group and header, wrapped to 80 columns, and gives each signature its brief and a
+  link to the member; low-level helpers are listed apart. Its page is now
+  `group__design__device__la__api.html` (old bookmarks to `design_device_la_api.html` break).
+- Docs theme: code examples no longer break lines inside linked identifiers, table code no longer
+  breaks mid-identifier, scrollable code blocks and tables show a visible scrollbar, and two pages
+  no longer show a stray backslash in code.
 
 - Vendor-free hosts also run `syevx`'s DirectSubset, LOBPCG and Filtered families and `ormbr` natively,
   each honouring a batch mask (fd7f8fc7, 88092f2c, e485696e). Tests that used to skip there run: `gemm`

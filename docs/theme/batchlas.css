@@ -219,7 +219,7 @@ div.contents blockquote {
 div.contents blockquote::before, div.contents blockquote::after { display: none; content: none; }
 div.contents blockquote p { margin: 4px 0; }
 
-div.contents table.markdownTable { display: block; overflow-x: auto; max-width: 100%; border: 0; border-radius: 2px; box-shadow: 0 0 0.05rem var(--bl-fg-3); font-size: 13.6px; }
+div.contents table.markdownTable { display: block; overflow-x: auto; max-width: 100%; border: 0; border-radius: 2px; box-shadow: none; font-size: 13.6px; }
 table.markdownTable th { background: var(--bl-code-bg); color: var(--bl-fg); font-weight: 700; border: 0; }
 table.markdownTable td, table.markdownTable th { border: 0; border-top: 1px solid var(--bl-line); padding: 9px 14px; }
 table.markdownTable tr:hover td { background: rgba(127, 127, 127, 0.04); }

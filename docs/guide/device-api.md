@@ -7,8 +7,8 @@ callable from inside your own SYCL kernel on one matrix per executor (a work-ite
 part of one, or a work-group). This guide covers the launch frame, the conventions every routine
 follows, executors, tiers, workspace, info values, the scalar types, what the device must provide,
 and per family what exists, with the compiled examples. The members are in @ref api_device; every
-public signature, by header, is on @subpage design_device_la_api "Device API signatures". The
-design rationale is @ref design_device_la.
+signature, by group and header, with its brief, is on @ref design_device_la_api. The design
+rationale is @ref design_device_la.
 
 ## What the device API is {#device-guide-what-it-is}
 
@@ -181,8 +181,19 @@ size, runs at a sub-group size the device has and, for a double `T`, finds fp64.
   - `0`: success.
   - `k > 0`: the routine's own failure, with LAPACK's partial-result contract (see the table
     under [Scalar types](#device-guide-scalar-types)).
-  - `-i`: argument `i`, counted after the executor, is invalid. Typically -2 is `A` not square or
-    `n` above the tier's bound, and -3 / -4 a missing or misaligned workspace.
+  - `< 0`: an invalid argument, where the routine checks its arguments. The numbering is per
+    family, not one rule; each routine's reference lists its values, and its group says which
+    rule it follows:
+    - Cholesky (@ref api_device_lapack_chol), `syev`, `sytrd`, `steqr` and `sygst` count from
+      the executor, `ex` being argument 1: -2 is `A` (not square, or `n` above the tier's bound)
+      and the next numbers are the next operands and the workspace.
+    - QR, `gebrd`, `ormbr`, `gesvd`, `sy2sb` and `sb2st` count from the first matrix, `A` being
+      argument 1 (`geqrf`: -2 a short `tau`, -3 a null workspace).
+    - `sytrf`, `sytrs` and `sysv` return LAPACK's own argument numbers (-1 the executor width,
+      -2 `N`, -4 or -5 `LDA`, -7 `B`, -8 `LDB`).
+    - `ortho` returns -2 when `k` exceeds the `tier::Cta<N>` bound.
+    - `getrf`, `getrs`, `getri`, `gesv`, `inv`, `stedc`, `stebz`, `stein`, `bdsqr`, `bdsdc` and
+      `ritz_values` check no arguments and return no negative value (`getrs` always returns 0).
 - A routine never throws in device code. `info` is not written anywhere for you: store it from
   `ex.leader()`, as the quick start does.
 - Host-side errors throw `batchlas::` types whose message opens with the routine's name (`with_tier`
@@ -355,8 +366,8 @@ The getrs tiers share getrf's executor and local plan, so both run in one kernel
 | `sb2st<UL, Tier>(ex, ab, d, e, tau, kd, ws)` (band to tridiagonal) | `Cta<4096>`, `Blocked<32>` |
 | `ritz_values<Tier, Cfg>(ex, A, V, w, ws)`; tier-free `ritz_values(ex, A, V, w)` | no list: `Blocked<NB>`, with NB named by you |
 
-`syevx.hh` provides the selection step `syevx_select`, and `jacobi.hh` the rotation kernels of
-one-sided Jacobi; neither is a driver. The merge kernels of `stedc` and `stein` (`laed2`, `laed3`,
+There is no device `syevx` or Jacobi solver: `syevx.hh` (the host syevx route's selection step)
+and `jacobi.hh` (the host Jacobi kernels' rotations) hold only `device::detail` code. The merge kernels of `stedc` and `stein` (`laed2`, `laed3`,
 `laed4`, `lagtf`, `lagts`) are in @ref api_device_lowlevel.
 
 ### Singular value decomposition {#device-guide-family-svd}
@@ -367,6 +378,10 @@ one-sided Jacobi; neither is a driver. The merge kernels of `stedc` and `stein` 
 | --- | --- |
 | `gesvd<JU, JVT, Tier>(ex, A, S, U, Vh, ws)` (any m x n) | `Blocked<16>` |
 | `bdsqr<Tier>(ex, d, e, s[, U, Vh], ws, BdsqrOptions<R>{})`, `bdsdc<Tier>(ex, d, e, s, U, Vh, ws, BdsdcOptions{})` (real) | `Blocked<1>`, the default `Tier` |
+
+The panel leaves of the QR and SVD routines, `geqr2`, `geqr2_reg`, `gebd2` (the unblocked
+bidiagonal reduction) and `labrd` (the panel of the blocked one), are low-level helpers in
+@ref api_device_lowlevel, not covered by the compatibility promise; call `geqrf` and `gebrd`.
 
 ### LAPACK auxiliaries {#device-guide-family-aux}
 
@@ -383,6 +398,15 @@ one-sided Jacobi; neither is a driver. The merge kernels of `stedc` and `stein` 
 | --- | --- |
 | `spmm<TA, TB, Tier>(ex, alpha, A, B, beta, C, ws)`, `A` a CSR item from `csr_item(view, b)` | `Blocked<64 / sizeof(T)>`: `Blocked<16>` for `float`, `Blocked<8>` for `double` and `complex<float>`, `Blocked<4>` for `complex<double>` |
 | `iluk_factorize<Tier>(ex, A, plan, M, opts, ws)` (options before `ws`), `iluk_apply<Tier>(ex, M, rhs, y, ws)` | `Blocked<1>` |
+
+- `spmm` with `NoTrans` `A` gives a result bit-identical to the host route. With `Trans` or
+  `ConjTrans` `A` it scales `C` by `beta` and then scatters into it with relaxed atomics, in an
+  unspecified order, so the last bits of `C` may vary from run to run.
+- `IlukPlan`, the symbolic plan `iluk_factorize` takes, has no installed builder: the library's
+  host symbolic phase builds it for the ILU(k) route, and that code is not an installed header.
+  Outside the library you can use `iluk_factorize` only by filling the plan's index arrays
+  yourself, to the layout `IlukPlan` documents. `iluk_apply` also runs on a factor the host
+  ILU(k) made (`iluk_batch` of its view).
 
 ### Low-level helpers {#device-guide-family-lowlevel}
 
