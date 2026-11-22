@@ -1,18 +1,25 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Device LA sparse operands, CSR row products (Sparse BLAS naming: us*) and the public in-kernel
-// sparse ops: spmm, iluk_factorize and iluk_apply. Each op runs one
-// batch item on one executor for any extent; the host routes launch the same bodies (detail
-// units, the detail row elimination, the iluk_apply solve). Element expressions match the
-// hand kernels they replaced (int64 offsets where those used them), so the host kernels keep
-// their SASS.
-//   spmm<TA, TB, Tier>(ex, alpha, A, B, beta, C[, ws])     C := alpha op(A) op(B) + beta C
-//   iluk_factorize<Tier>(ex, A, plan, M, opts[, ws])       M := ILU(k) of A in plan's pattern
-//   iluk_apply<Tier>(ex, M, rhs, out[, ws])                out := (L U)^{-1} rhs, one column
-// Tiers: tier::Blocked<NC> for spmm (NC = the column block of one item's accumulators) and
-// tier::Blocked<1> for the two ILU ops (level-scheduled, a barrier per level); all admit any n,
-// read and write their operands where the caller put them (global, or local memory the caller
-// sized) and need no workspace (device::buffer_size<R, Tier, T>(n) == {}).
+/// @file
+/// @brief In-kernel sparse operations: CSR operands, the sparse-dense product `spmm` and incomplete
+/// LU, `iluk_factorize` and `iluk_apply` (@ref api_device_sparse).
+///
+///   - `spmm<TA, TB, Tier>(ex, alpha, A, B, beta, C[, ws])`: `C := alpha op(A) op(B) + beta C`.
+///   - `iluk_factorize<Tier>(ex, A, plan, M, opts[, ws])`: `M :=` the ILU(k) factor of `A` in the
+///     plan's pattern.
+///   - `iluk_apply<Tier>(ex, M, rhs, y[, ws])`: `y := (L U)^{-1} rhs`, one column.
+///
+/// Each operation runs one batch item on one executor for any extent; the host's sparse routes
+/// launch the same bodies, so the results match the host's. The tiers are `tier::Blocked<NC>` for
+/// `spmm` (`NC` the column block of one item's accumulators) and `tier::Blocked<1>` for the two ILU
+/// operations (level-scheduled, a barrier per level). All admit any n, read and write their
+/// operands where the caller put them (global memory, or local memory the caller sized), and need
+/// no workspace: `device::buffer_size<R, Tier, T>(n)` is empty.
+///
+/// Neither umbrella header includes this one: include `<batchlas/device/sparse.hh>`.
+/// @ingroup api_device_sparse
+// Element expressions match the hand kernels they replaced (int64 offsets where those used
+// them), so the host kernels keep their SASS.
 
 #include <cmath>
 #include <cstddef>
@@ -36,8 +43,13 @@
 
 namespace batchlas::device {
 
-// One scalar access, or a complex as one 2-wide vector access (needs 2 * sizeof(real) alignment).
+/// @brief One scalar access, or with `Pair` a complex element as one 2-wide vector access.
+/// @ingroup api_device_lowlevel
+/// @tparam Pair `true`: a complex element is read and written as one `sycl::vec<real, 2>`, which
+///   needs `2 * sizeof(real)` alignment.
 template <bool Pair> struct PairAccess {
+    /// @brief `*p`.
+    /// @param p the element.
     template <class Scalar> BATCHLAS_DEVICE_INLINE static std::remove_cv_t<Scalar> load(Scalar* p) {
         using U = std::remove_cv_t<Scalar>;
         using A = Arith<U>;
@@ -49,6 +61,9 @@ template <bool Pair> struct PairAccess {
             return *p;
         }
     }
+    /// @brief `*p := x`.
+    /// @param p the element.
+    /// @param x the value.
     template <class Scalar> BATCHLAS_DEVICE_INLINE static void store(Scalar* p, Scalar x) {
         using A = Arith<Scalar>;
         if constexpr (Pair && A::is_complex) {
@@ -60,8 +75,13 @@ template <bool Pair> struct PairAccess {
     }
 };
 
-// Relaxed device-scope atomic *p += v. A complex is two independent real atomics, NOT an atomic
-// complex add: correct only while nothing reads *p between the first and the last update.
+/// @brief A relaxed device-scope atomic `*p += v` in global memory.
+///
+/// A complex value is two independent real atomics, not an atomic complex add: correct only while
+/// nothing reads `*p` between the first and the last update.
+/// @ingroup api_device_lowlevel
+/// @param p the element, in global memory.
+/// @param v the value added.
 template <class Scalar> BATCHLAS_DEVICE_INLINE void atomic_accumulate(Scalar* p, Scalar v) {
     using A = Arith<Scalar>;
     if constexpr (A::is_complex) {
@@ -77,74 +97,151 @@ template <class Scalar> BATCHLAS_DEVICE_INLINE void atomic_accumulate(Scalar* p,
 }
 
 // ---- operands ------------------------------------------------------------------------------
-// Element i at p[base + i], the sum in Off (int64_t where base = b * stride passes 2^31).
+/// @brief A vector with element `i` at `p[base + i]`, the sum formed in `Off`.
+/// @ingroup api_device_lowlevel
+/// @tparam T the element type (`const` for read-only).
+/// @tparam Off the offset type: `int` (default) or `std::int64_t` where `base = b * stride` can pass 2^31.
 template <class T, class Off = int> struct BasedVec {
+    /// The element type without cv.
     using value_type = std::remove_cv_t<T>;
+    /// The base pointer.
     T* p;
+    /// The offset of element 0.
     Off base;
+    /// @brief Element `i`, `p[base + i]`.
+    /// @param i the index.
     BATCHLAS_DEVICE_INLINE T& operator()(int i) const { return p[base + i]; }
 };
 
-// Read-only element i = PairAccess<Pair>::load(p + i).
+/// @brief A read-only vector: element `i` is `PairAccess<Pair>::load(p + i)`.
+/// @ingroup api_device_lowlevel
+/// @tparam Scalar the element type.
+/// @tparam Pair `PairAccess`'s pair flag (default `false`).
 template <class Scalar, bool Pair = false> struct LoadVec {
+    /// The element type without cv.
     using value_type = std::remove_cv_t<Scalar>;
+    /// The first element.
     Scalar* p;
+    /// @brief Element `i`, by value.
+    /// @param i the index.
     BATCHLAS_DEVICE_INLINE value_type operator()(int i) const { return PairAccess<Pair>::load(p + i); }
 };
 
-// Batch-interleaved (slot-major) storage: slot s of item `off` at p[size_t(s) * stride + off].
+/// @brief Batch-interleaved (slot-major) storage: slot `s` of item `off` at `p[s * stride + off]`.
+/// @ingroup api_device_lowlevel
+/// @tparam Scalar the element type.
 // stride and off stay int and widen at each use (as size_t they cost ILU eliminate +3..5 REG).
 template <class Scalar> struct InterleavedVec {
+    /// The element type without cv.
     using value_type = std::remove_cv_t<Scalar>;
+    /// The storage.
     Scalar* p;
+    /// The distance between slots.
     int stride;
+    /// The item's offset within a slot.
     int off;
+    /// @brief Slot `s` of the item, `p[s * stride + off]` with the product formed in `std::size_t`.
+    /// @param s the slot.
     BATCHLAS_DEVICE_INLINE Scalar& operator()(int s) const { return p[static_cast<std::size_t>(s) * stride + off]; }
 };
 
-// One CSR row segment: entries p in [begin, end) are (val(p), idx(p)), positions absolute.
+/// @brief One CSR row segment: entries `p` in `[begin, end)` are `(val(p), idx(p))`, positions absolute.
+/// @ingroup api_device_lowlevel
+/// @tparam VV the values' vector type.
+/// @tparam IV the column indices' vector type.
 template <class VV, class IV> struct SpRow {
+    /// The value type.
     using value_type = typename VV::value_type;
+    /// The values, indexed by absolute position.
     VV vals;
+    /// The column indices, indexed by absolute position.
     IV cols;
+    /// The row's first position.
     int begin;
+    /// One past the row's last position.
     int end;
+    /// @brief The value at position `p`.
+    /// @param p an absolute position in `[begin, end)`.
     BATCHLAS_DEVICE_INLINE value_type val(int p) const { return vals(p); }
+    /// @brief The column index at position `p`.
+    /// @param p an absolute position in `[begin, end)`.
     BATCHLAS_DEVICE_INLINE int idx(int p) const { return cols(p); }
 };
+/// @brief The row segment `[begin, end)` of `(vals, cols)`.
+/// @ingroup api_device_lowlevel
+/// @param vals the values.
+/// @param cols the column indices.
+/// @param begin the first position.
+/// @param end one past the last position.
 template <class VV, class IV> BATCHLAS_DEVICE_INLINE SpRow<VV, IV> sp_row(VV vals, IV cols, int begin, int end) {
     return {vals, cols, begin, end};
 }
 
-// Batch item b of a CSR batch (KernelMatrixView<Scalar, CSR>): values and column indices at
-// nz_base = b * matrix_stride, item-local row offsets at ro_base = b * offset_stride; m x n as
-// stored. Row r is [ro(r), ro(r + 1)); nothing at or past ro(m) is read.
+/// @brief One batch item of a CSR batch, the `A` operand of `spmm`; build it with `csr_item`.
+///
+/// Values and column indices start at `nz_base = b * matrix_stride` and the item-local row
+/// offsets at `ro_base = b * offset_stride`; the extents are m x n as stored. Row `r` is
+/// `[ro(r), ro(r + 1))`; nothing at or past `ro(m)` is read.
+/// @ingroup api_device_sparse
+/// @tparam Scalar the element type (`const` for read-only).
+/// @tparam Off the offset type (default `std::int64_t`).
 template <class Scalar, class Off = std::int64_t> struct CsrItem {
+    /// The element type without cv.
     using value_type = std::remove_cv_t<Scalar>;
+    /// The batch's values.
     Scalar* val;
+    /// The batch's column indices.
     const int* col;
+    /// The batch's row offsets.
     const int* ro;
+    /// The item's offset into `val` and `col`.
     Off nz_base;
+    /// The item's offset into `ro`.
     Off ro_base;
+    /// @{
+    /// The row and column counts.
     int m, n;
+    /// @}
+    /// @brief The row count `m`.
     BATCHLAS_DEVICE_INLINE int rows() const { return m; }
+    /// @brief The column count `n`.
     BATCHLAS_DEVICE_INLINE int cols() const { return n; }
+    /// @brief Row `r` as an `SpRow`, positions relative to the item.
+    /// @tparam Pair `PairAccess`'s pair flag for the values (default `false`).
+    /// @param r the row, in `[0, m)`.
     template <bool Pair = false> BATCHLAS_DEVICE_INLINE auto row(int r) const {
         return sp_row(LoadVec<Scalar, Pair>{val + nz_base}, BasedVec<const int, Off>{col, nz_base}, ro[ro_base + r], ro[ro_base + r + 1]);
     }
 };
+/// @brief Batch item `b` of a host CSR view, as a read-only `CsrItem`.
+/// @ingroup api_device_sparse
+/// @param a the host view (`KernelMatrixView<Scalar, MatrixFormat::CSR>`), captured by value.
+/// @param b the batch index.
+/// @return the item's operand.
 template <class Scalar> BATCHLAS_DEVICE_INLINE CsrItem<const Scalar> csr_item(const KernelMatrixView<Scalar, MatrixFormat::CSR>& a, std::int64_t b) {
     return {a.data_, a.col_indices_, a.row_offsets_, b * a.matrix_stride_, b * a.offset_stride_, a.rows_, a.cols_};
 }
 
-// op(B)(r, c) of a column-major B (int64 ld) whose transposition is a kernel argument: NoTrans
-// p[c * ld + r], else p[r * ld + c], conjugated when conj (one instantiation, as the hand kernel).
+/// @brief `op(B)(r, c)` of a column-major `B` whose transposition is a run-time value (one instantiation).
+///
+/// `notrans`: `p[c * ld + r]`; otherwise `p[r * ld + c]`, conjugated when `conj`.
+/// @ingroup api_device_lowlevel
+/// @tparam Scalar the element type.
+/// @tparam Pair `PairAccess`'s pair flag (default `false`).
 template <class Scalar, bool Pair = false> struct RtOpMat {
+    /// The element type without cv.
     using value_type = std::remove_cv_t<Scalar>;
+    /// `B`'s first element.
     Scalar* p;
+    /// `B`'s leading dimension.
     std::int64_t ld;
+    /// `true` for `op(B) = B`.
     bool notrans;
+    /// `true` to conjugate (with `notrans == false`).
     bool conj;
+    /// @brief Element `(r, c)` of `op(B)`.
+    /// @param r the row.
+    /// @param c the column.
     BATCHLAS_DEVICE_INLINE value_type operator()(int r, int c) const {
         value_type v = PairAccess<Pair>::load(notrans ? p + static_cast<std::int64_t>(c) * ld + r
                                                       : p + static_cast<std::int64_t>(r) * ld + c);
@@ -155,24 +252,51 @@ template <class Scalar, bool Pair = false> struct RtOpMat {
     }
 };
 
-// Column-major C (int64 ld): C(r, c) at p + (c * ld + r), an element reference that reads and
-// writes through PairAccess, so core store_epi() can take it as its y.
+/// @brief A column-major `C` with a 64-bit leading dimension whose elements read and write through `PairAccess`.
+///
+/// `C(r, c)` is a proxy reference to `p + (c * ld + r)`, so `store_epi` can take it as its output.
+/// @ingroup api_device_lowlevel
+/// @tparam Scalar the element type.
+/// @tparam Pair `PairAccess`'s pair flag (default `false`).
 template <class Scalar, bool Pair = false> struct ColMat64 {
+    /// The element type without cv.
     using value_type = std::remove_cv_t<Scalar>;
+    /// @brief A proxy reference to one element.
     struct Ref {
+        /// The element.
         Scalar* q;
+        /// @brief Reads the element.
         BATCHLAS_DEVICE_INLINE operator value_type() const { return PairAccess<Pair>::load(q); }
+        /// @brief Writes the element.
+        /// @param x the value.
         BATCHLAS_DEVICE_INLINE void operator=(value_type x) const { PairAccess<Pair>::store(q, x); }
     };
+    /// `C`'s first element.
     Scalar* p;
+    /// `C`'s leading dimension.
     std::int64_t ld;
+    /// @brief The address of `C(r, c)`.
+    /// @param r the row.
+    /// @param c the column.
     BATCHLAS_DEVICE_INLINE Scalar* ptr(int r, int c) const { return p + (static_cast<std::int64_t>(c) * ld + r); }
+    /// @brief The proxy reference to `C(r, c)`.
+    /// @param r the row.
+    /// @param c the column.
     BATCHLAS_DEVICE_INLINE Ref operator()(int r, int c) const { return {ptr(r, c)}; }
 };
 
 // ---- CSR row products ----------------------------------------------------------------------
-// acc - sum a.val(p) y(a.idx(p)) over the entries with idx < bound, left to right: the row is
-// sorted, so the first idx >= bound ends it; nothing at or past it is read.
+/// @brief `acc - sum a.val(p) y(a.idx(p))` over the row's entries with column below `bound`, left to right.
+///
+/// The row is sorted, so the first column at or past `bound` ends it; nothing at or past it is
+/// read. One item (`Thread`).
+/// @ingroup api_device_lowlevel
+/// @tparam Ar the arithmetic of the multiply-subtracts.
+/// @param acc the starting value.
+/// @param a the sorted CSR row (`SpRow`).
+/// @param y the dense vector.
+/// @param bound the column bound.
+/// @return the updated value.
 template <class Ar, class Row, class Y, class Scalar>
 BATCHLAS_DEVICE_INLINE Scalar usdot_sub_below(const Thread&, Scalar acc, const Row& a, const Y& y, int bound) {
     for (int p = a.begin; p < a.end; ++p) {
@@ -183,7 +307,14 @@ BATCHLAS_DEVICE_INLINE Scalar usdot_sub_below(const Thread&, Scalar acc, const R
     return acc;
 }
 
-// usmm, one output row: acc[t] += sum_p a.val(p) b(a.idx(p), c0 + t) for c0 + t < width.
+/// @brief One output row of a sparse-dense product: `acc[t] += sum_p a.val(p) b(a.idx(p), c0 + t)` for `c0 + t < width`.
+/// @ingroup api_device_lowlevel
+/// @tparam Ar the arithmetic of the multiply-adds.
+/// @param a the CSR row.
+/// @param b the dense operand, `b(row, col)`.
+/// @param c0 the column block's first column.
+/// @param width the column count.
+/// @param[in,out] acc the `NC` accumulators.
 template <class Ar, class Row, class B, class Scalar, int NC, class L>
 BATCHLAS_DEVICE_INLINE void usmm_row(const Thread&, const Row& a, const B& b, int c0, int width, Frag<Scalar, NC,
                                      L>& acc) {
@@ -198,8 +329,18 @@ BATCHLAS_DEVICE_INLINE void usmm_row(const Thread&, const Row& a, const B& b, in
     }
 }
 
-// C(r, c0 + t) := store_epi<epi::MacChain, Ops>(alpha, acc[t], beta, C(r, c0 + t)) for c0 + t < width;
-// a set beta flag never reads C.
+/// @brief `C(r, c0 + t) := alpha acc[t] + beta C(r, c0 + t)` (`store_epi<epi::MacChain, Ops>`) for `c0 + t < width`.
+///
+/// A `beta` with its zero flag set never reads `C`.
+/// @ingroup api_device_lowlevel
+/// @tparam Ops the arithmetic policy.
+/// @param alpha the product's scale.
+/// @param acc the `NC` accumulators.
+/// @param beta `C`'s scale, with its zero flag.
+/// @param C the output matrix.
+/// @param r the row.
+/// @param c0 the column block's first column.
+/// @param width the column count.
 template <class Ops, class Scalar, int NC, class L, class CM>
 BATCHLAS_DEVICE_INLINE void store_cols(const Thread&, Scalar alpha, const Frag<Scalar, NC, L>& acc, MaybeZero<Scalar> beta, const CM& C, int r,
                                     int c0, int width) {
@@ -210,7 +351,15 @@ BATCHLAS_DEVICE_INLINE void store_cols(const Thread&, Scalar alpha, const Frag<S
     }
 }
 
-// w[t] := alpha b(r, c0 + t) for c0 + t < width, else 0: a scaled row block of op(B).
+/// @brief `w[t] := alpha b(r, c0 + t)` for `c0 + t < width`, else 0: a scaled row block of `op(B)`.
+/// @ingroup api_device_lowlevel
+/// @tparam Ar the arithmetic of the products.
+/// @param alpha the scale.
+/// @param b the dense operand.
+/// @param r the row.
+/// @param c0 the block's first column.
+/// @param width the column count.
+/// @param[out] w the `NC` values.
 template <class Ar, class B, class Scalar, int NC, class L>
 BATCHLAS_DEVICE_INLINE void load_cols_scaled(const Thread&, Scalar alpha, const B& b, int r, int c0, int width, Frag<Scalar, NC, L>& w) {
     BATCHLAS_UNROLL_FULL
@@ -223,29 +372,56 @@ BATCHLAS_DEVICE_INLINE void load_cols_scaled(const Thread&, Scalar alpha, const 
 
 // ---- spmm ----------------------------------------------------------------------------------
 namespace routine {
+/// @brief The routine tag of `spmm`, for `launch`, `with_tier` and `tiers_t`.
+/// @ingroup api_device_sparse
+/// @tparam TA `op(A)`.
+/// @tparam TB `op(B)`.
 template <Transpose TA, Transpose TB> struct spmm {
+    /// The routine's name.
     static constexpr const char* name = "spmm";
 };
+/// @brief The routine tag of `iluk_apply`.
+/// @ingroup api_device_sparse
 struct iluk_apply {
+    /// The routine's name.
     static constexpr const char* name = "iluk_apply";
 };
+/// @brief The routine tag of `iluk_factorize`.
+/// @ingroup api_device_sparse
 struct iluk_factorize {
+    /// The routine's name.
     static constexpr const char* name = "iluk_factorize";
 };
 }  // namespace routine
 
-// 64 bytes of accumulators per item: the column block shrinks as the scalar widens.
+/// @brief `spmm`'s column block: 64 bytes of accumulators per item, so the block shrinks as the scalar widens.
+/// @ingroup api_device_sparse
+/// @tparam Scalar the element type.
 template <class Scalar> inline constexpr int spmm_block_v = 64 / static_cast<int>(sizeof(Scalar));
 
+/// @brief `spmm`'s tier list: one tier, `tier::Blocked<spmm_block_v<Scalar>>`.
+/// @ingroup api_device_sparse
 template <Transpose TA, Transpose TB, class Scalar> struct tiers<routine::spmm<TA, TB>, Scalar> {
+    /// The tier list.
     using type = tier::list<tier::Blocked<spmm_block_v<Scalar>>>;
 };
-// wg_size / sg_size: the launch the tier is tested at; the body runs on any executor.
+/// @brief `spmm`'s `tier::Blocked<NC>`: any n, no workspace.
+///
+/// `wg_size` and `sg_size` are the launch the tier is tested at; the body runs on any executor.
+/// @ingroup api_device_sparse
 template <Transpose TA, Transpose TB, int NC, class Scalar> struct tier_info<routine::spmm<TA, TB>, tier::Blocked<NC>, Scalar> {
+    /// @{
+    /// The tested work-group size and sub-group size.
     static constexpr int wg_size = 128, sg_size = 32;
+    /// @}
+    /// The executor `launch` builds.
     using executor = WorkGroup<wg_size, sg_size>;
+    /// Batch items per work-group.
     static constexpr int per_group = 1;
+    /// @brief Every `n >= 0` is admitted.
+    /// @param n the extent.
     static constexpr bool admits(int n) { return n >= 0; }
+    /// @brief No workspace.
     static constexpr WorkspaceSize buffer_size(int) { return {}; }
 };
 
@@ -300,13 +476,28 @@ BATCHLAS_DEVICE_INLINE void scatter_row(int width, Scalar alpha, const OB& b, in
 }
 }  // namespace detail
 
-// C := alpha op(A) op(B) + beta C for one batch item on executor ex (any size, any extents).
-//   A  CsrItem (csr_item(view, b)); op(A) is m x k.   B  matrix operand, op(B) k x n.
-//   C  matrix operand with cols(); C(r, c) assignable (an lvalue for (Conj)Trans A).
-// beta == 0 never reads C; alpha == 0 never reads A or B. NoTrans A: the host route's gather
-// units, each item owning its (row, column block) units: bit-identical to the host. (Conj)Trans:
-// C := beta C, a barrier, then the scatter by relaxed atomics, whose order is unspecified.
-// Collective: inputs visible on entry; returns 0 after a barrier (C visible to the executor).
+/// @brief `C := alpha op(A) op(B) + beta C` for one batch item, `A` sparse (CSR) and `B`, `C` dense.
+///
+/// Runs on any executor size and any extents. `beta == 0` never reads `C`; `alpha == 0` never
+/// reads `A` or `B`. With `NoTrans` `A`, each item owns its (row, column block) units of the host
+/// route's gather, so the result is bit-identical to the host's. With `Trans` / `ConjTrans` `A`:
+/// `C := beta C`, a barrier, then a scatter by relaxed atomics in global memory, whose order is
+/// unspecified (results may differ in the last bits from run to run). COLLECTIVE: the inputs are
+/// visible on entry, and `C` is visible to the executor on return.
+/// @ingroup api_device_sparse
+/// @tparam TA `op(A)`: `Transpose::NoTrans`, `Trans` or `ConjTrans`.
+/// @tparam TB `op(B)`: `Transpose::NoTrans`, `Trans` or `ConjTrans`.
+/// @tparam Tier `tier::Blocked<NC>`, `NC` the column block of one item's accumulators
+///   (`spmm_block_v<Scalar>` is the listed tier).
+/// @param ex the executor.
+/// @param alpha the scalar `alpha`, of `A`'s value type.
+/// @param A the sparse operand, a `CsrItem` (`csr_item(view, b)`); `op(A)` is m x k.
+/// @param B the dense operand; `op(B)` is k x n.
+/// @param beta the scalar `beta`.
+/// @param[in,out] C the m x n dense output with `cols()`; `C(r, c)` assignable, and an lvalue in
+///   global memory for a transposed `A`.
+/// @param ws the workspace; none is needed (default empty).
+/// @retval 0 always.
 template <Transpose TA, Transpose TB, class Tier, class Ex, class AM, class BM, class CM, class Scalar>
 BATCHLAS_DEVICE_HELPER int spmm(const Ex& ex, Scalar alpha, const AM& A, const BM& B, Scalar beta, const CM& C, const Workspace& ws = {}) {
     static_assert(std::is_same_v<typename AM::value_type, Scalar>, "spmm: alpha, beta and A share one scalar type");
@@ -345,44 +536,83 @@ BATCHLAS_DEVICE_HELPER int spmm(const Ex& ex, Scalar alpha, const AM& A, const B
 }
 
 // ---- iluk_apply ----------------------------------------------------------------------------
-// One batch item's ILU(k) factor as iluk_factorize stores it (ILUKView): L (strict lower, unit
-// diagonal) and U (upper with diagonal) in one CSR LU with sorted rows, each row's absolute
-// diagonal position diag[diag_base + i], and the batch-shared level schedules of the two solves.
+/// @brief One batch item's ILU(k) factor, the operand of `iluk_apply`.
+///
+/// The layout `iluk_factorize` and the host's ILU(k) (`ILUKView`) store: `L` (strict lower, unit
+/// diagonal) and `U` (upper, with its diagonal) in one CSR matrix with sorted rows, each row's
+/// absolute diagonal position `diag[diag_base + i]`, and the batch-shared level schedules of the
+/// two triangular solves. Get one from `IlukBatch::item` or `IlukPlan::factor`.
+/// @ingroup api_device_sparse
+/// @tparam Scalar the element type.
 // Fields in the order the solve reads them (a launcher's capture layout follows it).
 template <class Scalar> struct IlukFactor {
+    /// The factor's values; `base` is the item's offset.
     BasedVec<const Scalar> vals;  // base = b * matrix_stride
+    /// The factor's column indices, same offset.
     BasedVec<const int> cols;
+    /// The number of levels of the `L` solve.
     int l_levels;
+    /// The `L` levels: level `lv` is rows `l_rows[l_level_ptr[lv]]` to `l_rows[l_level_ptr[lv + 1] - 1]`.
     const int* l_level_ptr;
+    /// The rows of the `L` levels.
     const int* l_rows;
+    /// The row offsets of the batch.
     const int* ro;
+    /// The item's offset into `ro`.
     int ro_base;  // b * offset_stride
+    /// The number of levels of the `U` solve.
     int u_levels;
+    /// The `U` levels, as `l_level_ptr`.
     const int* u_level_ptr;
+    /// The rows of the `U` levels.
     const int* u_rows;
+    /// Each row's absolute diagonal position in `vals`.
     const int* diag;
+    /// The item's offset into `diag`.
     int diag_base;  // b * n
+    /// The diagonal shift the solve applies to an unusable pivot.
     Scalar diag_shift;
 };
 
-// The batch: trivially copyable, built on the host from an ILUKView (iluk_batch(M.view())) and
-// captured by value; item(b) is batch item b's factor.
+/// @brief A batch of ILU(k) factors: trivially copyable, built on the host and captured by value; `item(b)` is item `b`'s factor.
+///
+/// Build it from a host factor with `iluk_batch(M.view())`.
+/// @ingroup api_device_sparse
+/// @tparam Scalar the element type.
 template <class Scalar> struct IlukBatch {
+    /// The values of every item.
     const Scalar* val;
+    /// The column indices of every item.
     const int* col;
+    /// The row offsets of every item.
     const int* ro;
+    /// The absolute diagonal positions, `n` per item.
     const int* diag;
+    /// The `L` levels, shared by the batch.
     const int* l_level_ptr;
+    /// The rows of the `L` levels.
     const int* l_rows;
+    /// The `U` levels, shared by the batch.
     const int* u_level_ptr;
+    /// The rows of the `U` levels.
     const int* u_rows;
+    /// @{
+    /// The value stride and row-offset stride between items, the order, and the two level counts.
     int matrix_stride, offset_stride, n, l_levels, u_levels;
+    /// @}
+    /// The diagonal shift.
     Scalar diag_shift;
+    /// @brief Batch item `b`'s factor.
+    /// @param b the batch index.
     BATCHLAS_DEVICE_INLINE IlukFactor<Scalar> item(int b) const {
         return {{val, b * matrix_stride}, {col, b * matrix_stride}, l_levels, l_level_ptr, l_rows, ro, b * offset_stride,
                 u_levels, u_level_ptr, u_rows, diag, b * n, diag_shift};
     }
 };
+/// @brief The `IlukBatch` of a host ILU(k) factor's view (host code).
+/// @ingroup api_device_sparse
+/// @param M an `ILUKView` (`ILUKPreconditioner::view()`); its storage must outlive the kernel.
+/// @return the batch, to capture by value.
 template <class V> auto iluk_batch(const V& M) {
     using T = std::remove_cv_t<decltype(M.diagonal_shift)>;
     const auto kv = M.lu.kernel_view();
@@ -391,14 +621,27 @@ template <class V> auto iluk_batch(const V& M) {
                         kv.matrix_stride_, kv.offset_stride_, M.n, M.l_levels, M.u_levels, M.diagonal_shift};
 }
 
+/// @brief `iluk_apply`'s tier list: one tier, `tier::Blocked<1>`.
+/// @ingroup api_device_sparse
 template <class Scalar> struct tiers<routine::iluk_apply, Scalar> {
+    /// The tier list.
     using type = tier::list<tier::Blocked<1>>;
 };
+/// @brief `iluk_apply`'s `tier::Blocked<1>`: any n, no workspace, tested at a `WorkGroup<128, 32>`.
+/// @ingroup api_device_sparse
 template <class Scalar> struct tier_info<routine::iluk_apply, tier::Blocked<1>, Scalar> {
+    /// @{
+    /// The tested work-group size and sub-group size.
     static constexpr int wg_size = 128, sg_size = 32;
+    /// @}
+    /// The executor `launch` builds.
     using executor = WorkGroup<wg_size, sg_size>;
+    /// Batch items per work-group.
     static constexpr int per_group = 1;
+    /// @brief Every `n >= 0` is admitted.
+    /// @param n the order.
     static constexpr bool admits(int n) { return n >= 0; }
+    /// @brief No workspace.
     static constexpr WorkspaceSize buffer_size(int) { return {}; }
 };
 
@@ -431,9 +674,19 @@ template <class Scalar> inline Scalar shifted_pivot(const Scalar& pivot, const S
 }
 }  // namespace detail
 
-// out := U^{-1} L^{-1} rhs for one column of one batch item, level by level (a barrier between
-// levels), on a work-group executor; rhs and out are vectors (v(i)), distinct. Collective; returns
-// 0 after the last barrier. Native arithmetic (Annex-G complex), as the host route.
+/// @brief `y := U^{-1} L^{-1} rhs` for one column of one batch item with its ILU(k) factor.
+///
+/// Level by level, with a barrier after each level of each solve, on a work-group executor. In
+/// the `U` solve an unusable pivot is replaced by the factor's shifted pivot. Native arithmetic
+/// (Annex-G complex), as the host route. COLLECTIVE: `y` is visible to the work-group on return.
+/// @ingroup api_device_sparse
+/// @tparam Tier `tier::Blocked<1>` (or a tier list naming it).
+/// @param ex the work-group executor.
+/// @param M the item's factor (`IlukBatch::item(b)` or `IlukPlan::factor`).
+/// @param rhs the right-hand side, a vector `rhs(i)`.
+/// @param[out] y the solution, a vector `y(i)` distinct from `rhs`.
+/// @param ws the workspace; none is needed (default empty).
+/// @retval 0 always.
 template <class Tier, class Ex, class Scalar, class RV, class YV>
 BATCHLAS_DEVICE_HELPER int iluk_apply(const Ex& ex, const IlukFactor<Scalar>& M, const RV& rhs, const YV& y, const Workspace& ws = {}) {
     static_assert(std::is_same_v<resolve_tier_t<routine::iluk_apply, Scalar, Tier>, tier::Blocked<1>>, "iluk_apply: the tier is tier::Blocked<1>");
@@ -469,60 +722,105 @@ BATCHLAS_DEVICE_HELPER int iluk_apply(const Ex& ex, const IlukFactor<Scalar>& M,
 }
 
 // ---- iluk_factorize ------------------------------------------------------------------------
-// The numeric rules of an ILU(k) factorization: ILUKParams without levels_of_fill (the plan's).
+/// @brief The numeric rules of an ILU(k) factorization: the host's `ILUKParams` without `levels_of_fill`, which the plan fixes.
+/// @ingroup api_device_sparse
+/// @tparam Scalar the element type.
 template <class Scalar> struct IlukOptions {
+    /// The shift added to (or replacing) an unusable pivot; 0 for none.
     Scalar diagonal_shift;
+    /// An off-diagonal entry at or below `drop_tolerance * max(row scale, 1)` is dropped.
     real_t<Scalar> drop_tolerance;
+    /// Each row keeps its largest `ceil(fill_factor * row_nnz) - 1` off-diagonal entries.
     real_t<Scalar> fill_factor;
+    /// A pivot below `diag_pivot_threshold * max(row scale, 1)` is unusable.
     real_t<Scalar> diag_pivot_threshold;
+    /// `true`: modified ILU, dropped entries are added to the diagonal.
     bool modified_ilu;
 };
+/// @brief The `IlukOptions` of a host `ILUKParams`-like object (host code).
+/// @ingroup api_device_sparse
+/// @param p an object with the fields `diagonal_shift`, `drop_tolerance`, `fill_factor`,
+///   `diag_pivot_threshold` and `modified_ilu`.
 template <class P> auto iluk_options(const P& p) {
     using T = std::remove_cv_t<decltype(p.diagonal_shift)>;
     return IlukOptions<T>{p.diagonal_shift, p.drop_tolerance, p.fill_factor, p.diag_pivot_threshold, p.modified_ilu};
 }
 
-// The batch-shared symbolic plan of ILU(k) on one sorted CSR pattern with every diagonal stored,
-// as the host's symbolic phase builds it (the iluk host route; src/ops/iluk/iluk_plan.hh). Plain
-// device-visible index arrays, captured by value. Slots 0 .. nnz are item-local positions in the
-// factor's pattern (ro, col, diag: L strict lower and U upper with diagonal, rows sorted).
-//   a_to_slot[p]  the slot A's entry p lands in (-1: none);  row_nnz[i]  A's row count (fill quota)
-//   row i runs steps [step_ptr[i], step_ptr[i + 1]): step e divides slot step_target[e] by the
-//   diagonal slot step_pivot[e], then updates slot upd_dst[u] -= l * slot upd_src[u] for u in
-//   [step_upd_ptr[e], step_upd_ptr[e + 1])
-//   level_ptr / level_rows  the elimination levels (also the L-solve levels); u_*  the U-solve levels
+/// @brief The batch-shared symbolic plan of ILU(k) on one sorted CSR pattern with every diagonal stored.
+///
+/// Plain device-visible index arrays, captured by value. The library's host symbolic phase builds
+/// it for its ILU(k) route; that builder is not an installed header, so a caller outside the
+/// library fills the arrays to this layout itself. Slots `0` to `nnz - 1` are item-local positions
+/// in the factor's pattern (`ro`, `col`, `diag`: `L` strict lower and `U` upper with its diagonal,
+/// rows sorted). Row `i` runs the steps `[step_ptr[i], step_ptr[i + 1])`: step `e` divides slot
+/// `step_target[e]` by the diagonal slot `step_pivot[e]`, giving `l`, then for each `u` in
+/// `[step_upd_ptr[e], step_upd_ptr[e + 1])` updates slot `upd_dst[u] -= l * slot upd_src[u]`.
+/// @ingroup api_device_sparse
 struct IlukPlan {
+    /// @{
+    /// The order, `A`'s entry count, the factor's slot count, and the elimination and `U`-solve level counts.
     int n, a_nnz, nnz, levels, u_levels;
+    /// @}
+    /// The factor's row offsets (`n + 1`).
     const int* ro;
+    /// The factor's column indices (`nnz`).
     const int* col;
+    /// Each row's diagonal slot (`n`).
     const int* diag;
+    /// `A`'s entry count per row, the fill quota's base (`n`).
     const int* row_nnz;
+    /// The slot `A`'s entry `p` lands in, or -1 (`a_nnz`).
     const int* a_to_slot;
+    /// Each row's first step (`n + 1`).
     const int* step_ptr;
+    /// Each step's target slot.
     const int* step_target;
+    /// Each step's diagonal slot.
     const int* step_pivot;
+    /// Each step's first update (steps + 1).
     const int* step_upd_ptr;
+    /// Each update's source slot.
     const int* upd_src;
+    /// Each update's destination slot.
     const int* upd_dst;
+    /// The elimination levels, also the `L`-solve levels (`levels + 1`).
     const int* level_ptr;
+    /// The rows of the elimination levels.
     const int* level_rows;
+    /// The `U`-solve levels (`u_levels + 1`).
     const int* u_level_ptr;
+    /// The rows of the `U`-solve levels.
     const int* u_rows;
-    // The factor iluk_factorize left at lu (one item's nnz slots) as iluk_apply's operand.
+    /// @brief The factor `iluk_factorize` left at `lu` (one item's `nnz` slots), as `iluk_apply`'s operand.
+    /// @param lu the item's factor slots.
+    /// @param diag_shift the diagonal shift the solve applies.
     template <class Scalar> BATCHLAS_DEVICE_INLINE IlukFactor<Scalar> factor(const Scalar* lu,
                                                                              const Scalar& diag_shift) const {
         return {{lu, 0}, {col, 0}, levels, level_ptr, level_rows, ro, 0, u_levels, u_level_ptr, u_rows, diag, 0, diag_shift};
     }
 };
 
+/// @brief `iluk_factorize`'s tier list: one tier, `tier::Blocked<1>`.
+/// @ingroup api_device_sparse
 template <class Scalar> struct tiers<routine::iluk_factorize, Scalar> {
+    /// The tier list.
     using type = tier::list<tier::Blocked<1>>;
 };
+/// @brief `iluk_factorize`'s `tier::Blocked<1>`: any n, no workspace, tested at a `WorkGroup<128, 32>`.
+/// @ingroup api_device_sparse
 template <class Scalar> struct tier_info<routine::iluk_factorize, tier::Blocked<1>, Scalar> {
+    /// @{
+    /// The tested work-group size and sub-group size.
     static constexpr int wg_size = 128, sg_size = 32;
+    /// @}
+    /// The executor `launch` builds.
     using executor = WorkGroup<wg_size, sg_size>;
+    /// Batch items per work-group.
     static constexpr int per_group = 1;
+    /// @brief Every `n >= 0` is admitted.
+    /// @param n the order.
     static constexpr bool admits(int n) { return n >= 0; }
+    /// @brief No workspace.
     static constexpr WorkspaceSize buffer_size(int) { return {}; }
 };
 
@@ -624,15 +922,25 @@ BATCHLAS_DEVICE_INLINE void eliminate_row(const W& at, int i, const int* step_pt
 }
 }  // namespace detail
 
-// M := the ILU(k) factor of one batch item's A in plan's pattern, on executor ex (any n).
-//   A  the item's values in A's own CSR order (A(p), p < plan.a_nnz; the pattern is plan's).
-//   M  plan.nnz slots M(s), lvalues, distinct from A (global, or local memory of nnz elements).
-// Zeroes M, scatters A, then one level per barrier: the rows of a level split over the items.
-// Every slot of the pattern is written; a dropped entry is +0, so M is the host route's factor
-// expanded to the symbolic pattern (the host keeps the union of the items' survivors), bit for
-// bit: both run detail::eliminate_row. Returns the smallest 1-based row whose pivot was
-// unusable (no shift and a zero pivot: the host route throws convergence_error), else 0,
-// uniform across the executor; elimination continues past it with pivot 1. Collective.
+/// @brief `M :=` the ILU(k) factor of one batch item's `A` in the plan's pattern, on any n.
+///
+/// Zeroes `M`, scatters `A` into it, then eliminates one level per barrier, the rows of a level
+/// split over the items. Every slot of the pattern is written and a dropped entry is +0, so `M` is
+/// the host route's factor expanded to the symbolic pattern, bit for bit (the host keeps the union
+/// of the items' surviving entries). Elimination continues past an unusable pivot with pivot 1.
+/// COLLECTIVE over a work-group executor: `M` is visible to it on return.
+/// @ingroup api_device_sparse
+/// @tparam Tier `tier::Blocked<1>` (or a tier list naming it).
+/// @param ex the work-group executor.
+/// @param A the item's values in `A`'s own CSR order, `A(p)` for `p < plan.a_nnz`.
+/// @param plan the batch-shared symbolic plan; the pattern is the plan's.
+/// @param[out] M the `plan.nnz` factor slots `M(s)`, lvalues distinct from `A` (global memory, or
+///   local memory of `nnz` elements).
+/// @param opts the numeric rules.
+/// @param ws the workspace; none is needed (default empty).
+/// @retval 0 every pivot was usable.
+/// @retval k the smallest 1-based row whose pivot was unusable (no shift and a zero pivot; the host
+///   route throws `convergence_error` there), the same on every item.
 template <class Tier, class Ex, class AV, class MV, class Scalar>
 BATCHLAS_DEVICE_HELPER int iluk_factorize(const Ex& ex, const AV& A, const IlukPlan& plan, const MV& M, const IlukOptions<Scalar>& opts,
                                        const Workspace& ws = {}) {

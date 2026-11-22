@@ -1,16 +1,25 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Device LA level 2. Argument order is BLAS's: (ex, alpha, A, x, beta, y) and
-// (ex, alpha, x, y, A). The algorithm is a template parameter whose default is a type
-// computed from (executor, transpose); no kernel ever compiles the path it does not take.
-//
-//   gemv NoTrans      alg::RowOwner  item per output row; y in Cyclic layout
-//   gemv Trans/Conj   alg::SgPerCol  team per output column, Scope::Sub; y written by lane 0
-//                                    of team c mod nteams (publish y before Cyclic reads)
-//   gemv on Thread    alg::Serial
-//   symv/hemv Lower   alg::RowOwnerSplit (the latrd split loop); y in Cyclic layout
-//                     hemv alg::RowOwnerSplitStoredDiag: A(r,r) read as stored (Im assumed 0)
-//   ger/geru/gerc     alg::Cyclic    column loop outside, owned rows inside
+/// @file
+/// @brief In-kernel BLAS level 2: matrix-vector products, rank updates and triangular solves and
+/// multiplies on an executor (@ref api_device_blas2).
+///
+/// Arguments come in BLAS order: `(ex, alpha, A, x, beta, y)` for the products and
+/// `(ex, alpha, x, y, A)` for the rank updates. The algorithm is a template parameter whose
+/// default is computed from the executor and the transpose, so a kernel never compiles a path it
+/// does not take. The defaults, and where they leave the output:
+///   - `gemv`, `NoTrans`: `alg::RowOwner`, one item per output row; `y` in the cyclic layout.
+///   - `gemv`, `Trans` / `ConjTrans`: `alg::SgPerCol`, one team per output column with a team
+///     reduction; `y(c)` is written by lane 0 of team `c mod nteams`, so publish `y` before a
+///     cyclic read.
+///   - `gemv` on `Thread`: `alg::Serial`.
+///   - `symv` / `hemv` (`Uplo::Lower` only): `alg::RowOwnerSplit`; `y` in the cyclic layout.
+///   - `ger` / `geru` / `gerc`: `alg::Cyclic`, columns outside, owned rows inside.
+///
+/// An operand that an operation reads at indices other items own (`x` of `gemv`, `y` of `ger`)
+/// must be `Published`: pass `ex.publish(v)` or `assume_published(v)`. The compiler rejects an
+/// unpublished one. Included by `<batchlas/device.hh>`.
+/// @ingroup api_device_blas2
 
 #include <type_traits>
 
@@ -45,11 +54,31 @@ template <class Ex> BATCHLAS_DEVICE_INLINE auto lane_group(const Ex& ex) {
 }
 }  // namespace detail
 
-// y := alpha op(A) x + beta y; beta == Zero never reads y. Ops: the arithmetic of the dot;
-// Shape: the epilogue (store_epi<Shape, Ops>, arith.hh); AlphaSide: Side::Right forms acc * alpha.
-//   alg::TeamPerRow  NoTrans: team t owns rows t mod nteams, lanes stride the columns, lane 0 stores
-//   alg::ColDot<W>   (Conj)Trans: W consecutive lanes per column (W | the sub-group), a W-lane
-//                    butterfly; the W-block's first lane stores
+/// @brief `y := alpha op(A) x + beta y` (BLAS gemv) on an executor.
+///
+/// `A` is m x n; `op(A) x` has `op(A)`'s row count. A `Zero` tag for `beta` never reads `y`.
+/// Each output element is written once, by the item or lane the algorithm names; no barrier is
+/// taken, so publish `y` before another owner reads it.
+/// @ingroup api_device_blas2
+/// @tparam TR `Transpose::NoTrans`, `Trans` or `ConjTrans`.
+/// @tparam Alg `void` (default) picks `alg::Serial` on `Thread`, `alg::RowOwner` for `NoTrans` and
+///   `alg::SgPerCol` otherwise. The others:
+///   - `alg::TeamPerRow` (`NoTrans`): team `t` owns rows `t mod nteams`, its lanes stride the
+///     columns, lane 0 stores.
+///   - `alg::ColDot<W>` (`Trans` / `ConjTrans`): `W` consecutive lanes per column (`W` divides the
+///     sub-group), a `W`-lane butterfly; the block's first lane stores.
+///   - `alg::GroupReducePerOutput` (`Trans` / `ConjTrans`): one group reduction per column, the
+///     leader stores.
+/// @tparam Ops the arithmetic policy of the dot products.
+/// @tparam Shape the epilogue, `store_epi<Shape, Ops>` (default `epi::Sum`).
+/// @tparam AlphaSide `Side::Left` (default, `alpha * acc`) or `Side::Right` (`acc * alpha`, which
+///   differs for a complex product).
+/// @param ex the executor.
+/// @param alpha_ the scalar `alpha`: a value or a tag.
+/// @param a the matrix `A`.
+/// @param xp the vector `x`, `Published` unless the executor is `Thread`.
+/// @param beta_ the scalar `beta`: a value or a tag.
+/// @param[in,out] y the output vector.
 template <Transpose TR, class Alg = void, class Ops = arith::Explicit, class Shape = epi::Sum, Side AlphaSide = Side::Left,
           class Ex, class AS, class MA, class X, class BS, class Y>
 BATCHLAS_DEVICE_INLINE void gemv(const Ex& ex, AS alpha_, const MA& a, const X& xp, BS beta_, const Y& y) {
@@ -232,34 +261,103 @@ BATCHLAS_DEVICE_INLINE void ger_impl(const Ex& ex, AS alpha_, const X& x, const 
 }
 }  // namespace detail
 
-// y := alpha A x + beta y, A symmetric with the UL triangle stored.
+/// @brief `y := alpha A x + beta y` (BLAS symv), `A` symmetric with its `UL` triangle stored.
+///
+/// One item per output row (cyclic): row `r` reads the stored triangle's row and column through
+/// `r`, so the opposite triangle is never read. `y` is in the cyclic layout. A `Trailing` view of
+/// `A` (with trailing `x` and `y`) works in the parent's coordinates on rows and columns
+/// `[k, n)`. A `Zero` tag for `beta` never reads `y`.
+/// @ingroup api_device_blas2
+/// @tparam UL the stored triangle; only `Uplo::Lower` is implemented.
+/// @tparam Alg `void` (default): `alg::RowOwnerSplit`, the only form for `symv`.
+/// @tparam Ops the arithmetic policy.
+/// @param ex the executor.
+/// @param alpha the scalar `alpha`: a value or a tag.
+/// @param a the n x n matrix `A`.
+/// @param x the vector `x`, `Published` unless the executor is `Thread`.
+/// @param beta the scalar `beta`: a value or a tag.
+/// @param[in,out] y the output vector.
 template <Uplo UL, class Alg = void, class Ops = arith::Explicit, class Ex, class AS, class MA, class X, class BS, class Y>
 BATCHLAS_DEVICE_INLINE void symv(const Ex& ex, AS alpha, const MA& a, const X& x, BS beta, const Y& y) {
     detail::symv_impl<false, UL, Alg, Ops>(ex, alpha, a, x, beta, y);
 }
-// y := alpha A x + beta y, A Hermitian with the UL triangle stored (Im of the diagonal ignored).
+/// @brief `y := alpha A x + beta y` (BLAS hemv), `A` Hermitian with its `UL` triangle stored.
+///
+/// As `symv`, with the conjugate of the stored element used opposite the triangle. The imaginary
+/// part of the diagonal is not read.
+/// @ingroup api_device_blas2
+/// @tparam UL the stored triangle; only `Uplo::Lower` is implemented.
+/// @tparam Alg `void` (default): `alg::RowOwnerSplit`. `alg::RowOwnerSplitStoredDiag` reads the
+///   diagonal as stored instead; the caller guarantees its imaginary part is 0.
+/// @tparam Ops the arithmetic policy.
+/// @param ex the executor.
+/// @param alpha the scalar `alpha`: a value or a tag.
+/// @param a the n x n matrix `A`.
+/// @param x the vector `x`, `Published` unless the executor is `Thread`.
+/// @param beta the scalar `beta`: a value or a tag.
+/// @param[in,out] y the output vector.
 template <Uplo UL, class Alg = void, class Ops = arith::Explicit, class Ex, class AS, class MA, class X, class BS, class Y>
 BATCHLAS_DEVICE_INLINE void hemv(const Ex& ex, AS alpha, const MA& a, const X& x, BS beta, const Y& y) {
     detail::symv_impl<true, UL, Alg, Ops>(ex, alpha, a, x, beta, y);
 }
 
-// A := A + alpha x y^T (ger, geru) or A + alpha x y^H (gerc). y is read by every item.
-// alg::Cyclic: column loop outside, owned rows inside (x Cyclic); alg::Flat: the 2-D flat
-// ownership of for_each_owned_2d (x read across owners: Published). Ops: the mac's arithmetic.
-// RowFrag form: the item holds row r of A in a register Frag and x(r) as xr: a[j] += xr * alpha y(j).
+/// @brief `A := A + alpha x y^T` (BLAS geru), the unconjugated rank-1 update.
+///
+/// Every item reads all of `y`, so `y` must be `Published` (unless the executor is `Thread`).
+/// Each element of `A` is updated by the item that owns it; no barrier.
+/// @ingroup api_device_blas2
+/// @tparam Alg `alg::Cyclic` (default): columns outside, owned rows inside, `x` read in the cyclic
+///   layout. `alg::Flat`: `for_each_owned_2d` ownership, so `x` is read across owners and must be
+///   `Published` too.
+/// @tparam Ops the arithmetic policy of the multiply-adds.
+/// @param ex the executor.
+/// @param alpha the scalar `alpha`: a value or a tag.
+/// @param x the m-vector `x`.
+/// @param y the n-vector `y`.
+/// @param[in,out] a the m x n matrix `A`.
 template <class Alg = alg::Cyclic, class Ops = arith::Explicit, class Ex, class AS, class X, class Y, class MA>
 BATCHLAS_DEVICE_INLINE void geru(const Ex& ex, AS alpha, const X& x, const Y& y, const MA& a) {
     detail::ger_impl<false, Alg, Ops>(ex, alpha, x, y, a);
 }
+/// @brief `A := A + alpha x y^H` (BLAS gerc), the conjugated rank-1 update.
+///
+/// As `geru`, with `y` conjugated.
+/// @ingroup api_device_blas2
+/// @tparam Alg `alg::Cyclic` (default) or `alg::Flat`, as for `geru`.
+/// @tparam Ops the arithmetic policy of the multiply-adds.
+/// @param ex the executor.
+/// @param alpha the scalar `alpha`: a value or a tag.
+/// @param x the m-vector `x`.
+/// @param y the n-vector `y`, `Published`.
+/// @param[in,out] a the m x n matrix `A`.
 template <class Alg = alg::Cyclic, class Ops = arith::Explicit, class Ex, class AS, class X, class Y, class MA>
 BATCHLAS_DEVICE_INLINE void gerc(const Ex& ex, AS alpha, const X& x, const Y& y, const MA& a) {
     detail::ger_impl<true, Alg, Ops>(ex, alpha, x, y, a);
 }
+/// @brief `A := A + alpha x y^T` (BLAS ger): `geru`.
+/// @ingroup api_device_blas2
+/// @tparam Alg `alg::Cyclic` (default) or `alg::Flat`, as for `geru`.
+/// @tparam Ops the arithmetic policy of the multiply-adds.
+/// @param ex the executor.
+/// @param alpha the scalar `alpha`: a value or a tag.
+/// @param x the m-vector `x`.
+/// @param y the n-vector `y`, `Published`.
+/// @param[in,out] a the m x n matrix `A`.
 template <class Alg = alg::Cyclic, class Ops = arith::Explicit, class Ex, class AS, class X, class Y, class MA>
 BATCHLAS_DEVICE_INLINE void ger(const Ex& ex, AS alpha, const X& x, const Y& y, const MA& a) {
     geru<Alg, Ops>(ex, alpha, x, y, a);
 }
-// TR: Trans a[j] += xr alpha y(j) (ger), ConjTrans a[j] += xr alpha conj(y(j)) (gerc).
+/// @brief One row of a rank-1 update held in registers: `arow[j] += xr alpha op(y(j))` for `j < live`.
+///
+/// The item holds row `r` of `A` in a register fragment and `x(r)` as `xr`.
+/// @ingroup api_device_lowlevel
+/// @tparam TR `Transpose::Trans` (default, `ger`) or `Transpose::ConjTrans` (`gerc`: `y` conjugated).
+/// @tparam Ops the arithmetic policy.
+/// @param alpha_ the scalar `alpha`: a value or a tag.
+/// @param xr this row's element of `x`.
+/// @param y the vector `y`, read at `j < live`.
+/// @param[in,out] arow the row, `N` slots.
+/// @param live the number of valid columns (default `N`).
 template <Transpose TR = Transpose::Trans, class Ops = arith::Explicit, class AS, class Scalar, class Y, int N>
 BATCHLAS_DEVICE_INLINE void ger_row(AS alpha_, const Scalar& xr, const Y& y, Frag<Scalar, N, RowFrag>& arow,
                                     int live = N) {
@@ -275,8 +373,12 @@ BATCHLAS_DEVICE_INLINE void ger_row(AS alpha_, const Scalar& xr, const Y& y, Fra
     }
 }
 
-// Register-tile form on the Thread executor: A := x y^T + A, one Ops::mac per entry, row by row
-// (x, y register Frags: the memory-operand forms above read y per column).
+/// @brief Register form on `Thread`: `A := x y^T + A` on a register tile, one multiply-add per entry, row by row.
+/// @ingroup api_device_blas2
+/// @tparam Ops the arithmetic policy of the multiply-adds.
+/// @param x the `R`-element register fragment.
+/// @param y the `C`-element register fragment.
+/// @param[in,out] a the `R` x `C` register tile.
 template <class Ops = arith::Explicit, class Scalar, int R, int C, class L1, class L2>
 BATCHLAS_DEVICE_INLINE void ger(const Thread&, const Frag<Scalar, R, L1>& x, const Frag<Scalar, C, L2>& y, Tile<Scalar,
                                 R, C>& a) {
@@ -289,12 +391,31 @@ BATCHLAS_UNROLL_FULL
 }
 
 // ---- the guarded diagonal step of trsv's RowFrag block form ----------------------------------
-// The diagonal of row lid(): its reciprocal, divide = any reciprocal in the partition is
-// non-finite (a bit_or team_reduce, shuffles only), unit = the diagonal is not applied.
+/// @brief The diagonal step object of `trsv`'s row-fragment block form (`alg::DiagApply`).
+///
+/// Built by `guarded_recip` for the diagonal element of row `lid()`.
+/// @ingroup api_device_lowlevel
 template <class Scalar> struct GuardedRecip {
+    /// @{
+    /// The diagonal element `d` and its reciprocal `rinv`.
     Scalar d, rinv;
+    /// @}
+    /// @{
+    /// `divide`: some reciprocal in the partition is not finite, so divide by `d`. `unit`: the
+    /// diagonal is not applied.
     bool divide, unit;
+    /// @}
 };
+/// @brief The `GuardedRecip` of the diagonal element `d` of row `lid()`.
+///
+/// `divide` is set when any item's reciprocal is not finite (a bitwise-or team reduction,
+/// shuffles only). COLLECTIVE over the partition.
+/// @ingroup api_device_lowlevel
+/// @tparam Ar the arithmetic used for the reciprocal.
+/// @param ex the partition executor.
+/// @param d this row's diagonal element.
+/// @param unit `true` when the diagonal is not to be applied.
+/// @return the step object.
 template <class Ar, int P, class Scalar> BATCHLAS_DEVICE_INLINE GuardedRecip<Scalar> guarded_recip(const Partition<P>& ex, Scalar d, bool unit) {
     const Scalar rinv = Ar::recip(d);
     int bad = Ar::isfinite(rinv) ? 0 : 1;
@@ -304,10 +425,17 @@ template <class Ar, int P, class Scalar> BATCHLAS_DEVICE_INLINE GuardedRecip<Sca
 
 // ---- subtract-from and multi-term gemv, triangular solve / multiply -------------------------
 
-// y := b - A x (NoTrans, RowOwner): the running value starts at b(r) and every term is
-// subtracted from it (Ops::msub), the order of the hand kernels' column updates. That rounding
-// is not alpha * (A x) + b, so a strict port of such a loop needs this form (latrd P3, sytrf).
-// y may alias b.
+/// @brief `y := b - A x`, each row's terms subtracted from `b(r)` in column order (`Ops::msub`).
+///
+/// Row owner (cyclic). The rounding differs from `gemv` with `alpha = -1`, `beta = 1`, which forms
+/// `A x` first. `y` may alias `b`.
+/// @ingroup api_device_lowlevel
+/// @tparam Ops the arithmetic policy.
+/// @param ex the executor.
+/// @param a the m x n matrix.
+/// @param xp the n-vector `x`, `Published` unless the executor is `Thread`.
+/// @param b the m-vector `b`.
+/// @param[out] y the m-vector result.
 template <class Ops = arith::Explicit, class Ex, class MA, class X, class B, class Y>
 BATCHLAS_DEVICE_INLINE void gemv_sub(const Ex& ex, const MA& a, const X& xp, const B& b, const Y& y) {
     using T = typename MA::value_type;
@@ -322,16 +450,32 @@ BATCHLAS_DEVICE_INLINE void gemv_sub(const Ex& ex, const MA& a, const X& xp, con
     });
 }
 
-// A term A_t x_t of gemv_acc.
+/// @brief One term `A_t x_t` of `gemv_acc`; build it with `term`.
+/// @ingroup api_device_lowlevel
 template <class MA, class X> struct GemvTerm {
+    /// The matrix `A_t`.
     MA a;
+    /// The vector `x_t`, `Published`.
     X x;
 };
+/// @brief The `gemv_acc` term `A x`.
+/// @ingroup api_device_lowlevel
+/// @param a the matrix.
+/// @param x the vector, `Published`.
+/// @return the term.
 template <class MA, class X> BATCHLAS_DEVICE_INLINE GemvTerm<MA, X> term(const MA& a, const X& x) { return {a, x}; }
 
-// y := y0 + alpha * sum_t A_t x_t (NoTrans, RowOwner) in ONE accumulator per row: the terms'
-// products are summed in argument order, then scaled once (gebrd's gemv_pair, sytrd's Fit
-// gemv). Every x_t is read by every item (Published, or assume_published). y may alias y0.
+/// @brief `y := y0 + alpha sum_t A_t x_t` in one accumulator per row (`NoTrans`, row owner).
+///
+/// The terms' products are summed in argument order, then scaled once. Every `x_t` is read by
+/// every item, so each is `Published`. `y` may alias `y0`.
+/// @ingroup api_device_lowlevel
+/// @tparam Ops the arithmetic policy.
+/// @param ex the executor.
+/// @param alpha_ the scalar `alpha`: a value or a tag.
+/// @param y0 the vector added.
+/// @param[out] y the result; its size is the row count.
+/// @param terms the `GemvTerm`s, from `term(A, x)`.
 template <class Ops = arith::Explicit, class Ex, class AS, class Y0, class Y, class... Terms>
 BATCHLAS_DEVICE_INLINE void gemv_acc(const Ex& ex, AS alpha_, const Y0& y0, const Y& y, const Terms&... terms) {
     using T = elem_t<Y>;
@@ -349,11 +493,6 @@ BATCHLAS_DEVICE_INLINE void gemv_acc(const Ex& ex, AS alpha_, const Y0& y0, cons
     });
 }
 
-// x := op(A) x (trmv) in place, A n x n triangular (UL stored), on one item: x is a register
-// Frag<T, N> (n <= N live entries, every index a compile-time constant) or a memory vector
-// (runtime n). Entries past n are not touched. Diag::Unit never reads the diagonal; the opposite
-// triangle is never read. trsv (below) solves with the same operands. Alg: alg::Serial, or
-// alg::SplitDot<W> (as trsv's: x_i = re(a_ii) x_i + the split column dot).
 namespace detail {
 template <class X> constexpr int tri_cap_of(const X*) { return 0; }
 template <class T, int N, class L> constexpr int tri_cap_of(const Frag<T, N, L>*) { return N; }
@@ -431,6 +570,22 @@ BATCHLAS_DEVICE_INLINE void split_dot_tri(const MA& a, Frag<Scalar, N, L>& x, in
 
 }  // namespace detail
 
+/// @brief `x := op(A) x` (BLAS trmv) in place on one item, `A` n x n triangular with its `UL` triangle stored.
+///
+/// `x` is a register fragment `Frag<T, N>` (`n <= N` live entries, every index a compile-time
+/// constant) or a memory vector (run-time `n`). Entries past `n` are not touched; the opposite
+/// triangle is never read. `trsv` solves with the same operands.
+/// @ingroup api_device_blas2
+/// @tparam UL the stored triangle.
+/// @tparam TR `Transpose::NoTrans`, `Trans` or `ConjTrans`.
+/// @tparam DG `Diag::Unit` never reads the diagonal; `Diag::NonUnit` multiplies by it.
+/// @tparam Ops the arithmetic policy.
+/// @tparam Alg `alg::Serial` (default), or `alg::SplitDot<W>` (`Trans` / `ConjTrans` with
+///   `Diag::NonUnit`, the diagonal read as real: `x_i = re(a_ii) x_i` plus the column dot split
+///   over `W` accumulators, 16-byte column loads, every column of `A` 16-byte aligned).
+/// @param a the matrix `A`.
+/// @param[in,out] x the vector.
+/// @param n the order.
 template <Uplo UL, Transpose TR, Diag DG, class Ops = arith::Explicit, class Alg = alg::Serial, class MA, class X>
 BATCHLAS_DEVICE_INLINE void trmv(const Thread&, const MA& a, X& x, int n) {
     using T = typename MA::value_type;
@@ -472,7 +627,17 @@ BATCHLAS_DEVICE_INLINE void trmv(const Thread&, const MA& a, X& x, int n) {
             for (int i = 0; i < n; ++i) x(i) = row(i, xs);
     }
 }
-// The memory-vector form takes x by const view (the view, not the data, is const).
+/// @brief `x := op(A) x` in place on one item for a memory vector of order `x.size()`, `alg::Serial`.
+///
+/// `x` is taken by const view: the view is const, not the data it refers to.
+/// @ingroup api_device_blas2
+/// @tparam UL the stored triangle.
+/// @tparam TR `Transpose::NoTrans`, `Trans` or `ConjTrans`.
+/// @tparam DG `Diag::Unit` or `Diag::NonUnit`.
+/// @tparam Ops the arithmetic policy.
+/// @param ex the `Thread` executor.
+/// @param a the matrix `A`.
+/// @param x the vector, overwritten.
 template <Uplo UL, Transpose TR, Diag DG, class Ops = arith::Explicit, class MA, class X>
     requires(requires(const X& v) { v.size(); })
 BATCHLAS_DEVICE_INLINE void trmv(const Thread& ex, const MA& a, const X& x) {
@@ -482,12 +647,23 @@ BATCHLAS_DEVICE_INLINE void trmv(const Thread& ex, const MA& a, const X& x) {
 
 // ---- level 2 (design A.2) -----------------------------------------------------------------------
 
-// A := alpha x y^H + conj(alpha) y x^H + A on the UL triangle of A (real T: alpha (x y^T + y x^T));
-// the other triangle is neither read nor written. Each element adds tag_mul(alpha, x(r) conj(y(c)))
-// and then tag_mul(conj(alpha), y(r) conj(x(c))), in that order; the diagonal's imaginary part is
-// set to zero (LAPACK zher2). x and y are read across owners (Published).
-//   alg::RowOwner    rows Cyclic over the items, each item serial over its row's columns
-//   alg::TeamPerRow  team t owns rows t mod nteams, its lanes stride the columns
+/// @brief `A := alpha x y^H + conj(alpha) y x^H + A` (BLAS her2) on the `UL` triangle of `A`.
+///
+/// For a real element type this is `alpha (x y^T + y x^T) + A` (syr2). The other triangle is
+/// neither read nor written. Each element adds `alpha x(r) conj(y(c))`, then
+/// `conj(alpha) y(r) conj(x(c))`, in that order; the diagonal's imaginary part is set to zero
+/// (LAPACK zher2). `x` and `y` are read across owners, so both are `Published`.
+/// @ingroup api_device_blas2
+/// @tparam UL the triangle updated.
+/// @tparam Alg `alg::RowOwner` (default): rows cyclic over the items, each item serial over its
+///   row's columns. `alg::TeamPerRow`: team `t` owns rows `t mod nteams`, its lanes stride the
+///   columns.
+/// @tparam Ops the arithmetic policy.
+/// @param ex the executor.
+/// @param alpha_ the scalar `alpha`: a value or a tag.
+/// @param xp the vector `x`, `Published`.
+/// @param yp the vector `y`, `Published`.
+/// @param[in,out] a the n x n matrix `A`.
 template <Uplo UL, class Alg = alg::RowOwner, class Ops = arith::Explicit, class Ex, class AS, class X, class Y, class MA>
 BATCHLAS_DEVICE_INLINE void her2(const Ex& ex, AS alpha_, const X& xp, const Y& yp, const MA& a) {
     constexpr Part P = UL == Uplo::Lower ? Part::Lower : Part::Upper;
@@ -545,35 +721,6 @@ BATCHLAS_DEVICE_INLINE void her2(const Ex& ex, AS alpha_, const X& xp, const Y& 
     }
 }
 
-// x := op(A)^{-1} x in place for A n x n triangular (UL stored; the opposite triangle is never
-// read), entries past n untouched. Diag::Unit never reads the diagonal (nor takes the last
-// pivot, which updates nothing); Diag::NonUnit divides by it under Div: alg::Div, alg::Recip or
-// alg::RealDiv (core.hh) on a_ii, or alg::DiagApply, x_i := d.apply<Ar>(i, x_i) for a diagonal
-// step object d (TpDiag, GuardedRecip: a guarded reciprocal, unit at run time). The diagonal is
-// op(A)'s own, or d(i) when the diagonal operand d is a vector (potrf's real diagonal). Upd:
-//   alg::Fused         Ops::msub
-//   alg::Unfused       sub of mul, a * x_j: two roundings (getrs / sytrs)
-//   alg::UnfusedRight  sub of mul, x_j * a: the X op(A) = B operand order (potrf; a complex fma
-//                      product is not bit-commutative)
-//   alg::DotThenSub    the row's dot from zero, then x_i := b(i) - dot (alg::SerialRows)
-//   alg::Axpy          x += a x_j on every row with a the caller's NEGATED multipliers, zero on and
-//                      above the diagonal (no row predicate; alg::LanePerRow on a RowFrag)
-// Alg:
-//   alg::Serial        one item (Thread); x a register Frag<T, N> (n <= N live entries, every index
-//                      a compile-time constant) or a memory vector (runtime n)
-//   alg::SerialRows<R> Lower / NoTrans alg::Serial on rows [r0, r0 + R) only (rows below r0 solved), the
-//                      right-hand side b(i) read after the row's dot (the tiled forward solve)
-//   alg::SplitDot<W>   Thread, (Conj)Trans, Diag::NonUnit with alg::RealDiv: x_i combines column i
-//                      of A with the solved entries in W accumulators (term p in p mod W) summed as
-//                      a tree, 16-byte column loads (every column start of A 16-byte aligned)
-//   alg::LanePerRow    row t on lane t % size: x the lane's register (n <= size) or a lane-cyclic
-//                      Frag<T, R, Cyclic> (row lane + size r in x[r]); step j finalises row j and
-//                      broadcasts it, the rows it reaches update. No barrier. COLLECTIVE. On a
-//                      RowFrag x (row lane of an n x QC block X, a trsm over QC columns; Lower,
-//                      NoTrans, alg::Axpy, alg::DiagApply with a GuardedRecip, A the lane's row of
-//                      multipliers as a Frag): the division sits behind a partition-uniform branch.
-//   alg::LanePerRowRolled  the RowFrag form with the step loop rolled (A's row indexed at run
-//                      time: local memory, fewer registers)
 namespace detail {
 template <Diag DG, class Div, class Ar, class Scalar, class D> BATCHLAS_DEVICE_INLINE Scalar trsv_diag_apply(Scalar xi, const D& aii) {
     if constexpr (DG == Diag::Unit) return xi;
@@ -764,23 +911,106 @@ BATCHLAS_DEVICE_INLINE void trsv_run(const Ex& ex, const MA& a, const DV& d, X& 
     }
 }
 }  // namespace detail
+/// @brief `x := op(A)^{-1} x` (BLAS trsv) in place, `A` n x n triangular with its `UL` triangle stored.
+///
+/// The opposite triangle is never read and entries of `x` past `n` are untouched. `Diag::Unit`
+/// never reads the diagonal (nor takes the last step, which updates nothing). A zero diagonal
+/// element of a `Diag::NonUnit` `A` gives Inf or NaN, as BLAS does.
+/// @ingroup api_device_blas2
+/// @tparam UL the stored triangle.
+/// @tparam TR `Transpose::NoTrans`, `Trans` or `ConjTrans`.
+/// @tparam DG `Diag::Unit` or `Diag::NonUnit`.
+/// @tparam Div how a `Diag::NonUnit` diagonal is applied: `alg::Div` (default, a division),
+///   `alg::Recip` (a multiply by the reciprocal), `alg::RealDiv` (a division by the real part), or
+///   `alg::DiagApply` (a step object; see the form with a diagonal operand).
+/// @tparam Alg the algorithm:
+///   - `alg::Serial` (default): one item (`Thread`); `x` a register fragment `Frag<T, N>` (`n <= N`
+///     live entries) or a memory vector.
+///   - `alg::SplitDot<W>`: `Thread`, `Trans` / `ConjTrans`, `Diag::NonUnit` with `alg::RealDiv`;
+///     each step's column dot in `W` accumulators summed as a tree, with 16-byte column loads
+///     (every column of `A` 16-byte aligned).
+///   - `alg::LanePerRow`: row `t` on lane `t mod size`, `x` the lane's register (`n <= size`) or a
+///     lane-cyclic `Frag<T, R, Cyclic>` (row `lane + size r` in `x[r]`); step `j` finishes row `j`
+///     and broadcasts it. No barrier. COLLECTIVE over the sub-group or partition.
+///   - `alg::LanePerRowRolled`: the row-fragment block form with its step loop rolled.
+/// @tparam Ops the arithmetic policy.
+/// @tparam Upd how a solved entry updates the others:
+///   - `alg::Fused` (default): one `Ops::msub`.
+///   - `alg::Unfused`: a multiply `a * x_j`, then a subtraction (two roundings).
+///   - `alg::UnfusedRight`: the same with `x_j * a`, the operand order of `X op(A) = B` (a complex
+///     product is not bit-commutative).
+///   - `alg::DotThenSub`, `alg::Axpy`: the `alg::SerialRows` and row-fragment forms.
+/// @param ex the executor.
+/// @param a the matrix `A`.
+/// @param[in,out] x the right-hand side, overwritten by the solution.
+/// @param n the order.
 template <Uplo UL, Transpose TR, Diag DG, class Div = alg::Div, class Alg = alg::Serial, class Ops = arith::Explicit,
           class Upd = alg::Fused, class Ex, class MA, class X>
 BATCHLAS_DEVICE_INLINE void trsv(const Ex& ex, const MA& a, X& x, int n) {
     detail::trsv_run<UL, TR, DG, Div, Alg, Ops, Upd>(ex, a, None{}, x, n, 0, None{});
 }
-// With the diagonal operand d: a vector (d(i) is a_ii) or, under alg::DiagApply, a step object.
+/// @brief `x := op(A)^{-1} x` with the diagonal taken from the operand `d`.
+///
+/// `d` is a vector (`d(i)` is used as `a_ii`, for example the real diagonal of a Cholesky
+/// factor), or, under `alg::DiagApply`, a step object: `x_i := d.apply<Ar>(i, x_i)` (a `TpDiag`,
+/// or a `GuardedRecip` in the row-fragment block form). The row-fragment block form (`x` a
+/// `Frag<T, QC, RowFrag>` holding row `lane` of an n x QC block, `A` the lane's row of negated
+/// multipliers as a fragment) is `Uplo::Lower`, `NoTrans`, `alg::LanePerRow` or
+/// `alg::LanePerRowRolled`, `alg::Axpy` and `alg::DiagApply`.
+/// @ingroup api_device_blas2
+/// @tparam UL the stored triangle.
+/// @tparam TR `Transpose::NoTrans`, `Trans` or `ConjTrans`.
+/// @tparam DG `Diag::Unit` or `Diag::NonUnit`.
+/// @tparam Div `alg::Div` (default), `alg::Recip`, `alg::RealDiv` or `alg::DiagApply`.
+/// @tparam Alg the algorithm, as for the form without `d`.
+/// @tparam Ops the arithmetic policy.
+/// @tparam Upd the update form, as for the form without `d`.
+/// @param ex the executor.
+/// @param a the matrix `A`.
+/// @param d the diagonal operand or step object.
+/// @param[in,out] x the right-hand side, overwritten by the solution.
+/// @param n the order.
 template <Uplo UL, Transpose TR, Diag DG, class Div = alg::Div, class Alg = alg::Serial, class Ops = arith::Explicit,
           class Upd = alg::Fused, class Ex, class MA, class DV, class X>
 BATCHLAS_DEVICE_INLINE void trsv(const Ex& ex, const MA& a, const DV& d, X& x, int n) {
     detail::trsv_run<UL, TR, DG, Div, Alg, Ops, Upd>(ex, a, d, x, n, 0, None{});
 }
-// alg::SerialRows<R>: rows [r0, r0 + R) of the n-row solve, b(i) their right-hand side.
+/// @brief Rows `[r0, r0 + R)` of an n-row forward solve (`alg::SerialRows<R>`), `b(i)` their right-hand side.
+///
+/// `Thread`, `Uplo::Lower`, `NoTrans`, `alg::DotThenSub`: rows below `r0` are already solved in the
+/// register fragment `x`; each row's dot starts from zero and `x_i := b(i) - dot`, then the
+/// diagonal step. The building block of a tiled forward solve.
+/// @ingroup api_device_blas2
+/// @tparam UL `Uplo::Lower`.
+/// @tparam TR `Transpose::NoTrans`.
+/// @tparam DG `Diag::Unit` or `Diag::NonUnit`.
+/// @tparam Div how the diagonal is applied, as for the other forms.
+/// @tparam Alg `alg::SerialRows<R>`.
+/// @tparam Ops the arithmetic policy.
+/// @tparam Upd `alg::DotThenSub`.
+/// @param ex the `Thread` executor.
+/// @param a the matrix `A`.
+/// @param d the diagonal operand, or `None{}` for `A`'s own.
+/// @param[in,out] x the register fragment; rows `[r0, r0 + R)` are written.
+/// @param n the order.
+/// @param r0 the first row solved.
+/// @param b the right-hand side, read at the solved rows.
 template <Uplo UL, Transpose TR, Diag DG, class Div, class Alg, class Ops, class Upd, class Ex, class MA, class DV, class X, class B>
 BATCHLAS_DEVICE_INLINE void trsv(const Ex& ex, const MA& a, const DV& d, X& x, int n, int r0, const B& b) {
     detail::trsv_run<UL, TR, DG, Div, Alg, Ops, Upd>(ex, a, d, x, n, r0, b);
 }
-// The memory-vector form takes x by const view (the view, not the data, is const).
+/// @brief `x := op(A)^{-1} x` in place on one item for a memory vector of order `x.size()`, `alg::Serial`.
+///
+/// `x` is taken by const view: the view is const, not the data it refers to.
+/// @ingroup api_device_blas2
+/// @tparam UL the stored triangle.
+/// @tparam TR `Transpose::NoTrans`, `Trans` or `ConjTrans`.
+/// @tparam DG `Diag::Unit` or `Diag::NonUnit`.
+/// @tparam Div `alg::Div` (default), `alg::Recip` or `alg::RealDiv`.
+/// @tparam Ops the arithmetic policy.
+/// @param ex the `Thread` executor.
+/// @param a the matrix `A`.
+/// @param x the vector, overwritten by the solution.
 template <Uplo UL, Transpose TR, Diag DG, class Div = alg::Div, class Ops = arith::Explicit, class MA, class X>
     requires(requires(const X& v) { v.size(); })
 BATCHLAS_DEVICE_INLINE void trsv(const Thread& ex, const MA& a, const X& x) {
@@ -788,9 +1018,16 @@ BATCHLAS_DEVICE_INLINE void trsv(const Thread& ex, const MA& a, const X& x) {
     trsv<UL, TR, DG, Div, alg::Serial, Ops>(ex, a, xv, x.size());
 }
 
-// A := diag(d) A (Side::Left) or A diag(d) (Side::Right) in place, or C := the same of B (four
-// operands; C may alias B); 2-D flat ownership. A real d on a complex matrix scales both parts
-// (no cross terms); otherwise each element is mul(b, d).
+/// @brief `A := diag(d) A` (`Side::Left`) or `A diag(d)` (`Side::Right`) in place.
+///
+/// `for_each_owned_2d` ownership, no barrier. A real `d` on a complex matrix scales both parts;
+/// otherwise each element is `mul(a, d)`.
+/// @ingroup api_device_blas2
+/// @tparam SD `Side::Left` (row `i` scaled by `d(i)`) or `Side::Right` (column `j` by `d(j)`).
+/// @tparam Ops the arithmetic policy.
+/// @param ex the executor.
+/// @param d the diagonal, a vector of `A`'s row count (Left) or column count (Right).
+/// @param[in,out] a the matrix.
 template <Side SD, class Ops = arith::Explicit, class Ex, class D, class MA>
 BATCHLAS_DEVICE_INLINE void dgmm(const Ex& ex, const D& d, const MA& a) {
     using T = typename MA::value_type;
@@ -803,6 +1040,16 @@ BATCHLAS_DEVICE_INLINE void dgmm(const Ex& ex, const D& d, const MA& a) {
         else a(i, j) = A::mul(aij, static_cast<T>(s));
     });
 }
+/// @brief `C := diag(d) B` (`Side::Left`) or `B diag(d)` (`Side::Right`); `C` may alias `B`.
+///
+/// Over `C`'s extents, `for_each_owned_2d` ownership, no barrier.
+/// @ingroup api_device_blas2
+/// @tparam SD `Side::Left` or `Side::Right`.
+/// @tparam Ops the arithmetic policy.
+/// @param ex the executor.
+/// @param d the diagonal.
+/// @param b the source matrix.
+/// @param[out] c the destination matrix.
 template <Side SD, class Ops = arith::Explicit, class Ex, class D, class MB, class MC>
 BATCHLAS_DEVICE_INLINE void dgmm(const Ex& ex, const D& d, const MB& b, const MC& c) {
     using T = typename MC::value_type;
@@ -816,9 +1063,20 @@ BATCHLAS_DEVICE_INLINE void dgmm(const Ex& ex, const D& d, const MB& b, const MC
     });
 }
 
-// y := alpha A x + beta y for A m x n general band with KL sub- and KU super-diagonals in LAPACK
-// band storage, A(i, j) = ab(KU + i - j, j). Row owner, ascending j; x read across owners
-// (Published); beta == Zero never reads y.
+/// @brief `y := alpha A x + beta y` (BLAS gbmv, `NoTrans`) for a general band `A`.
+///
+/// `A` is m x n with `KL` sub- and `KU` super-diagonals in LAPACK band storage:
+/// `A(i, j) = ab(KU + i - j, j)`. Row owner, ascending `j`. A `Zero` tag for `beta` never reads `y`.
+/// @ingroup api_device_blas2
+/// @tparam KL the number of sub-diagonals, `>= 0`.
+/// @tparam KU the number of super-diagonals, `>= 0`.
+/// @tparam Ops the arithmetic policy.
+/// @param ex the executor.
+/// @param alpha_ the scalar `alpha`: a value or a tag.
+/// @param ab the band storage, `KL + KU + 1` rows by n columns.
+/// @param xp the n-vector `x`, `Published`.
+/// @param beta_ the scalar `beta`: a value or a tag.
+/// @param[in,out] y the m-vector `y`.
 template <int KL, int KU, class Ops = arith::Explicit, class Ex, class AS, class MB, class X, class BS, class Y>
 BATCHLAS_DEVICE_INLINE void gbmv(const Ex& ex, AS alpha_, const MB& ab, const X& xp, BS beta_, const Y& y) {
     static_assert(KL >= 0 && KU >= 0, "gbmv: KL, KU >= 0");

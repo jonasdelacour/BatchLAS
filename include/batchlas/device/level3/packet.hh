@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Level 3 packets: the 4-wide register value of the reg: and small gemm tiles
-// (Vec4) and the aligned packet load of the stagers. Vec4 is a clang ext_vector, or under
-// BATCHLAS_DEVICE_NO_VECTOR_TYPES (Metal: its emitter has no vector types) a 16-byte struct with
-// the members the kernels use (.x-.w, [i], scalar * Vec4).
+/// @file
+/// @brief Level 3 packets of the tuned gemm: the 4-wide register value `l3::Vec4` and the stagers'
+/// aligned packet load (@ref api_device_lowlevel, not covered by the compatibility promise).
+///
+/// `Vec4` is a clang `ext_vector_type(4)`, or, under `BATCHLAS_DEVICE_NO_VECTOR_TYPES` (Metal,
+/// whose emitter has no vector types), a 16-byte struct with the members the kernels use
+/// (`.x` to `.w`, `[i]`, scalar times `Vec4`).
+/// @ingroup api_device_lowlevel
 
 #include <cstdint>
 #include <type_traits>
@@ -18,6 +22,8 @@ namespace batchlas::device::l3 {
 
 // Element-wise copies on purpose: LLVM folds a trivial global->private->local copy pair into
 // a byte-loop memmove (AdaptiveCpp's emitter needs patch 0005 to compile it at all).
+/// @brief A 4-wide register value of `T`: the struct form for targets without vector types.
+/// @ingroup api_device_lowlevel
 template <class T>
 struct alignas(4 * sizeof(T)) Vec4 {
     T x, y, z, w;
@@ -35,20 +41,36 @@ struct alignas(4 * sizeof(T)) Vec4 {
 
 #else
 
+/// @brief A 4-wide register value of `T`, a clang `ext_vector_type(4)`.
+/// @ingroup api_device_lowlevel
 template <class T>
 using Vec4 = T __attribute__((ext_vector_type(4)));
 
 #endif
 
+/// @brief `true` when 4-wide packet loads of `T` are supported (`float` only).
+/// @ingroup api_device_lowlevel
 template <class T>
 inline constexpr bool supports_packet4_v = std::is_same_v<T, float>;
 
+/// @brief `true` when `Width`-wide packet loads of `T` are supported.
+/// @ingroup api_device_lowlevel
 template <class T, int Width>
 inline constexpr bool supports_packet_v = false;
 
+/// @brief `true` when 4-wide packet loads of `T` are supported.
+/// @ingroup api_device_lowlevel
 template <class T>
 inline constexpr bool supports_packet_v<T, 4> = supports_packet4_v<T>;
 
+/// @brief Whether a batch at `ptr` may be staged with `Width`-wide aligned packet loads.
+/// @ingroup api_device_lowlevel
+/// @tparam Width the packet width.
+/// @param ptr the batch's first element.
+/// @param ld the leading dimension.
+/// @param stride the batch stride.
+/// @return `true` when packets of `T` are supported, `ptr` is aligned to a packet, and `ld` and
+///   `stride` are multiples of `Width`.
 template <class T, int Width>
 inline bool supports_aligned_packet_loads(const T* ptr, int ld, int stride) {
     if constexpr (!supports_packet_v<T, Width>) {
@@ -62,6 +84,12 @@ inline bool supports_aligned_packet_loads(const T* ptr, int ld, int stride) {
     }
 }
 
+/// @brief One aligned `Width`-wide load of `ptr[offset]` to `ptr[offset + Width - 1]`.
+/// @ingroup api_device_lowlevel
+/// @pre `ptr + offset` is aligned to `sycl::vec<T, Width>`.
+/// @tparam Width the packet width.
+/// @param ptr the base pointer.
+/// @param offset the first element's offset.
 template <class T, int Width>
 inline sycl::vec<T, Width> packet_load_aligned(const T* ptr, int offset) {
     return *reinterpret_cast<const sycl::vec<T, Width>*>(ptr + offset);

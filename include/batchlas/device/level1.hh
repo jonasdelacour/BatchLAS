@@ -1,9 +1,17 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Device LA level 1. Every op distributes over the executor's Cyclic layout (i owned by
-// lid == i mod size), so two ops on the same executor touch an element from the same item and
-// compose with NO barrier. No op here contains a work-group barrier except the packed
-// Scratch exchange, which names it in its signature.
+/// @file
+/// @brief In-kernel BLAS level 1: vector operations, reductions and the ownership loops they are
+/// built from (@ref api_device_blas1).
+///
+/// Every operation distributes over the executor's cyclic layout: element `i` is owned by the
+/// item with `lid == i mod size`. Two operations on the same executor therefore touch an element
+/// from the same item and compose with no barrier. No operation here contains a work-group
+/// barrier except the packed `Scratch` exchange, which names the scratch in its signature.
+/// Reductions return a uniform result: every item of the reduction scope gets the same value.
+///
+/// Included by `<batchlas/device.hh>`.
+/// @ingroup api_device_blas1
 
 #include <array>
 #include <climits>
@@ -18,6 +26,9 @@
 
 namespace batchlas::device {
 
+/// @brief The element type of a vector operand `V`: what `v(0)` returns, without cv and reference.
+/// @ingroup api_device_blas1
+/// @tparam V a vector operand (anything callable as `v(i)`).
 template <class V> using elem_t = std::remove_cvref_t<decltype(std::declval<const V&>()(0))>;
 
 // The primitive: f(i) for every i this item owns, of [0, n) or of a Range [lo, hi) in parent
@@ -44,6 +55,19 @@ template <class U, class F> BATCHLAS_DEVICE_INLINE void strided_loop(int lo, int
 }
 }  // namespace detail
 
+/// @brief Calls `f(i)` for every `i` in `[0, n)` that this item owns.
+///
+/// The ownership primitive every level-1 operation is built on: item `lid` visits
+/// `i = lid, lid + size, ...` in ascending order. Operations that use the same executor and
+/// `n` therefore touch each element from the same item, and compose with no barrier.
+/// On a one-item executor (`Thread`) the loop visits every `i`.
+/// @ingroup api_device_blas1
+/// @tparam U the unroll policy of the loop: `alg::UnrollDefault` (the compiler decides),
+///   `alg::UnrollNone`, `alg::UnrollFull` or `alg::UnrollCount<N>` (`N >= 1`), emitted as loop
+///   metadata.
+/// @param ex the executor.
+/// @param n the extent; `n <= 0` visits nothing.
+/// @param f called as `f(int i)`.
 template <class U = alg::UnrollDefault, class Ex, class F> BATCHLAS_DEVICE_INLINE void for_each_owned(const Ex& ex, int n, F&& f) {
     if constexpr (std::is_same_v<U, alg::UnrollDefault> && !is_runtime_v<Ex>) {
         for (int i = ex.lid(); i < n; i += Ex::size) f(i);  // the first spelling, SASS-pinned by the lab
@@ -51,6 +75,15 @@ template <class U = alg::UnrollDefault, class Ex, class F> BATCHLAS_DEVICE_INLIN
         detail::strided_loop<U>(ex.lid(), n, detail::size_of(ex), f);
     }
 }
+/// @brief Calls `f(i)` for every `i` in `[r.lo, r.hi)` that this item owns, in parent coordinates.
+///
+/// `i` is owned by the item with `lid == (i - r.lo) mod size`, the same ownership as an operation
+/// on the view `x.tail(r.lo)`, so the two compose with no barrier.
+/// @ingroup api_device_blas1
+/// @tparam U the unroll policy, as for the `[0, n)` form.
+/// @param ex the executor.
+/// @param r the index range; an empty range visits nothing.
+/// @param f called as `f(int i)` with `i` in `[r.lo, r.hi)`.
 template <class U = alg::UnrollDefault, class Ex, class F> BATCHLAS_DEVICE_INLINE void for_each_owned(const Ex& ex, Range r, F&& f) {
     if constexpr (std::is_same_v<U, alg::UnrollDefault> && !is_runtime_v<Ex>) {
         for (int i = r.lo + ex.lid(); i < r.hi; i += Ex::size) f(i);
@@ -58,34 +91,73 @@ template <class U = alg::UnrollDefault, class Ex, class F> BATCHLAS_DEVICE_INLIN
         detail::strided_loop<U>(r.lo + ex.lid(), r.hi, detail::size_of(ex), f);
     }
 }
-// for_each_owned(ex, Range{first, end}, f), the P3 spelling.
+/// @brief `for_each_owned(ex, Range{first, end}, f)`: calls `f(i)` for the owned `i` in `[first, end)`.
+/// @ingroup api_device_blas1
+/// @tparam U the unroll policy, as for the `[0, n)` form.
+/// @param ex the executor.
+/// @param first the first index of the range.
+/// @param end one past the last index.
+/// @param f called as `f(int i)`.
 template <class U = alg::UnrollDefault, class Ex, class F>
 BATCHLAS_DEVICE_INLINE void for_each_owned(const Ex& ex, int first, int end, F&& f) {
     for_each_owned<U>(ex, Range{first, end}, f);
 }
-// n == the executor's size: each item owns exactly i = lid, no loop and no guard (the caller
-// guarantees n == size; krylov's ItemGroup).
+/// @brief Calls `f(ex.lid())` once, with no loop and no bound test.
+/// @ingroup api_device_lowlevel
+/// @pre `n` equals the executor's size, so each item owns exactly `i = lid`.
+/// @param ex the executor.
+/// @param n the extent; not read.
+/// @param f called once as `f(int i)`.
 template <class Ex, class F> BATCHLAS_DEVICE_INLINE void for_each_owned_exact(const Ex& ex, [[maybe_unused]] int n, F&& f) {
     f(ex.lid());
 }
-// Fit<Ex> (exec.hh): index lid only, one guarded call (n <= size); Range: lo + lid.
+/// @brief On a `Fit` executor: calls `f(lid)` once if `lid < n`.
+/// @ingroup api_device_blas1
+/// @pre `n` is at most the executor's size (a `Fit` executor owns one index per item).
+/// @tparam U ignored; present so that the call spells the same as the looping form.
+/// @param ex the executor.
+/// @param n the extent.
+/// @param f called as `f(int i)`.
 template <class U = alg::UnrollDefault, class Ex, class F> BATCHLAS_DEVICE_INLINE void for_each_owned(const Fit<Ex>& ex, int n, F&& f) {
     const int i = ex.lid();
     if (i >= 0 && i < n) f(i);
 }
+/// @brief On a `Fit` executor: calls `f(r.lo + lid)` once if it is below `r.hi`.
+/// @ingroup api_device_blas1
+/// @pre `r.hi - r.lo` is at most the executor's size.
+/// @tparam U ignored, as for the `[0, n)` form.
+/// @param ex the executor.
+/// @param r the index range, in parent coordinates.
+/// @param f called as `f(int i)`.
 template <class U = alg::UnrollDefault, class Ex, class F> BATCHLAS_DEVICE_INLINE void for_each_owned(const Fit<Ex>& ex, Range r, F&& f) {
     const int i = r.lo + ex.lid();
     if (i < r.hi) f(i);
 }
-// Grid1D (exec.hh): the launch's element i; Exact drops the i < n test.
+/// @brief On a `Grid1D` executor: calls `f(g.i)` for the launch's one element, if it is below `n`.
+/// @ingroup api_device_blas1
+/// @tparam U ignored, as for the `[0, n)` form.
+/// @tparam E `true` (an exact grid) drops the `i < n` test.
+/// @param g the one-dimensional grid executor.
+/// @param n the extent.
+/// @param f called as `f(int i)`.
 template <class U = alg::UnrollDefault, bool E, class F> BATCHLAS_DEVICE_INLINE void for_each_owned(const Grid1D<E>& g, int n, F&& f) {
     if constexpr (E) f(g.i);
     else if (g.i < n) f(g.i);
 }
 
-// The team loop: f(o, live) for the outputs o this item's team owns (o = team + k * nteams).
-// alg::Lockstep: every team runs ceil(nout / nteams) trips with live = o < nout, so a team
-// collective inside f is reached by every lane; alg::Diverge: o < nout only (live is true).
+/// @brief The team loop: calls `f(o, live)` for the outputs `o` that this item's team owns.
+///
+/// Team `t` of `nteams` owns `o = t, t + nteams, ...`; every lane of the team makes the same calls.
+/// A one-item executor is one team. Use it when each output is a team collective (a team
+/// reduction per output column, for example).
+/// @ingroup api_device_blas1
+/// @tparam Loop `alg::Lockstep` (default): every team runs `ceil(nout / nteams)` trips with
+///   `live = o < nout`, so a team collective inside `f` is reached by every lane even when teams
+///   share a sub-group. `alg::Diverge`: only the trips with `o < nout`, `live` always `true`.
+/// @param ex the executor.
+/// @param nout the number of outputs.
+/// @param f called as `f(int o, bool live)`; when `live` is `false`, `f` must still reach its
+///   team collectives but must not touch output `o`.
 template <class Loop = alg::Lockstep, class Ex, class F> BATCHLAS_DEVICE_INLINE void for_each_team_owned(const Ex& ex, int nout, F&& f) {
     const int nt = detail::nteams_of(ex);
     const int t = is_thread_v<Ex> ? 0 : ex.team();
@@ -101,8 +173,19 @@ template <class Loop = alg::Lockstep, class Ex, class F> BATCHLAS_DEVICE_INLINE 
     }
 }
 
-// f(i0, j0, live_r, live_c) for every TR x TC tile of an m x n grid this item owns: tiles in
-// column-major tile order, tile t owned by lid == t mod size; live_* clip the edge tiles.
+/// @brief Calls `f(i0, j0, live_r, live_c)` for every `TR` x `TC` tile of an m x n grid that this
+/// item owns.
+///
+/// Tiles are numbered in column-major tile order and tile `t` is owned by the item with
+/// `lid == t mod size`. `(i0, j0)` is the tile's first element; `live_r = min(TR, m - i0)` and
+/// `live_c = min(TC, n - j0)` clip the edge tiles.
+/// @ingroup api_device_blas1
+/// @tparam TR tile rows, `>= 1`.
+/// @tparam TC tile columns, `>= 1`.
+/// @param ex the executor.
+/// @param m grid rows.
+/// @param n grid columns.
+/// @param f called as `f(int i0, int j0, int live_r, int live_c)`.
 template <int TR, int TC, class Ex, class F> BATCHLAS_DEVICE_INLINE void for_each_owned_tiles(const Ex& ex, int m, int n, F&& f) {
     static_assert(TR >= 1 && TC >= 1, "for_each_owned_tiles: TR, TC >= 1");
     const int tr = (m + TR - 1) / TR, tc = (n + TC - 1) / TC;
@@ -113,16 +196,27 @@ template <int TR, int TC, class Ex, class F> BATCHLAS_DEVICE_INLINE void for_eac
     });
 }
 
-// f(r, c) for every element of an m x n column-major grid this item owns: flat e = lid + s *
-// size, so consecutive items take consecutive rows (loads coalesce) and per-item partial sums
-// keep the legacy grid-stride order. Alg (core.hh alg::) is the hand kernel's index form:
-//   Flat     q = e / m, (e - q m, q) per step, e in Idx (ptrdiff_t: the legacy 64-bit index math)
-//   DivMod   (e % m, e / m) per step
-//   Stepped  one division per item; r += size, then subtract m while r >= m
-//   Walk     one division per item; (r, c) += (size % m, size / m) with one carry per step
-//   RowOwner rows owned as for_each_owned (row i by lid == i mod size), each walked serially
-//            over its columns (the hand kernels' row-copy form; on Fit, one guarded row)
-// On Thread every Alg is the column-major double loop; on a Grid2D, the item's one element.
+/// @brief Calls `f(r, c)` for every element of an m x n column-major grid that this item owns.
+///
+/// Ownership is flat: element `e = r + c * m` is owned by the item with `lid == e mod size`, so
+/// consecutive items take consecutive rows and their loads coalesce. Every 2-D operation that uses
+/// the same executor and extents composes with this one with no barrier. On `Thread` every
+/// algorithm is the column-major double loop; on a `Grid2D` executor, the item's one element.
+/// @ingroup api_device_blas1
+/// @tparam Alg how the item computes `(r, c)` from `e`; every form visits the same elements:
+///   - `alg::Walk` (default): one division per item, then `(r, c) += (size % m, size / m)` with
+///     one carry per step.
+///   - `alg::Stepped`: one division per item, then `r += size` and subtract `m` while `r >= m`.
+///   - `alg::DivMod`: `(e % m, e / m)` per step.
+///   - `alg::Flat`: one division per step with `e` of type `Idx`.
+///   - `alg::RowOwner`: row ownership instead (row `i` by `lid == i mod size`), each row walked
+///     serially over its columns.
+/// @tparam Idx the index type of `alg::Flat` and `alg::DivMod` (`std::ptrdiff_t` for 64-bit index
+///   arithmetic); the other forms ignore it.
+/// @param ex the executor.
+/// @param m grid rows.
+/// @param n grid columns.
+/// @param f called as `f(int r, int c)`.
 template <class Alg = alg::Walk, class Idx = int, class Ex, class F>
 BATCHLAS_DEVICE_INLINE void for_each_owned_2d(const Ex& ex, int m, int n, F&& f) {
     if constexpr (requires { ex.row(); ex.col(); }) {  // Grid2D (grid.hh)
@@ -194,9 +288,18 @@ struct Walk2d {
     }
 };
 }  // namespace detail
-// for_each_owned_2d's column-major walk (alg::Walk), U positions per round: load(live, r, c) for
-// all U (their loads overlap), then use(item) for all U. A dead slot (past the grid) still gets
-// load(false, ...) and use().
+/// @brief `for_each_owned_2d`'s `alg::Walk` ownership, `U` positions per round, loads before uses.
+///
+/// Each round calls `load(live, r, c)` for `U` positions (so their loads overlap), then `use(e)` for
+/// each of the `U` results in order. A slot past the grid still gets `load(false, r, c)` and
+/// `use(e)`; `load` must return a harmless value for it.
+/// @ingroup api_device_lowlevel
+/// @tparam U positions per round.
+/// @param ex the executor (needs `width()`).
+/// @param rows grid rows.
+/// @param cols grid columns.
+/// @param load called as `load(bool live, int r, int c)`; returns the item passed to `use`.
+/// @param use called as `use(item)`.
 template <int U, class Ex, class Load, class Use>
 BATCHLAS_DEVICE_INLINE void for_each_owned_2d_batched(const Ex& ex, int rows, int cols, Load&& load, Use&& use) {
     using Item = decltype(load(true, 0, 0));
@@ -213,13 +316,29 @@ BATCHLAS_UNROLL_FULL
     }
 }
 
-// ElemAt (exec.hh): the item's one element; Exact drops the extent test. ElemIn: the
-// element relative to its block origin, column test first.
+/// @brief On an `ElemAt` executor: calls `f(ex.r, ex.c)` for the item's one element, if it is inside m x n.
+/// @ingroup api_device_blas1
+/// @tparam Alg ignored; present so that the call spells the same as the looping form.
+/// @tparam Idx ignored.
+/// @tparam E `true` (an exact grid) drops the extent test.
+/// @param ex the one-element executor.
+/// @param m grid rows.
+/// @param n grid columns.
+/// @param f called as `f(int r, int c)`.
 template <class Alg = alg::Walk, class Idx = int, bool E, class F>
 BATCHLAS_DEVICE_INLINE void for_each_owned_2d(const ElemAt<E>& ex, int m, int n, F&& f) {
     if constexpr (E) f(ex.r, ex.c);
     else if (ex.r < m && ex.c < n) f(ex.r, ex.c);
 }
+/// @brief On an `ElemIn` executor: calls `f(r - r0, c - c0)` for the item's one element, if it lies
+/// inside the m x n block at `(r0, c0)`.
+/// @ingroup api_device_blas1
+/// @tparam Alg ignored.
+/// @tparam Idx ignored.
+/// @param ex the one-element executor with its block origin.
+/// @param m block rows.
+/// @param n block columns.
+/// @param f called as `f(int r, int c)` in block coordinates.
 template <class Alg = alg::Walk, class Idx = int, class F>
 BATCHLAS_DEVICE_INLINE void for_each_owned_2d(const ElemIn& ex, int m, int n, F&& f) {
     if (ex.c >= ex.c0) {
@@ -227,19 +346,41 @@ BATCHLAS_DEVICE_INLINE void for_each_owned_2d(const ElemIn& ex, int m, int n, F&
     }
 }
 
-// 2-D elementwise (Grid2D or any Cyclic executor, for_each_owned_2d):
-// out(i, j) = f(ins(i, j)...)
+/// @brief Elementwise 2-D map: `out(i, j) = f(ins(i, j)...)` over `out`'s extents.
+///
+/// Ownership is `for_each_owned_2d`'s, so `out` may alias an input.
+/// @ingroup api_device_blas1
+/// @param ex the executor (any cyclic executor or a `Grid2D`).
+/// @param out the output matrix operand (`rows()`, `cols()`, assignable `out(i, j)`).
+/// @param f called as `f(ins(i, j)...)`.
+/// @param ins the input matrix operands, at least `out`'s extents.
 template <class Ex, class Out, class F, class... In>
 BATCHLAS_DEVICE_INLINE void map2d(const Ex& ex, const Out& out, F&& f, const In&... ins) {
     for_each_owned_2d(ex, out.rows(), out.cols(), [&](int i, int j) { out(i, j) = f(ins(i, j)...); });
 }
-// out(i) = f(ins(i)...)
+/// @brief Elementwise map: `out(i) = f(ins(i)...)` for `i < out.size()`.
+///
+/// Ownership is `for_each_owned`'s, so `out` may alias an input.
+/// @ingroup api_device_blas1
+/// @param ex the executor.
+/// @param out the output vector operand.
+/// @param f called as `f(ins(i)...)`.
+/// @param ins the input vector operands, at least `out.size()` long.
 template <class Ex, class Out, class F, class... In>
 BATCHLAS_DEVICE_INLINE void map(const Ex& ex, const Out& out, F&& f, const In&... ins) {
     for_each_owned(ex, out.size(), [&](int i) { out(i) = f(ins(i)...); });
 }
 
-// y := a x + b y; b == Zero never reads y.
+/// @brief `y := a x + b y` (BLAS axpby).
+///
+/// A `Zero` tag for `b` never reads `y`; with any other `b`, `y` is read where it is written.
+/// Elementwise over `y.size()`, no barrier.
+/// @ingroup api_device_blas1
+/// @param ex the executor.
+/// @param a_ the scalar `a`: a value or a tag (`One`, `Zero`, `NegOne`, `Scalar<T>`).
+/// @param x the input vector, at least `y.size()` long.
+/// @param b_ the scalar `b`: a value or a tag.
+/// @param[in,out] y the output vector.
 template <class Ex, class A, class X, class B, class Y>
 BATCHLAS_DEVICE_INLINE void axpby(const Ex& ex, A a_, const X& x, B b_, const Y& y) {
     using T = elem_t<Y>;
@@ -251,7 +392,16 @@ BATCHLAS_DEVICE_INLINE void axpby(const Ex& ex, A a_, const X& x, B b_, const Y&
     });
 }
 
-// y := a x + y
+/// @brief `y := a x + y` (BLAS axpy).
+///
+/// A `Zero` tag returns at once; `One` and `NegOne` add or subtract without a multiply.
+/// Elementwise over `y.size()`, no barrier.
+/// @ingroup api_device_blas1
+/// @tparam Ops the arithmetic policy (`arith::Explicit` default, `arith::Native`, `arith::Fma`).
+/// @param ex the executor.
+/// @param a_ the scalar `a`: a value or a tag.
+/// @param x the input vector, at least `y.size()` long.
+/// @param[in,out] y the output vector.
 template <class Ops = arith::Explicit, class Ex, class A, class X, class Y>
 BATCHLAS_DEVICE_INLINE void axpy(const Ex& ex, A a_, const X& x, const Y& y) {
     using T = elem_t<Y>;
@@ -266,7 +416,15 @@ BATCHLAS_DEVICE_INLINE void axpy(const Ex& ex, A a_, const X& x, const Y& y) {
     });
 }
 
-// x := a x (arith::Native with a value: x *= a, T's own in-place multiply)
+/// @brief `x := a x` (BLAS scal).
+///
+/// Elementwise over `x.size()`, no barrier. With `arith::Native` and a value `a`, each element is
+/// `x(i) *= a` in the element type's own operator.
+/// @ingroup api_device_blas1
+/// @tparam Ops the arithmetic policy (`arith::Explicit` default, `arith::Native`).
+/// @param ex the executor.
+/// @param a_ the scalar `a`: a value or a tag.
+/// @param[in,out] x the vector.
 template <class Ops = arith::Explicit, class Ex, class A, class X> BATCHLAS_DEVICE_INLINE void scal(const Ex& ex, A a_, const X& x) {
     using T = elem_t<X>;
     using S = tag_t<A>;
@@ -278,7 +436,12 @@ template <class Ops = arith::Explicit, class Ex, class A, class X> BATCHLAS_DEVI
         else x(i) = tag_mul(a, static_cast<T>(x(i)));
     });
 }
-// LaneVec form (operand.hh): only the window [x.lo, x.hi) is scaled.
+/// @brief `x := a x` on a lane vector: only the items in the window `[x.lo, x.hi)` scale their element.
+/// @ingroup api_device_blas1
+/// @tparam Ops the arithmetic policy, as for the memory form.
+/// @param ex the executor.
+/// @param a_ the scalar `a`: a value or a tag.
+/// @param[in,out] x the lane vector (one element per item).
 template <class Ops = arith::Explicit, class Ex, class A, class Scalar> BATCHLAS_DEVICE_INLINE void scal(const Ex& ex, A a_, const LaneVec<Scalar>& x) {
     using V = std::remove_cv_t<Scalar>;
     using S = tag_t<A>;
@@ -292,10 +455,20 @@ template <class Ops = arith::Explicit, class Ex, class A, class Scalar> BATCHLAS
     }
 }
 
+/// @brief `y := x` (BLAS copy) over `y.size()` elements; elementwise, no barrier.
+/// @ingroup api_device_blas1
+/// @param ex the executor.
+/// @param x the source vector, at least `y.size()` long.
+/// @param[out] y the destination vector.
 template <class Ex, class X, class Y> BATCHLAS_DEVICE_INLINE void copy(const Ex& ex, const X& x, const Y& y) {
     for_each_owned(ex, y.size(), [&](int i) { y(i) = x(i); });
 }
 
+/// @brief Exchanges `x` and `y` (BLAS swap) over `x.size()` elements; elementwise, no barrier.
+/// @ingroup api_device_blas1
+/// @param ex the executor.
+/// @param[in,out] x the first vector.
+/// @param[in,out] y the second vector, at least `x.size()` long.
 template <class Ex, class X, class Y> BATCHLAS_DEVICE_INLINE void swap(const Ex& ex, const X& x, const Y& y) {
     for_each_owned(ex, x.size(), [&](int i) {
         const auto t = x(i);
@@ -393,13 +566,36 @@ BATCHLAS_DEVICE_INLINE std::array<T, K> packed_reduce(const Ex& ex, Scratch<T, S
 }
 }  // namespace detail
 
-// sum over i < n of f(i)
+/// @brief The sum of `f(i)` over `i < n`, reduced over scope `S`; the result is uniform.
+///
+/// Each item sums its owned terms in ascending order, then one reduction combines the partials.
+/// COLLECTIVE: every item of the scope must call it.
+/// @ingroup api_device_blas1
+/// @tparam S the reduction scope: `Scope::Own` (default; the executor's natural scope),
+///   `Scope::Sub` (one team, shuffles only, no barrier; not on a `WorkGroup`, which has one partial
+///   per sub-group) or `Scope::Group` (the whole executor).
+/// @param ex the executor.
+/// @param n the number of terms.
+/// @param f called as `f(int i)`; its return type is the result type.
+/// @return the sum, the same on every item.
 template <Scope S = Scope::Own, class Ex, class F> BATCHLAS_DEVICE_INLINE auto reduce(const Ex& ex, int n, F&& f) {
     using T = std::remove_cvref_t<decltype(f(0))>;
     T acc = Arith<T>::zero();
     for_each_owned(ex, n, [&](int i) { acc = Arith<T>::add(acc, f(i)); });
     return detail::scope_reduce<S>(ex, acc);
 }
+/// @brief The sum of `f(i)` over `i < n` over the whole executor, through one packed `Scratch` exchange.
+///
+/// On a `WorkGroup` with several sub-groups: one team reduction, lane 0 of each team writes its
+/// partial to the scratch, a local barrier, every item sums the partials in team order, and a
+/// trailing barrier so the scratch can be reused. Other executors reduce in their team and ignore
+/// the scratch. COLLECTIVE.
+/// @ingroup api_device_blas1
+/// @param ex the executor.
+/// @param scr local scratch of at least `scratch_elements<reduce_op::ReduceN<1>, Ex, T>()` slots.
+/// @param n the number of terms.
+/// @param f called as `f(int i)`, returning `T`.
+/// @return the sum, the same on every item.
 template <class Ex, class T, int Slots, class F>
 BATCHLAS_DEVICE_INLINE T reduce(const Ex& ex, Scratch<T, Slots> scr, int n, F&& f) {
     T acc = Arith<T>::zero();
@@ -434,12 +630,30 @@ BATCHLAS_DEVICE_INLINE auto dot_partial(const Ex& ex, const X& x, const Y& y) {
 }
 }  // namespace detail
 
-// x^T y (no conjugation)
+/// @brief `x^T y` (BLAS dotu: no conjugation) over `x.size()` elements, reduced over scope `S`.
+///
+/// COLLECTIVE; the result is uniform over the scope.
+/// @ingroup api_device_blas1
+/// @tparam S the reduction scope (`Scope::Own` default, `Scope::Sub`, `Scope::Group`), as for `reduce`.
+/// @tparam Ops the arithmetic policy of the products.
+/// @param ex the executor.
+/// @param x the first vector.
+/// @param y the second vector, at least `x.size()` long.
+/// @return the dot product, the same on every item.
 template <Scope S = Scope::Own, class Ops = arith::Explicit, class Ex, class X, class Y>
 BATCHLAS_DEVICE_INLINE auto dot(const Ex& ex, const X& x, const Y& y) {
     return detail::scope_reduce<S>(ex, detail::dot_partial<Transpose::Trans, Ops>(ex, x, y));
 }
-// x^H y
+/// @brief `x^H y` (BLAS dotc: `x` conjugated) over `x.size()` elements, reduced over scope `S`.
+///
+/// For a real element type this is `dot`. COLLECTIVE; the result is uniform over the scope.
+/// @ingroup api_device_blas1
+/// @tparam S the reduction scope, as for `reduce`.
+/// @tparam Ops the arithmetic policy of the products.
+/// @param ex the executor.
+/// @param x the conjugated vector.
+/// @param y the second vector, at least `x.size()` long.
+/// @return the dot product, the same on every item.
 template <Scope S = Scope::Own, class Ops = arith::Explicit, class Ex, class X, class Y>
 BATCHLAS_DEVICE_INLINE auto dotc(const Ex& ex, const X& x, const Y& y) {
     return detail::scope_reduce<S>(ex, detail::dot_partial<Transpose::ConjTrans, Ops>(ex, x, y));
@@ -464,8 +678,18 @@ template <int K, Transpose TR, class Ex, class Xs, class Y> BATCHLAS_DEVICE_INLI
 }
 }  // namespace detail
 
-// {op(xs[k]) y} (TR: Trans xs[k]^T y, ConjTrans xs[k]^H y) for k < K. With Scratch on a
-// WorkGroup: one packed exchange.
+/// @brief `K` dot products `op(xs[k]) y` for `k < K` in one loop over `y` and one packed `Scratch` exchange.
+///
+/// On a `WorkGroup` with several sub-groups the `K` sums share one scratch exchange (two barriers);
+/// other executors reduce in their team and ignore the scratch. COLLECTIVE; uniform results.
+/// @ingroup api_device_blas1
+/// @tparam K the number of dot products.
+/// @tparam TR `Transpose::Trans` (default, `xs[k]^T y`) or `Transpose::ConjTrans` (`xs[k]^H y`).
+/// @param ex the executor.
+/// @param scr local scratch of at least `scratch_elements<reduce_op::ReduceN<K>, Ex, Scalar>()` slots.
+/// @param xs `K` vectors of one type, each at least `y.size()` long.
+/// @param y the shared vector.
+/// @return the `K` dot products, the same on every item.
 template <int K, Transpose TR = Transpose::Trans, class Ex, class Scalar, int Slots, class X, class Y>
 BATCHLAS_DEVICE_INLINE std::array<Scalar, K> dotN(const Ex& ex, Scratch<Scalar, Slots> scr, const std::array<X, K>& xs, const Y& y) {
     return detail::packed_reduce<K>(ex, scr, detail::dotn_partial<K, TR>(ex, xs, y));
@@ -488,15 +712,37 @@ template <Transpose TR, class Ops, class Ex, class Y, class... Xs> BATCHLAS_DEVI
 }
 }  // namespace detail
 
-// {op(xs) y...} (TR: Trans xs^T y, ConjTrans xs^H y) for operands of different types (e.g. a
-// column and its unit_head), one loop over y and one packed exchange: latrd's gamma/delta pair.
+/// @brief One dot product `op(x) y` per operand in `xs`, which may have different types, in one
+/// loop over `y` and one packed `Scratch` exchange.
+///
+/// For example a column and its `unit_head` view. COLLECTIVE; uniform results.
+/// @ingroup api_device_blas1
+/// @tparam TR `Transpose::Trans` (default, `x^T y`) or `Transpose::ConjTrans` (`x^H y`).
+/// @tparam Ops the arithmetic policy of the products.
+/// @param ex the executor.
+/// @param scr local scratch of at least `scratch_elements<reduce_op::ReduceN<K>, Ex, Scalar>()`
+///   slots, `K = sizeof...(Xs)`.
+/// @param y the shared vector.
+/// @param xs the vectors, each at least `y.size()` long.
+/// @return the dot products in argument order, the same on every item.
 template <Transpose TR = Transpose::Trans, class Ops = arith::Explicit, class Ex, class Scalar, int Slots, class Y, class... Xs>
 BATCHLAS_DEVICE_INLINE std::array<Scalar, sizeof...(Xs)> dot_many(const Ex& ex, Scratch<Scalar, Slots> scr, const Y& y, const Xs&... xs) {
     static_assert(TR != Transpose::NoTrans, "dot_many: TR is Trans or ConjTrans");
     return detail::packed_reduce<sizeof...(Xs)>(ex, scr, detail::dot_many_partial<TR, Ops>(ex, y, xs...));
 }
-// Without Scratch: one loop over y, then one scope-S reduction per x in argument order (on a
-// WorkGroup, portable::reduce_over_group each: the legacy kernels' trees, bit-identical).
+// On a WorkGroup each reduction is portable::reduce_over_group: the legacy kernels' trees, bit-identical.
+/// @brief One dot product `op(x) y` per operand in `xs`, in one loop over `y`, then one scope-`S`
+/// reduction per result in argument order (no scratch).
+///
+/// COLLECTIVE; uniform results.
+/// @ingroup api_device_blas1
+/// @tparam TR `Transpose::Trans` (default) or `Transpose::ConjTrans`.
+/// @tparam S the reduction scope, as for `reduce`.
+/// @tparam Ops the arithmetic policy of the products.
+/// @param ex the executor.
+/// @param y the shared vector.
+/// @param xs the vectors, each at least `y.size()` long.
+/// @return a `std::array` of the dot products in argument order.
 template <Transpose TR = Transpose::Trans, Scope S = Scope::Own, class Ops = arith::Explicit, class Ex, class Y, class... Xs>
 BATCHLAS_DEVICE_INLINE auto dot_many(const Ex& ex, const Y& y, const Xs&... xs) {
     static_assert(TR != Transpose::NoTrans, "dot_many: TR is Trans or ConjTrans");
@@ -505,8 +751,17 @@ BATCHLAS_DEVICE_INLINE auto dot_many(const Ex& ex, const Y& y, const Xs&... xs) 
     return acc;
 }
 
-// Without Scratch: K independent reductions of scope S (on a sub-group or partition these are
-// shuffles only, so nothing is exchanged).
+/// @brief `K` dot products `op(xs[k]) y` in one loop over `y`, then `K` independent scope-`S` reductions (no scratch).
+///
+/// On a sub-group or a partition the reductions are shuffles only. COLLECTIVE; uniform results.
+/// @ingroup api_device_blas1
+/// @tparam K the number of dot products.
+/// @tparam TR `Transpose::Trans` (default) or `Transpose::ConjTrans`.
+/// @tparam S the reduction scope, as for `reduce`.
+/// @param ex the executor.
+/// @param xs `K` vectors of one type, each at least `y.size()` long.
+/// @param y the shared vector.
+/// @return a `std::array` of the `K` dot products.
 template <int K, Transpose TR = Transpose::Trans, Scope S = Scope::Own, class Ex, class X, class Y>
 BATCHLAS_DEVICE_INLINE auto dotN(const Ex& ex, const std::array<X, K>& xs, const Y& y) {
     auto acc = detail::dotn_partial<K, TR>(ex, xs, y);
@@ -514,7 +769,14 @@ BATCHLAS_DEVICE_INLINE auto dotN(const Ex& ex, const std::array<X, K>& xs, const
     return acc;
 }
 
-// sum |re| + |im|
+/// @brief The sum of `|re(x_i)| + |im(x_i)|` (BLAS asum) over `x.size()` elements, reduced over scope `S`.
+///
+/// COLLECTIVE; the result is real and uniform.
+/// @ingroup api_device_blas1
+/// @tparam S the reduction scope, as for `reduce`.
+/// @param ex the executor.
+/// @param x the vector.
+/// @return the sum, of the real type of `x`'s elements.
 template <Scope S = Scope::Own, class Ex, class X> BATCHLAS_DEVICE_INLINE auto asum(const Ex& ex, const X& x) {
     using R = real_t<elem_t<X>>;
     R acc = R(0);
@@ -522,7 +784,15 @@ template <Scope S = Scope::Own, class Ex, class X> BATCHLAS_DEVICE_INLINE auto a
     return detail::scope_reduce<S>(ex, acc);
 }
 
-// max |re| + |im|. NaN policy (NaN::Propagate): any NaN element makes the result NaN.
+/// @brief The maximum of `|re(x_i)| + |im(x_i)|` over `x.size()` elements, reduced over scope `S`.
+///
+/// Any NaN element makes the result NaN. An empty `x` gives 0. COLLECTIVE; uniform result. For
+/// another key or NaN policy see `amax_by`; for the index see `iamax`.
+/// @ingroup api_device_blas1
+/// @tparam S the reduction scope, as for `reduce`.
+/// @param ex the executor.
+/// @param x the vector.
+/// @return the maximum, of the real type of `x`'s elements.
 template <Scope S = Scope::Own, class Ex, class X> BATCHLAS_DEVICE_INLINE auto amax(const Ex& ex, const X& x) {
     using R = real_t<elem_t<X>>;
     R m = R(0);
@@ -537,8 +807,16 @@ template <Scope S = Scope::Own, class Ex, class X> BATCHLAS_DEVICE_INLINE auto a
     return nan ? std::numeric_limits<R>::quiet_NaN() : m;
 }
 
-// LAPACK lassq without the incoming pair: scale = max |component|, scale^2 * ssq = sum |x_i|^2,
-// computed in two passes so no square overflows or underflows to zero.
+/// @brief LAPACK lassq without the incoming pair: `scale` and `ssq` with `scale^2 * ssq = sum |x_i|^2`.
+///
+/// `scale` is the largest real or imaginary component in absolute value (NaN if any is NaN). Two
+/// passes, a maximum then the sum of `(x_i / scale)^2`, so no square overflows or underflows to
+/// zero. Two reductions over scope `S`. COLLECTIVE; uniform result.
+/// @ingroup api_device_blas1
+/// @tparam S the reduction scope, as for `reduce`.
+/// @param ex the executor.
+/// @param x the vector.
+/// @return a `ScaledSsq` `{scale, ssq}`; an all-zero `x` gives `{0, 0}`.
 template <Scope S = Scope::Own, class Ex, class X> BATCHLAS_DEVICE_INLINE auto lassq(const Ex& ex, const X& x) {
     using T = elem_t<X>;
     using A = Arith<T>;
@@ -620,12 +898,22 @@ template <class Real> BATCHLAS_DEVICE_INLINE Real blue_finish(Real abig, Real am
 }
 }  // namespace detail
 
-// ||x||_2 with the algorithm named (no default: alg::Blue is overflow-safe in one pass and one
-// exchange but costs more than Unscaled; see the design report):
-//   alg::Unscaled  sqrt(re(x^H x)), one reduction; overflows past sqrt(max), underflows below
-//                  sqrt(min). Inf beats NaN only by accident of the sum.
-//   alg::Blue      dnrm2.f90's three accumulators, one exchange.
-//   alg::Scaled    two-pass lassq (max, then the scaled sum): two exchanges.
+/// @brief The Euclidean norm `||x||_2` (BLAS nrm2), with the algorithm named by the caller.
+///
+/// There is no default algorithm: `alg::Blue` is overflow-safe in one pass and one exchange but
+/// costs more than `alg::Unscaled`. A complex `x` accumulates `|re|` and `|im|` separately.
+/// COLLECTIVE; uniform result.
+/// @ingroup api_device_blas1
+/// @tparam Alg one of
+///   - `alg::Unscaled`: `sqrt(re(x^H x))`, one reduction; overflows past `sqrt(max)` and
+///     underflows below `sqrt(min)`.
+///   - `alg::Blue`: Blue's three accumulators (reference `dnrm2.f90`), one exchange; no overflow
+///     or underflow.
+///   - `alg::Scaled`: the two-pass `lassq` (maximum, then the scaled sum), two exchanges.
+/// @tparam S the reduction scope, as for `reduce`.
+/// @param ex the executor.
+/// @param x the vector.
+/// @return the norm, of the real type of `x`'s elements.
 template <class Alg, Scope S = Scope::Own, class Ex, class X> BATCHLAS_DEVICE_INLINE auto nrm2(const Ex& ex, const X& x) {
     using T = elem_t<X>;
     using R = real_t<T>;
@@ -658,26 +946,63 @@ template <class Alg, Scope S = Scope::Own, class Ex, class X> BATCHLAS_DEVICE_IN
 
 // ---- reductions ------------------------------------------------------------------------------
 
-// v reduced over scope S (T, or std::array<T, K>: one reduction per value, pack-expanded).
+/// @brief Each item's `v`, reduced with `op` over scope `S`; the result is uniform.
+///
+/// COLLECTIVE: every item of the scope must call it with the same `op`.
+/// @ingroup api_device_blas1
+/// @tparam S the reduction scope, as for `reduce`.
+/// @param ex the executor.
+/// @param v this item's value.
+/// @param op an associative binary operation (default: `sycl::plus<T>`, a sum).
+/// @return the reduction, the same on every item of the scope.
 template <Scope S = Scope::Own, class Ex, class T, class Op = sycl::plus<T>>
 BATCHLAS_DEVICE_INLINE T allreduce(const Ex& ex, T v, Op op = {}) {
     return detail::scope_reduce<S>(ex, v, op);
 }
+/// @brief Each element of `v` reduced with `op` over scope `S`, one reduction per element.
+///
+/// COLLECTIVE; uniform results.
+/// @ingroup api_device_blas1
+/// @tparam S the reduction scope, as for `reduce`.
+/// @param ex the executor.
+/// @param v this item's `K` values.
+/// @param op an associative binary operation (default: a sum).
+/// @return the `K` reductions.
 template <Scope S = Scope::Own, class Ex, class T, std::size_t K, class Op = sycl::plus<T>>
 BATCHLAS_DEVICE_INLINE std::array<T, K> allreduce(const Ex& ex, std::array<T, K> v, Op op = {}) {
     detail::reduce_each<S>(ex, v, op);
     return v;
 }
-// Through Scratch, over every item of the executor: v (a T, or std::array<T, K>: K values in ONE
-// packed exchange, scratch_elements<reduce_op::ReduceN<K>, Ex, T>() slots) reduced with op (any
-// associative op; the default sums), uniform result. trailing_barrier = false skips the barrier
-// that lets the caller reuse the scratch at once. Sub-scope executors (SubGroup, Partition,
-// Teams) and Thread reduce in their team and ignore the scratch.
+/// @brief `K` values reduced with `op` over every item of the executor in ONE packed `Scratch` exchange.
+///
+/// On a `WorkGroup` with several sub-groups: a team reduction per value, lane 0 of each team
+/// writes its `K` partials, one local barrier, every item combines the partials in team order (a
+/// uniform result), then a trailing barrier so the scratch can be reused at once. Sub-scope
+/// executors (`SubGroup`, `Partition`, `Teams`) and `Thread` reduce in their team and ignore the
+/// scratch. COLLECTIVE.
+/// @ingroup api_device_blas1
+/// @param ex the executor.
+/// @param scr local scratch of at least `scratch_elements<reduce_op::ReduceN<K>, Ex, T>()` slots.
+/// @param v this item's `K` values.
+/// @param op an associative binary operation (default: a sum).
+/// @param trailing_barrier `false` skips the trailing barrier, when the next write to the scratch
+///   is behind another barrier anyway.
+/// @return the `K` reductions, the same on every item.
 template <class Ex, class T, int Slots, std::size_t K, class Op = sycl::plus<T>>
 BATCHLAS_DEVICE_INLINE std::array<T, K> allreduce(const Ex& ex, Scratch<T, Slots> scr, std::array<T, K> v, Op op = {},
                                                   bool trailing_barrier = true) {
     return detail::packed_reduce<int(K)>(ex, scr, v, op, trailing_barrier);
 }
+/// @brief One value reduced with `op` over every item of the executor through a `Scratch` exchange.
+///
+/// The `K = 1` case of the array form. COLLECTIVE.
+/// @ingroup api_device_blas1
+/// @param ex the executor.
+/// @param scr local scratch of at least `scratch_elements<reduce_op::ReduceN<1>, Ex, T>()` slots.
+/// @param v this item's value.
+/// @param op an associative binary operation (default: a sum).
+/// @param trailing_barrier `false` skips the trailing barrier.
+/// @return the reduction, the same on every item.
 template <class Ex, class T, int Slots, class Op = sycl::plus<T>>
 BATCHLAS_DEVICE_INLINE T allreduce(const Ex& ex, Scratch<T, Slots> scr, T v, Op op = {}, bool trailing_barrier = true) {
     return detail::packed_reduce<1>(ex, scr, std::array<T, 1>{v}, op, trailing_barrier)[0];
@@ -703,6 +1028,18 @@ template <class Alg, class Real, class Scalar> BATCHLAS_DEVICE_INLINE void acc_a
     }
 }
 }  // namespace detail
+/// @brief `sum |x_i|^2` of one vector, or of several vectors of equal size in one loop.
+///
+/// No scaling: the squares can overflow or underflow (see `lassq` and `nrm2`). One reduction
+/// over scope `S` per vector. COLLECTIVE; uniform results.
+/// @ingroup api_device_blas1
+/// @tparam Alg `alg::Fused` (default): `re^2` then `im^2` are added to the running sum, each a
+///   contractible `a * a + acc`. `alg::Unfused`: adds `abs2(x_i)`, its own rounding.
+/// @tparam S the reduction scope, as for `reduce`.
+/// @param ex the executor.
+/// @param x the first vector; its size is the trip count.
+/// @param xs further vectors, each at least `x.size()` long.
+/// @return the real sum for one vector, or a `std::array` of `1 + sizeof...(Xs)` sums.
 template <class Alg = alg::Fused, Scope S = Scope::Own, class Ex, class X, class... Xs>
 BATCHLAS_DEVICE_INLINE auto sumsq(const Ex& ex, const X& x, const Xs&... xs) {
     using R = real_t<elem_t<X>>;
@@ -718,8 +1055,17 @@ BATCHLAS_DEVICE_INLINE auto sumsq(const Ex& ex, const X& x, const Xs&... xs) {
     else return acc;
 }
 
-// The first i in [0, x.size()) with pred(x(i)), or none (uniform). Each item stops at its first
-// owned hit (owned indices ascend), then one min-reduction. An index search passes fn_vec(n, f).
+/// @brief The first `i` in `[0, x.size())` with `pred(x(i))`, or `none`.
+///
+/// Each item stops at its first owned hit (owned indices ascend), then one minimum reduction over
+/// scope `S`. To search on an index, pass `fn_vec(n, f)` as `x`. COLLECTIVE; uniform result.
+/// @ingroup api_device_blas1
+/// @tparam S the reduction scope, as for `reduce`.
+/// @param ex the executor.
+/// @param x the vector searched.
+/// @param pred called as `pred(x(i))`, returning `bool`.
+/// @param none the value returned when no element satisfies `pred` (default -1).
+/// @return the smallest matching index, or `none`.
 template <Scope S = Scope::Own, class Ex, class X, class P>
     requires(requires(const X& x) { x.size(); x(0); })
 BATCHLAS_DEVICE_INLINE int find_first(const Ex& ex, const X& x, P&& pred, int none = -1) {
@@ -735,18 +1081,37 @@ BATCHLAS_DEVICE_INLINE int find_first(const Ex& ex, const X& x, P&& pred, int no
     return first == INT_MAX ? none : first;
 }
 
-// iamax (?IAMAX; ?GETF2's and ?SYTF2's pivot search): {index, key} of the maximum of key(x(i))
-// over i in r (default all of x), i != skip (K = None: none left out). Key: alg::KeyAbs1
-// (|re| + |im|, LAPACK's cabs1), alg::KeyAbs (hypot), alg::KeyReal (re). NaN: alg::NanAsInf (a
-// NaN key ranks as +inf: found), alg::NanSkip (a NaN never beats a number). tie: alg::TieLowest,
-// alg::TieHighest or alg::TieRt{low}. Group scope: ArgMaxSlots (their barriers) or None (two
-// group collectives); lanes: argmax_allreduce (reduce.hh). No candidate:
-// {none, seed}, seed -1 (KeyReal: -inf). Uniform; COLLECTIVE.
 namespace alg {
+/// @brief `iamax` and `amax_by` key: `|re| + |im|`, LAPACK's `cabs1` (the BLAS `i?amax` key).
+/// @ingroup api_device_blas1
 struct KeyAbs1 {};
+/// @brief `iamax` and `amax_by` key: the modulus `|x|` (a hypot for complex).
+/// @ingroup api_device_blas1
 struct KeyAbs {};
+/// @brief `iamax` key: the real part, signed (`amax_by`: its absolute value).
+/// @ingroup api_device_blas1
 struct KeyReal {};
 }  // namespace alg
+/// @brief `{index, key}` of the largest `key(x(i))` over `i` in `r`, optionally leaving out one index
+/// (BLAS `i?amax`; the pivot search of LAPACK getf2 and sytf2).
+///
+/// Indices are 0-based. When no index is a candidate the result is `{none, seed}` with `seed = -1`
+/// (`alg::KeyReal`: `-inf`). COLLECTIVE; the result is uniform.
+/// @ingroup api_device_blas1
+/// @tparam NaN `alg::NanAsInf` (default; a NaN key ranks as `+inf`, so it is found) or
+///   `alg::NanSkip` (a NaN never beats a number).
+/// @tparam Key `alg::KeyAbs1` (default), `alg::KeyAbs` or `alg::KeyReal`.
+/// @param ex the executor.
+/// @param x the vector searched.
+/// @param r the index range searched, in `x`'s coordinates.
+/// @param tie which index wins a tie: `alg::TieLowest` (default), `alg::TieHighest` or a run-time
+///   `alg::TieRt{low}`.
+/// @param slots the work-group exchange: `None` (default; two group collectives) or an
+///   `ArgMaxSlots` in local memory (its own barriers).
+/// @param skip an index left out of the search; `None` (default) leaves none out.
+/// @param none the index reported when there is no candidate (default -1).
+/// @param lanes the lane-exchange policy passed to `argmax_allreduce`; `None` by default.
+/// @return an `ArgMax` with the winning index and its key.
 template <class NaN = alg::NanAsInf, class Key = alg::KeyAbs1, class Ex, class X, class Tie = alg::TieLowest, class S = None,
           class K = None, class W = None>
 BATCHLAS_DEVICE_INLINE ArgMax<real_t<elem_t<X>>> iamax(const Ex& ex, const X& x, Range r, const Tie& tie = {}, S slots = {},
@@ -778,14 +1143,35 @@ BATCHLAS_DEVICE_INLINE ArgMax<real_t<elem_t<X>>> iamax(const Ex& ex, const X& x,
     });
     return argmax_allreduce(ex, best, tie, slots, none, seed, lanes);
 }
+/// @brief `{index, key}` of the largest `key(x(i))` over all of `x` (BLAS `i?amax`, 0-based).
+///
+/// The range form over `Range{0, x.size()}` with no skip and the default exchange. COLLECTIVE;
+/// uniform result.
+/// @ingroup api_device_blas1
+/// @tparam NaN `alg::NanAsInf` (default) or `alg::NanSkip`, as for the range form.
+/// @tparam Key `alg::KeyAbs1` (default), `alg::KeyAbs` or `alg::KeyReal`.
+/// @param ex the executor.
+/// @param x the vector searched.
+/// @param tie which index wins a tie (default `alg::TieLowest`).
+/// @return an `ArgMax` with the winning index (-1 for an empty `x`) and its key.
 template <class NaN = alg::NanAsInf, class Key = alg::KeyAbs1, class Ex, class X, class Tie = alg::TieLowest>
     requires(requires(const X& v) { v.size(); })
 BATCHLAS_DEVICE_INLINE ArgMax<real_t<elem_t<X>>> iamax(const Ex& ex, const X& x, const Tie& tie = {}) {
     return iamax<NaN, Key>(ex, x, Range{0, x.size()}, tie);
 }
 
-// max key over x with a NaN policy: alg::NanPropagate (any NaN -> NaN, as amax) or alg::NanSkip
-// (fmax: NaN ignored, the bdsqr / tridiag rule).
+/// @brief The largest key over `x`, with the NaN policy named.
+///
+/// An empty `x` gives 0. COLLECTIVE; uniform result.
+/// @ingroup api_device_blas1
+/// @tparam NaN `alg::NanPropagate` (default; any NaN gives NaN, exactly `amax`; only with
+///   `alg::KeyAbs1`) or `alg::NanSkip` (`fmax`: a NaN element is ignored, the rule of bdsqr and
+///   the tridiagonal solvers).
+/// @tparam Key `alg::KeyAbs1` (default), `alg::KeyAbs`, or `alg::KeyReal` (here `|re|`).
+/// @tparam S the reduction scope, as for `reduce`.
+/// @param ex the executor.
+/// @param x the vector.
+/// @return the maximum key, of the real type of `x`'s elements.
 template <class NaN = alg::NanPropagate, class Key = alg::KeyAbs1, Scope S = Scope::Own, class Ex, class X>
 BATCHLAS_DEVICE_INLINE auto amax_by(const Ex& ex, const X& x) {
     using T = elem_t<X>;
@@ -809,20 +1195,33 @@ BATCHLAS_DEVICE_INLINE auto amax_by(const Ex& ex, const X& x) {
 
 // ---- level 1 (design A.2) -----------------------------------------------------------------------
 
-// fs(i)... in argument order for every owned i < n: several outputs in ONE owned pass.
+/// @brief Calls `fs(i)...` in argument order for every owned `i < n`: several outputs in one pass.
+/// @ingroup api_device_blas1
+/// @param ex the executor.
+/// @param n the extent.
+/// @param fs the callables, each called as `f(int i)`.
 template <class Ex, class... Fs> BATCHLAS_DEVICE_INLINE void map_many(const Ex& ex, int n, const Fs&... fs) {
     for_each_owned(ex, n, [&](int i) { (fs(i), ...); });
 }
 
-// x(i) := alpha (a tag or a value).
+/// @brief `x(i) := alpha` for `i < x.size()`; elementwise, no barrier.
+/// @ingroup api_device_blas1
+/// @param ex the executor.
+/// @param alpha the value: a value or a tag (`Zero`, `One`, ...).
+/// @param[out] x the vector.
 template <class Ex, class AS, class X> BATCHLAS_DEVICE_INLINE void fill(const Ex& ex, AS alpha, const X& x) {
     using T = elem_t<X>;
     const T v = tag_mul(as_tag(alpha), Arith<T>::one());
     for_each_owned(ex, x.size(), [&](int i) { x(i) = v; });
 }
 
-// y(2k) := a(k) for k < a.size(), y(2k + 1) := b(k) for k < b.size() (the perfect shuffle;
-// b.size() is a.size() or a.size() - 1), one owned loop over k.
+/// @brief The perfect shuffle: `y(2k) := a(k)` and `y(2k + 1) := b(k)`, one owned loop over `k < a.size()`.
+/// @ingroup api_device_lowlevel
+/// @pre `b.size()` is `a.size()` or `a.size() - 1`, and `y` holds `a.size() + b.size()` elements.
+/// @param ex the executor.
+/// @param a the even-position source.
+/// @param b the odd-position source.
+/// @param[out] y the destination.
 template <class Ex, class A, class B, class Y> BATCHLAS_DEVICE_INLINE void interleave(const Ex& ex, const A& a, const B& b, const Y& y) {
     const int nb = b.size();
     for_each_owned(ex, a.size(), [&](int k) {
@@ -831,9 +1230,13 @@ template <class Ex, class A, class B, class Y> BATCHLAS_DEVICE_INLINE void inter
     });
 }
 
-// x := x reversed, in place: item owning i < n / 2 swaps x(i) and x(n - 1 - i) (Thread: the
-// serial two-pointer loop). LaneVec (operand.hh) form: each window [lo, hi) reversed by one
-// shuffle when on (uniform); items outside it keep their value.
+/// @brief Reverses `x` in place: the item owning `i < n / 2` swaps `x(i)` and `x(n - 1 - i)`.
+///
+/// On `Thread` this is the serial two-pointer loop. Each element is written by the item that owns
+/// its lower index, so a later operation that reads it under the usual ownership needs a barrier.
+/// @ingroup api_device_lowlevel
+/// @param ex the executor.
+/// @param[in,out] x the vector, `n = x.size()`.
 template <class Ex, class X> BATCHLAS_DEVICE_INLINE void reverse(const Ex& ex, const X& x) {
     const int n = x.size();
     if constexpr (is_thread_v<Ex>) {
@@ -850,13 +1253,26 @@ template <class Ex, class X> BATCHLAS_DEVICE_INLINE void reverse(const Ex& ex, c
         });
     }
 }
+/// @brief Reverses the window `[x.lo, x.hi)` of a lane vector by one shuffle, when `on`.
+///
+/// Items outside the window keep their value. COLLECTIVE: every lane calls, with a uniform `on`.
+/// @ingroup api_device_lowlevel
+/// @param ex the executor (a sub-group or partition).
+/// @param[in,out] x the lane vector (one element per item).
+/// @param on `false` leaves every value in place.
 template <class Ex, class T> BATCHLAS_DEVICE_INLINE void reverse(const Ex& ex, const LaneVec<T>& x, bool on) {
     const int l = ex.lid();
     const int src = (on && l >= x.lo && l < x.hi) ? (x.lo + x.hi - 1 - l) : l;
     x.v = ex.shuffle(static_cast<std::remove_cv_t<T>>(x.v), src);
 }
 
-// The number of x(i) <= v on an ascending x (C++ upper_bound's offset), by bisection on one item.
+/// @brief The number of `x(i) <= v` in an ascending `x` (the offset `std::upper_bound` returns), by
+/// bisection on one item.
+/// @ingroup api_device_lowlevel
+/// @pre `x` is sorted ascending.
+/// @param x the sorted vector.
+/// @param v the value searched for.
+/// @return an index in `[0, x.size()]`.
 template <class X, class Real> BATCHLAS_DEVICE_INLINE int upper_bound(const Thread&, const X& x, Real v) {
     int lo = 0, hi = x.size();
     while (lo < hi) {
@@ -867,8 +1283,15 @@ template <class X, class Real> BATCHLAS_DEVICE_INLINE int upper_bound(const Thre
     return lo;
 }
 
-// x := x / d (LAPACK ?RSCL): one reciprocal and a multiply when 1/d is finite and nonzero, else a
-// division per element (SafeRecip, scalar.hh); d == 0 divides (Inf / NaN, as LAPACK).
+/// @brief `x := x / d` (LAPACK rscl), elementwise, no barrier.
+///
+/// One reciprocal and a multiply per element when `1 / d` is finite and nonzero, else a division
+/// per element (`SafeRecip`); `d == 0` divides, giving Inf or NaN as LAPACK does.
+/// @ingroup api_device_blas1
+/// @tparam Ops the arithmetic policy (default `arith::Fma`).
+/// @param ex the executor.
+/// @param d the divisor, converted to `x`'s element type.
+/// @param[in,out] x the vector.
 template <class Ops = arith::Fma, class Ex, class Scalar, class X> BATCHLAS_DEVICE_INLINE void rscl(const Ex& ex, const Scalar& d, const X& x) {
     using E = elem_t<X>;
     const auto s = SafeRecip<E, Ops>::make(static_cast<E>(d));
@@ -878,27 +1301,55 @@ template <class Ops = arith::Fma, class Ex, class Scalar, class X> BATCHLAS_DEVI
     });
 }
 
-// This item's partial op(x) y (TR: Trans x^T y, ConjTrans x^H y) over its owned elements; no
-// reduction (the caller combines partials, e.g. through a Scratch exchange shared with other sums).
+/// @brief This item's partial `op(x) y` over its owned elements, with no reduction.
+///
+/// The caller combines the partials, for example in one `allreduce` through a `Scratch` exchange
+/// shared with other sums. On a `Fit` executor, the item's one product (0 past `x.size()`).
+/// @ingroup api_device_blas1
+/// @tparam TR `Transpose::Trans` (default, `x^T y`) or `Transpose::ConjTrans` (`x^H y`).
+/// @tparam Ops the arithmetic policy of the products.
+/// @param ex the executor.
+/// @param x the first vector; its size is the trip count.
+/// @param y the second vector.
+/// @return this item's partial sum (not uniform).
 template <Transpose TR = Transpose::Trans, class Ops = arith::Explicit, class Ex, class X, class Y>
 BATCHLAS_DEVICE_INLINE auto dot_partial(const Ex& ex, const X& x, const Y& y) {
     return detail::dot_partial<TR, Ops>(ex, x, y);
 }
 
-// acc += x(t) y(t) for t < N with kk0 + t < k, in index order: one item's dot over a staged slab.
+/// @brief `acc += x(t) y(t)` for `t < N` with `kk0 + t < k`, in index order: one item's dot over a staged slab.
+/// @ingroup api_device_lowlevel
+/// @tparam N the slab length.
+/// @tparam Ops the arithmetic policy (default `arith::Native`).
+/// @param[in,out] acc the accumulator.
+/// @param x the slab of the first operand, indexed from 0.
+/// @param y the slab of the second operand.
+/// @param kk0 the slab's offset in the full dot.
+/// @param k the full dot's length.
 template <int N, class Ops = arith::Native, class Scalar, class VX, class VY>
 BATCHLAS_DEVICE_INLINE void dot_slab(Scalar& acc, const VX& x, const VY& y, int kk0, int k) {
     using A = arith_t<Ops, Scalar>;
     for (int t = 0; t < N && kk0 + t < k; ++t) A::mac(acc, x(t), y(t));
 }
 
-// prod_i f(i) as mant * 2^expo (mant in [0.5, 1) unless the product is 0, Inf or NaN), free of
-// over/underflow: each item renormalises its running product by frexp, then the mantissas
-// combine 32 items at a time (2^-32 <= a product of 32 mantissas <= 1) with renormalisation.
+/// @brief A product as `mant * 2^expo`, the result of `prod_scaled`.
+/// @ingroup api_device_lowlevel
 template <class Real> struct ScaledProd {
+    /// The mantissa, in `[0.5, 1)` in magnitude unless the product is 0, Inf or NaN.
     Real mant;
+    /// The binary exponent.
     std::int32_t expo;
 };
+/// @brief The product of `f(i)` over `i < n` as `mant * 2^expo`, free of overflow and underflow.
+///
+/// Each item renormalises its running product with `frexp`, then the items' mantissas combine 32
+/// at a time with renormalisation (a product of 32 mantissas lies in `[2^-32, 1]`). COLLECTIVE;
+/// uniform result.
+/// @ingroup api_device_lowlevel
+/// @param ex the executor.
+/// @param n the number of factors.
+/// @param f called as `f(int i)`, returning a real factor.
+/// @return a `ScaledProd`.
 template <class Ex, class F> BATCHLAS_DEVICE_INLINE auto prod_scaled(const Ex& ex, int n, F&& f) {
     using R = std::remove_cvref_t<decltype(f(0))>;
     R mant = R(1);
@@ -926,7 +1377,10 @@ template <class Ex, class F> BATCHLAS_DEVICE_INLINE auto prod_scaled(const Ex& e
     }
     return ScaledProd<R>{mant_all, expo_all};
 }
-// sqrt(|mant| 2^expo) without forming the power.
+/// @brief `sqrt(|q.mant| 2^q.expo)` without forming the power.
+/// @ingroup api_device_lowlevel
+/// @param q a scaled product.
+/// @return the square root of its magnitude.
 template <class Real> BATCHLAS_DEVICE_INLINE Real sqrt_scaled(ScaledProd<Real> q) {
     const std::int32_t half = q.expo >> 1;  // floor(expo / 2)
     const std::int32_t rem = q.expo - 2 * half;
@@ -934,8 +1388,15 @@ template <class Real> BATCHLAS_DEVICE_INLINE Real sqrt_scaled(ScaledProd<Real> q
     return sycl::ldexp(mag, half);
 }
 
-// find_first on a LaneVec: the smallest lid in [x.lo, x.hi) whose element satisfies pred, else
-// none (a min butterfly, masks ascending).
+/// @brief On a lane vector: the smallest `lid` in `[x.lo, x.hi)` whose element satisfies `pred`, or `none`.
+///
+/// One minimum butterfly over the executor's lanes. COLLECTIVE; uniform result.
+/// @ingroup api_device_blas1
+/// @param ex the executor (a sub-group or partition).
+/// @param x the lane vector (one element per item).
+/// @param pred called as `pred(value)`, returning `bool`.
+/// @param none the value returned when no element satisfies `pred` (default -1).
+/// @return the smallest matching lane, or `none`.
 template <class Ex, class T, class P> BATCHLAS_DEVICE_INLINE int find_first(const Ex& ex, const LaneVec<T>& x, P&& pred, int none = -1) {
     const int l = ex.lid();
     const int cand = (l >= x.lo && l < x.hi && pred(static_cast<std::remove_cv_t<T>>(x.v))) ? l : none;
@@ -943,8 +1404,13 @@ template <class Ex, class T, class P> BATCHLAS_DEVICE_INLINE int find_first(cons
 }
 
 // ---- Cyclic rows of a static extent N (N % size == 0): item l owns rows l + k*size ----------
-// f(k, row) for the item's N / size rows, k a compile-time Frag slot; no bound check.
-// U = alg::UnrollFull is a full unroll pragma, alg::UnrollDefault none.
+/// @brief Calls `f(k, row)` for the item's `N / size` cyclic rows `row = lid + k * size`, `k` the
+/// register-fragment slot; no bound check.
+/// @ingroup api_device_lowlevel
+/// @tparam N the static extent, a multiple of the executor's size.
+/// @tparam U `alg::UnrollFull` (default, a full unroll) or `alg::UnrollDefault`.
+/// @param ex the executor (a compile-time size).
+/// @param f called as `f(int k, int row)`.
 template <int N, class U = alg::UnrollFull, class Ex, class F> BATCHLAS_DEVICE_INLINE void for_each_owned_frag(const Ex& ex, F&& f) {
     static_assert(N % Ex::size == 0, "for_each_owned_frag: N must be a multiple of the executor size");
     constexpr int K = N / Ex::size;
@@ -958,15 +1424,29 @@ template <int N, class U = alg::UnrollFull, class Ex, class F> BATCHLAS_DEVICE_I
     }
 }
 
-// x[k] = v(l + k*size) for rows < n, else 0.
+/// @brief `x[k] := v(lid + k * size)` for rows below `n`, else 0: a masked load into a cyclic fragment.
+/// @ingroup api_device_lowlevel
+/// @param ex the executor.
+/// @param v the vector loaded.
+/// @param n the number of valid rows.
+/// @param[out] x the item's fragment of `K` slots.
 template <class Ex, class V, class T, int K> BATCHLAS_DEVICE_INLINE void load_owned_masked(const Ex& ex, const V& v, int n, Frag<T, K>& x) {
     for_each_owned_frag<K * Ex::size>(ex, [&](int k, int r) { x[k] = (r < n) ? static_cast<T>(v(r)) : T(0); });
 }
-// x = e_j restricted to the item's rows.
+/// @brief `x := e_j`, the unit vector, restricted to the item's cyclic rows.
+/// @ingroup api_device_lowlevel
+/// @param ex the executor.
+/// @param j the row of the 1.
+/// @param[out] x the item's fragment.
 template <class Ex, class T, int K> BATCHLAS_DEVICE_INLINE void set_unit_owned(const Ex& ex, int j, Frag<T, K>& x) {
     for_each_owned_frag<K * Ex::size>(ex, [&](int k, int r) { x[k] = (r == j) ? T(1) : T(0); });
 }
-// sum_k conj(x[k]) y[k] over the item's fragment (a partial dotc; reduce it with allreduce).
+/// @brief `sum_k conj(x[k]) y[k]` over the item's fragment: a partial dotc to reduce with `allreduce`.
+/// @ingroup api_device_lowlevel
+/// @tparam Ops the arithmetic policy (default `arith::Native`).
+/// @param x the conjugated fragment.
+/// @param y the second fragment.
+/// @return this item's partial sum.
 template <class Ops = arith::Native, class Scalar, int K> BATCHLAS_DEVICE_INLINE Scalar dotc_owned(const Frag<Scalar, K>& x, const Frag<Scalar, K>& y) {
     Scalar acc = Scalar(0);
 #pragma unroll
@@ -976,8 +1456,17 @@ template <class Ops = arith::Native, class Scalar, int K> BATCHLAS_DEVICE_INLINE
     }
     return acc;
 }
-// x[k] = u(l + k*size), y[k] = v(l + k*size) and the partial dotc sum_k conj(x[k]) y[k] in one
-// pass (x, y: Frag or T[K]). Two loads plus dotc_owned gave complex T extra BRA.
+// Two loads plus dotc_owned gave complex T extra BRA.
+/// @brief Loads `x[k] := u(lid + k * size)` and `y[k] := v(lid + k * size)` and returns the partial
+/// dotc `sum_k conj(x[k]) y[k]`, in one pass.
+/// @ingroup api_device_lowlevel
+/// @tparam K the fragment slots.
+/// @param ex the executor.
+/// @param u the first vector loaded.
+/// @param v the second vector loaded.
+/// @param[out] x the first fragment (a `Frag` or `T[K]`).
+/// @param[out] y the second fragment.
+/// @return this item's partial sum.
 template <int K, class Ex, class U, class V, class X>
 BATCHLAS_DEVICE_INLINE auto load_dotc_owned(const Ex& ex, const U& u, const V& v, X& x, X& y) {
     using T = std::remove_cvref_t<decltype(x[0])>;
@@ -992,7 +1481,12 @@ BATCHLAS_DEVICE_INLINE auto load_dotc_owned(const Ex& ex, const U& u, const V& v
     }
     return acc;
 }
-// y[k] := y[k] - x[k] a (one classical Gram-Schmidt projection step).
+/// @brief `y[k] := y[k] - x[k] a` over a fragment: one classical Gram-Schmidt projection step.
+/// @ingroup api_device_lowlevel
+/// @tparam Ops the arithmetic policy (default `arith::Native`).
+/// @param[in,out] y the fragment updated.
+/// @param x the fragment subtracted.
+/// @param a the coefficient.
 template <class Ops = arith::Native, class Scalar, int K> BATCHLAS_DEVICE_INLINE void sub_mul(Frag<Scalar, K>& y, const Frag<Scalar, K>& x, Scalar a) {
 #pragma unroll
     for (int k = 0; k < K; ++k) {
@@ -1000,7 +1494,12 @@ template <class Ops = arith::Native, class Scalar, int K> BATCHLAS_DEVICE_INLINE
         else arith_t<Ops, Scalar>::msub(y[k], x[k], a);
     }
 }
-// sum of |x[k]|^2 over the item's rows < n (each abs2 its own rounding, as the hand loop).
+/// @brief This item's `sum |x[k]|^2` over its cyclic rows below `n` (each `abs2` its own rounding), not reduced.
+/// @ingroup api_device_lowlevel
+/// @param ex the executor.
+/// @param x the item's fragment.
+/// @param n the number of valid rows.
+/// @return this item's partial sum.
 template <class Ex, class Scalar, int K> BATCHLAS_DEVICE_INLINE real_t<Scalar> sumsq_owned(const Ex& ex, const Frag<Scalar, K>& x, int n) {
     real_t<Scalar> acc = real_t<Scalar>(0);
     for_each_owned_frag<K * Ex::size>(ex, [&](int k, int r) {
@@ -1008,9 +1507,16 @@ template <class Ex, class Scalar, int K> BATCHLAS_DEVICE_INLINE real_t<Scalar> s
     });
     return acc;
 }
-// sumsq of a Cyclic register vector: x[k] is row l + k*size of the item's share, rows >= n
-// skipped (read nothing); Alg as sumsq (alg::Unfused: each abs2 its own rounding), reduced
-// over scope S.
+/// @brief `sum |x_i|^2` of a cyclic register vector, reduced over scope `S`.
+///
+/// `x[k]` is row `lid + k * size`; rows at or past `n` are skipped. COLLECTIVE; uniform result.
+/// @ingroup api_device_blas1
+/// @tparam Alg `alg::Fused` (default) or `alg::Unfused`, as for the memory form.
+/// @tparam S the reduction scope, as for `reduce`.
+/// @param ex the executor.
+/// @param x the item's share of the vector.
+/// @param n the vector's length.
+/// @return the sum, the same on every item.
 template <class Alg = alg::Fused, Scope S = Scope::Own, class Ex, class Scalar, int N>
 BATCHLAS_DEVICE_INLINE real_t<Scalar> sumsq(const Ex& ex, const Frag<Scalar, N, Cyclic>& x, int n) {
     real_t<Scalar> acc = real_t<Scalar>(0);
@@ -1020,9 +1526,14 @@ BATCHLAS_DEVICE_INLINE real_t<Scalar> sumsq(const Ex& ex, const Frag<Scalar, N, 
     return allreduce<S>(ex, acc);
 }
 
-// Lane l returns ||a(:, l)||^2 for the P = Ex::size columns of a, whose static row count (a.m,
-// an Ext) is Cyclic over the executor: per-lane partial sums, then reduce_scatter<P> (log2 P
-// exchanges; core sumsq over P columns would be P all-reduces).
+/// @brief Lane `l` gets `||a(:, l)||^2` for the `P = Ex::size` columns of `a`.
+///
+/// `a`'s static row count (an `Ext`) is cyclic over the executor: per-lane partial sums, then one
+/// `reduce_scatter<P>` (`log2 P` exchanges rather than `P` all-reductions). COLLECTIVE.
+/// @ingroup api_device_lowlevel
+/// @param ex the executor (a sub-group or partition of `P` lanes).
+/// @param a a matrix with `P` columns and a static row count.
+/// @return this lane's column's squared norm.
 template <class Ex, class M> BATCHLAS_DEVICE_INLINE auto col_sumsq(const Ex& ex, const M& a) {
     using T = typename M::value_type;
     using R = real_t<T>;

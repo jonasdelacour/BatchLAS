@@ -1,11 +1,17 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Device LA Level 3, register tier: one work-item's whole operands in
-// register Tiles (every index a compile-time constant after unrolling). The in-group forms over
-// executors and the tuned gemm components join here in L3a-L3d (design B).
-//   gemm<TA, TB, Shape, Ops>   C := alpha op(A) op(B) + beta C  (epilogue store_epi<Shape, Ops>)
-//   gemm_sub<K, Ops>           C -= A B (the factorizations' trailing update; Ops::msub)
-//   trsm<Side, UL, TR, DG, Ops>  op(A) X = alpha B (Left) or X op(A) = alpha B (Right), in place
+/// @file
+/// @brief In-kernel BLAS level 3, register tier: one work-item's whole operands in register tiles
+/// (@ref api_device_blas3).
+///
+/// Every index is a compile-time constant after unrolling, so the operands stay in registers:
+///   - `gemm<TA, TB, Shape, Ops>`: `C := alpha op(A) op(B) + beta C`.
+///   - `gemm_sub<K, Ops>`: `C -= A B`, the factorizations' trailing update.
+///   - `trsm<SD, UL, TR, DG, Ops>`: `op(A) X = alpha B` (Left) or `X op(A) = alpha B` (Right), in place.
+///
+/// All three run on the `Thread` executor. The in-group forms (one matrix per work-group, any
+/// size) are in `<batchlas/device/level3/group.hh>`. Included by `<batchlas/device.hh>`.
+/// @ingroup api_device_blas3
 
 #include <type_traits>
 
@@ -32,9 +38,21 @@ template <Transpose TR, int R, int C> inline constexpr int op_rows = TR == Trans
 template <Transpose TR, int R, int C> inline constexpr int op_cols = TR == Transpose::NoTrans ? C : R;
 }  // namespace detail
 
-// C(M x N) := alpha op(A) op(B) + beta C; op(A) is M x K, op(B) is K x N. The k loop runs
-// innermost per (i, j) with Ops::mac into a zero accumulator, then one epilogue store per
-// element (Shape: epi::Sum default; see arith.hh store).
+/// @brief `C := alpha op(A) op(B) + beta C` (BLAS gemm) on register tiles, on one item.
+///
+/// `op(A)` is M x K, `op(B)` is K x N and `C` is M x N; the shapes are checked at compile time.
+/// Per element, the k loop runs innermost with `Ops::mac` into a zero accumulator, then one
+/// epilogue store. A `Zero` tag for `beta` never reads `C`.
+/// @ingroup api_device_blas3
+/// @tparam TA `op(A)`: `Transpose::NoTrans` (default), `Trans` or `ConjTrans`.
+/// @tparam TB `op(B)`, likewise.
+/// @tparam Shape the epilogue, `store_epi<Shape, Ops>` (default `epi::Sum`).
+/// @tparam Ops the arithmetic policy (`arith::FmaSplit` selects the split epilogue arithmetic).
+/// @param alpha the scalar `alpha`: a value or a tag.
+/// @param A the register tile `A`.
+/// @param B the register tile `B`.
+/// @param beta the scalar `beta`: a value or a tag.
+/// @param[in,out] C the register tile `C`.
 template <Transpose TA = Transpose::NoTrans, Transpose TB = Transpose::NoTrans, class Shape = epi::Sum, class Ops = arith::Explicit,
           class AS, class BS, class Scalar, int AR, int AC, int BR, int BC, int M, int N>
 BATCHLAS_DEVICE_INLINE void gemm(const Thread&, AS alpha, const Tile<Scalar, AR, AC>& A, const Tile<Scalar, BR, BC>& B, BS beta, Tile<Scalar, M, N>& C) {
@@ -53,10 +71,19 @@ BATCHLAS_DEVICE_INLINE void gemm(const Thread&, AS alpha, const Tile<Scalar, AR,
         }
 }
 
-// C -= A B, one Ops::msub per term in k order (Ops = arith::FmaSplit: sub(c, mul(a, b)), the
-// two-rounding hand form; arith::Fma: one fused msub). A = a(x, k) (M x K) and B = b(k, y)
-// (K x N) are Tiles or any operands (local or global memory, a masked view): both are staged into
-// registers first (for k: A's column k, then B's row k), then K rank-1 steps in k order.
+/// @brief `C -= A B` on a register tile, one `Ops::msub` per term in k order: the factorizations'
+/// trailing update.
+///
+/// `A = a(x, k)` (M x K) and `B = b(k, y)` (K x N) are tiles or any operands (local or global
+/// memory, a masked view). Both are staged into registers first (for each k, `A`'s column k then
+/// `B`'s row k), then K rank-1 steps in k order.
+/// @ingroup api_device_blas3
+/// @tparam K the inner dimension.
+/// @tparam Ops `arith::FmaSplit`: `sub(c, mul(a, b))`, two roundings; `arith::Fma`: one fused
+///   `msub`; default `arith::Explicit`.
+/// @param a the M x K operand.
+/// @param b the K x N operand.
+/// @param[in,out] c the M x N register tile.
 template <int K, class Ops = arith::Explicit, class MA, class MB, class Scalar, int M, int N>
 BATCHLAS_DEVICE_INLINE void gemm_sub(const Thread&, const MA& a, const MB& b, Tile<Scalar, M, N>& c) {
     using Ar = ops_arith_t<Ops, Scalar>;
@@ -75,16 +102,33 @@ BATCHLAS_UNROLL_FULL
 BATCHLAS_UNROLL_FULL
             for (int y = 0; y < N; ++y) Ar::msub(c(x, y), at[x][k], bt[k][y]);
 }
+/// @brief `C -= A B` on register tiles, `K` deduced from the tiles.
+/// @ingroup api_device_blas3
+/// @tparam Ops the arithmetic policy, as for the operand form.
+/// @param ex the `Thread` executor.
+/// @param A the M x K register tile.
+/// @param B the K x N register tile.
+/// @param[in,out] C the M x N register tile.
 template <class Ops = arith::Explicit, class Scalar, int M, int K, int N>
 BATCHLAS_DEVICE_INLINE void gemm_sub(const Thread& ex, const Tile<Scalar, M, K>& A, const Tile<Scalar, K, N>& B, Tile<Scalar, M, N>& C) {
     gemm_sub<K, Ops>(ex, A, B, C);
 }
 
-// Triangular solve on a register tile B, overwritten by X. Left: op(A) X = alpha B with A M x M;
-// Right: X op(A) = alpha B with A N x N. A is a Tile or any a(i, j) operand (Left lower reads each
-// A(i, k) once, for every column). UL names the STORED triangle of A (the other is not read);
-// DG = Unit never reads the diagonal. Each element's terms run in the reference BLAS order
-// (dtrsm), so a real Ops::msub chain matches it term by term.
+/// @brief Triangular solve with a register tile `B`, overwritten by `X` (BLAS trsm) on one item.
+///
+/// `Side::Left`: `op(A) X = alpha B` with `A` M x M. `Side::Right`: `X op(A) = alpha B` with `A`
+/// N x N. `A` is a tile or any `a(i, j)` operand; a tile's shape is checked at compile time. Each
+/// element's terms run in the reference BLAS order (dtrsm), so a real `Ops::msub` chain matches it
+/// term by term. A zero diagonal element of a `Diag::NonUnit` `A` gives Inf or NaN.
+/// @ingroup api_device_blas3
+/// @tparam SD `Side::Left` or `Side::Right`.
+/// @tparam UL the stored triangle of `A`; the other is not read.
+/// @tparam TR `op(A)`: `Transpose::NoTrans`, `Trans` or `ConjTrans`.
+/// @tparam DG `Diag::Unit` never reads the diagonal; `Diag::NonUnit` divides by it.
+/// @tparam Ops the arithmetic policy.
+/// @param alpha_ the scalar `alpha`: a value or a tag (`One` skips the scaling).
+/// @param A the triangular matrix.
+/// @param[in,out] B the M x N register tile: the right-hand side on entry, `X` on return.
 template <Side SD, Uplo UL, Transpose TR, Diag DG, class Ops = arith::Explicit, class AS, class MA, class Scalar, int M, int N>
 BATCHLAS_DEVICE_INLINE void trsm(const Thread&, AS alpha_, const MA& A, Tile<Scalar, M, N>& B) {
     using Ar = ops_arith_t<Ops, Scalar>;
