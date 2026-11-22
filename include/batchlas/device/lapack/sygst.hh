@@ -1,15 +1,19 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// LAPACK ?sygst / ?hegst in a kernel: the reduction of A x = lambda B x (itype 1), A B x = lambda x
-// (2) and B A x = lambda x (3) to a standard Hermitian problem, from B's Cholesky factor F (L for
-// Lower, U^H for Upper): itype 1 C = F^-1 A F^-H, itypes 2, 3 C = F^H A F, uplo triangles only.
-//   sygst<Itype, UL, tier::Cta<N>>(ex, A, B, ws)      one matrix per WorkGroup, n <= N <= 32
-//   sygst<Itype, UL, tier::Blocked<NB>>(ex, A, B, ws) any n: LAPACK's ?sygst schedule in one
-//                                                 work-group, NB <= 32 diagonal blocks by
-//                                                 sygs2_group, the rest by the in-group L3
-//   sygs2_group<Inverse, KB, NF>(...)             ?sygs2 on ipw diagonal blocks per work-group:
-//                                                 the one body; sygst's host blocked route
-//                                                 launches it for every kb x kb diagonal block
+/// @file
+/// @ingroup api_device_lapack_eig
+/// @brief ?SYGST / ?HEGST in a kernel: the reduction of a generalized Hermitian-definite
+/// eigenproblem to a standard one, for one matrix, from B's Cholesky factor.
+///
+/// The problems are \f$A x = \lambda B x\f$ (`Itype::AinvB`, itype 1), \f$A B x = \lambda x\f$
+/// (`Itype::AB`, 2) and \f$B A x = \lambda x\f$ (`Itype::BA`, 3). With F the factor (L for
+/// `Uplo::Lower`, \f$U^H\f$ for `Uplo::Upper`), itype 1 gives \f$C = F^{-1} A F^{-H}\f$ and
+/// itypes 2 and 3 give \f$C = F^H A F\f$, on the `UL` triangles only. The routine is sygst(); its
+/// routine tag is routine::sygst. Its tiers, smallest first, are `tier::Cta<8>`, `tier::Cta<16>`,
+/// `tier::Cta<32>`, `tier::Blocked<32>` and `tier::Blocked<16>`. The diagonal-block kernel
+/// sygs2_group() is in @ref api_device_lowlevel.
+// sygs2_group<Inverse, KB, NF>(...) is ?sygs2 on ipw diagonal blocks per work-group: the one
+// body; sygst's host blocked route launches it for every kb x kb diagonal block.
 // One work-item per column of a block, the column in registers; F and a transpose buffer per
 // block in local memory, F stored so each pass reads its lines as aligned 16-byte packs. Each pass
 // is a triangular solve with F (itype 1) or a product with F^H (2, 3), applied to A and then to
@@ -108,18 +112,36 @@ template <class D> constexpr SygstCtaPlan<D> sygst_cta_plan(int n) {
 
 }  // namespace detail
 
-/// ?SYGS2 on ipw diagonal blocks of order kb (<= NF <= 32) per work-group: block gi is matrix
-/// first + gi (first = grp * ipw), its column j owned by item gi * kb + j of the wg items. The
-/// group copies A's and B's uplo triangles into local memory (coalesced across the blocks), then
-/// each item reduces its column; C (real diagonal) goes back to A's uplo triangle and, through
-/// full(itm, row, col, value), to wherever the caller keeps the whole Hermitian block.
-///   fbase   ipw * (fper + sper) local elements, 16-byte aligned: the F stores, then the S buffers
-///   fper    kb * ldf, ldf = detail::sygs2_ldf<D>(kb);  sper = kb * lds, lds = kb + 1
-///   a_of(itm), b_of(itm)  matrix itm's A (read, written) and B (read) operands
-///   dead(itm)             true for a matrix no item may load or store (out of range or masked;
-///                         uniform per block); its items compute on its unloaded local slot
-/// KB > 0 is a compile-time order (kb == KB); KB = 0 any kb <= NF. Every item of ex reaches the
-/// four barriers. The argument order is the hand kernel's capture order (its parameter order).
+/// @ingroup api_device_lowlevel
+/// @brief ?SYGS2 on `ipw` diagonal blocks of order `kb` (<= NF <= 32) per work-group.
+///
+/// Not covered by the compatibility promise: this is the diagonal-block body of sygst() and of
+/// the host blocked route. Block gi is matrix first + gi (first = `grp` * `ipw`), its column j
+/// owned by item gi * `kb` + j of the `wg` items. The group copies A's and B's uplo triangles
+/// into local memory (coalesced across the blocks), then each item reduces its column; C (real
+/// diagonal) goes back to A's uplo triangle and, through `full`, to wherever the caller keeps the
+/// whole Hermitian block. Every item of `ex` reaches the four barriers.
+/// @tparam Inverse  true: itype 1 (\f$F^{-1} A F^{-H}\f$); false: itypes 2 and 3 (\f$F^H A F\f$)
+/// @tparam KB       a compile-time order (`kb` == KB), or 0 for any `kb` <= NF
+/// @tparam NF       the bound on `kb`, at most 32
+/// @param[in] ex     the work-group
+/// @param[in] t      this item's index in the work-group
+/// @param[in] kb     the block order
+/// @param[in] lower  true: the lower triangles hold A and F
+/// @param[in] grp    the work-group's index
+/// @param[in] ipw    the number of blocks per work-group
+/// @param[in] fbase  `ipw` * (`fper` + `sper`) local elements, 16-byte aligned: the F stores, then
+///                   the S buffers
+/// @param[in] fper   `kb` * `ldf` local elements per F store
+/// @param[in] a_of   `a_of(itm)`: matrix itm's A operand (read and written)
+/// @param[in] sper   `kb` * `lds` local elements per S buffer
+/// @param[in] lds    `kb` + 1
+/// @param[in] wg     the number of items in the work-group
+/// @param[in] dead   `dead(itm)`: true for a matrix no item may load or store (uniform per block)
+/// @param[in] b_of   `b_of(itm)`: matrix itm's B operand (read)
+/// @param[in] ldf    `detail::sygs2_ldf<D>(kb)`
+/// @param[in] full   `full(itm, row, col, value)`: stores an element of the whole Hermitian block
+// The argument order is the hand kernel's capture order (its parameter order).
 template <bool Inverse, int KB, int NF = 32, class Ex, class D, class AOf, class Dead, class BOf, class Full>
 BATCHLAS_DEVICE_INLINE void sygs2_group(const Ex& ex, int t, int kb, bool lower, std::size_t grp, int ipw, D* fbase,
                                      int fper, const AOf& a_of, int sper, int lds, int wg, const Dead& dead,
@@ -179,14 +201,21 @@ BATCHLAS_DEVICE_INLINE void sygs2_group(const Ex& ex, int t, int kb, bool lower,
 }
 
 namespace routine {
+/// @ingroup api_device_lapack_eig
+/// @brief The routine tag of sygst() for the problem type `IT` and triangle `UL`: names the
+/// routine to `with_tier`, `launch`, `tier_info`, `tiers_t` and `buffer_size`.
 template <Itype IT, Uplo UL> struct sygst {
-    static constexpr const char* name = "sygst";
+    static constexpr const char* name = "sygst";  ///< The routine's name, "sygst".
 };
 }  // namespace routine
 
-// tier::Cta<N>, N <= 32 (the column of the block in one item's registers), then tier::Blocked<NB>
-// for any n; Blocked<16> is the fallback where Blocked<32>'s diagonal block does not fit (complex
-// double on 32 KB of local memory).
+/// @ingroup api_device_lapack_eig
+/// @brief sygst()'s tiers for every `Scalar`, smallest first: `Cta<8>`, `Cta<16>`, `Cta<32>`,
+/// `Blocked<32>`, `Blocked<16>`.
+///
+/// `tier::Cta<N>`, N <= 32, holds the column of the block in one item's registers;
+/// `tier::Blocked<NB>` takes any n. `Blocked<16>` is the fallback where `Blocked<32>`'s diagonal
+/// block does not fit (`std::complex<double>` on 32 KB of local memory).
 template <Itype IT, Uplo UL, class Scalar> struct tiers<routine::sygst<IT, UL>, Scalar> {
     using type = tier::list<tier::Cta<8>, tier::Cta<16>, tier::Cta<32>, tier::Blocked<32>, tier::Blocked<16>>;
 };
@@ -223,8 +252,13 @@ template <class D, int NB, Itype IT> constexpr SygstBlockedPlan<D> sygst_blocked
 }
 }  // namespace detail
 
-// buffer_size(n): the local and global bytes of one matrix of order n (Cta: n <= N, global none;
-// Blocked: any n).
+/// @ingroup api_device_lapack_eig
+/// @brief sygst()'s local-memory tier `tier::Cta<N>`, N <= 32: one matrix per work-group, item j
+/// owning column j.
+///
+/// The executor is `WorkGroup<wg_size, 32>`, `wg_size` N rounded up to a multiple of 32.
+/// `admits(n)` is 0 <= n <= N. `buffer_size(n)` is local memory only: one ?SYGS2 block in whole
+/// 16-byte packs; no global workspace.
 template <Itype IT, Uplo UL, int N, class Alg, class Scalar> struct tier_info<routine::sygst<IT, UL>, tier::Cta<N, Alg>, Scalar> {
     static_assert(N >= 1 && N <= 32, "sygst: tier::Cta<N>, N <= 32");
     static constexpr int wg_size = (N + 31) / 32 * 32, sg_size = 32;
@@ -235,6 +269,14 @@ template <Itype IT, Uplo UL, int N, class Alg, class Scalar> struct tier_info<ro
         return detail::sygst_cta_plan<std::remove_cv_t<Scalar>>(n).plan.size();
     }
 };
+/// @ingroup api_device_lapack_eig
+/// @brief sygst()'s blocked tier `tier::Blocked<NB>`, NB <= 32: any n, LAPACK's ?SYGST schedule in
+/// one 256-item work-group, `A` and `B` in global memory.
+///
+/// The NB x NB diagonal blocks are reduced by sygs2_group(), the rest by the in-group level 3.
+/// The executor is `WorkGroup<256, 32>`. `admits(n)` is n >= 0. `buffer_size(n)` has a local part
+/// (the ?SYGS2 block and the level 3 stages, never live at once) and, for n > NB, a global part
+/// per matrix: the whole Hermitian diagonal block, and for itypes 2 and 3 an n x NB panel.
 template <Itype IT, Uplo UL, int NB, class Alg, class Scalar> struct tier_info<routine::sygst<IT, UL>, tier::Blocked<NB, Alg>, Scalar> {
     static_assert(NB >= 1 && NB <= 32, "sygst: tier::Blocked<NB>, NB <= 32 (the ?sygs2 block)");
     static constexpr int wg_size = detail::blocked_cfg_t<std::remove_cv_t<Scalar>>::threads, sg_size = 32;
@@ -362,15 +404,36 @@ BATCHLAS_DEVICE_INLINE void blocked(const Ex& ex, const l3::Global<D>& a, const 
 
 }  // namespace detail
 
-/// C := F^-1 A F^-H (Itype 1) or F^H A F (2, 3) on one matrix, in A's UL triangle (the other
-/// triangle is not touched); B holds F in its UL triangle (read only). Tier: tier::Cta<N>,
-/// tier::Blocked<NB> or tier::upto<N>. COLLECTIVE over a WorkGroup: Cta, at least N items (item
-/// j < n owns column j); Blocked, tier_info's wg_size (256) items, A and B in global memory (a
-/// Mat over T*, device::item or l3::Global) and B's diagonal real (potrf's factor: the trsm / trmm
-/// steps read it as stored, as LAPACK's do). A and B visible to every item on entry, A's result on
-/// return. ws: buffer_size<routine::sygst<Itype, UL>, Tier, T>(n), 16-byte aligned (Blocked,
-/// n > NB: a global slice too). Returns 0, or -2 (A not square or, Cta, n > N), -3 (B smaller
-/// than n x n); uniform over the executor.
+/// @ingroup api_device_lapack_eig
+/// @brief ?SYGST / ?HEGST in a kernel: \f$C := F^{-1} A F^{-H}\f$ (`Itype::AinvB`) or
+/// \f$C := F^H A F\f$ (`Itype::AB`, `Itype::BA`) for one matrix, in `a`'s `UL` triangle.
+///
+/// The other triangle of `a` is not touched. `b` holds F, potrf()'s factor of B, in its `UL`
+/// triangle and is read only; its diagonal must be real (the trsm and trmm steps read it as
+/// stored, as LAPACK's do).
+/// - `tier::Cta<N>`, N <= 32: `ex` a `WorkGroup` of at least N items (item j < n owns column j);
+///   n <= N.
+/// - `tier::Blocked<NB>`, NB <= 32: `ex` a `WorkGroup` of `tier_info::wg_size` (256) items; any n;
+///   `a` and `b` in global memory (a `Mat` over `T*`, `device::item` or `l3::Global`).
+/// - `tier::upto<N>`: the first tier of `tiers_t<routine::sygst<IT, UL>, T>` that admits N.
+///
+/// Workspace: `ws` holds `buffer_size<routine::sygst<IT, UL>, Tier, T>(n)`, 16-byte aligned
+/// (`tier::Blocked` with n > NB: a global slice too). The workspace is not checked.
+///
+/// @pre Collective over a `WorkGroup`: every item of `ex` calls sygst() with the same arguments;
+/// `a` and `b` visible to every item on entry. The result in `a` is visible to every item on
+/// return.
+/// @tparam IT    `Itype::AinvB`, `Itype::AB` or `Itype::BA`: the generalized problem
+/// @tparam UL    `Uplo::Lower` or `Uplo::Upper`: the triangle that holds A, F and the result
+/// @tparam Tier  `tier::Cta<N>`, `tier::Blocked<NB>` or `tier::upto<N>`
+/// @param[in]     ex  the work-group that owns this matrix
+/// @param[in,out] a   the n x n Hermitian A; its `UL` triangle is overwritten with C
+/// @param[in]     b   B's Cholesky factor F in its `UL` triangle, at least n x n
+/// @param[in]     ws  this matrix's workspace slice
+/// @return 0 or a negative argument number, the same on every item of `ex`:
+/// @retval 0   success
+/// @retval -2  `a` is not square, or (`tier::Cta`) n > N
+/// @retval -3  `b` is smaller than n x n
 template <Itype IT, Uplo UL, class Tier, class Ex, class MA, class MB>
 BATCHLAS_DEVICE_INLINE int sygst(const Ex& ex, const MA& a, const MB& b, const Workspace& ws) {
     using D = std::remove_cv_t<typename MA::value_type>;

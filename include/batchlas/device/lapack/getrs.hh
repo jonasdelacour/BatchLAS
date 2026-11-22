@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+/// @file
+/// @ingroup api_device_lapack_lu
+/// @brief ?GETRS in a kernel: the solve \f$\mathrm{op}(A) X = B\f$ for one matrix from getrf()'s
+/// factor and pivots, X overwriting B.
+///
+/// The routine is getrs(); its routine tag is routine::getrs. Its one tier is `tier::Blocked<32>`,
+/// with getrf()'s Blocked executor and local workspace plan.
 // ?GETRS's device steps (the fused and composed host tiers run them), in detail until core
 // Level 3 / lapack_aux has SASS-identical forms of them. Everything else comes from core
 // (RtGroup, for_each_owned, lacpy, laswp, lapmr, conj_if, op_view, shift_reduce, select, arith::Fma):
@@ -94,9 +101,12 @@ BATCHLAS_UNROLL_FULL
 namespace batchlas::device {
 
 namespace routine {
+/// @ingroup api_device_lapack_lu
+/// @brief The routine tag of getrs() for op(A) = `TR`: names the routine to `with_tier`, `launch`,
+/// `tier_info`, `tiers_t` and `buffer_size`.
 template <Transpose TR> struct getrs {
-    static constexpr const char* name = "getrs";
-    static constexpr Transpose trans = TR;
+    static constexpr const char* name = "getrs";  ///< The routine's name, "getrs".
+    static constexpr Transpose trans = TR;        ///< op(A): NoTrans, Trans or ConjTrans.
 };
 }  // namespace routine
 
@@ -138,32 +148,43 @@ BATCHLAS_DEVICE_INLINE void solve_blocked(const Ex& ex, const MA& a_in, const PV
 
 }  // namespace detail
 
-/// getrs's Blocked<NB>: any n and nrhs; getrf's Blocked executor and local plan (no global
-/// workspace). buffer_size(n[, nrhs]): nrhs does not enter it.
+/// @ingroup api_device_lapack_lu
+/// @brief getrs()'s blocked tier `tier::Blocked<NB>`: any n and nrhs; getrf()'s Blocked executor
+/// and local plan, no global workspace.
+///
+/// `buffer_size(n)` and `buffer_size(n, nrhs)` are the same: nrhs does not enter it.
 template <Transpose TR, int NB, class Alg, class Scalar>
 struct tier_info<routine::getrs<TR>, tier::Blocked<NB, Alg>, Scalar> : tier_info<routine::getrf, tier::Blocked<NB, Alg>, Scalar> {
     using tier_info<routine::getrf, tier::Blocked<NB, Alg>, Scalar>::buffer_size;
     static constexpr WorkspaceSize buffer_size(int n, int) { return buffer_size(n); }
 };
+/// @ingroup api_device_lapack_lu
+/// @brief getrs()'s tiers for every `Scalar`: `Blocked<32>`.
 template <Transpose TR, class Scalar> struct tiers<routine::getrs<TR>, Scalar> {
     using type = tier::list<tier::Blocked<32>>;
 };
 
+/// @ingroup api_device_lapack_lu
 /// @brief ?GETRS in a kernel: \f$\mathrm{op}(A) X = B\f$ from getrf's factor, B overwritten by X.
 ///
-/// Collective as getrf: every item calls with the same arguments; A, B and ipiv visible to all
-/// items on entry; B visible to all on return. A zero U(k, k) gives Inf / NaN, as LAPACK does
-/// (getrf's info reports it).
+/// No argument is checked. A zero U(k, k) gives Inf / NaN, as LAPACK does (getrf's info reports
+/// it).
 /// - `tier::Blocked<NB>`: `ex` a WorkGroup<tier_info::wg_size, 32>; A n x n and B n x nrhs of
-///   any size in global memory; `ws.local` >= buffer_size<routine::getrs<TR>, Tier, T>(n) bytes.
-/// @tparam TR  op(A): NoTrans, Trans or ConjTrans (the host's run-time transA)
+///   any size in global memory; `ws.local` >= buffer_size<routine::getrs<TR>, Tier, T>(n) bytes,
+///   no global workspace.
+/// - `tier::upto<N>`: the first tier of `tiers_t<routine::getrs<TR>, T>` that admits N.
+///
+/// @pre Collective as getrf(): every item calls with the same arguments; A, B and ipiv visible to
+/// all items on entry; B visible to all on return.
+/// @tparam TR    op(A): NoTrans, Trans or ConjTrans (the host's run-time transA)
+/// @tparam Tier  `tier::Blocked<NB>` or `tier::upto<N>`
 /// @param[in]     ex    the executor
 /// @param[in]     a     getrf's L and U of this matrix
 /// @param[in]     ipiv  getrf's n pivots, 1-based (a Vec<int>)
 /// @param[in,out] b     this matrix's right-hand sides; overwritten with X
 /// @param[in]     ws    this matrix's workspace slice
 /// @param[in]     live  false: a dead matrix of the launch (executor-uniform)
-/// @return 0 (the host getrs has no info)
+/// @retval 0  always (the host getrs has no info)
 template <Transpose TR, class Tier, class Ex, class MA, class PV, class MB>
 BATCHLAS_DEVICE_INLINE int getrs(const Ex& ex, const MA& a, const PV& ipiv, const MB& b, const Workspace& ws = {}, bool live = true) {
     using D = detail::lu_value_t<MA>;

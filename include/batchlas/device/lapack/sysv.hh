@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// LAPACK ?sysv on device: A = P L D L^T P^T by sytrf, then B := A^-1 B by sytrs
-// when the factor is nonsingular (info == 0; otherwise B is left as given, as LAPACK's).
-// Tiers (one per kernel; with_tier picks one on the host for a run-time n):
-//   tier::Cta<N>, N <= 32   fused in one local-memory tile: sytrf `cta`'s factor on sub-group 0,
-//                           then sytrs `cta`'s converted solve, one sub-group per right-hand side
-//                           (the host route sysv `cta` launches these two bodies)
-//   tier::Blocked<1>        any n: sytrf Blocked<1>, then sytrs Blocked<1> (sysv `compose` over
-//                           sytrf `wg` and sytrs `wg`); ex at most 256 items
-//   tier::Blocked<NB>, NB>1 any n: sytrf Blocked<NB>, then sytrs Blocked<NB> (sysv `compose`
-//                           over sytrf `blocked` and sytrs `blocked`); ex = WorkGroup<256, 32>;
-//                           not in tiers_t; buffer_size<routine::sysv<UL>, Tier, T>(n, nrhs)
+/// @file
+/// @ingroup api_device_lapack_ldl
+/// @brief ?SYSV in a kernel: the Bunch-Kaufman factorization of one symmetric indefinite matrix,
+/// then the solve with it, in one call.
+///
+/// The routine is sysv(); its routine tag is routine::sysv. Its tiers are `tier::Cta<32>` (both
+/// halves fused in one local-memory tile) and `tier::Blocked<1>` (sytrf()'s then sytrs()'s
+/// `tier::Blocked<1>`); `tier::Blocked<NB>` with NB > 1 is offered but not in `tiers_t`.
+// The host route sysv `cta` launches the Cta tier's two bodies; sysv `compose` runs sytrf `wg` and
+// sytrs `wg` (Blocked<1>) or sytrf `blocked` and sytrs `blocked` (Blocked<NB>).
 // Tests: tests/device_lapack_sytrf_tests.cc.
 
 #include <cstddef>
@@ -23,9 +22,12 @@
 namespace batchlas::device {
 
 namespace routine {
+/// @ingroup api_device_lapack_ldl
+/// @brief The routine tag of sysv() for the triangle `UL`: names the routine to `with_tier`,
+/// `launch`, `tier_info`, `tiers_t` and `buffer_size`.
 template <Uplo UL> struct sysv {
     static_assert(UL == Uplo::Lower || UL == Uplo::Upper, "sysv: Uplo::Lower or Uplo::Upper");
-    static constexpr const char* name = "sysv";
+    static constexpr const char* name = "sysv";  ///< The routine's name, "sysv".
 };
 }  // namespace routine
 
@@ -101,9 +103,18 @@ constexpr WorkspaceSize sysv_max(const WorkspaceSize& a, const WorkspaceSize& b)
 
 }  // namespace detail
 
+/// @ingroup api_device_lapack_ldl
+/// @brief sysv()'s tiers for every `Scalar`, smallest first: `Cta<32>`, `Blocked<1>`.
+/// `Blocked<NB>` with NB > 1 is offered but not listed.
 template <Uplo UL, class Scalar> struct tiers<routine::sysv<UL>, Scalar> {
     using type = tier::list<tier::Cta<32>, tier::Blocked<1>>;
 };
+/// @ingroup api_device_lapack_ldl
+/// @brief sysv()'s local-memory tier `tier::Cta<N>`, N <= 32: sytrf()'s factor on sub-group 0 and
+/// sytrs()'s converted solve, fused in one local-memory tile.
+///
+/// The executor is `WorkGroup<32, 32>`. `admits(n)` is 0 <= n <= N. `buffer_size(n, nrhs)` is
+/// local memory only and depends on neither.
 template <Uplo UL, int N, class Scalar> struct tier_info<routine::sysv<UL>, tier::Cta<N>, Scalar> {
     static_assert(N <= 32, "sysv tier::Cta<N>: N <= 32 (one sub-group factors)");
     static constexpr int wg_size = 32, sg_size = 32;
@@ -112,6 +123,13 @@ template <Uplo UL, int N, class Scalar> struct tier_info<routine::sysv<UL>, tier
     static constexpr bool admits(int n) { return n >= 0 && n <= N; }
     static constexpr WorkspaceSize buffer_size(int, int = 1) { return detail::sysv_cta_plan<N, Scalar>().size; }
 };
+/// @ingroup api_device_lapack_ldl
+/// @brief sysv()'s unblocked tier `tier::Blocked<1>`: any n, sytrf()'s then sytrs()'s
+/// `tier::Blocked<1>` on one workspace.
+///
+/// The executor is `WorkGroup<256, 32>` (any executor of whole 32-wide sub-groups, at most 256
+/// items). `admits(n)` is n >= 0. `buffer_size(n, nrhs)` is the larger of the two halves' plans:
+/// local memory only, independent of n and nrhs.
 template <Uplo UL, class Scalar> struct tier_info<routine::sysv<UL>, tier::Blocked<1>, Scalar> {
     static constexpr int wg_size = detail::sytrf_wg_max, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
@@ -122,6 +140,12 @@ template <Uplo UL, class Scalar> struct tier_info<routine::sysv<UL>, tier::Block
                                 detail::sytrs_wg_plan<real_t<Scalar>>().size);
     }
 };
+/// @ingroup api_device_lapack_ldl
+/// @brief sysv()'s blocked tier `tier::Blocked<NB>`, NB > 1: any n, sytrf()'s then sytrs()'s
+/// `tier::Blocked<NB>` on one workspace.
+///
+/// The executor is `WorkGroup<256, 32>`. `admits(n)` is n >= 0. `buffer_size(n, nrhs)` is the
+/// larger of the two halves' plans, in both spaces; its global part grows with n and nrhs.
 template <Uplo UL, int NB, class Scalar> struct tier_info<routine::sysv<UL>, tier::Blocked<NB>, Scalar> {
     static constexpr int wg_size = detail::sytrf_blocked_wg, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
@@ -133,11 +157,41 @@ template <Uplo UL, int NB, class Scalar> struct tier_info<routine::sysv<UL>, tie
     }
 };
 
-// ?sysv of one matrix inside a kernel: A := sytrf's factor, ipiv (a Vec<int> of n) := its pivots,
-// and B := A^-1 B when info == 0. Collective as sytrf; A, ipiv and B visible to every item on
-// return. Returns sytrf's info (k > 0: B untouched) or a negative LAPACK argument number
-// (sytrs_check's, ?sysv numbers them as ?sytrs), the same on every item. ws:
-// buffer_size<routine::sysv<UL>, Tier, T>(n, nrhs).
+/// @ingroup api_device_lapack_ldl
+/// @brief ?SYSV in a kernel: `A` := sytrf()'s factor, `ipiv` := its pivots, and
+/// \f$B := A^{-1} B\f$ when the factor is nonsingular, for one matrix.
+///
+/// When info is 0, the n x nrhs `B` is overwritten with the solution X; otherwise `B` is left as
+/// given, as LAPACK's. The executor needs sub-group size 32 and must be whole 32-wide sub-groups.
+/// - `tier::Cta<N>`, N <= 32: `ex` a `WorkGroup<32, 32>`; n <= N; both halves in one local tile.
+/// - `tier::Blocked<1>`: any n; `ex` at most 256 items.
+/// - `tier::Blocked<NB>`, NB > 1: any n; `ex` a `WorkGroup<256, 32>`. Not in `tiers_t`.
+/// - `tier::upto<N>`: the first tier of `tiers_t<routine::sysv<UL>, T>` that admits N.
+///
+/// Workspace: `ws` holds `buffer_size<routine::sysv<UL>, Tier, T>(n, nrhs)`: its local bytes,
+/// and for `tier::Blocked<NB>` its global bytes for this matrix alone.
+///
+/// @pre Collective as sytrf(): every item of `ex` calls with the same arguments; `A`, `ipiv` and
+/// `B` visible to every item on entry. All three are visible to every item on return.
+/// @tparam UL    `Uplo::Lower` or `Uplo::Upper`: the triangle to factor
+/// @tparam Tier  `tier::Cta<N>`, `tier::Blocked<NB>` or `tier::upto<N>`
+/// @param[in]     ex    the executor that owns this matrix
+/// @param[in,out] A     the n x n symmetric matrix; its `UL` triangle is overwritten with the
+///                      factor
+/// @param[out]    ipiv  the n pivots (a `Vec<int>`), as sytrf()'s
+/// @param[in,out] B     the n x nrhs right-hand sides; overwritten with X when info is 0
+/// @param[in]     ws    this matrix's workspace slice
+/// @return sytrf()'s info or a negative LAPACK argument number, the same on every item of `ex`.
+/// The numbers are ?SYTRS's, as ?SYSV numbers them (N is 2, LDA 5, B 7, LDB 8), not positions in
+/// this call:
+/// @retval 0   success: `A` holds the factor and `B` holds X
+/// @retval k   (k > 0) D(k, k) is exactly zero; `B` is unchanged
+/// @retval -1  `ex` has a run-time width that is not whole 32-wide sub-groups, or is wider than
+///             `tier::Blocked<1>`'s 256 items
+/// @retval -2  `A` is not square, or n is outside the tier
+/// @retval -5  `A`'s leading dimension is less than max(1, n)
+/// @retval -7  `B` does not have n rows
+/// @retval -8  `B`'s leading dimension is less than max(1, n)
 template <Uplo UL, class Tier, class Ex, class MA, class PV, class MB>
 BATCHLAS_DEVICE_INLINE int sysv(const Ex& ex, const MA& A, const PV& ipiv, const MB& B, const Workspace& ws) {
     using D = std::remove_cv_t<typename MA::value_type>;

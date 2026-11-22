@@ -1,11 +1,21 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// ?GETF2, GETRF's own routine: by row interchanges (getf2) or lazy relabel (getf2_relabel), with a
-// fused pivot search (one butterfly, one slot barrier); arith::Fma. detail: the policies and
-// the steps core has no SASS-identical form of yet. evidence: docs/perf/lu.md#the-shape-of-the-getrf-device-code
-// The public op getrf<Tier>(ex, A, ipiv, ws): Reg and Cta are the host tiny and cta routes'
-// bodies; Blocked (any n) is ?GETRF's panel loop on the in-group Level 3. detail: the plans,
-// sinks, tier bodies, and the Blocked configuration and plan getrs, gesv, getri and inv share.
+/// @file
+/// @ingroup api_device_lapack_lu
+/// @brief ?GETRF in a kernel: the LU factorization with partial pivoting of one matrix per
+/// executor, in place, in a register, local-memory or blocked tier.
+///
+/// The routine is getrf(); its routine tag is routine::getrf. The tiers, smallest first, are
+/// `tier::Reg<8>`, `tier::Reg<16>`, `tier::Reg<32>` (not for `std::complex<double>`),
+/// `tier::Cta<64>`, `tier::Cta<96>`, `tier::Cta<128>` and `tier::Blocked<32>`. Pivots are 1-based
+/// int32, as in LAPACK. The unblocked panel kernels getf2(), getf2_panel_device() and
+/// getf2_relabel() are in @ref api_device_lowlevel.
+// ?GETF2 pivots by row interchanges (getf2) or lazy relabel (getf2_relabel), with a fused pivot
+// search (one butterfly, one slot barrier); arith::Fma. detail: the policies and the steps core
+// has no SASS-identical form of yet. evidence: docs/perf/lu.md#the-shape-of-the-getrf-device-code
+// Reg and Cta are the host tiny and cta routes' bodies; Blocked (any n) is ?GETRF's panel loop on
+// the in-group Level 3. detail: the plans, sinks, tier bodies, and the Blocked configuration and
+// plan getrs, gesv, getri and inv share.
 
 #include <cstddef>
 #include <cstdint>
@@ -186,12 +196,24 @@ template <class Px> BATCHLAS_DEVICE_INLINE BcastShuffle<Px> bcast_shuffle(const 
 }  // namespace detail
 
 // ---- ?GETF2, explicit row interchanges ----------------------------------------------------------
-// In place on A (mat_wide: legacy 64-bit addressing) for kmax steps (NOT min(m, n)): iamax, ipiv,
-// swap of the WHOLE rows (only columns >= k is the classic silently wrong LU), rscl, rank-1
-// update; barriers B1 (Scope::Group) to B4. Ex: RtGroup<Scope::Sub | Scope::Group>. ipiv (a Vec):
-// step k's row 1-based plus `base`, the panel's global row (no fix-up pass). info: the leader's
-// running first failure (global, 1-based); the first EXACT zero pivot, no epsilon, leaves its
-// column unscaled. vs / is: nteams slots of local memory for the pivot exchange.
+/// @ingroup api_device_lowlevel
+/// @brief ?GETF2 by explicit row interchanges: `kmax` steps of the unblocked LU of `a`, in place.
+///
+/// Not covered by the compatibility promise: this is the panel kernel of the host LU routes.
+/// Each step k runs the pivot search, records the pivot, swaps the whole rows, scales the column
+/// and applies the rank-1 update. The first exactly zero pivot (no epsilon) leaves its column
+/// unscaled and is recorded in info. Every item of `ex` calls it with the same arguments.
+/// @param[in]     ex    the executor, a `RtGroup<Scope::Sub>` or `RtGroup<Scope::Group>`
+/// @param[in,out] a     the panel (a `mat_wide` operand: 64-bit addressing)
+/// @param[in]     kmax  the number of steps (not min(m, n))
+/// @param[out]    ipiv  step k's pivot row, 1-based, plus `base`
+/// @param[in]     info  the running info: the leader's first failure so far, global and 1-based
+/// @param[in]     vs    local slots for the pivot exchange (values), one per team
+/// @param[in]     is    local slots for the pivot exchange (indices), one per team
+/// @param[in]     base  the panel's first global row, added to `ipiv` and info
+/// @return the updated info (meaningful on the leader)
+// ipiv's base is the panel's global row (no fix-up pass); swapping only columns >= k is the
+// classic silently wrong LU.
 template <class Ex, class MA, class PV, class VS, class IS>
 BATCHLAS_DEVICE_INLINE int getf2(const Ex& ex, const MA& a, int kmax, const PV& ipiv, int info, const VS& vs, const IS& is,
                                  int base = 0) {
@@ -220,7 +242,20 @@ BATCHLAS_DEVICE_INLINE int getf2(const Ex& ex, const MA& a, int kmax, const PV& 
     return info;
 }
 
-// Both residencies' entry; `info_item` is READ too (first failure wins): launchers zero it.
+/// @ingroup api_device_lowlevel
+/// @brief getf2() on a panel `A` with the pivots and info in raw memory: the entry of both
+/// residencies of the host LU panel kernels.
+///
+/// Not covered by the compatibility promise. `info_item` is read too (the first failure wins),
+/// so a launcher zeroes it first.
+/// @param[in]     ex         the executor
+/// @param[in,out] A          the panel
+/// @param[in]     kmax       the number of steps
+/// @param[out]    piv_item   `kmax` pivots, 1-based, plus `piv_base`
+/// @param[in]     piv_base   added to every pivot and to info
+/// @param[in,out] info_item  the info cell (the leader reads and writes it)
+/// @param[in]     rval       local slots for the pivot exchange (values)
+/// @param[in]     ridx       local slots for the pivot exchange (indices)
 template <class Ex, class MA, class ValAcc, class IdxAcc>
 inline void getf2_panel_device(const Ex& ex, const MA& A, int kmax, int* piv_item, int piv_base, int* info_item, ValAcc rval,
                                IdxAcc ridx) {
@@ -230,13 +265,24 @@ inline void getf2_panel_device(const Ex& ex, const MA& A, int kmax, int* piv_ite
 }
 
 // ---- ?GETF2 on a RowFrag, pivoting by lazy relabel -------------------------------------------------
-// Each item holds one matrix row in rA and its logical row index in `rowid`; an interchange swaps
-// two labels and moves no data. After the relabel the winner of column j is the item with
-// rowid == j, so `act = rowid > j` keeps it from writing rA while others read its row. Policies:
-//   Piv: argmax(j, mag, rowid) -> PivotWinner (NaN mapped by the policy), record(j, w) (ipiv),
-//        on_zero(zero, j) (info)
-//   Bc:  publish(j, rA, rowid, w) (make the pivot row readable), pivot(j, rA, w) -> Scalar,
-//        for_right(j, ncols, rA, w, f) calling f(k, u_k) for the pivot row's j < k < ncols
+/// @ingroup api_device_lowlevel
+/// @brief ?GETF2 by lazy relabel on rows held in registers: `kmax` steps of the unblocked LU, one
+/// matrix row per item.
+///
+/// Not covered by the compatibility promise: this is the register panel leaf of the LU tiers.
+/// Each item holds one row in `rA` and its logical row index in `rowid`; an interchange swaps two
+/// labels and moves no data. After the relabel the winner of column j is the item with
+/// `rowid` == j. The policies:
+/// - `Piv`: `argmax(j, mag, rowid)` -> the winner, `record(j, w)` (ipiv), `on_zero(zero, j)` (info).
+/// - `Bc`: `publish(j, rA, rowid, w)` makes the pivot row readable, `pivot(j, rA, w)` returns the
+///   pivot, `for_right(j, ncols, rA, w, f)` calls f(k, u_k) for the pivot row's j < k < `ncols`.
+/// @param[in,out] rA     this item's row
+/// @param[in,out] rowid  this item's logical row index
+/// @param[in]     kmax   the number of steps, uniform over the items
+/// @param[in]     ncols  the number of columns
+/// @param[in,out] piv    the pivot policy
+/// @param[in,out] bc     the broadcast policy
+// `act = rowid > j` keeps the winner from writing rA while others read its row.
 // THREE SPELLINGS ARE SILENT WRONG ANSWERS OR SILENT SPILLS: the j loop's COMPILE-TIME bound with
 // `continue` (never `break`; kmax must be uniform, collectives are skipped), publishing the pivot
 // row AFTER the relabel, and selecting a complex scalar by if/else, never `?:`.
@@ -269,8 +315,11 @@ BATCHLAS_UNROLL_FULL
 
 // ==== the public op: getrf<Tier>(ex, A, ipiv, ws [, live]) ======================================
 namespace routine {
+/// @ingroup api_device_lapack_lu
+/// @brief The routine tag of getrf(): names the routine to `with_tier`, `launch`, `tier_info`,
+/// `tiers_t` and `buffer_size`.
 struct getrf {
-    static constexpr const char* name = "getrf";
+    static constexpr const char* name = "getrf";  ///< The routine's name, "getrf".
 };
 }  // namespace routine
 
@@ -440,7 +489,14 @@ BATCHLAS_DEVICE_INLINE int factor_blocked(const Ex& ex, const MA& a_in, const PV
 
 }  // namespace detail
 
-/// getrf's Reg<N>: an N-lane (or wider) Partition, n <= N (complex<double>: N <= 16), no workspace.
+/// @ingroup api_device_lapack_lu
+/// @brief getrf()'s register tier `tier::Reg<N>`: one square matrix of order n <= N per
+/// partition of a 32-wide sub-group, no workspace.
+///
+/// The executor is `Partition<part_size>`, at least N lanes; a 32-item work-group holds
+/// 32 / `part_size` matrices (`per_group`). `admits(n)` is 1 <= n <= N (n == N for
+/// `tier::Reg<N, true>`). Offered for N <= 32 (16 for `std::complex<double>`). `buffer_size` is
+/// empty.
 template <int N, bool Exact, class Scalar>
     requires(N <= detail::reg_cap<Scalar>())
 struct tier_info<routine::getrf, tier::Reg<N, Exact>, Scalar> {
@@ -451,7 +507,13 @@ struct tier_info<routine::getrf, tier::Reg<N, Exact>, Scalar> {
     static constexpr bool admits(int n) { return n >= 1 && (Exact ? n == N : n <= N); }
     static constexpr WorkspaceSize buffer_size(int) { return {}; }
 };
-/// getrf's Cta<N>: one WorkGroup (or RtGroup) per matrix; the tile and 32 slots in local memory.
+/// @ingroup api_device_lapack_lu
+/// @brief getrf()'s local-memory tier `tier::Cta<N>`: one matrix per work-group, copied into local
+/// memory, factored there and written back.
+///
+/// The executor is `WorkGroup<wg_size, 32>` (or a `RtGroup`); `wg_size` is about four columns'
+/// worth of rows, 64 to 512. `admits(n)` is 1 <= n <= N. `buffer_size(n)` is local memory only:
+/// the n x n tile at an odd leading dimension and 32 pivot-search slots.
 template <int N, class Scalar> struct tier_info<routine::getrf, tier::Cta<N>, Scalar> {
     static constexpr int wg_size = detail::leaf_wg(N), sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
@@ -459,8 +521,14 @@ template <int N, class Scalar> struct tier_info<routine::getrf, tier::Cta<N>, Sc
     static constexpr bool admits(int n) { return n >= 1 && n <= N; }
     static constexpr WorkspaceSize buffer_size(int n) { return detail::getrf_cta_plan<Scalar>(n, n).size; }
 };
-/// getrf's Blocked<NB>: any m x n; one WorkGroup of the L3 configuration's items (256 by
-/// default); A in global memory, the L3 stages and 32 slots in local memory, no global workspace.
+/// @ingroup api_device_lapack_lu
+/// @brief getrf()'s blocked tier `tier::Blocked<NB>`: any m x n, one matrix per work-group, the
+/// matrix left in global memory.
+///
+/// The executor is `WorkGroup<wg_size, 32>`, `wg_size` the level 3 configuration's item count
+/// (256 by default; `Alg` may name an `l3::cfg` preset for the trailing updates). `admits(n)` is
+/// n >= 1. `buffer_size(n)` does not depend on n and is local memory only (the level 3 stages and
+/// 32 pivot-search slots); no global workspace.
 template <int NB, class Alg, class Scalar> struct tier_info<routine::getrf, tier::Blocked<NB, Alg>, Scalar> {
     using cfg = detail::lu_blocked_cfg_t<Scalar, tier::Blocked<NB, Alg>>;
     static_assert(std::is_same_v<typename cfg::value_type, Scalar>, "getrf: tier::Blocked's l3 configuration is for another scalar type");
@@ -470,6 +538,9 @@ template <int NB, class Alg, class Scalar> struct tier_info<routine::getrf, tier
     static constexpr bool admits(int n) { return n >= 1; }
     static constexpr WorkspaceSize buffer_size(int) { return detail::lu_blocked_plan<Scalar, cfg>().size; }
 };
+/// @ingroup api_device_lapack_lu
+/// @brief getrf()'s tiers for `Scalar`, smallest first: `Reg<8>`, `Reg<16>`, `Reg<32>`, `Cta<64>`,
+/// `Cta<96>`, `Cta<128>`, `Blocked<32>`; `Reg<32>` is left out for `std::complex<double>`.
 template <class Scalar> struct tiers<routine::getrf, Scalar> {
     using type = std::conditional_t<
         (detail::reg_cap<Scalar>() >= 32),
@@ -477,11 +548,14 @@ template <class Scalar> struct tiers<routine::getrf, Scalar> {
         tier::list<tier::Reg<8>, tier::Reg<16>, tier::Cta<64>, tier::Cta<96>, tier::Cta<128>, tier::Blocked<32>>>;
 };
 
+/// @ingroup api_device_lapack_lu
 /// @brief ?GETRF in a kernel: \f$A = PLU\f$ in place for one matrix, by the executor `ex`.
 ///
-/// Collective: every item of `ex` calls it with the same arguments; A must be visible to all
-/// items on entry and is visible to all on return. One tier per kernel (choose it on the host
-/// with with_tier<routine::getrf, T>, never by a run-time branch between two tiers).
+/// `a` is overwritten with the unit lower L (diagonal not stored) and U; at step i (0-based) row
+/// i + 1 was interchanged with row `ipiv(i)`, both 1-based as in LAPACK. No argument is checked:
+/// there is no negative info. A kernel compiles one tier
+/// (choose it on the host with `with_tier<routine::getrf, T>`, never by a run-time branch between
+/// two tiers).
 /// - `tier::Reg<N>`: `ex` a Partition<P> (P >= N, P divides the sub-group); A square, n <= N,
 ///   n uniform across the sub-group; a dead partition passes `live = false` (it factors an
 ///   identity and stores nothing; every lane still calls). `ws` unused.
@@ -492,12 +566,22 @@ template <class Scalar> struct tiers<routine::getrf, Scalar> {
 ///   ipiv in memory every item reads; `ws.local` >= buffer_size<routine::getrf, Tier, T>(n) bytes, no
 ///   global workspace; `live` executor-uniform. Alg: an l3::cfg preset for the trailing updates.
 /// - `tier::upto<N>`: the first tier of tiers_t<routine::getrf, T> that admits N.
+///
+/// Workspace: `ws` is this matrix's slice of `buffer_size<routine::getrf, Tier, T>(n)`, local
+/// memory only (none for `tier::Reg`).
+///
+/// @pre Collective: every item of `ex` calls it with the same arguments; `a` must be visible to
+/// all items on entry, and `a` and `ipiv` are visible to all on return.
+/// @tparam Tier  `tier::Reg<N>`, `tier::Cta<N>`, `tier::Blocked<NB>` or `tier::upto<N>`
 /// @param[in]     ex    the executor
 /// @param[in,out] a     this matrix (any operand: Mat, ItemMat, ...); overwritten with L and U
 /// @param[out]    ipiv  this matrix's min(m, n) pivots, 1-based (a Vec<int>: vec(ipiv + b * n, n))
 /// @param[in]     ws    this matrix's workspace slice
 /// @param[in]     live  false: a dead matrix of the launch (see the tiers)
-/// @return LAPACK's info, uniform across `ex`: 0, or the first k with \f$U_{kk} = 0\f$ exactly
+/// @return LAPACK's info, uniform across `ex`:
+/// @retval 0  success, or `live` false
+/// @retval k  (k > 0) \f$U_{kk}\f$ is exactly zero (the first such k); the factorization is
+///            complete, but U is singular and a solve with it divides by zero
 template <class Tier, class Ex, class MA, class PV>
 BATCHLAS_DEVICE_INLINE int getrf(const Ex& ex, const MA& a, const PV& ipiv, const Workspace& ws = {}, bool live = true) {
     using D = detail::lu_value_t<MA>;
