@@ -1093,7 +1093,7 @@ template <Uplo UL, class Scalar> struct tiers<routine::potrf<UL>, Scalar> {
 /// of one n x n Hermitian positive definite matrix, in place.
 ///
 /// The `UL` triangle of `A` is read and overwritten with the factor; the other triangle is
-/// neither read nor written. One tier per kernel; choose it on the host with
+/// neither read nor written. A kernel compiles one tier; choose it on the host with
 /// `with_tier<routine::potrf<UL>, T>` for a run-time n, never by a run-time branch in the kernel.
 /// - `tier::Reg<N>`: `ex` a `Partition<N>` (lane r holds row r); n <= N <= 32 (16 for
 ///   `std::complex<double>`); `ws` unused.

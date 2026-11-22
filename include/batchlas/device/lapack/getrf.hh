@@ -553,7 +553,7 @@ template <class Scalar> struct tiers<routine::getrf, Scalar> {
 ///
 /// `a` is overwritten with the unit lower L (diagonal not stored) and U; at step i (0-based) row
 /// i + 1 was interchanged with row `ipiv(i)`, both 1-based as in LAPACK. No argument is checked:
-/// there is no negative info. One tier per kernel
+/// there is no negative info. A kernel compiles one tier
 /// (choose it on the host with `with_tier<routine::getrf, T>`, never by a run-time branch between
 /// two tiers).
 /// - `tier::Reg<N>`: `ex` a Partition<P> (P >= N, P divides the sub-group); A square, n <= N,
