@@ -1,8 +1,15 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// LAPACK xLARFT (Direct = Forward, Store = Columnwise), the only larft: T of the block reflector
-// H = I - V T V^H from a unit-lower V and tau, on one work-group. detail holds the one
-// piece core has no spelling for yet (a distributed out-of-place upper trmv, one item per row).
+/// @file
+/// @brief The triangular factor of a block reflector inside a kernel: `larft`, LAPACK's xLARFT
+/// (forward, columnwise).
+///
+/// `larft(ex, v, tau, t)` forms the upper triangular T of \f$H = I - V T V^H\f$ from a unit lower
+/// V and its reflector scalars, on one work-group; `larfb` applies H. Reference:
+/// @ref api_device_lapack_qr.
+/// @ingroup api_device_lapack_qr
+// detail holds the one piece core has no spelling for yet (a distributed out-of-place upper trmv,
+// one item per row).
 
 #include <batchlas/device.hh>
 #include <batchlas/device/detail/kernel_attrs.hh>
@@ -31,9 +38,24 @@ BATCHLAS_DEVICE_INLINE void trmv_upper_row_owner(const Ex& ex, const MA& a, cons
 
 }  // namespace detail
 
-// t (ib x ib, upper) from v (m x ib, unit diagonal stored) and tau(0:ib), netlib's (V, TAU, T)
-// order. Two barriers: Y_j = -tau_j V^H v_j parks in t's strict lower row j; the trmv owner reads
-// back only its rows; the scratch is cleared last. tau_j == 0 gives a zero column above t(j, j).
+/// @brief xLARFT (Direct = Forward, Store = Columnwise) inside a kernel: the ib x ib upper
+/// triangular `t` of the block reflector \f$H = H_0 H_1 \cdots H_{ib-1} = I - V T V^H\f$.
+///
+/// `v` is m x ib, unit lower trapezoidal with its unit diagonal stored (the part above the
+/// diagonal is not read); `tau(j)` is reflector j's scalar. `t` receives T in its upper triangle and zeros in its strict
+/// lower triangle; a zero `tau(j)` gives a zero column above `t(j, j)`. Netlib's argument order
+/// (V, TAU, T). Collective over `ex`, every item with the same arguments; `v` and `tau` visible to
+/// every item on entry. `t` is written by its owners: barrier (`Mem::Global`) before another item
+/// reads it.
+/// @pre `ex` is a `WorkGroup<WG, 32>` and the kernel runs at sub-group size 32 (its gemv packs
+///      over 32 lanes).
+/// @param[in]  ex   the executor
+/// @param[in]  v    the m x ib reflector vectors, unit diagonal stored
+/// @param[in]  tau  the ib reflector scalars
+/// @param[out] t    the ib x ib triangular factor
+/// @ingroup api_device_lapack_qr
+// Two barriers: Y_j = -tau_j V^H v_j parks in t's strict lower row j; the trmv owner reads back
+// only its rows; the scratch is cleared last.
 template <class Ex, class MV, class VT, class MT>
 BATCHLAS_DEVICE_INLINE void larft(const Ex& ex, const MV& v, const VT& tau, const MT& t) {
     using T = typename MT::value_type;

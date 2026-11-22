@@ -1,9 +1,17 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Bidiagonal SVD of a real upper bidiagonal B = (d, e) by stedc, NOT a port of LAPACK's dlasd*:
-// the perfect-shuffled Golub-Kahan matrix [0 B^T; B 0] is tridiagonal with zero diagonal and
-// off-diagonal (d0, e0, d1, ..., d(n-1)), eigenvalues +/- sigma. Nothing is squared; an
-// eigenvector's even rows are v, its odd rows u. ONE body for every executor:
+/// @file
+/// @brief Bidiagonal SVD by divide and conquer inside a kernel: `bdsdc` on a real upper
+/// bidiagonal B = (d, e), through `stedc`.
+///
+/// Not a port of LAPACK's dlasd*: the perfect-shuffled Golub-Kahan matrix
+/// \f$\begin{bmatrix} 0 & B^T \\ B & 0 \end{bmatrix}\f$ is tridiagonal with a zero diagonal and
+/// off-diagonal \f$(d_0, e_0, d_1, \ldots, d_{n-1})\f$, and its eigenvalues are
+/// \f$\pm\sigma_i\f$. Nothing is squared; an eigenvector's even rows are v and its odd rows u.
+/// `bdsdc<tier::Blocked<1>>` runs it on one `WorkGroup<256, 32>` around the in-group `stedc`.
+/// Reference: @ref api_device_lapack_svd.
+/// @ingroup api_device_lapack_svd
+// ONE body for every executor:
 //   detail::build_gk        the Golub-Kahan tridiagonal on one item (a prefix product)
 //   detail::extract_column  sigma_i, row i of V^H, column i of U (a work-group)
 //   detail::repair          the vectors of the numerically zero sigma (a work-group)
@@ -29,6 +37,8 @@
 namespace batchlas::device {
 
 namespace routine {
+/// @brief The routine tag of `bdsdc`, for `with_tier`, `launch` and `buffer_size`.
+/// @ingroup api_device_lapack_svd
 struct bdsdc {
     static constexpr const char* name = "bdsdc";
 };
@@ -195,10 +205,18 @@ template <class Real> constexpr BdsdcLayout<Real> plan(int n) {
 
 }  // namespace detail
 
+/// @brief The tiers `with_tier` tries for `bdsdc`: `tier::Blocked<1>`.
+/// @ingroup api_device_lapack_svd
 template <class Real> struct tiers<routine::bdsdc, Real> {
     using type = tier::list<tier::Blocked<1>>;
 };
-// stedc's executor (WorkGroup<256, 32>) at order 2n; real types only (B is real for every gebrd Scalar).
+/// @brief `bdsdc` in `tier::Blocked<1>`: one bidiagonal of any order n per work-group, real types
+/// only.
+///
+/// The executor is `stedc`'s, `WorkGroup<256, 32>`, at order 2n; the kernel must run at sub-group
+/// size 32 (`BATCHLAS_REQD_SG_SIZE(sg_size)`). `buffer_size(n)` is one bidiagonal's local and
+/// global bytes, the nested `stedc`'s included. B is real for every `gebrd` scalar type.
+/// @ingroup api_device_lapack_svd
 template <class Real> struct tier_info<routine::bdsdc, tier::Blocked<1>, Real> {
     static_assert(std::is_floating_point_v<Real>, "bdsdc: a real T");
     static constexpr int wg_size = detail::wg_size, sg_size = detail::sg_size;
@@ -208,18 +226,37 @@ template <class Real> struct tier_info<routine::bdsdc, tier::Blocked<1>, Real> {
     static constexpr WorkspaceSize buffer_size(int n) { return detail::plan<Real>(n).size; }
 };
 
-// bdsdc's options. sort_desc: s descending (else ascending), U's columns and Vh's rows with it.
+/// @brief `bdsdc`'s options.
+/// @ingroup api_device_lapack_svd
 struct BdsdcOptions {
+    /// Sort the singular values descending (else ascending), U's columns and Vh's rows with them.
     bool sort_desc = true;
 };
 
-// The SVD of one upper bidiagonal, (d, e, s, U, Vh, ws, opts): s receives the n singular values
-// (descending when opts.sort_desc, else ascending), U (n x n or larger: its leading n x n block)
-// the left vectors as columns, Vh (the same) the right vectors as rows; an operand smaller than
-// n x n is not formed. d (n) and e (n - 1) are read only. COLLECTIVE over ex, a WorkGroup<256, 32>
-// launched at sub-group size 32, with the same arguments; d, e visible on entry, outputs on
-// return. Workspace: device::buffer_size<routine::bdsdc, Tier, T>(n). Returns stedc's info: 0, or
-// 1 when a secular root ran out of iterations.
+/// @brief The SVD of one real upper bidiagonal B = (d, e) inside a kernel, by divide and conquer
+/// on its Golub-Kahan form.
+///
+/// `s` receives the n singular values (descending when `opts.sort_desc`, else ascending); `U`
+/// (n x n or larger: its leading n x n block) the left vectors as columns; `Vh` (the same) the
+/// right vectors as rows. An operand smaller than n x n is not formed. `d` and `e` are read only.
+/// Arguments in the order (d, e, s, U, Vh, ws, opts). Collective over `ex`, every item with the
+/// same arguments; `d` and `e` visible to every item on entry, outputs visible on return.
+/// @pre The kernel runs at sub-group size 32 (`BATCHLAS_REQD_SG_SIZE(32)`).
+/// @tparam Tier  `tier::Blocked<1>`, the default and only tier
+/// @tparam Ex    `WorkGroup<256, 32>`
+/// @param[in]  ex    the executor
+/// @param[in]  d     the n diagonal entries of B, real
+/// @param[in]  e     the n - 1 superdiagonal entries of B
+/// @param[out] s     the n singular values
+/// @param[out] U     the left singular vectors as columns, at least n x n to be formed
+/// @param[out] Vh    the right singular vectors as rows, at least n x n to be formed
+/// @param[in]  ws    `ws.local` and this bidiagonal's `ws.global` slice of
+///                   `device::buffer_size<routine::bdsdc, Tier, T>(n)`
+/// @param[in]  opts  the sort order
+/// @return `info`, `stedc`'s, the same on every item
+/// @retval 0  success, including n = 0
+/// @retval 1  a secular equation root ran out of iterations
+/// @ingroup api_device_lapack_svd
 template <class Tier = tier::Blocked<1>, class Ex, class D, class E, class S, class MU, class MV>
 BATCHLAS_DEVICE_HELPER int bdsdc(const Ex& ex, const D& d, const E& e, const S& s, const MU& U, const MV& Vh, const Workspace& ws,
                               const BdsdcOptions& opts = {}) {

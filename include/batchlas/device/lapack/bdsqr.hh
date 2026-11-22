@@ -1,15 +1,22 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// LAPACK xBDSQR on a real upper bidiagonal B = (d, e): implicit shifted QR sweeps with DBDSQR's
-// zero-shift chase for a negligible diagonal, the singular values in s, the rotations accumulated
-// into U (U := U Q over its n columns) and Vh (Vh := P^T Vh over its n rows), optionally sorted
-// descending. ONE body for every executor:
-//   Thread                one item runs the sweep and applies each rotation as it forms it
-//   tier::Blocked<1>      any n on a work-group: the leader runs the scalar recurrence and stores
-//                         one block's rotations in the global workspace; every item then applies
-//                         them, in the same order, to the rows of U and the columns of Vh it owns
-// Each element of U and Vh sees the same rotations in the same order on both executors. The host
-// route (gesvd/bdsqr/bdsqr.cc) is a launcher over the Thread path, one item per matrix.
+/// @file
+/// @brief Bidiagonal SVD by QR iteration inside a kernel: `bdsqr`, LAPACK's xBDSQR on a real
+/// upper bidiagonal B = (d, e).
+///
+/// Implicit shifted QR sweeps with DBDSQR's zero-shift chase for a negligible diagonal entry give
+/// the singular values; the rotations are accumulated into U (\f$U \leftarrow U Q\f$ over its n
+/// columns) and Vh (\f$V^H \leftarrow P^T V^H\f$ over its n rows), optionally sorted descending.
+/// One body runs on two executors:
+/// - a `Thread`: one work-item runs the sweep and applies each rotation as it forms it;
+/// - `tier::Blocked<1>` on a work-group, any n: the leader runs the scalar recurrence and stores
+///   one block's rotations in the global workspace, then every item applies them, in the same
+///   order, to the rows of U and the columns of Vh it owns.
+///
+/// Each element of U and Vh sees the same rotations in the same order on both executors.
+/// Reference: @ref api_device_lapack_svd.
+/// @ingroup api_device_lapack_svd
+// The host route (gesvd/bdsqr/bdsqr.cc) is a launcher over the Thread path, one item per matrix.
 
 #include <algorithm>
 #include <cstdint>
@@ -28,17 +35,22 @@
 namespace batchlas::device {
 
 namespace routine {
+/// @brief The routine tag of `bdsqr`, for `with_tier`, `launch` and `buffer_size`.
+/// @ingroup api_device_lapack_svd
 struct bdsqr {
     static constexpr const char* name = "bdsqr";
 };
 }  // namespace routine
 
-// bdsqr's options. sort_desc: s descending, U's columns and Vh's rows permuted with it. tol: the
-// relative tolerance (<= 0: DBDSQR's tolmul * eps, tolmul = clamp(eps^(-1/8), 10, 100)). maxit:
-// the iteration cap (<= 0: DBDSQR's max(32, 6 n^2)).
+/// @brief `bdsqr`'s options; the zero-initialised defaults are DBDSQR's.
+/// @tparam Real  the bidiagonal's real type
+/// @ingroup api_device_lapack_svd
 template <class Real> struct BdsqrOptions {
+    /// Sort the singular values descending, permuting U's columns and Vh's rows with them.
     bool sort_desc = true;
+    /// The relative tolerance; <= 0 is DBDSQR's tolmul * eps, tolmul = clamp(eps^(-1/8), 10, 100).
     Real tol = Real(0);
+    /// The iteration cap; <= 0 is DBDSQR's max(32, 6 n^2).
     int maxit = 0;
 };
 
@@ -95,11 +107,18 @@ template <class M> BATCHLAS_DEVICE_INLINE void swap_at(const M& a, int i0, int j
 }
 }  // namespace detail
 
+/// @brief The tiers `with_tier` tries for `bdsqr`: `tier::Blocked<1>`.
+/// @ingroup api_device_lapack_svd
 template <class Real> struct tiers<routine::bdsqr, Real> {
     using type = tier::list<tier::Blocked<1>>;
 };
-// wg_size is what with_tier checks; the op runs on any work-group width (items past the owned
-// count idle). Real types only (B is real; gebrd's complex reduction hands bdsqr a real B too).
+/// @brief `bdsqr` in `tier::Blocked<1>`: one bidiagonal of any order n per work-group, real types
+/// only.
+///
+/// `wg_size` (256) is what `with_tier` checks; the routine runs on any work-group width (items
+/// past the owned count idle). B is real for every `gebrd` scalar type, so `Real` is a real
+/// type. `buffer_size(n)` is one bidiagonal's local and global bytes.
+/// @ingroup api_device_lapack_svd
 template <class Real> struct tier_info<routine::bdsqr, tier::Blocked<1>, Real> {
     static_assert(std::is_floating_point_v<Real>, "bdsqr: a real T");
     static constexpr int wg_size = 256, sg_size = 32;
@@ -384,13 +403,31 @@ BATCHLAS_DEVICE_INLINE int bdsqr_sweep(const Ex& ex, const D& d, const E& e, con
 }
 }  // namespace detail
 
-// xBDSQR of one bidiagonal, (d, e, s, U, Vh, ws, opts). d (n) and e (n - 1) are working storage
-// (undefined on return); s receives the n singular values (|d| after convergence, descending when
-// opts.sort_desc). U is accumulated when it has n columns and at least one row, Vh when it has n
-// rows and at least one column (pass a 0 x 0 operand to skip either). COLLECTIVE over ex with the
-// same arguments; d, e, U, Vh visible on entry; outputs visible on return. Workspace:
-// device::buffer_size<routine::bdsqr, Tier, T>(n) on a work-group, none on Thread. Returns
-// xBDSQR's status as the host's flag: 0, or 1 when the sweep hit maxit or a singular value is NaN.
+/// @brief xBDSQR inside a kernel: the singular values of one real upper bidiagonal B = (d, e),
+/// accumulating the rotations into U and Vh.
+///
+/// `d` (n) and `e` (n - 1) are working storage, undefined on return; `s` receives the n singular
+/// values (the absolute values of d after convergence, descending when `opts.sort_desc`). `U` is
+/// accumulated (\f$U \leftarrow U Q\f$) when it has n columns and at least one row, `Vh`
+/// (\f$V^H \leftarrow P^T V^H\f$) when it has n rows and at least one column: pass a 0 x 0
+/// operand to skip either, or call the overload without them. To get B's own singular vectors,
+/// seed U and Vh with the identity. Collective over `ex`, every item with the same arguments;
+/// `d`, `e`, `U` and `Vh` visible to every item on entry, outputs visible on return.
+/// @tparam Tier  `tier::Blocked<1>`, the default and only tier
+/// @tparam Ex    a `Thread` (no workspace) or a work-group executor
+/// @param[in]     ex    the executor
+/// @param[in,out] d     the n diagonal entries of B; destroyed
+/// @param[in,out] e     the n - 1 superdiagonal entries of B; destroyed
+/// @param[out]    s     the n singular values
+/// @param[in,out] U     the left accumulator, rows by n columns
+/// @param[in,out] Vh    the right accumulator, n rows by columns
+/// @param[in]     ws    on a work-group, `ws.local` and this bidiagonal's `ws.global` slice of
+///                      `device::buffer_size<routine::bdsqr, Tier, T>(n)`; unused on a `Thread`
+/// @param[in]     opts  sorting, tolerance and iteration cap
+/// @return `info`, xBDSQR's status as the host's flag, the same on every item
+/// @retval 0  converged
+/// @retval 1  the sweep reached `maxit`, or a singular value is NaN
+/// @ingroup api_device_lapack_svd
 template <class Tier = tier::Blocked<1>, class Ex, class D, class E, class S, class MU, class MV>
 BATCHLAS_DEVICE_INLINE int bdsqr(const Ex& ex, const D& d, const E& e, const S& s, const MU& U, const MV& Vh, const Workspace& ws,
                               const BdsqrOptions<elem_t<D>>& opts = {}) {
@@ -399,7 +436,17 @@ BATCHLAS_DEVICE_INLINE int bdsqr(const Ex& ex, const D& d, const E& e, const S& 
     const detail::bdsqr_params<R> p{opts.tol > R(0) ? opts.tol : dflt.tol, opts.maxit > 0 ? opts.maxit : dflt.maxit};
     return detail::bdsqr_sweep<Tier>(ex, d, e, s, U, Vh, ws, opts.sort_desc, p);
 }
-// Singular values only.
+/// @brief xBDSQR inside a kernel, singular values only: `bdsqr` with no U and Vh.
+///
+/// The same contract as the overload with U and Vh.
+/// @param[in]     ex    the executor
+/// @param[in,out] d     the n diagonal entries of B; destroyed
+/// @param[in,out] e     the n - 1 superdiagonal entries of B; destroyed
+/// @param[out]    s     the n singular values
+/// @param[in]     ws    as for the overload with U and Vh
+/// @param[in]     opts  sorting, tolerance and iteration cap
+/// @return `info`: 0 converged, 1 the sweep reached `maxit` or a singular value is NaN
+/// @ingroup api_device_lapack_svd
 template <class Tier = tier::Blocked<1>, class Ex, class D, class E, class S>
 BATCHLAS_DEVICE_INLINE int bdsqr(const Ex& ex, const D& d, const E& e, const S& s, const Workspace& ws,
                               const BdsqrOptions<elem_t<D>>& opts = {}) {
