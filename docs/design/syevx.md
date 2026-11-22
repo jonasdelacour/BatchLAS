@@ -17,7 +17,7 @@ index or value range. It dispatches to one of four algorithms by a hand-written 
 | Algorithm | Input | Method | Chosen by Auto when |
 |---|---|---|---|
 | `Direct` | dense; all types, ranges and `jobz` | the public `syev`, then select | \f$n \le 64\f$, eigenvalues only, complex, or below the `DirectSubset` gates |
-| `DirectSubset` | dense, real only (`syevx_direct_subset_supported`); in-order Queue | `sy2sb`, `sb2st`, `stebz`, `stein`, back-transforms on \f$k\f$ columns | eigenvectors at large \f$n\f$ and batch |
+| `DirectSubset` | dense, real only (`syevx_direct_subset_supported`); in-order Queue; 32-wide sub-groups (`sy2sb`'s larft) | `sy2sb`, `sb2st`, `stebz`, `stein`, back-transforms on \f$k\f$ columns | eigenvectors at large \f$n\f$ and batch |
 | `LOBPCG` | CSR (dense on explicit request) | batched LOBPCG, optional ILU(k) or Jacobi preconditioner | sparse input, extremal ranges only |
 | `Filtered` | CSR or dense | scaled Chebyshev filter with Rayleigh-Ritz | never; explicit request only |
 
@@ -25,7 +25,8 @@ On dense real input with eigenvectors, Auto picks `DirectSubset` when \f$n \ge\f
 (1024) and \f$n \cdot \mathrm{batch} \ge\f$ `kSyevxSubsetMinWork` (\f$128 \cdot 1024\f$), and `Direct`
 otherwise; `kSyevxSmallN` = 64. The rule has no \f$k/n\f$ term: the `DirectSubset` advantage is flat in
 \f$k\f$ from 0.8 % to 25 % of the spectrum. An explicit `DirectSubset` request on complex input runs
-`Direct`. No vendor routine is a batched subset eigensolver (`cusolverDnXsyevdx` and MAGMA `syevdx` are
+`Direct`; on a device without 32-wide sub-groups (AdaptiveCpp's OpenMP host) it throws
+`batchlas::unsupported` before any launch, and Auto and `BATCHLAS_SYEVX_ALGORITHM` run `Direct`. No vendor routine is a batched subset eigensolver (`cusolverDnXsyevdx` and MAGMA `syevdx` are
 not batched; the batched cuSOLVER routines solve the full spectrum), which is the case for `DirectSubset`.
 
 ## syevx: the flop-count cost model

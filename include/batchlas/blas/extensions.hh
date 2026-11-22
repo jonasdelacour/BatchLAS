@@ -602,7 +602,8 @@ BATCHLAS_API size_t syevx_direct_buffer_size(Queue& ctx,
 /// @param[out] info      per-item convergence status, or empty; see @ref md_docs_2cpp-api
 /// @return event of the last enqueued kernel
 /// @pre in-order Queue; `A` square
-/// @throws batchlas::unsupported for complex or sparse input
+/// @throws batchlas::unsupported for complex or sparse input, or a device without 32-wide
+///         sub-groups (`Device::supports_sub_group_size(32)`), before any launch
 /// @throws batchlas::invalid_argument for `neigs == 0`, an out-of-range index block,
 ///         \f$\mathit{vl} \ge \mathit{vu}\f$, a too-short `m`, or an out-of-order Queue
 /// @see syevx_direct_subset_supported()
