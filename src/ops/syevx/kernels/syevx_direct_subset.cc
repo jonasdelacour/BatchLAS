@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <complex>
 #include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/blas/functions.hh>
@@ -55,6 +56,15 @@ inline size_t subset_w_sub_len(int64_t n, int64_t capacity, bool value_range) {
 template <Backend B>
 inline constexpr bool kSubsetHostBlas = B == Backend::NETLIB && !select::kHostNative;
 
+// sy2sb's WY update (larft) and sb2st_hh's chase run 32-wide sub-groups on every backend, beside a
+// host BLAS too; acpp's OpenMP host enumerates only size 1. Refused before any launch.
+inline void refuse_without_sg32(Queue& ctx, const char* who) {
+    if (!ctx.device().supports_sub_group_size(32))
+        throw batchlas::unsupported(std::string(who) +
+                                    ": the device has no 32-wide sub-groups, which sytrd_sy2sb's WY update "
+                                    "needs; use SyevxAlgorithm::Direct");
+}
+
 }  // namespace
 
 template <Backend B, typename Scalar, MatrixFormat MFormat>
@@ -81,6 +91,7 @@ Event syevx_direct_subset(Queue& ctx,
         throw batchlas::unsupported(
             "syevx_direct_subset: only real scalar types with dense input are supported");
     } else {
+        refuse_without_sg32(ctx, "syevx_direct_subset");
         const int32_t n = static_cast<int32_t>(A.rows());
         const int32_t batch = static_cast<int32_t>(A.batch_size());
         // Stride of W and columns of V; never the per-item count nor w_sub_len
@@ -382,6 +393,7 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
         // Must reject exactly what the solver rejects.
         if constexpr (kSubsetHostBlas<B>)
             ::batchlas::detail::refuse_batch_mask("syevx_direct_subset_buffer_size", A, V);
+        refuse_without_sg32(ctx, "syevx_direct_subset_buffer_size");
         const auto mask = ::batchlas::detail::call_mask("syevx_direct_subset_buffer_size", A, V);
         (void)W;
         const int32_t n = static_cast<int32_t>(A.rows());

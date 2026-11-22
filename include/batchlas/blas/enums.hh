@@ -418,8 +418,10 @@ inline constexpr std::string_view to_string(ApplyOrder v) {
 /// DirectSubset on CSR runs LOBPCG. A non-extremal SyevxSelect range is never
 /// degraded to a different part of the spectrum: on CSR input, or with an
 /// explicit LOBPCG or Filtered, it throws batchlas::invalid_argument (under the
-/// environment override the dense case runs Direct instead). `syevx` and
-/// `syevx_buffer_size` resolve the choice identically.
+/// environment override the dense case runs Direct instead). On a device without
+/// 32-wide sub-groups an explicit DirectSubset throws batchlas::unsupported, while Auto
+/// and the environment override run Direct. `syevx` and `syevx_buffer_size` resolve
+/// the choice identically.
 /// @see @ref perf_syevx for the routing thresholds, @ref design_syevx for the tiers.
 enum class SyevxAlgorithm {
     Auto,           ///< Heuristic selection on format, \f$n\f$, batch size and jobz (the default).

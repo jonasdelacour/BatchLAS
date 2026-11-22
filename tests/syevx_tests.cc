@@ -594,6 +594,8 @@ TEST_P(SyevxDirectSubsetTest, FullSpectrumThroughSubsetPath) {
 // GPU in the gate) and syevx_mask_tests' subset oracle is the same route unmasked. Graded spectra,
 // ld and batch stride past n, a workspace 8 bytes past its USM base. A vendor-free host runs every
 // stage natively and masks item 0 off (its W and V keep their poison); a host BLAS refuses a mask.
+// sy2sb needs 32-wide sub-groups: where the host enumerates none (acpp's OpenMP host) the pin is
+// refused before any launch, keyed on the queried capability.
 TEST_P(SyevxDirectSubsetTest, HostQueueMatchesReference) {
     if (syevx_algorithm_overridden_to_other("direct_subset")) GTEST_SKIP() << "algorithm forced via env";
     SYEVX_REQUIRE_LAPACKE();
@@ -608,10 +610,21 @@ TEST_P(SyevxDirectSubsetTest, HostQueueMatchesReference) {
     }
     Queue& q = *cpu;
     ASSERT_EQ(q.backend(), Backend::NETLIB);
+    const bool sg32 = q.device().supports_sub_group_size(32);
     constexpr bool kMasked = select::kHostNative;
     constexpr float kPoison = 7777.25f;
     constexpr int batch = 3;
     using MV = MatrixView<float, MatrixFormat::Dense>;
+    const auto expect_refused = [](const auto& call) {
+        try {
+            call();
+            ADD_FAILURE() << "DirectSubset ran on a device without 32-wide sub-groups";
+        } catch (const batchlas::unsupported& e) {
+            const std::string what = e.what();
+            EXPECT_EQ(what.rfind("syevx", 0), 0u) << what;
+            EXPECT_NE(what.find("32-wide sub-groups"), std::string::npos) << what;
+        }
+    };
 
     SyevxParams<float> params;
     params.method = SyevxAlgorithm::DirectSubset;
@@ -639,6 +652,23 @@ TEST_P(SyevxDirectSubsetTest, HostQueueMatchesReference) {
                 for (int i = 0; i < n + 2; ++i) v_at(i, j, b) = kPoison;
         const MV Am = kMasked ? A.with_batch_mask(mask.to_span()) : A;
         const MV Vm = !want_vectors ? MV() : kMasked ? Vfull.with_batch_mask(mask.to_span()) : Vfull;
+
+        if (!sg32) {
+            expect_refused([&] { (void)syevx_buffer_size(q, Am, W.to_span(), neig, jobz, Vm, params); });
+            UnifiedVector<std::byte> ws(1024 + 8, std::byte{0x01});
+            expect_refused([&] {
+                (void)syevx(q, Am, W.to_span(), neig, Span<std::byte>(ws.data() + 8, 1024), jobz, Vm, params);
+                q.wait();
+            });
+            q.wait();
+            for (size_t i = 0; i < W.size(); ++i) EXPECT_EQ(W[i], kPoison) << "a refused call wrote W[" << i << "]";
+            int touched = 0;
+            for (int b = 0; b < batch; ++b)
+                for (int j = 0; j < neig; ++j)
+                    for (int i = 0; i < n + 2; ++i) touched += v_at(i, j, b) != kPoison;
+            EXPECT_EQ(touched, 0) << "a refused call wrote V";
+            continue;
+        }
 
         const size_t ws_bytes = syevx_buffer_size(q, Am, W.to_span(), neig, jobz, Vm, params);
         // Poisoned: an inactive item's stebz count is never written, and a zero there would hide a
@@ -672,6 +702,39 @@ TEST_P(SyevxDirectSubsetTest, HostQueueMatchesReference) {
                 for (int i = 0; i < n + 2; ++i)
                     touched += (b < first || i >= n) && v_at(i, j, b) != kPoison;
         EXPECT_EQ(touched, 0) << "V entries outside the active items' n x neig blocks were written";
+    }
+}
+
+// Auto past both DirectSubset gates (n 1024, batch 128, eigenvectors) on a CPU queue sizes the route
+// it would run: DirectSubset where the device has 32-wide sub-groups, Direct where it has none. A size
+// query reads no data, so one float anchors views of the full shape (the pointer check wants non-null).
+TEST(SyevxDirectSubsetRoute, HostAutoSizesTheRouteItRuns) {
+    if (std::getenv("BATCHLAS_SYEVX_ALGORITHM")) GTEST_SKIP() << "algorithm forced via env";
+    if (!select::kHostNative && !select::kHasNetlib) GTEST_SKIP() << "no host route for DirectSubset";
+    std::unique_ptr<Queue> cpu;
+    try {
+        cpu = std::make_unique<Queue>(Device("cpu"), true);
+    } catch (const std::exception& e) {
+        GTEST_SKIP() << "no CPU device: " << e.what();
+    }
+    Queue& q = *cpu;
+    using MV = MatrixView<float, MatrixFormat::Dense>;
+    constexpr int n = 1024, batch = 128, k = 8;
+    UnifiedVector<float> anchor(1, 0.0f);
+    const MV A(anchor.data(), n, n, n, n * n, batch);
+    const MV V(anchor.data(), n, k, n, n * k, batch);
+    const auto bytes = [&](SyevxAlgorithm method) {
+        SyevxParams<float> params;
+        params.method = method;
+        return syevx_buffer_size(q, A, Span<float>(), k, JobType::EigenVectors, V, params);
+    };
+    const size_t auto_bytes = bytes(SyevxAlgorithm::Auto);
+    const size_t direct_bytes = bytes(SyevxAlgorithm::Direct);
+    if (q.device().supports_sub_group_size(32)) {
+        EXPECT_EQ(auto_bytes, bytes(SyevxAlgorithm::DirectSubset));
+        EXPECT_NE(auto_bytes, direct_bytes) << "the sizes cannot tell the two routes apart";
+    } else {
+        EXPECT_EQ(auto_bytes, direct_bytes) << "Auto picked DirectSubset without 32-wide sub-groups";
     }
 }
 
