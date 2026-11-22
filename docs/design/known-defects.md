@@ -317,6 +317,13 @@ Located to a line, not confirmed by a test.
   below about \f$2^{-63}\f$ on a device that flushes subnormals; each needs its own graded test,
   scheduled for 1.x. The reflector norms (`larfg_lanes`, `latrd`, `sb2st`, `gebrd`, legacy `sytrd`)
   are scaled.
+- **Sub-group-32 routes without a capability check.** `ormqr`, `syev` and `gesvd` Blocked and `syev`
+  TwoStage reach `larft`/`sy2sb`, which need 32-wide sub-groups, with no `supports_sub_group_size(32)`
+  term in `can_run`; the public `ormbr<NETLIB>` throws a message opening with `larft` on AdaptiveCpp's
+  OpenMP host. None is reachable in the 1.0.0 release configurations' tests (every DPC++ and Metal
+  device there has 32-wide sub-groups, and those routes stay behind `natives_run_on` on that host);
+  a vendor-free AdaptiveCpp host or a GPU without size 32 would expose them. `syevx` DirectSubset
+  has the check (757348c6); the others are 1.x work.
 - Matrix containers and the environment parser are tracked on their pages:
   [matrix model](matrix-model.md#matrix-model-open-debts),
   [environment](environment.md#environment-parser-defects-recorded-not-fixed).

@@ -226,6 +226,10 @@ pre-release commit (version 0.1.0) will notice.
   `measuring()` replay (7dd5cbb4, 88092f2c).
 - `gesvd` in CTA mode under `BATCHLAS_GESVD_BIDIAG=normal` could write past a thin tall U; only the
   CTA entry's thin-job refusal kept it unreachable (d166fba4).
+- `syevx` DirectSubset needs a device with 32-wide sub-groups (`sytrd_sy2sb`'s WY update). Auto and
+  `BATCHLAS_SYEVX_ALGORITHM` run Direct elsewhere (AdaptiveCpp's OpenMP host), and an explicit
+  `SyevxAlgorithm::DirectSubset`, `syevx_direct_subset` or its size query throws
+  `batchlas::unsupported` before any launch, instead of failing mid-call in `larft` (757348c6).
 
 ### Known limitations {#changelog-1-0-0-known-limitations}
 
