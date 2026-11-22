@@ -102,8 +102,11 @@ built library (see "The device API without building BatchLAS" in @ref guide_cpp_
 picks an *executor* (who cooperates on one matrix), wraps its memory in *operands* (typed int32
 views), and calls routines whose sizes, layouts and algorithms are template parameters, so a
 kernel compiles only the path it takes. LAPACK-level routines run in a *tier* (`tier::Reg`,
-`tier::Cta` or `tier::Blocked`) chosen on the host by `with_tier`, size their workspace with
-`<op>_buffer_size`, and report failure through an `info` value, as LAPACK does.
+`tier::Cta` or `tier::Blocked`) chosen on the host by `with_tier`. The host sizes a routine's
+workspace with `launch<R, Tier, T>::buffer_size(extents...)` or
+`device::buffer_size<R, Tier, T>(extents...)`; there is no per-op sizer. A LAPACK-level routine
+returns `int info` as LAPACK does: 0 on success, `k > 0` with the routine's LAPACK meaning, and
+`-i` when argument `i` is invalid.
 
 @par Which header to include
 - `#include <batchlas/device.hh>`: the core. Launch, tiers and workspace; executors; operands,
@@ -112,8 +115,10 @@ kernel compiles only the path it takes. LAPACK-level routines run in a *tier* (`
 - `#include <batchlas/device/lapack.hh>`: every LAPACK routine (it includes the core), or one
   routine with `<batchlas/device/lapack/<routine>.hh>`, e.g. `<batchlas/device/lapack/potrf.hh>`.
 - `#include <batchlas/device/level3/group.hh>`: in-group level 3 (gemm and friends on one matrix
-  per work-group, operands in global memory). Not in either umbrella.
-- `#include <batchlas/device/sparse.hh>`: CSR operands, spmm and ILU(k). Not in either umbrella.
+  per work-group, operands in global memory). `device.hh` does not include it; `lapack.hh` does,
+  through the LAPACK headers built on it (`potrf.hh`, `getrf.hh`, `sytrd.hh` and others).
+- `#include <batchlas/device/sparse.hh>`: CSR operands, spmm and ILU(k). Neither umbrella
+  includes it.
 
 @par What it contains
 - @ref api_device_launch &ndash; turning a routine and a tier into a kernel launch.
@@ -249,9 +254,10 @@ modes as template parameters and are tuned through an `l3::` configuration. Incl
 @brief Cholesky factorization of a symmetric or Hermitian positive definite matrix, the solve with
 its factor, the combined driver and the inverse from the factor.
 
-`potrf` returns LAPACK's `info`: 0, or the order of the first leading minor that is not
-positive definite.
-Include `<batchlas/device/lapack/potrf.hh>` (or `potrs.hh`, `posv.hh`, `potri.hh`), or
+`potrf` returns `info`: 0 on success, `k > 0` when the leading minor of order `k` is not
+positive definite, -2 when `a` is not square or its order is out of the tier's range, and -3 when
+the workspace is missing or misaligned. `potrs`, `posv` and `potri` follow the same rule: `-i`
+names the invalid argument `i`. Include `<batchlas/device/lapack/potrf.hh>` (or `potrs.hh`, `posv.hh`, `potri.hh`), or
 `<batchlas/device/lapack.hh>` for all routines. Guide: @ref design_device_la.
 */
 
@@ -295,9 +301,11 @@ reduction, the tridiagonal solvers, the generalized-problem reduction and one-si
 
 `syev` computes all eigenvalues (and optionally eigenvectors), `syevx` a selected range; both
 report non-convergence in `info`. The stages (`sytrd`, `sy2sb` then `sb2st`; `steqr`, `stedc`,
-`stebz` with `stein`) can be called on their own. Include `<batchlas/device/lapack/syev.hh>` (or
-the stage's header, e.g. `steqr.hh`), or `<batchlas/device/lapack.hh>`. Guide:
-@ref design_device_la.
+`stebz` with `stein`) can be called on their own. `ritz_values` (`ritz_values.hh`) gives the
+Rayleigh quotients of the columns of `V`. The kernels `stedc` and `stein` are built from (`laed2`,
+`laed3`, `laed4`, `lagtf`, `lagts`) are in @ref api_device_lowlevel. Include
+`<batchlas/device/lapack/syev.hh>` (or the stage's header, e.g. `steqr.hh`), or
+`<batchlas/device/lapack.hh>`. Guide: @ref design_device_la.
 */
 
 /**
@@ -341,7 +349,11 @@ They are **not** covered by the compatibility promise.
 
 A member of this group may change its signature or disappear in any release, minor or patch
 ("Versioning and compatibility" in @ref guide_cpp_api). They are documented so that the public
-routines' signatures can be read; do not build on them. Everything in `batchlas::device::detail`
+routines' signatures can be read; do not build on them. Among them are the divide-and-conquer
+merge kernels `laed2`, `laed3` and `laed4` and the inverse-iteration pair `lagtf` and `lagts`
+(`<batchlas/device/lapack/laed2.hh>` and siblings, all included by `lapack.hh`): `stedc`, `stein`
+and the host kernels share their bodies, and their signatures follow those callers rather than
+the device conventions. Everything in `batchlas::device::detail`
 is private and is not documented at all. Guide: @ref design_device_la.
 */
 
