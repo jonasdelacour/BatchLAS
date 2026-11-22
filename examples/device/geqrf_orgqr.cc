@@ -2,7 +2,8 @@
 // docs/guide/device-api.md, geqrf / orgqr: a user kernel that factors a batch of m x n (m >= n)
 // matrices A = Q R with device::geqrf, copies the factor into Q's storage and forms Q's n columns
 // there with device::orgqr, in one kernel. Both routines offer one tier, Blocked<NB>
-// (NB = larfb_default_nb<T>()), on a WorkGroup per matrix: with_tier picks it, both calls take it
+// (NB = larfb_default_nb<T>(): 32 for float, 16 for double; 32 for both complex types), on a
+// WorkGroup per matrix: with_tier picks it, both calls take it
 // and share one workspace sized for the larger of the two. float, and double where the device has
 // fp64. Exit 0 when max |A - Q R| / (m max|A|) and max |Q^T Q - I| / m are small and every info
 // is 0, else 1.

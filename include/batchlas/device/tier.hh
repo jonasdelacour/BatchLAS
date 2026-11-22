@@ -8,8 +8,9 @@
  * A tier is a type, so one kernel never pays the registers of two paths. Per routine (a tag type
  * in device::routine) and scalar T, `tier_info<Routine, Tier, T>` states the executor type,
  * `wg_size`, `sg_size`, `per_group`, `admits(n)` and `buffer_size(n)`; `tiers_t<Routine, T>` lists
- * the routine's tiers smallest first. launch.hh turns a tier into a launch (nd_range, executor,
- * matrix slot, workspace).
+ * the routine's tiers in the order with_tier tries them: by bound, smallest first, except that a
+ * fallback follows the tier it replaces (sygst lists `Blocked<32>` before `Blocked<16>`). launch.hh
+ * turns a tier into a launch (nd_range, executor, matrix slot, workspace).
  */
 // A run-time `if (n <= 32)` between two tiers compiles both, and the kernel carries the larger
 // register count of the two: the old design's failure.
@@ -80,7 +81,7 @@ template <int NB, class Alg = alg::Default> struct Blocked {
 template <int NMax> struct upto {
     static constexpr int n_max = NMax;  ///< The order the chosen tier must admit.
 };
-/// @brief A list of tiers, smallest first, as tiers_t gives it and with_tier visits it.
+/// @brief A list of tiers, in the order with_tier tries them, as tiers_t gives it.
 /// @ingroup api_device_launch
 /// @tparam Tiers the tiers
 template <class... Tiers> struct list {};
@@ -116,30 +117,47 @@ template <int NB, class A> inline constexpr bool is_blocked_v<Blocked<NB, A>> = 
 }  // namespace tier
 
 /// @brief The routine tags, `device::routine::<op><modes...>`, each declared next to its op.
+///
+/// A tag is an empty struct with a `name` (the routine's name for error messages). It names the
+/// routine, with its compile-time modes, to tier_info, tiers_t, with_tier, launch and
+/// buffer_size; the routine itself is the function of the same name in batchlas::device.
 namespace routine {}
 
 /// @brief What tier Tier of Routine is for scalar T; specialised by each routine for each tier it
 /// implements.
 /// @ingroup api_device_launch
 ///
-/// A specialisation states `executor` (the executor type), `wg_size`, `sg_size`, `per_group`
-/// (matrices per work-group, one per executor), `admits(n)` and `buffer_size(extents...)` (a
-/// WorkspaceSize). The primary template is incomplete: naming a tier a routine does not have is a
-/// compile error.
+/// A specialisation has these static members:
+/// - `executor`: the executor type the kernel builds for one matrix
+///   (`launch<Routine, Tier, T>::executor`).
+/// - `wg_size` (`int`): the work-group size of the launch.
+/// - `sg_size` (`int`): the sub-group size the kernel requires; with_tier skips the tier when the
+///   device does not offer it.
+/// - `per_group` (`int`): matrices per work-group, one per executor; 1 for a `WorkGroup` executor.
+/// - `admits(int n)` (`constexpr bool`): whether the tier runs order n, beyond the tier's own bound.
+/// - `buffer_size(extents...)` (`constexpr WorkspaceSize`): the local and global workspace of one
+///   matrix; `launch<Routine, Tier, T>::buffer_size` and `device::buffer_size` forward to it.
+///
+/// The primary template is incomplete: naming a tier a routine does not have is a compile error.
 /// @tparam Routine a routine tag from device::routine
 /// @tparam Tier a concrete tier: tier::Reg, tier::Cta or tier::Blocked
 /// @tparam T the scalar type
 template <class Routine, class Tier, class T> struct tier_info;
 
-/// @brief The tiers of Routine for Scalar, smallest first: `tiers<Routine, Scalar>::type` is a
-/// tier::list.
+/// @brief The tiers of Routine for Scalar, in the order with_tier tries them:
+/// `tiers<Routine, Scalar>::type` is a tier::list.
 /// @ingroup api_device_launch
 ///
-/// Specialised by each routine next to its tier_info specialisations.
+/// Specialised by each routine next to its tier_info specialisations. Its one member, `type`, is
+/// a tier::list ordered by bound, smallest first, except that a fallback follows the tier it
+/// replaces: sygst lists `Blocked<32>` before `Blocked<16>`, which is tried only where
+/// `Blocked<32>`'s diagonal block does not fit. `ortho` and `ritz_values` have tier_info
+/// specialisations but no tiers specialisation; name their tier yourself.
 /// @tparam Routine a routine tag from device::routine
 /// @tparam Scalar the scalar type
 template <class Routine, class Scalar> struct tiers;
-/// @brief The routine's tiers for Scalar, smallest first: `tiers<Routine, Scalar>::type`.
+/// @brief The routine's tiers for Scalar, in the order with_tier tries them:
+/// `tiers<Routine, Scalar>::type`.
 /// @ingroup api_device_launch
 /// @tparam Routine a routine tag from device::routine
 /// @tparam Scalar the scalar type
@@ -306,7 +324,7 @@ template <class Routine, class Scalar, class F, class... Tiers> bool visit_first
 /// exactly one runs.
 /// @tparam Routine a routine tag from device::routine
 /// @tparam Scalar the scalar type
-/// @tparam List the tiers to try, smallest first (default: the routine's tiers_t)
+/// @tparam List the tiers to try, in order (default: the routine's tiers_t)
 /// @tparam F a callable taking a tier by value
 /// @param lim the device limits
 /// @param n the order of the problem
@@ -322,7 +340,7 @@ void with_tier(const DeviceLimits& lim, int n, F&& f, const char* name = Routine
 /// @ingroup api_device_launch
 /// @tparam Routine a routine tag from device::routine
 /// @tparam Scalar the scalar type
-/// @tparam List the tiers to try, smallest first (default: the routine's tiers_t)
+/// @tparam List the tiers to try, in order (default: the routine's tiers_t)
 /// @tparam F a callable taking a tier by value
 /// @param d the device
 /// @param n the order of the problem

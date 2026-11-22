@@ -9,9 +9,10 @@
 /// (`Itype::AB`, 2) and \f$B A x = \lambda x\f$ (`Itype::BA`, 3). With F the factor (L for
 /// `Uplo::Lower`, \f$U^H\f$ for `Uplo::Upper`), itype 1 gives \f$C = F^{-1} A F^{-H}\f$ and
 /// itypes 2 and 3 give \f$C = F^H A F\f$, on the `UL` triangles only. The routine is sygst(); its
-/// routine tag is routine::sygst. Its tiers, smallest first, are `tier::Cta<8>`, `tier::Cta<16>`,
-/// `tier::Cta<32>`, `tier::Blocked<32>` and `tier::Blocked<16>`. The diagonal-block kernel
-/// sygs2_group() is in @ref api_device_lowlevel.
+/// routine tag is routine::sygst. Its tiers, in the order with_tier tries them, are
+/// `tier::Cta<8>`, `tier::Cta<16>`, `tier::Cta<32>`, `tier::Blocked<32>` and `tier::Blocked<16>`
+/// (the fallback where `Blocked<32>` does not fit). The diagonal-block kernel sygs2_group() is in
+/// @ref api_device_lowlevel.
 // sygs2_group<Inverse, KB, NF>(...) is ?sygs2 on ipw diagonal blocks per work-group: the one
 // body; sygst's host blocked route launches it for every kb x kb diagonal block.
 // One work-item per column of a block, the column in registers; F and a transpose buffer per
@@ -210,8 +211,8 @@ template <Itype IT, Uplo UL> struct sygst {
 }  // namespace routine
 
 /// @ingroup api_device_lapack_eig
-/// @brief sygst()'s tiers for every `Scalar`, smallest first: `Cta<8>`, `Cta<16>`, `Cta<32>`,
-/// `Blocked<32>`, `Blocked<16>`.
+/// @brief sygst()'s tiers for every `Scalar`, in the order with_tier tries them: `Cta<8>`,
+/// `Cta<16>`, `Cta<32>`, `Blocked<32>`, `Blocked<16>`.
 ///
 /// `tier::Cta<N>`, N <= 32, holds the column of the block in one item's registers;
 /// `tier::Blocked<NB>` takes any n. `Blocked<16>` is the fallback where `Blocked<32>`'s diagonal
