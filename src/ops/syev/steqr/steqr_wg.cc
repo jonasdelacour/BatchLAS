@@ -123,7 +123,7 @@ Event steqr_wg_impl(Queue& ctx,
                     // The rotation kernel reads rotation (j, k) of this block for every j < n_local - 1
                     // and every sweep column k. The sweeps write theirs and this kernel writes the
                     // identity into the columns no sweep used, so the buffer needs no fill per pass.
-                    const auto identity_from = [&](size_t k0) {
+                    const auto identity_from = [&](size_t k0) BATCHLAS_DEVICE_BODY {
                         if (!store_givens) return;
                         for (int k = static_cast<int>(k0); k < rotations_view.cols(); ++k)
                             for (int j = 0; j < n_local - 1; ++j) rotations_view(j, k, gid) = {Real(1), Real(0)};
