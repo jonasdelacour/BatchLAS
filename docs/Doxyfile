@@ -111,6 +111,9 @@ EXCLUDE_PATTERNS       = */minibench.hh \
                          */batchlas/device/detail/*
 EXCLUDE_SYMBOLS        = batchlas::sig \
                          batchlas::linalg::sig \
+                         batchlas::device::detail \
+                         batchlas::device::l3::detail \
+                         BATCHLAS_POTF2_* \
                          BATCHLAS_CHECK_ARGS \
                          BATCHLAS_ARG_NAMES_* \
                          MINI_ACC_* \
@@ -167,7 +170,9 @@ XML_PROGRAMLISTING     = NO
 # One documentation configuration: a CUDA + host build with every vendor
 # library. The generated backend_config.h is not in the source tree, so the
 # flags it would define are spelled out here. BATCHLAS_API is the generated
-# export macro; unexpanded it becomes the class name.
+# export macro; unexpanded it becomes the class name. The device inlining and
+# kernel-attribute macros expand to nothing, so device signatures read as plain
+# declarations.
 ENABLE_PREPROCESSING   = YES
 MACRO_EXPANSION        = YES
 EXPAND_ONLY_PREDEF     = YES
@@ -185,7 +190,14 @@ PREDEFINED             = BATCHLAS_DOXYGEN \
                          BATCHLAS_HAS_CUSOLVER=1 \
                          BATCHLAS_HAS_CUSPARSE=1 \
                          BATCHLAS_HAS_LAPACKE=1 \
-                         BATCHLAS_HAS_CBLAS=1
+                         BATCHLAS_HAS_CBLAS=1 \
+                         BATCHLAS_DEVICE_INLINE= \
+                         BATCHLAS_DEVICE_HELPER= \
+                         BATCHLAS_DEVICE_BODY= \
+                         BATCHLAS_UNROLL_FULL= \
+                         BATCHLAS_AMDGCN_FN= \
+                         "BATCHLAS_LAUNCH_BOUNDS(max_threads,min_blocks)=" \
+                         "BATCHLAS_REQD_SG_SIZE(n)="
 EXPAND_AS_DEFINED      = BATCHLAS_DENSE_VIEW
 SKIP_FUNCTION_MACROS   = YES
 
