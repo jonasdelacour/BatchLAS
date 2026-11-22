@@ -1,8 +1,15 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// xSTEIN: eigenvectors of a symmetric tridiagonal (d, e) by inverse iteration, given ascending
-// eigenvalues w (from stebz); factor / solve: lagtf / lagts.
-//   stein                    the public op (design C): one matrix on one executor, any n
+/// @file
+/// @brief Eigenvectors of a real symmetric tridiagonal by inverse iteration, `stein` (xSTEIN),
+/// inside a kernel, for ascending eigenvalues such as `stebz` returns.
+///
+/// One matrix on one executor, any n, in one tier, `tier::Blocked<1>`: one item per vector runs a
+/// serial LU of the shifted tridiagonal per step, then the vectors of each cluster of close
+/// eigenvalues are reorthogonalised by modified Gram-Schmidt. The LU rows live in the caller's
+/// global workspace. `with_tier` checks a `WorkGroup<256>` at sub-group size 32. The factor and
+/// solve kernels `lagtf` and `lagts` are in @ref api_device_lowlevel.
+/// @ingroup api_device_lapack_eig
 //   detail::iterate    phase 1: one item per vector, a serial LU per shift (the host
 //                            route's SteinIterateKernel body)
 //   detail::reorthogonalize  phase 2: modified Gram-Schmidt inside clusters of close
@@ -27,13 +34,17 @@
 
 namespace batchlas::device {
 
-/// stein's options. max_iter: inverse-iteration steps (no convergence test, >= 1). Clusters:
-/// neighbours closer than ortho_threshold * ||T||_inf. seed: this matrix's; vector j starts from
-/// the LCG seeded with seed + j * 104729 (the host route passes params.seed + b * 7919 for matrix
-/// b). The defaults are SteinParams'.
+/// @brief Run-time options of `stein`; the defaults are the host SteinParams'.
+/// @tparam Real  the tridiagonal's real type
+/// @ingroup api_device_lapack_eig
 template <class Real> struct SteinOptions {
+    /// Inverse-iteration steps per vector, >= 1; there is no convergence test.
     std::int32_t max_iter = 3;
+    /// Neighbouring eigenvalues closer than ortho_threshold times the infinity norm of T form a
+    /// cluster, whose vectors are reorthogonalised.
     Real ortho_threshold = Real(1e-3);
+    /// This matrix's seed: vector j starts from the LCG seeded with seed + j * 104729 (the host
+    /// route passes params.seed + b * 7919 for matrix b).
     std::uint32_t seed = 0x5eed1234u;
 };
 
@@ -210,17 +221,27 @@ BATCHLAS_DEVICE_INLINE void reorthogonalize(const Ex& ex, const D& d, const E& e
 }  // namespace detail
 
 namespace routine {
+/// @brief The routine tag of `stein` (xSTEIN) for `with_tier`, `launch` and `buffer_size`.
+/// @ingroup api_device_lapack_eig
 struct stein {
+    /// The name `with_tier` puts in its error message.
     static constexpr const char* name = "stein";
 };
 }  // namespace routine
 
+/// @brief The tiers `with_tier` tries for `stein`: `tier::Blocked<1>` only.
+/// @ingroup api_device_lapack_eig
 template <class Real> struct tiers<routine::stein, Real> {
     using type = tier::list<tier::Blocked<1>>;
 };
-// buffer_size(n, k) for k vectors; buffer_size(n) is the k = n bound (with_tier's query). The
-// op runs on any executor width; wg_size is what with_tier checks. Real types only (xSTEIN's
-// complex form takes a real tridiagonal and is the caller's back-transform).
+/// @brief The one tier of `stein`, `tier::Blocked<1>`: real data, any n >= 1, global workspace
+/// for the LU rows and one local slot.
+///
+/// `buffer_size(n, k)` is the workspace for k vectors; `buffer_size(n)` is the k = n bound that
+/// `with_tier` queries. `wg_size` 256 and `sg_size` 32 are what `with_tier` checks; the op itself
+/// runs on any executor width. Real types only: xSTEIN's complex form takes a real tridiagonal,
+/// and the complex back-transform is the caller's.
+/// @ingroup api_device_lapack_eig
 template <class Real> struct tier_info<routine::stein, tier::Blocked<1>, Real> {
     static_assert(std::is_floating_point_v<Real>, "stein: a real T");
     static constexpr int wg_size = 256, sg_size = 32;
@@ -231,12 +252,26 @@ template <class Real> struct tier_info<routine::stein, tier::Blocked<1>, Real> {
     static constexpr WorkspaceSize buffer_size(int n) { return buffer_size(n, n); }
 };
 
-/// Eigenvectors z(:, 0..kb) of one tridiagonal (d, e) for the ascending eigenvalues w(0..kb),
-/// host order (d, e, w, kb, z, ws, opts); z is n x k (k = z.cols() >= kb), its columns past kb
-/// written as zero. COLLECTIVE over ex; inputs visible to every item on entry; outputs visible on
-/// return. Returns 0 (inverse iteration runs a fixed number of steps, xSTEIN's info is not
-/// computed). Workspace: buffer_size<routine::stein, Tier, T>(n, k); ws.global is this matrix's
-/// slice.
+/// @brief xSTEIN on one real symmetric tridiagonal (d, e) inside a kernel: the eigenvectors of the
+/// ascending eigenvalues w(0) to w(kb - 1), by inverse iteration.
+///
+/// Arguments in the host order (d, e, w, kb, z, ws, opts). z is n x k with k = `z.cols()` >= kb;
+/// column j < kb receives the unit vector of w(j), and the columns from kb on are written as
+/// zero. An exactly repeated eigenvalue is nudged so that its vectors differ. COLLECTIVE over
+/// `ex`; the inputs must be visible to every item on entry, and every output is visible on
+/// return.
+/// @tparam Tier  `tier::Blocked<1>`
+/// @param[in]  ex  the executor, any width
+/// @param[in]  d   n reals, the diagonal
+/// @param[in]  e   n - 1 reals, the off-diagonal
+/// @param[in]  w   at least kb eigenvalues, ascending (from `stebz`)
+/// @param[in]  kb  the number of vectors wanted
+/// @param[out] z   n x k, the vectors
+/// @param      ws  this matrix's slices of `buffer_size<routine::stein, Tier, T>(n, k)`
+/// @param[in]  p   the step count, the cluster threshold and the seed
+/// @retval 0  always: inverse iteration runs a fixed number of steps and xSTEIN's info is not
+///            computed
+/// @ingroup api_device_lapack_eig
 template <class Tier, class Ex, class D, class E, class W, class Z, class Real>
 BATCHLAS_DEVICE_INLINE int stein(const Ex& ex, const D& d, const E& e, const W& w, int kb, const Z& z, const Workspace& ws,
                                  const SteinOptions<Real>& p) {

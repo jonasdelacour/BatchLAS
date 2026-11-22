@@ -1,14 +1,24 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// xSYEV / xHEEV in a kernel: eigenvalues W (ascending) and, for JobType::EigenVectors, the
-// eigenvectors over A.
-//   syev<J, UL, tier::Cta<N>>       n <= N, one problem per SgpPartition<N> from load to store
-//                                   (sytd2 Upper, steqr, org2l / orm2l): the host syev_cta_fused
-//                                   kernel is its thin launcher, ws.local only.
-//   syev<J, UL, tier::Blocked<NB>>  any n, one problem per WorkGroup<256>: sytrd<Lower, Blocked<NB>>,
-//                                   steqr<J, Blocked<1>> and ormqr<Left, NoTrans, Blocked> on the
-//                                   caller's global slice (Upper input is mirrored first).
-// detail also holds the steps and the flat 2-D glue the host syev drivers share.
+/// @file
+/// @brief The symmetric and Hermitian eigensolver driver `syev` (xSYEV / xHEEV) inside a kernel:
+/// all eigenvalues of one matrix, ascending, and optionally its eigenvectors.
+///
+/// Two tiers, picked on the host with `with_tier<routine::syev<J, UL>, T>`:
+/// - `tier::Cta<N>`, N in {4, 8, 16, 32}: n <= N, one matrix per `SgpPartition<N>` (32 / N
+///   matrices per 32-item work-group) from load to store: the unblocked tridiagonal reduction,
+///   steqr and the QL back-transform, with the tile in local memory only.
+/// - `tier::Blocked<NB>`: any n, one matrix per `WorkGroup<256>` with A in global memory:
+///   `sytrd<Uplo::Lower, tier::Blocked<NB>>`, `steqr<J, tier::Blocked<1>>` and `ormqr` on this
+///   matrix's global workspace slice (an Upper input is mirrored into the lower triangle first).
+///
+/// Both tiers need 32-wide sub-groups (`tier_info::sg_size` is 32): launch the kernel with
+/// `BATCHLAS_REQD_SG_SIZE(L::sg_size)`; `with_tier` skips a tier the device cannot run. The
+/// column-owner `org2l` and `orm2l` defined here are in @ref api_device_lowlevel. Example:
+/// `examples/device/syev_any_n.cc`.
+/// @ingroup api_device_lapack_eig
+// The host syev_cta_fused kernel is the Cta tier's thin launcher. detail also holds the steps and
+// the flat 2-D glue the host syev drivers share.
 // evidence: docs/perf/syev.md#syev-the-fused-cta-kernel-design
 
 #include <cstddef>
@@ -25,11 +35,17 @@
 
 namespace batchlas::device {
 
-/// syev's options: steqr's knobs (the host SteqrParams fields of the same meaning) at the host
-/// syev_cta / syev_cta_fused defaults (their bump over SteqrParams{}). The Blocked tier reads
-/// max_sweeps only (the work-group steqr's shift).
+/// @brief Run-time options of `syev`: the knobs of its tridiagonal QL/QR solve.
+///
+/// The fields mean what the host SteqrParams fields of the same name mean; the defaults are the
+/// host syev_cta route's (a larger sweep cap and the Wilkinson shift, against SteqrParams{}).
+/// `tier::Blocked<NB>` reads `max_sweeps` only: the work-group steqr keeps its own shift.
+/// @tparam Real  the matrix's real type (`float` for `std::complex<float>`)
+/// @ingroup api_device_lapack_eig
 template <class Real> struct SyevOptions {
+    /// Sweep cap per unreduced block; a block still coupled after it makes `info` positive.
     int max_sweeps = 400;
+    /// The shift of each QL/QR sweep (`tier::Cta<N>` only).
     SteqrShiftStrategy shift = SteqrShiftStrategy::Wilkinson;
 };
 
@@ -120,9 +136,19 @@ template <class Ex, class Vs, class Rm> BATCHLAS_DEVICE_INLINE void stage_ql_ref
 
 }  // namespace detail
 
-// xORG2L, column-owner form (no column shift): lane l < n - 1 ends with column l of
-// Q = H(n-2) ... H(0) (columns >= n - 1 are the caller's). Column k is generated at step k,
-// so the reflector store may overlap the columns of Q not yet generated.
+/// @brief xORG2L in column-owner form: lane l of a partition forms column l of
+/// \f$Q = H(n-2) \cdots H(0)\f$ from the n - 1 QL reflectors of the Upper tridiagonal reduction.
+///
+/// No column shift: lane l < n - 1 ends with column l of Q, and columns n - 1 and up are the
+/// caller's. Column k is generated at step k, so the reflector store may overlap the columns of
+/// Q not yet generated. COLLECTIVE over `ex`, with a barrier per reflector.
+/// @param[in]  ex        the partition executor; lane l owns column l
+/// @param[out] q         this lane's column of Q, in registers
+/// @param      vs        scratch of the partition's width in local memory, shared by its lanes
+/// @param[in]  refl      the reflector store: reflector k in column k + 1 (rows < k, unit at row k)
+/// @param[in]  tau_lane  tau(k) on lane k
+/// @param[in]  n         the order of the matrix
+/// @ingroup api_device_lowlevel
 template <class Ops = arith::Native, class Ex, class Scalar, int N, class L, class Vs, class Rm>
 BATCHLAS_DEVICE_INLINE void org2l(const Ex& ex, Frag<Scalar, N, L>& q, const Vs& vs, const Rm& refl, Scalar tau_lane, const int& n) {
     const int lane = ex.lid();
@@ -137,8 +163,17 @@ BATCHLAS_DEVICE_INLINE void org2l(const Ex& ex, Frag<Scalar, N, L>& q, const Vs&
     }
 }
 
-// xORM2L, Side::Left, NoTrans, column-owner form: c := H(n-2) ... H(0) c on the lanes < n
-// (the n x n block's columns); a reflector with tau == 0 is skipped.
+/// @brief xORM2L with `Side::Left` and `Transpose::NoTrans` in column-owner form:
+/// \f$C := H(n-2) \cdots H(0)\, C\f$ on the columns held by lanes < n.
+///
+/// A reflector with tau = 0 is skipped. COLLECTIVE over `ex`, with a barrier per reflector.
+/// @param[in]     ex        the partition executor; lane l owns column l of C
+/// @param[in,out] c         this lane's column of C, in registers
+/// @param         vs        scratch of the partition's width in local memory, shared by its lanes
+/// @param[in]     refl      the reflector store, laid out as for org2l()
+/// @param[in]     tau_lane  tau(k) on lane k
+/// @param[in]     n         the order of the matrix
+/// @ingroup api_device_lowlevel
 template <class Ops = arith::Native, class Ex, class Scalar, int N, class L, class Vs, class Rm>
 BATCHLAS_DEVICE_INLINE void orm2l(const Ex& ex, Frag<Scalar, N, L>& c, const Vs& vs, const Rm& refl, Scalar tau_lane, const int& n) {
     const int lane = ex.lid();
@@ -515,12 +550,20 @@ template <class Tv, class TQv> BATCHLAS_DEVICE_INLINE void sytrd_tau_pack_at(con
 }  // namespace detail
 
 namespace routine {
-// xSYEV / xHEEV, jobz J, triangle UL.
+/// @brief The routine tag of `syev` (xSYEV / xHEEV) for `with_tier`, `launch` and `buffer_size`.
+/// @tparam J   `JobType::EigenVectors` or `JobType::NoEigenVectors` (LAPACK's jobz)
+/// @tparam UL  the triangle of A that is read
+/// @ingroup api_device_lapack_eig
 template <JobType J, Uplo UL> struct syev {
+    /// The name `with_tier` puts in its error message.
     static constexpr const char* name = "syev";
 };
 }  // namespace routine
 
+/// @brief The `tier::Cta<N>` tier of `syev`: n <= N, N in {4, 8, 16, 32}, one matrix per
+/// `SgpPartition<N>`, `wg_size` 32, `sg_size` 32, 32 / N matrices per work-group, local workspace
+/// only.
+/// @ingroup api_device_lapack_eig
 template <JobType J, Uplo UL, int N, class Alg, class Scalar> struct tier_info<routine::syev<J, UL>, tier::Cta<N, Alg>, Scalar> {
     static_assert(N == 4 || N == 8 || N == 16 || N == 32, "syev: tier::Cta<N> has N in {4, 8, 16, 32}");
     static constexpr int wg_size = 32;  // the smallest launch: one sub-group, 32 / N problems
@@ -530,6 +573,9 @@ template <JobType J, Uplo UL, int N, class Alg, class Scalar> struct tier_info<r
     static constexpr bool admits(int n) { return n >= 1 && n <= N; }
     static constexpr WorkspaceSize buffer_size(int) { return detail::syev_cta_plan<J == JobType::EigenVectors, N, Scalar>{}.plan.size(); }
 };
+/// @brief The `tier::Blocked<NB>` tier of `syev`: any n >= 1, one matrix per `WorkGroup<256>`
+/// (`wg_size` 256, `sg_size` 32), global and local workspace.
+/// @ingroup api_device_lapack_eig
 template <JobType J, Uplo UL, int NB, class Alg, class Scalar> struct tier_info<routine::syev<J, UL>, tier::Blocked<NB, Alg>, Scalar> {
     static constexpr int wg_size = detail::blocked_cfg<Scalar>::threads;  // 256: sytrd's, steqr's and ormqr's
     static constexpr int sg_size = 32;
@@ -540,24 +586,44 @@ template <JobType J, Uplo UL, int NB, class Alg, class Scalar> struct tier_info<
         return detail::syev_blocked_plan<J == JobType::EigenVectors, NB, Scalar>(n).plan.size();
     }
 };
+/// @brief The tiers `with_tier` tries for `syev`, smallest first: `tier::Cta<4>`, `<8>`, `<16>`,
+/// `<32>`, then `tier::Blocked<32>`.
+/// @ingroup api_device_lapack_eig
 template <JobType J, Uplo UL, class Scalar> struct tiers<routine::syev<J, UL>, Scalar> {
     using type = tier::list<tier::Cta<4>, tier::Cta<8>, tier::Cta<16>, tier::Cta<32>, tier::Blocked<32>>;
 };
 
-/// xSYEV / xHEEV on one n x n matrix A, reading only its UL triangle (Im(diag) ignored): W(0..n-1)
-/// the eigenvalues ascending (real), A := the eigenvectors (column j for W(j)) with EigenVectors,
-/// A overwritten with NoEigenVectors (Blocked) or untouched (Cta).
-///   tier::Cta<N>      n <= N, one problem per SgpPartition<N>, COLLECTIVE over the whole sub-group
-///                     (every lane calls with its partition's problem); ws.local. opts: steqr's.
-///   tier::Blocked<NB> any n, one problem per WorkGroup<256>, COLLECTIVE; ws.global is this matrix's
-///                     slice; opts.max_sweeps only (the work-group steqr's shift).
-/// Returns 0, k > 0 when steqr did not converge (Cta: 1; Blocked: the e(j) != 0 left), -2 when A is
-/// not square with 1 <= n (<= N for Cta); uniform.
-/// ws: buffer_size<routine::syev<J, UL>, Tier, T>(n) for ONE problem (Cta: local tile, v, w and
-/// the Hermitian accumulator; Blocked: global d, e, tau, Z and the stages' slice, local the
-/// stages' maximum). live == false (a dead slot of a packed
-/// launch, same n): A and W are neither read nor written (ws is its scratch), every collective is
-/// reached; returns 0.
+/// @brief xSYEV / xHEEV on one n x n symmetric or Hermitian matrix A inside a kernel: the
+/// eigenvalues in W, ascending, and with `JobType::EigenVectors` the eigenvectors over A.
+///
+/// Only the UL triangle of A is read, and the imaginary part of its diagonal is ignored. With
+/// `JobType::EigenVectors`, column j of A leaves as the unit eigenvector of W(j). With
+/// `JobType::NoEigenVectors`, `tier::Blocked<NB>` overwrites A and `tier::Cta<N>` leaves it
+/// untouched. Eigenvalues sort with NaN last and ties by index.
+///
+/// - `tier::Cta<N>`: n <= N, one matrix per `SgpPartition<N>`. COLLECTIVE over the whole
+///   sub-group: every lane calls, each with its own partition's matrix. Local workspace only.
+/// - `tier::Blocked<NB>`: any n, one matrix per `WorkGroup<256>`, COLLECTIVE over the
+///   work-group. `ws.global` is this matrix's slice; only `opts.max_sweeps` is read.
+///
+/// Both tiers run at sub-group size 32 (`BATCHLAS_REQD_SG_SIZE(L::sg_size)` on the kernel).
+/// @tparam J     `JobType::EigenVectors` or `JobType::NoEigenVectors`
+/// @tparam UL    the triangle of A that is read
+/// @tparam Tier  `tier::Cta<N>` or `tier::Blocked<NB>`, from `with_tier`
+/// @param[in]     ex    the executor the tier names (`launch<R, Tier, T>::exec(it)`)
+/// @param[in,out] A     the n x n matrix (a `Mat`); the eigenvectors on return, as above
+/// @param[out]    W     n reals, the eigenvalues ascending (a vector operand or a `Real*`)
+/// @param         ws    this matrix's slices of `buffer_size<routine::syev<J, UL>, Tier, T>(n)`
+///                      (`launch<R, Tier, T>::workspace(...)`)
+/// @param[in]     opts  the sweep cap and the shift
+/// @param[in]     live  false for a dead slot of a packed launch (same n): A and W are neither
+///                      read nor written, `ws` is used as scratch and every collective is reached
+/// @retval 0   success, and always when `live` is false
+/// @retval k   (k > 0) the QL/QR iteration did not converge: 1 for `tier::Cta<N>`, the number
+///             of off-diagonal entries left nonzero for `tier::Blocked<NB>`
+/// @retval -2  A is not square, or n < 1 (or n > N for `tier::Cta<N>`)
+/// @return     The value is uniform over the executor.
+/// @ingroup api_device_lapack_eig
 template <JobType J, Uplo UL, class Tier, class Ex, class MA, class WV,
           class Re = real_t<std::remove_cv_t<typename MA::value_type>>>
 BATCHLAS_DEVICE_INLINE int syev(const Ex& ex, const MA& A, const WV& W, const Workspace& ws,

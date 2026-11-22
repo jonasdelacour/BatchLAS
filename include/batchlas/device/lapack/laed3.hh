@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+/// @file
+/// @brief `laed3` (xLAED3): a deflated divide-and-conquer merge's roots and eigenvectors, as
+/// `stedc` and the host merges run it. Not covered by the compatibility promise: its signature
+/// follows those callers.
+/// @ingroup api_device_lowlevel
 // xLAED3: a deflated merge's roots (laed4) and eigenvectors Q(:, j) = z~ ./ (d - lambda_j),
 // z~ the Löwner-rescaled weights (Gu-Eisenstat). laed3 is the host fused merges' body and
 // device::stedc's; detail holds its steps (moved from src/ops/syev/stedc unchanged).
@@ -94,13 +99,29 @@ BATCHLAS_DEVICE_HELPER void form_vectors(const Ex& ex, std::int32_t first, std::
 
 }  // namespace detail
 
-/// One merge's secular step, COLLECTIVE over the work-group wex. Roots k = first, first +
-/// stride, ... < dd are solved on pex (a partition of wex, or wex itself with (0, 1)); for each,
-/// on_root(k, origin, tau, converged) runs on pex's leader (root origin + tau) and Q(:, k)
-/// receives the root's denominators. Then the weights v are Löwner-rescaled (do_rescale) and
-/// Q(:, 0..dd) becomes the merged eigenvectors.
-/// d_prob, z_prob: the dd sorted poles and weights (any memory); abs_2rho = |2 rho|; Q_bid: Q
-/// by (i, j) for the rescale; v(i, bid) / v.batch_item(bid): the weights (written).
+/// @brief xLAED3: one deflated merge's secular step, the roots and then the merged eigenvectors,
+/// COLLECTIVE over the work-group `wex`.
+///
+/// Roots k = first, first + stride, ... below dd are solved on `pex`; for each,
+/// `on_root(k, origin, tau, converged)` runs on pex's leader (the root is origin + tau) and
+/// Q(:, k) receives the root's denominators. Then the weights are Löwner-rescaled (Gu-Eisenstat)
+/// and Q(:, 0) to Q(:, dd - 1) become the merged eigenvectors.
+/// @param[in]     wex         the work-group executor
+/// @param[in]     pex         a partition of wex, or wex itself with first = 0 and stride = 1
+/// @param[in]     first       the first root this executor solves
+/// @param[in]     stride      the step between the roots it solves
+/// @param[in]     dd          the number of kept poles
+/// @param[in]     d_prob      the dd sorted poles, any memory
+/// @param[in]     z_prob      the dd weights, any memory
+/// @param[in]     abs_2rho    \f$|2 \rho|\f$
+/// @param[in]     max_iter    the secular iteration cap per root
+/// @param[in]     do_rescale  apply the Löwner rescale to the weights
+/// @param[in,out] Q           the denominators, then the eigenvectors
+/// @param[in]     Q_bid       Q by (i, j), for the rescale
+/// @param[out]    v           the rescaled weights, v(i, bid) or `v.batch_item(bid)`
+/// @param[in]     bid         this merge's batch item in v
+/// @param[in]     on_root     called once per root on pex's leader
+/// @ingroup api_device_lowlevel
 template <class Real, class WEx, class PEx, class DV, class QMat, class QBatch, class VView, class OnRoot>
 BATCHLAS_DEVICE_INLINE void laed3(const WEx& wex, const PEx& pex, std::int32_t first, std::int32_t stride, std::int32_t dd, const DV& d_prob,
                                const DV& z_prob, Real abs_2rho, std::int32_t max_iter, bool do_rescale, const QMat& Q, QBatch& Q_bid,

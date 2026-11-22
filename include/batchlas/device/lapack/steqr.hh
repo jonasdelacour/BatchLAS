@@ -1,7 +1,17 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// xSTEQR on a tridiagonal (d, e), e(i) coupling d(i) and d(i+1): steqr<J, tier::Cta<N>>, one
-// problem per SgpPartition<N> (lane i holds d(i), e(i) and row i of Q; Q in local memory).
+/// @file
+/// @brief The implicit QL/QR tridiagonal eigensolver `steqr` (xSTEQR) inside a kernel: the
+/// eigenvalues of a real symmetric tridiagonal (d, e) and optionally the rotations applied to Z.
+///
+/// e(i) couples d(i) and d(i+1). Two tiers:
+/// - `tier::Cta<N>`, N in {4, 8, 16, 32}: n <= N, one problem per `SgpPartition<N>`; lane i holds
+///   d(i), e(i) and row i of Q, with Q in local memory.
+/// - `tier::Blocked<1>`: any n, one problem per `WorkGroup<256>` (the host steqr_wg algorithm),
+///   the rotations and the block table in global memory.
+///
+/// Both tiers need 32-wide sub-groups (`tier_info::sg_size` is 32).
+/// @ingroup api_device_lapack_eig
 // detail: the split test and bulge-chase similarity, the CTA solver (nested / flat /
 // lockstep over one implicit QL step) the host steqr_cta and syev_cta_fused kernels share, and
 // the form core does not reproduce bit for bit yet (the two-window reversal).
@@ -1067,19 +1077,32 @@ BATCHLAS_DEVICE_INLINE int steqr_wg_run(const WorkGroup<WG>& ex, const D& d, con
 }  // namespace detail
 
 namespace routine {
-// xSTEQR, jobz J (EigenVectors: Q := Q * the rotations, LAPACK compz = 'V').
+/// @brief The routine tag of `steqr` (xSTEQR) for `with_tier`, `launch` and `buffer_size`.
+/// @tparam J  `JobType::EigenVectors` (Z := Z times the rotations, LAPACK's compz = 'V') or
+///            `JobType::NoEigenVectors`
+/// @ingroup api_device_lapack_eig
 template <JobType J> struct steqr {
+    /// The name `with_tier` puts in its error message.
     static constexpr const char* name = "steqr";
 };
 }  // namespace routine
 
-/// steqr's options: the run-time knobs of the solve (the host SteqrParams fields of the same
-/// meaning). The Blocked tier reads max_sweeps only (steqr_wg's shift, as the host route).
+/// @brief Run-time options of `steqr`: the knobs of the solve.
+///
+/// The fields mean what the host SteqrParams fields of the same name mean. `tier::Blocked<1>`
+/// reads `max_sweeps` only: it keeps the host steqr_wg's own shift.
+/// @ingroup api_device_lapack_eig
 struct SteqrOptions {
+    /// Sweep cap per unreduced block; a block still coupled after it makes `info` positive.
     int max_sweeps = 50;
+    /// The shift of each QL/QR sweep (`tier::Cta<N>` only).
     SteqrShiftStrategy shift = SteqrShiftStrategy::Lapack;
 };
 
+/// @brief The `tier::Cta<N>` tier of `steqr`: real data, n <= N, N in {4, 8, 16, 32}, one problem
+/// per `SgpPartition<N>`, `wg_size` 32, `sg_size` 32, 32 / N problems per work-group, local
+/// workspace only (Q, with vectors).
+/// @ingroup api_device_lapack_eig
 template <JobType J, int N, class Alg, class Real> struct tier_info<routine::steqr<J>, tier::Cta<N, Alg>, Real> {
     static_assert(N == 4 || N == 8 || N == 16 || N == 32, "steqr: tier::Cta<N> has N in {4, 8, 16, 32}");
     static_assert(!Arith<Real>::is_complex, "steqr: d and e are real");
@@ -1092,7 +1115,12 @@ template <JobType J, int N, class Alg, class Real> struct tier_info<routine::ste
         return detail::steqr_cta_plan<J == JobType::EigenVectors, N, Real>{}.plan.size();
     }
 };
-// tier::Blocked<1>: no panel (the chase is serial per block, z's rows parallel), any n.
+/// @brief The `tier::Blocked<1>` tier of `steqr`: real data, any n >= 1, one problem per
+/// `WorkGroup<256>` (`wg_size` 256, `sg_size` 32), global workspace.
+///
+/// NB must be 1: the chase is serial per block, with the rows of Z updated in parallel, so there
+/// is no panel.
+/// @ingroup api_device_lapack_eig
 template <JobType J, int NB, class Alg, class Real> struct tier_info<routine::steqr<J>, tier::Blocked<NB, Alg>, Real> {
     static_assert(NB == 1, "steqr: tier::Blocked<1> (the work-group solver has no panel width)");
     static_assert(!Arith<Real>::is_complex, "steqr: d and e are real");
@@ -1103,23 +1131,42 @@ template <JobType J, int NB, class Alg, class Real> struct tier_info<routine::st
     static constexpr bool admits(int n) { return n >= 1; }
     static constexpr WorkspaceSize buffer_size(int n) { return detail::wg_plan<J == JobType::EigenVectors, Real>(n).plan.size(); }
 };
+/// @brief The tiers `with_tier` tries for `steqr`, smallest first: `tier::Cta<4>` to
+/// `tier::Cta<32>`, then `tier::Blocked<1>`.
+/// @ingroup api_device_lapack_eig
 template <JobType J, class Real> struct tiers<routine::steqr<J>, Real> {
     using type = tier::list<tier::Cta<4>, tier::Cta<8>, tier::Cta<16>, tier::Cta<32>, tier::Blocked<1>>;
 };
 
-/// xSTEQR on one problem: d (n = d.size()), e (n - 1) and, for EigenVectors, z (n x n, the matrix
-/// the rotations accumulate into: the identity, or sytrd's Q) are overwritten; eigenvalues
-/// UNSORTED in d (the host route sorts in a separate pass).
-///   tier::Cta<N>      n <= N, one problem per SgpPartition<N>, COLLECTIVE over the whole sub-group
-///                     (every lane calls with its partition's problem); ws.local. Returns 1 when a
-///                     block did not converge within opts.max_sweeps.
-///   tier::Blocked<1>  any n, one problem per WorkGroup<256>, COLLECTIVE; the host steqr_wg
-///                     algorithm (same sweep body, same pass order); ws.global. Returns the number
-///                     of e(j) != 0 left (LAPACK's info). z may be complex (real rotations).
-/// Returns 0 on success (uniform); -2 when n is outside [1, N]. ws: ONE problem's
-/// buffer_size<routine::steqr<J>, Tier, T>(n) (Cta: local Q with vectors; Blocked: global
-/// rotations and the block table). live == false (a dead slot of a packed launch, same n): d, e
-/// and z are neither read nor written (ws is its scratch), every collective is reached; returns 0.
+/// @brief xSTEQR on one real symmetric tridiagonal (d, e) inside a kernel: the eigenvalues in d,
+/// unsorted, and with `JobType::EigenVectors` the rotations accumulated into z.
+///
+/// n = `d.size()`. d, e and, with `JobType::EigenVectors`, z are overwritten. z is the matrix the
+/// rotations accumulate into: the identity, or the Q of `sytrd`. The eigenvalues are not sorted
+/// (`syev` sorts them; so does the host route, in a separate pass).
+/// - `tier::Cta<N>`: n <= N, one problem per `SgpPartition<N>`. COLLECTIVE over the whole
+///   sub-group: every lane calls, each with its own partition's problem. Local workspace.
+/// - `tier::Blocked<1>`: any n, one problem per `WorkGroup<256>`, COLLECTIVE over the
+///   work-group; the host steqr_wg algorithm (same sweep body, same pass order). z may be complex
+///   (the rotations are real). Global workspace.
+///
+/// Both tiers run at sub-group size 32 (`BATCHLAS_REQD_SG_SIZE(L::sg_size)` on the kernel).
+/// @tparam J     `JobType::EigenVectors` or `JobType::NoEigenVectors`
+/// @tparam Tier  `tier::Cta<N>` or `tier::Blocked<1>`, from `with_tier`
+/// @param[in]     ex    the executor the tier names (`launch<R, Tier, T>::exec(it)`)
+/// @param[in,out] d     n reals, the diagonal; the eigenvalues on return
+/// @param[in,out] e     n - 1 reals, the off-diagonal; overwritten
+/// @param[in,out] z     n x n, read and written only with `JobType::EigenVectors`
+/// @param         ws    this problem's slices of `buffer_size<routine::steqr<J>, Tier, T>(n)`
+/// @param[in]     opts  the sweep cap and the shift
+/// @param[in]     live  false for a dead slot of a packed launch (same n): d, e and z are neither
+///                      read nor written, `ws` is used as scratch and every collective is reached
+/// @retval 0   success, and always when `live` is false
+/// @retval k   (k > 0) not converged within `opts.max_sweeps`: 1 for `tier::Cta<N>`; for
+///             `tier::Blocked<1>` the number of e(j) left nonzero, LAPACK's info
+/// @retval -2  n < 1, or n > N for `tier::Cta<N>`
+/// @return     The value is uniform over the executor.
+/// @ingroup api_device_lapack_eig
 template <JobType J, class Tier, class Ex, class D, class E, class Z>
 BATCHLAS_DEVICE_INLINE int steqr(const Ex& ex, const D& d, const E& e, const Z& z, const Workspace& ws,
                                  const SteqrOptions& opts = {}, bool live = true) {

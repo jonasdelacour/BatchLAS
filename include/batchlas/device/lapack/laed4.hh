@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+/// @file
+/// @brief `laed4` (xLAED4): one root of a divide-and-conquer merge's secular equation, collective
+/// over an executor, as `stedc` and the host merges run it. Not covered by the compatibility
+/// promise: its signature follows those callers.
+/// @ingroup api_device_lowlevel
 // xLAED4: one root of a divide-and-conquer merge's secular equation
 //     f(x) = 1 / rho + sum_i z_i^2 / (d_i - x) = 0,   d ascending, rho > 0,
 // collective over an executor (the ROCm stedc root iteration with LAPACK's error bound). Root k
@@ -432,14 +437,31 @@ BATCHLAS_DEVICE_HELPER SecularRoot<Real> secular_root(const Ex& ex, const DV& d,
 
 }  // namespace detail
 
-/// Root k (0-based) of the dd-pole secular equation 1/rho + sum_i z_i^2 / (d_i - x) = 0, d
-/// ascending and distinct, z without zeros, rho > 0 (a deflated merge: laed2), as x = origin +
-/// tau (origin, tau: out). COLLECTIVE over ex: every item calls with the same k; d and z must be
-/// visible to every item. Returns xLAED4's info, uniform: 0, or 1 when the iteration ran out of
-/// max_iter >= 1 (StedcParams::max_sec_iter). scratch (Thread only): dd writable entries of this
-/// item, contents undefined on return; the same root. FP64 holds d - origin there (one
-/// subtraction per term less); float ignores it (its strided reads cost more than the
-/// subtraction). `evidence: docs/perf/stedc.md#stedc-one-secular-solver`
+/// @brief xLAED4: root k of the dd-pole secular equation
+/// \f$1/\rho + \sum_i z_i^2 / (d_i - x) = 0\f$, returned as x = origin + tau.
+///
+/// d ascending and distinct, z without zeros and rho > 0, as a deflated merge (laed2()) leaves
+/// them. Root k < dd - 1 lies in \f$(d_k, d_{k+1})\f$, root dd - 1 in
+/// \f$(d_{dd-1}, d_{dd-1} + \rho)\f$. origin is a pole, so the caller forms \f$d_i - x\f$ as
+/// \f$(d_i - \mathrm{origin}) - \tau\f$ without cancellation. COLLECTIVE over `ex`: every item
+/// calls with the same k, and d and z must be visible to every item.
+/// @param[in]  ex        the executor (a partition or a work-group)
+/// @param[in]  d         the dd poles
+/// @param[in]  z         the dd weights
+/// @param[in]  dd        the number of poles
+/// @param[in]  k         the root's index, 0-based
+/// @param[in]  rho       the rank-one weight, > 0
+/// @param[out] origin    the pole the root is measured from
+/// @param[out] tau       the root's offset from origin
+/// @param[in]  max_iter  the iteration cap, >= 1 (the host StedcParams::max_sec_iter)
+/// @param      scratch   `Thread` executor only: dd writable entries of this item, undefined on
+///                       return; the root is the same with or without it
+/// @retval 0  converged
+/// @retval 1  the iteration ran out of max_iter (xLAED4's info)
+/// @return    The value is uniform over the executor.
+/// @ingroup api_device_lowlevel
+// FP64 holds d - origin in scratch (one subtraction per term less); float ignores it (its strided
+// reads cost more than the subtraction). evidence: docs/perf/stedc.md#stedc-one-secular-solver
 template <class Ex, class DV, class Real, class SV = detail::NoScratch>
 BATCHLAS_DEVICE_INLINE int laed4(const Ex& ex, const DV& d, const DV& z, int dd, int k, Real rho, Real& origin, Real& tau, int max_iter,
                                  const SV& scratch = {}) {

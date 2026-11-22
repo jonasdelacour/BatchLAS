@@ -1,16 +1,28 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// xLAGTF (dstein's factorization of T - lambda I) in xGTTRF's storage, serial on one item. In:
-// dl the sub-, dd the main and du the super-diagonal, already shifted (n = dd.size(); dl, du and
-// swapped n - 1 entries, du2 n - 2: views at least that long). Out: dl the multipliers, dd / du /
-// du2 the diagonals of U (du2 the second super-diagonal fill), swapped(i) = 1 where rows i and
-// i + 1 were interchanged. A pivot below tol in magnitude becomes +-tol (dlagtf's TOL
-// perturbation: inverse iteration is near-singular on purpose). Solve with lagts.
+/// @file
+/// @brief `lagtf` (xLAGTF): the LU factorization with row interchanges of a shifted tridiagonal
+/// \f$T - \lambda I\f$, serial on one item, as `stein` uses it. Not covered by the compatibility
+/// promise.
+/// @ingroup api_device_lowlevel
 
 #include <batchlas/device/exec.hh>
 
 namespace batchlas::device {
 
+/// @brief xLAGTF, dstein's factorization of \f$T - \lambda I\f$ in xGTTRF's storage, serial on
+/// one item; solve with lagts().
+///
+/// n = `dd.size()`; dl, du and swapped need n - 1 entries and du2 n - 2 (views at least that
+/// long). A pivot below tol in magnitude becomes +tol or -tol (dlagtf's TOL perturbation: inverse
+/// iteration is near-singular on purpose).
+/// @param[in,out] dl       the sub-diagonal, already shifted; the multipliers on return
+/// @param[in,out] dd       the diagonal, already shifted; the diagonal of U on return
+/// @param[in,out] du       the super-diagonal; the first super-diagonal of U on return
+/// @param[out]    du2      the second super-diagonal of U (the fill)
+/// @param[out]    swapped  swapped(i) = 1 where rows i and i + 1 were interchanged, else 0
+/// @param[in]     tol      the smallest pivot magnitude kept
+/// @ingroup api_device_lowlevel
 template <class V, class P, class Real>
 BATCHLAS_DEVICE_HELPER void lagtf(const Thread&, const V& dl, const V& dd, const V& du, const V& du2, const P& swapped, Real tol) {
     const int n = dd.size();

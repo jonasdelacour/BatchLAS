@@ -1,11 +1,17 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Public device ritz_values. The host route forms A V with gemm / spmm
-// and calls ritz_values_quotient per (item, column). Device forms, any n and k:
-//   ritz_values(ex, A, V, w)               no workspace: forms A v_j on read
-//   ritz_values<Blocked<NB>, Cfg>(..., ws)  the host route's algorithm on the in-group gemm: per
-//                                          NB columns, A V(:, blk) into this matrix's global
-//                                          workspace, then the quotient per column
+/// @file
+/// @brief `ritz_values`: the Rayleigh quotients \f$w_j = \mathrm{Re}(v_j^H A v_j) / (v_j^H v_j)\f$
+/// of the columns of V, inside a kernel, as the host ritz_values() computes them.
+///
+/// Two forms, any n and k: `ritz_values(ex, A, V, w)` needs no workspace and forms \f$A v_j\f$ on
+/// read; `ritz_values<tier::Blocked<NB>, Cfg>(ex, A, V, w, ws)` is the host route's algorithm on
+/// the in-group gemm, per NB columns \f$A V(:, \mathrm{blk})\f$ into this matrix's global
+/// workspace and then the quotient per column. The Blocked form runs on a
+/// `WorkGroup<Cfg::threads, 32>` at sub-group size 32. The per-column `ritz_values_quotient` is
+/// in @ref api_device_lowlevel.
+/// @ingroup api_device_lapack_eig
+// The host route forms A V with gemm / spmm and calls ritz_values_quotient per (item, column).
 
 #include <cstddef>
 #include <type_traits>
@@ -43,7 +49,8 @@ template <class Scalar> struct RitzValuesBlockedPlan {
 /// @param[in] ex  the executor (collective)
 /// @param[in] v   the trial vector
 /// @param[in] av  \f$A v\f$, same length as @p v
-/// @return the quotient (\f$v^H v\f$ as sumsq<alg::Fused>), the same on every item
+/// @return the quotient (\f$v^H v\f$ as `sumsq<alg::Fused>`), the same on every item
+/// @ingroup api_device_lowlevel
 template <class Ex, class V, class AV> BATCHLAS_DEVICE_INLINE auto ritz_values_quotient(const Ex& ex, const V& v, const AV& av) {
     using T = elem_t<V>;
     const T num = dotc(ex, v, av);
@@ -58,6 +65,7 @@ template <class Ex, class V, class AV> BATCHLAS_DEVICE_INLINE auto ritz_values_q
 /// @param[in]  v   V, n x k, a Mat (col())
 /// @param[out] w   k reals, written by the leader (other items read them after a barrier)
 /// @return 0 (the host op has no info)
+/// @ingroup api_device_lapack_eig
 template <class Ex, class MA, class MV, class W> BATCHLAS_DEVICE_INLINE int ritz_values(const Ex& ex, const MA& a, const MV& v, const W& w) {
     const int n = a.rows(), k = v.cols();
     for (int j = 0; j < k; ++j) {
@@ -72,14 +80,21 @@ template <class Ex, class MA, class MV, class W> BATCHLAS_DEVICE_INLINE int ritz
 }
 
 namespace routine {
-// The workspace form's tag: Cfg (the gemm's l3::cfg preset) sizes the stages, so the tag carries it.
+/// @brief The routine tag of the workspace form of `ritz_values` for `launch` and `buffer_size`.
+/// @tparam Cfg  the gemm's `l3::cfg` preset, which sizes the stages, so the tag carries it
+/// @ingroup api_device_lapack_eig
 template <class Cfg> struct ritz_values {
+    /// The name `with_tier` puts in its error message.
     static constexpr const char* name = "ritz_values";
 };
 }  // namespace routine
 
-/// The tier::Blocked ritz_values(): a WorkGroup<Cfg::threads, 32>; buffer_size(n, k) is ONE
-/// matrix's local bytes (the gemm's stages) and global bytes (n x min(k, NB) values of Scalar).
+/// @brief The `tier::Blocked<NB>` tier of `ritz_values`: one matrix per
+/// `WorkGroup<Cfg::threads, 32>` (`sg_size` 32), any n.
+///
+/// `buffer_size(n, k)` is one matrix's local bytes (the gemm's stages) and global bytes
+/// (n x min(k, NB) values of the scalar type).
+/// @ingroup api_device_lapack_eig
 template <class Cfg, int NB, class A, class Scalar> struct tier_info<routine::ritz_values<Cfg>, tier::Blocked<NB, A>, Scalar> {
     static constexpr int wg_size = Cfg::threads, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
@@ -92,14 +107,16 @@ template <class Cfg, int NB, class A, class Scalar> struct tier_info<routine::ri
 
 /// @brief The host ritz_values() inside a kernel on the in-group gemm, the host route's
 /// algorithm: per block of NB columns, P := A V(:, blk) (gemm), then w_j = ritz_values_quotient(v_j, p_j).
-/// @tparam Tier  tier::Blocked<NB>
-/// @tparam Cfg   the l3::cfg preset of the gemm
-/// @param[in]  ex  a WorkGroup<Cfg::threads, SG> (collective); A and V read only, visible on entry
+/// @tparam Tier  `tier::Blocked<NB>`
+/// @tparam Cfg   the `l3::cfg` preset of the gemm
+/// @param[in]  ex  a `WorkGroup<Cfg::threads, 32>` (collective, launched at sub-group size 32);
+///                 A and V read only, visible on entry
 /// @param[in]  a   A, n x n, a Mat over global memory
 /// @param[in]  v   V, n x k, a Mat over global memory (col(), sub())
 /// @param[out] w   k reals, written by the leader; visible to every item on return
-/// @param[in]  ws  this matrix's slice of buffer_size<routine::ritz_values<Cfg>, Tier, T>(n, k)
+/// @param[in]  ws  this matrix's slice of `buffer_size<routine::ritz_values<Cfg>, Tier, T>(n, k)`
 /// @return 0 (the host op has no info)
+/// @ingroup api_device_lapack_eig
 template <class Tier, class Cfg, class Ex, class MA, class MV, class W>
 BATCHLAS_DEVICE_INLINE int ritz_values(const Ex& ex, const MA& a, const MV& v, const W& w, const Workspace& ws) {
     using T = typename MA::value_type;

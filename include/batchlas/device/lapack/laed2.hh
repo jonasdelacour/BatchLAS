@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+/// @file
+/// @brief `laed2` (xLAED2): the deflation step of a divide-and-conquer merge, as `stedc` and the
+/// host merges run it. Not covered by the compatibility promise: its signature follows those
+/// callers (callable operands, an int64 n).
+/// @ingroup api_device_lowlevel
 // xLAED2: the deflation of a divide-and-conquer merge diag(D) + rho z z^T (D sorted):
 //   laed2                    Givens rotations merge poles closer than the tolerance (z(j) -> 0,
 //                            the two eigenvector columns rotated), then every |rho z_k| below
@@ -45,17 +50,37 @@ BATCHLAS_DEVICE_HELPER void laed2_merge_vector(const Ex& ex, const Z& z, int m, 
 }
 }  // namespace detail
 
-/// Deflation of the n-pole merge on the work-group ex. d (operand) and d_at (callable) the sorted
-/// poles, z the weights (rotated in place), Qb the merge's eigenvector columns, addressed through
-/// perm_map (logical -> physical column), rho_at() the tear's rho. Outputs: keep(k) = 1 for a
-/// kept pole, permutation(i) the gather order (kept poles ascending, then the deflated ones in
-/// reverse), set_reduced(count) on the leader. Scratch (n each, indexable): perm_local, scan_inc,
-/// scan_exc and absx (an operand); keep_ptr() / scan_*_ptr() return keep's and the scans' first
-/// element (contiguous), read where the scans run.
-/// The tolerance is LAPACK's ABSOLUTE 8 eps max(|D|_inf, |z|_inf), taken before the Givens loop so
-/// proximity deflation uses it too (a relative one under-deflates clustered small eigenvalues).
-/// `evidence: docs/perf/stedc.md#stedc-the-absolute-deflation-tolerance`
-/// No trailing barrier: the caller syncs before it reads the outputs.
+/// @brief xLAED2: the deflation of the n-pole merge \f$\mathrm{diag}(D) + \rho z z^T\f$, D sorted,
+/// on a work-group.
+///
+/// %Givens rotations merge poles closer than the tolerance (z(j) becomes 0 and the two
+/// eigenvector columns are rotated), then every \f$|\rho z_k|\f$ below it deflates. The tolerance
+/// is LAPACK's absolute \f$8 \epsilon \max(\|D\|_\infty, \|z\|_\infty)\f$, taken before the %Givens
+/// loop so that proximity deflation uses it too. COLLECTIVE over `ex`, with no trailing barrier:
+/// the caller syncs before it reads the outputs. Every operand it writes is a callable
+/// `(i) -> T&`.
+/// @param[in]     ex            the work-group executor
+/// @param[in]     n             the number of poles
+/// @param[in]     d             the sorted poles, an operand
+/// @param[in,out] z             the weights, rotated in place
+/// @param[in,out] Qb            the merge's eigenvector columns, addressed through perm_map
+/// @param         absx          scratch operand of n elements
+/// @param[in]     d_at          the sorted poles, as a callable
+/// @param[in]     rho_at        `rho_at()` returns the tear's rho
+/// @param[out]    keep          keep(k) = 1 for a kept pole
+/// @param[in]     keep_ptr      `keep_ptr()` returns keep's first element (contiguous)
+/// @param[out]    permutation   permutation(i), the gather order: kept poles ascending, then the
+///                              deflated ones in reverse
+/// @param[in]     perm_map      logical to physical column of Qb
+/// @param         perm_local    scratch of n elements
+/// @param         scan_inc      scratch of n elements, the inclusive scan
+/// @param[in]     scan_inc_ptr  `scan_inc_ptr()` returns scan_inc's first element (contiguous)
+/// @param         scan_exc      scratch of n elements, the exclusive scan
+/// @param[in]     scan_exc_ptr  `scan_exc_ptr()` returns scan_exc's first element (contiguous)
+/// @param[in]     set_reduced   `set_reduced(count)` runs on the leader with the kept count
+/// @ingroup api_device_lowlevel
+// A relative tolerance under-deflates clustered small eigenvalues.
+// evidence: docs/perf/stedc.md#stedc-the-absolute-deflation-tolerance
 template <class Ex, class D, class Z, class Q, class AbsX, class DAt, class RhoAt, class KeepAt, class KeepPtr, class PermAt, class MapAt,
           class PermLocal, class ScanInc, class ScanIncPtr, class ScanExc, class ScanExcPtr, class SetReduced>
 BATCHLAS_DEVICE_INLINE void laed2(const Ex& ex, std::int64_t n, const D& d, const Z& z, const Q& Qb, const AbsX& absx, const DAt& d_at,

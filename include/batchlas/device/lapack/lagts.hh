@@ -1,13 +1,26 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// xLAGTS (as xGTTRS, no transpose): b := (T - lambda I)^{-1} b with the lagtf factors, serial
-// on one item: the row interchanges and multipliers forward, then U back-substitution
-// (n = dd.size(); the factors' views as lagtf's, b n entries).
+/// @file
+/// @brief `lagts` (xLAGTS): the solve with the `lagtf` factors of a shifted tridiagonal, serial
+/// on one item, as `stein` uses it. Not covered by the compatibility promise.
+/// @ingroup api_device_lowlevel
 
 #include <batchlas/device/exec.hh>
 
 namespace batchlas::device {
 
+/// @brief xLAGTS without transpose, as xGTTRS: \f$b := (T - \lambda I)^{-1} b\f$ with the
+/// factors from lagtf(), serial on one item.
+///
+/// Applies the row interchanges and the multipliers forward, then back-substitutes with U.
+/// n = `dd.size()`; the factors' views are as for lagtf().
+/// @param[in]     dl       the multipliers
+/// @param[in]     dd       the diagonal of U
+/// @param[in]     du       the first super-diagonal of U
+/// @param[in]     du2      the second super-diagonal of U
+/// @param[in]     swapped  the interchange flags
+/// @param[in,out] b        n entries: the right-hand side, the solution on return
+/// @ingroup api_device_lowlevel
 template <class V, class P, class B>
 BATCHLAS_DEVICE_HELPER void lagts(const Thread&, const V& dl, const V& dd, const V& du, const V& du2, const P& swapped, const B& b) {
     const int n = dd.size();
