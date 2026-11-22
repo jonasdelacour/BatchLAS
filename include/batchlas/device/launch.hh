@@ -31,7 +31,7 @@ struct MatrixSlot {
     bool live;
 };
 
-/// @brief The in-kernel matrix index of every packed launch, the library's included.
+/// @brief The in-kernel matrix index of every packed launch, the library's own included.
 /// @ingroup api_device_launch
 ///
 /// Work-group wg holds per_group matrices and its team-th executor owns matrix
