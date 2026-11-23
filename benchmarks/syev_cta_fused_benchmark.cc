@@ -64,7 +64,7 @@ void BM_SYEV_CTA_FUSED(minibench::State& state) {
                         (void)syev_cta_fused(q, std::forward<decltype(xs)>(xs)...);
                     });
 
-    const double flops = 4.0 / 3.0 * static_cast<double>(n) * n * n;
+    const double flops = tridiag_flops(n);
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * flops), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
@@ -99,7 +99,7 @@ void BM_SYEV_CTA_PIPELINED(minibench::State& state) {
                         (void)syev_cta(q, std::forward<decltype(xs)>(xs)...);
                     });
 
-    const double flops = 4.0 / 3.0 * static_cast<double>(n) * n * n;
+    const double flops = tridiag_flops(n);
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * flops), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }

@@ -84,7 +84,7 @@ void BM_SYEV(minibench::State& state) {
                     [](Queue& q, auto&&... xs) {
                         (void)syev(q, std::forward<decltype(xs)>(xs)...);
                     });
-    double flops = 4.0 / 3.0 * static_cast<double>(n) * n * n;
+    double flops = tridiag_flops(n);
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * flops), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }

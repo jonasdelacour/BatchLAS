@@ -142,6 +142,12 @@ inline double gemm_gflop(std::size_t m, std::size_t n, std::size_t k, std::size_
     return static_cast<double>(batch) * (1e-9 * 2.0 * m * n * k);
 }
 
+// Flop count of one n x n tridiagonal reduction (4/3 n^3), for the syev/sytrd benchmarks' rates.
+// Keep the operation order ((4/3) n) n n: the syev/sytrd benchmarks' numbers were recorded with it.
+inline double tridiag_flops(std::size_t n) {
+    return 4.0 / 3.0 * static_cast<double>(n) * n * n;
+}
+
 #define BATCHLAS_REGISTER_BENCHMARK(name, sizes) \
     BATCHLAS_BENCH_CUDA(name, sizes) \
     BATCHLAS_BENCH_ROCM(name, sizes) \

@@ -34,7 +34,7 @@ void BM_SYTRD_CTA(minibench::State& state) {
 
     // Approx flop model: symmetric tridiagonal reduction (unblocked) is O(n^3).
     // We use ~4/3 n^3 as a rough proxy.
-    const double total_flops = (4.0 / 3.0) * double(n) * double(n) * double(n) * double(batch);
+    const double total_flops = tridiag_flops(n) * double(batch);
 
     auto q = std::make_shared<Queue>(Device("gpu"), B);
     auto A = Matrix<Scalar>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/2025);

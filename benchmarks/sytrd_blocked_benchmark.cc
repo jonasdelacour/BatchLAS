@@ -35,7 +35,7 @@ void BM_SYTRD_BLOCKED(minibench::State& state) {
     const Uplo uplo = (uplo_i == 0) ? Uplo::Lower : Uplo::Upper;
 
     // Rough flop model for blocked SYTRD is still O(n^3).
-    const double total_flops = (4.0 / 3.0) * double(n) * double(n) * double(n) * double(batch);
+    const double total_flops = tridiag_flops(n) * double(batch);
 
     auto A0 = Matrix<Scalar>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/2026);
     auto A = Matrix<Scalar>::Zeros(n, n, batch);
