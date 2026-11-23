@@ -427,8 +427,6 @@ Matrix<Scalar, NewMType> Matrix<Scalar, MType>::convert_to(const float_t<Scalar>
 
         // First kernel: Count non-zeros per row
         q->submit([&](sycl::handler& h) {
-            sycl::local_accessor<int, 1> local_counts(sycl::range<1>(wg_size), h);
-
             batchlas::impl::parallel_for(h,
                 sycl::nd_range<3>(
                     sycl::range<3>(batch_size, cols, wg_size),
