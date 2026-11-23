@@ -23,12 +23,21 @@
 set -u
 die() { echo "dispatch: $*" >&2; exit 2; }
 
+HOSTS="mac jrhnbr tr02"
+
+# The message names the hosts with the first one last: "(jrhnbr, tr02, mac)".
+check_host() {
+    local h rest=${HOSTS#* }
+    for h in $HOSTS; do [ "$1" = "$h" ] && return; done
+    die "unknown host '$1' (${rest// /, }, ${HOSTS%% *})"
+}
+
 ssh_of() {
+    check_host "$1"
     case "$1" in
         jrhnbr) echo JRHNBR-jump ;;
         tr02) echo threadripper02-jump ;;
         mac) echo local ;;
-        *) die "unknown host '$1' (jrhnbr, tr02, mac)" ;;
     esac
 }
 
@@ -84,7 +93,7 @@ cmd_start() {
             *) die "unknown option $1" ;;
         esac
     done
-    case "$host" in jrhnbr | tr02 | mac) ;; *) die "unknown host '$host' (jrhnbr, tr02, mac)" ;; esac
+    check_host "$host"
     [ -f "$brief" ] || die "no brief file $brief"
     [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || die "name must match [A-Za-z0-9._-]+"
     [ "$host" = tr02 ] && [ -n "$gpu" ] && die "tr02 is CPU/build only; no --gpu"
@@ -147,7 +156,7 @@ EOF
 }
 
 cmd_list() {
-    local hosts=${1:-"mac jrhnbr tr02"} h repo
+    local hosts=${1:-$HOSTS} h repo
     for h in $hosts; do
         repo=$(repo_of "$h")
         echo "== $h"
@@ -187,7 +196,7 @@ for t in out[-n:]: print(t[:1500]); print("---")
 
 cmd_hosts() {
     local h
-    for h in mac jrhnbr tr02; do
+    for h in $HOSTS; do
         printf '== %s  ' "$h"
         on "$h" "printf 'load %s  ' \"\$(uptime | sed 's/.*average[s]*: //')\"
             if command -v free >/dev/null; then free -g | sed -n 2p | tr -s ' ' | cut -d' ' -f2,7 | sed 's/^/mem total,avail GB /'
