@@ -35,21 +35,18 @@ select::Key key_of(const MV<Scalar>& A) {
     return {{"n", A.rows()}, {"batch", A.batch_size()}};
 }
 
-template <class Scalar>
-int cta_ceiling(const select::Device& d) {
-    return ops::potri::cta_max_n<Scalar>(static_cast<std::size_t>(d.slm_budget), d.max_wg);
-}
-
 // Correctness only: false means the launch would throw. Both families need a homogeneous batch and
-// a CTA block (the whole matrix, or one nb x nb diagonal block) within the device's local memory.
+// a CTA block (the whole matrix, or one nb x nb diagonal block) within cta_ceiling(q), the order
+// potri_cta itself admits on q (its local memory and the kernel's work-group limit).
 template <class Scalar>
-bool can_run(const PotriChoice& c, const select::Device& d, const MV<Scalar>& A) {
+bool can_run(const PotriChoice& c, const select::Device& d, Queue& q, const MV<Scalar>& A) {
     // cta honours a batch mask; blocked runs its children (trmm, syrk/herk) on the masked views.
     const bool homogeneous = !A.is_heterogeneous() && A.rows() >= 1 && A.batch_size() >= 1 && d.max_wg >= 1;
-    const int n = A.rows();
+    if (!homogeneous) return false;
+    const int n = A.rows(), ceiling = ops::potri::cta_ceiling<Scalar>(q);
     return std::visit(overloaded{
-        [&](Cta) { return homogeneous && n <= cta_ceiling<Scalar>(d); },
-        [&](Blocked b) { return homogeneous && b.nb >= 1 && std::min(b.nb, n) <= cta_ceiling<Scalar>(d); },
+        [&](Cta) { return n <= ceiling; },
+        [&](Blocked b) { return b.nb >= 1 && std::min(b.nb, n) <= ceiling; },
     }, c);
 }
 
@@ -101,7 +98,7 @@ Event potri(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& A, Uplo u
     const coverage::Shape shape{.m = A.rows(), .n = A.rows(), .k = A.rows(), .batch = A.batch_size(), .uplo = uplo};
     return select::run<Back, Scalar>(
         ops::potri::spec, ctx, ops::potri::key_of<Scalar>(A), ops::potri::candidates<Scalar>(),
-        [&](const auto& c, const auto& d) { return ops::potri::can_run<Scalar>(c, d, A); }, shape,
+        [&](const auto& c, const auto& d) { return ops::potri::can_run<Scalar>(c, d, ctx, A); }, shape,
         {{"n", A.rows()}, {"batch", A.batch_size()}},
         [&](const auto& c) {
             // blocked's children chain through A and W, so they need an in-order queue.
@@ -119,7 +116,7 @@ size_t potri_buffer_size(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dens
     ops::potri::throw_if_unservable<Scalar>(A, "potri_buffer_size");
     const auto c = select::pick<Back, Scalar>(
         ops::potri::spec, ctx, ops::potri::key_of<Scalar>(A), ops::potri::candidates<Scalar>(),
-        [&](const auto& k, const auto& d) { return ops::potri::can_run<Scalar>(k, d, A); });
+        [&](const auto& k, const auto& d) { return ops::potri::can_run<Scalar>(k, d, ctx, A); });
     return ops::potri::workspace<Scalar>(ctx, c, A);
 }
 

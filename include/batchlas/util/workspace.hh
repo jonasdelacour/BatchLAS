@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 
 /// @file
 /// @brief WorkspaceLease: a scoped borrow of scratch memory from a Queue's workspace arena.

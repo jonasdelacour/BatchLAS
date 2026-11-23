@@ -37,17 +37,10 @@ struct SyevBlockedConfig {
 
 using SyevBlockedTestTypes = typename test_utils::backend_types<SyevBlockedConfig>::type;
 
+// Vendor-free, the CPU runs syev_blocked natively (select::kHostNative), against the host
+// reference of eigen_verify.hh. evidence: docs/design/vendor-independence.md#the-host-native-gate
 template <typename Config>
-class SyevBlockedTest : public test_utils::BatchLASTest<Config> {
-protected:
-    // Vendor-free: the CPU has no syev route and no netlib reference (docs/perf/syev.md#syev-vendor-free-double-band).
-    void SetUp() override {
-        test_utils::BatchLASTest<Config>::SetUp();
-        if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
-        if (Config::BackendVal == Backend::NETLIB && !batchlas::select::kHasNetlib)
-            GTEST_SKIP() << "vendor-free build: no syev route on the CPU";
-    }
-};
+class SyevBlockedTest : public test_utils::BatchLASTest<Config> {};
 
 TYPED_TEST_SUITE(SyevBlockedTest, SyevBlockedTestTypes);
 
@@ -208,24 +201,14 @@ TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvectorsSmoke) {
 
     test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0, A_two_stage, W_two_stage, n);
 }
-// n = 320 is deliberate: it is inside the 256 < n <= 512 bucket where
-// sytrd_block_size_default<T> now returns a different panel width for complex
-// (32) than the tuning harness value used for real types (8). Every other
-// eigen test in this file runs at n <= 96, so nothing here exercised that
-// bucket at all -- the panel-width change and the workspace sizing that
-// depends on it were both untested.
-//
-// This goes through the public `syev` on Auto rather than calling syev_blocked
-// directly, so it also covers the per-type rows of
-// tuned/syev.<device>.txt: at n = 320 that is blocked for float, double
-// and complex<float>, and the vendor for complex<double>. Whichever provider
-// Auto picks, the answer must satisfy the same residual and orthogonality
-// bounds.
-//
-// The workspace is sized by syev_buffer_size, which re-derives the panel width
-// through the same sytrd_block_size_default<T>. If the query and the solve ever
-// disagreed about the width, this test would fail on the sizing check rather
-// than silently under-allocating.
+// n = 320 is deliberate: it is inside the 256 < n <= 512 bucket where sytrd_block_size_default<T> returns a
+// different panel width for complex (32) than the tuning harness value for real types (8). Every other eigen
+// test in this file runs at n <= 96, so nothing else exercises that bucket or the workspace sizing that depends
+// on it. This goes through the public `syev` on Auto rather than syev_blocked, so it also covers the per-type
+// rows of tuned/syev.<device>.txt: whichever provider Auto picks, the answer must satisfy the same residual and
+// orthogonality bounds. The workspace is sized by syev_buffer_size, which re-derives the panel width through the
+// same sytrd_block_size_default<T>: a query and a solve that disagree fail the sizing check rather than
+// silently under-allocating.
 TYPED_TEST(SyevBlockedTest, AutoEigenvectorsAtRetunedPanelWidth) {
     using Scalar = typename TestFixture::ScalarType;
     using Real = typename base_type<Scalar>::type;
@@ -334,14 +317,21 @@ Matrix<Scalar, MatrixFormat::Dense> upper_mirrored(const Matrix<Scalar, MatrixFo
     return M;
 }
 
-// max over items of max_i |eig_i(A) - eig_i(B)|, both read from the lower triangle by LAPACKE.
+// max over items of max_i |eig_i(A) - eig_i(B)|, both read from the lower triangle by LAPACKE, or
+// without it by the host reference of eigen_verify.hh (which reads the lower triangle too).
 template <typename Scalar>
 double lapacke_spectrum_gap(const MatrixView<Scalar, MatrixFormat::Dense>& A, const MatrixView<Scalar,
                             MatrixFormat::Dense>& B) {
+    using P = typename MatrixView<Scalar, MatrixFormat::Dense>::promoted_type;
+    const auto spectrum = [](const MatrixView<Scalar, MatrixFormat::Dense>& M, int b, std::vector<double>& w) {
+        if constexpr (verify::have_reference) return verify::eigenvalues(M, b, w);
+        w = test_utils::host_hermitian_eigenvalues<P>(M.rows(), verify::detail::item_vector<P>(M, b));
+        return true;
+    };
     double gap = 0;
     for (int b = 0; b < A.batch_size(); ++b) {
         std::vector<double> wa, wc;
-        if (!verify::eigenvalues(A, b, wa) || !verify::eigenvalues(B, b, wc)) return std::numeric_limits<double>::quiet_NaN();
+        if (!spectrum(A, b, wa) || !spectrum(B, b, wc)) return std::numeric_limits<double>::quiet_NaN();
         for (std::size_t i = 0; i < wa.size(); ++i) gap = verify::nanmax(gap, std::fabs(wa[i] - wc[i]));
     }
     return gap;
@@ -377,10 +367,8 @@ TYPED_TEST(SyevBlockedTest, UpperMatchesNetlibWithDisagreeingTriangles) {
     // still symmetric, Upper and Lower are interchangeable, and this test would pass even if
     // the mirror never ran. The spectrum read from the LOWER triangle must differ from the
     // Upper one (LAPACKE on both) -- that is what makes the Upper comparison below meaningful.
-#if BATCHLAS_VERIFY_HAVE_LAPACKE
     ASSERT_GT(lapacke_spectrum_gap(A0, A_sym), 1.0)
         << "fixture is vacuous: the two triangles agree, so Upper vs Lower proves nothing";
-#endif
 
     // Ours: blocked path with Uplo::Upper, which must mirror before reducing.
     {

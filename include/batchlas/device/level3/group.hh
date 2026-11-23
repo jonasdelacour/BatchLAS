@@ -1,24 +1,40 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// In-group Level 3: ONE matrix per work-group, any m, n, k, operands in global
-// memory, the stage (l3::smem_bytes<Cfg>()) at the start of ws.local. Host op names in BLAS argument order
-// (alpha before its product, beta before the output); the host's run-time modes are template
-// parameters:
-//   gemm<TA, TB, Cfg>(ex, alpha, A, B, beta, C, ws)          C := alpha op(A) op(B) + beta C
-//   symm / hemm<SD, UL, Cfg>(ex, alpha, A, B, beta, C, ws)   C := alpha A B + beta C (Left), alpha B A + beta C
-//   syrk<UL, TR, Cfg>(ex, alpha, A, beta, C, ws)             C := alpha op(A) op(A)^T + beta C, UL triangle
-//   herk<UL, TR, Cfg>(ex, alpha, A, beta, C, ws)             C := alpha op(A) op(A)^H + beta C, real alpha, beta
-//   syr2k<UL, TR, Cfg>(ex, alpha, A, B, beta, C, ws)         C := alpha (op(A) op(B)^T + op(B) op(A)^T) + beta C
-//   her2k<UL, TR, Cfg>(ex, alpha, A, B, beta, C, ws)         C := alpha op(A) op(B)^H + conj(alpha) op(B) op(A)^H + beta C
-//   trmm_out<SD, UL, TR, DG, Cfg>(ex, alpha, A, B, C, ws)    C := alpha op(A) B (Left), alpha B op(A); B unchanged
-//   trsm<SD, UL, TR, DG, Cfg, NB>(ex, alpha, A, B, ws)       B := alpha op(A)^-1 B (Left), alpha B op(A)^-1
-// Every op is one tile body (l3::reg_tile_mma + store_tile_staged, the host reg route's) run
-// over the matrix's tiles by for_each_tile. A float gemm with a Cfg of a reg_configs row (Stages,
-// UnrollK and tile equal, predicated leg) gives the host route's bits. Collective: every item of
-// the executor calls with the same arguments; inputs visible on entry (the caller's barrier);
-// outputs visible to the work-group on return (the op ends on a global barrier). Operands: Mat
-// over T* in global memory, device::item(view, b), or l3::Global; in-item offsets are int32.
-// Alpha / beta: a value or a tag (One, Zero, NegOne, Scalar, MaybeZero); beta == 0 never reads C.
+/// @file
+/// @brief In-group BLAS level 3: one matrix per work-group, any m, n and k, operands in global
+/// memory (@ref api_device_blas3).
+///
+/// The host's operation names and BLAS argument order (`alpha` before its product, `beta` before
+/// the output), with the host's run-time modes as template parameters:
+///   - `gemm<TA, TB, Cfg>(ex, alpha, A, B, beta, C, ws)`: `C := alpha op(A) op(B) + beta C`.
+///   - `symm` / `hemm<SD, UL, Cfg>(ex, alpha, A, B, beta, C, ws)`: `C := alpha A B + beta C` (Left)
+///     or `alpha B A + beta C` (Right), `A` symmetric / Hermitian.
+///   - `syrk<UL, TR, Cfg>(ex, alpha, A, beta, C, ws)`: `C := alpha op(A) op(A)^T + beta C`.
+///   - `herk<UL, TR, Cfg>(ex, alpha, A, beta, C, ws)`: `C := alpha op(A) op(A)^H + beta C`.
+///   - `syr2k<UL, TR, Cfg>(ex, alpha, A, B, beta, C, ws)`:
+///     `C := alpha (op(A) op(B)^T + op(B) op(A)^T) + beta C`.
+///   - `her2k<UL, TR, Cfg>(ex, alpha, A, B, beta, C, ws)`:
+///     `C := alpha op(A) op(B)^H + conj(alpha) op(B) op(A)^H + beta C`.
+///   - `trmm_out<SD, UL, TR, DG, Cfg>(ex, alpha, A, B, C, ws)`: `C := alpha op(A) B` (Left) or
+///     `alpha B op(A)`; `B` unchanged.
+///   - `trsm<SD, UL, TR, DG, Cfg, NB>(ex, alpha, A, B, ws)`: `B := alpha op(A)^-1 B` (Left) or
+///     `alpha B op(A)^-1`.
+///
+/// The contract every operation here shares:
+///   - **Executor**: a `WorkGroup` of exactly `Cfg::threads` items (checked at compile time).
+///   - **Workspace**: `ws.local` holds `l3::smem_bytes<Cfg>()` bytes at offset 0, the stage.
+///   - **Collective**: every item of the executor calls with the same arguments. The inputs must
+///     be visible on entry (the caller's barrier); the outputs are visible to the work-group on
+///     return, because every operation ends on a global barrier.
+///   - **Operands**: a `Mat` over `T*` in global memory, `device::item(view, b)` of a host view, or
+///     an `l3::Global`; in-item offsets are 32-bit.
+///   - **Scalars**: `alpha` and `beta` are values or tags (`One`, `Zero`, `NegOne`, `Scalar`,
+///     `MaybeZero`). `beta == 0` never reads `C`, so `C` may hold NaN.
+///
+/// Every operation runs one tile body (the host's register-tiled route's) over the matrix's tiles,
+/// so a float `gemm` with the configuration of a host route row gives the host's bits.
+/// Not included by `<batchlas/device.hh>`; `<batchlas/device/lapack.hh>` includes it.
+/// @ingroup api_device_blas3
 
 #include <cstdint>
 #include <type_traits>
@@ -38,47 +54,113 @@ namespace batchlas::device {
 
 namespace l3 {
 
-// One matrix in global memory: element (i, j) at p[i + j * ld], m x n.
+/// @brief One column-major m x n matrix in global memory: element `(i, j)` at `p[i + j * ld]`.
+///
+/// The operand form every in-group level 3 operation reads; a `Mat` in global memory and
+/// `device::item(view, b)` convert to it.
+/// @ingroup api_device_blas3
+/// @tparam T the element type (`const` for a read-only operand).
 template <class T> struct Global {
+    /// The first element.
     T* p;
+    /// @{
+    /// The leading dimension, the row count and the column count.
     int ld, m, n;
+    /// @}
+    /// @brief Element `(i, j)`.
+    /// @param i the row.
+    /// @param j the column.
+    /// @return a reference to `p[i + j * ld]`.
     BATCHLAS_DEVICE_INLINE T& operator()(int i, int j) const { return p[i + j * ld]; }
+    /// @brief The row count `m`.
     BATCHLAS_DEVICE_INLINE int rows() const { return m; }
+    /// @brief The column count `n`.
     BATCHLAS_DEVICE_INLINE int cols() const { return n; }
 };
+/// @brief `a` itself.
+/// @ingroup api_device_lowlevel
+/// @param a the global operand.
 template <class T> BATCHLAS_DEVICE_INLINE Global<T> global_of(const Global<T>& a) { return a; }
+/// @brief The `Global` view of a `Mat` in global memory.
+/// @ingroup api_device_lowlevel
+/// @param a the matrix operand.
 template <class T, class R, class C, class Ld, class L, class Idx>
 BATCHLAS_DEVICE_INLINE Global<T> global_of(const Mat<T, R, C, Ld, Mem::Global, L, T*, Idx>& a) {
     return {a.p + a.off, int(a.ld), a.rows(), a.cols()};
 }
+/// @brief The `Global` view of one batch item of a host view (`device::item(view, b)`).
+/// @ingroup api_device_lowlevel
+/// @param a the batch item.
 template <class T> BATCHLAS_DEVICE_INLINE Global<T> global_of(const ItemMat<T>& a) {
     return {a.p + static_cast<std::int64_t>(a.b) * a.stride, a.ld, a.m, a.n};
 }
 
-// The value of a scalar argument (a MaybeZero with its flag set is 0).
+/// @brief The value of a scalar argument as `Scalar`; a `MaybeZero` with its flag set is 0.
+/// @ingroup api_device_lowlevel
+/// @tparam Scalar the result type.
+/// @param s_ a value or a tag.
 template <class Scalar, class S> BATCHLAS_DEVICE_INLINE Scalar scalar_of(const S& s_) {
     const auto s = as_tag(s_);
     if constexpr (::batchlas::device::detail::is_maybe_zero_v<std::remove_cv_t<decltype(s)>>) return s.zero ? Arith<Scalar>::zero() : static_cast<Scalar>(s.v);
     else return ::batchlas::device::detail::tag_value<Scalar>(s);
 }
 
-// One k pass of a tile: a(row, kk) = op(A)(row, k_lo + kk), b(kk, col) = op(B)(k_lo + kk, col)
-// for kk < k. AR / BR: the staging walks the slab's rows fastest (the operand's contiguous index).
+/// @brief One k pass of a tile: `a(row, kk)` reads `op(A)(row, k_lo + kk)` and `b(kk, col)` reads
+/// `op(B)(k_lo + kk, col)` for `kk < k`.
+/// @ingroup api_device_lowlevel
+/// @tparam AR the staging of `a` walks the slab's rows fastest (the operand's contiguous index).
+/// @tparam BR likewise for `b`.
 template <bool AR, bool BR, class RA, class RB> struct Pass {
+    /// The pass's depth.
     int k;
+    /// The `op(A)` reader, called as `a(row, kk)`.
     RA a;
+    /// The `op(B)` reader, called as `b(kk, col)`.
     RB b;
 };
+/// @brief A `Pass` of depth `k` over the readers `a` and `b`.
+/// @ingroup api_device_lowlevel
+/// @tparam AR the staging of `a` walks rows fastest.
+/// @tparam BR the staging of `b` walks rows fastest.
+/// @param k the depth.
+/// @param a the `op(A)` reader.
+/// @param b the `op(B)` reader.
 template <bool AR, bool BR, class RA, class RB> BATCHLAS_DEVICE_INLINE Pass<AR, BR, RA, RB> make_pass(int k, RA a, RB b) {
     return {k, a, b};
 }
 
+/// @brief A `Pass`'s `AR` flag (`false` for any other type).
+/// @ingroup api_device_lowlevel
 template <class PS> inline constexpr bool pass_a_rows = false;
+/// @brief A `Pass`'s `AR` flag.
+/// @ingroup api_device_lowlevel
 template <bool AR, bool BR, class RA, class RB> inline constexpr bool pass_a_rows<Pass<AR, BR, RA, RB>> = AR;
+/// @brief A `Pass`'s `BR` flag (`false` for any other type).
+/// @ingroup api_device_lowlevel
 template <class PS> inline constexpr bool pass_b_rows = false;
+/// @brief A `Pass`'s `BR` flag.
+/// @ingroup api_device_lowlevel
 template <bool AR, bool BR, class RA, class RB> inline constexpr bool pass_b_rows<Pass<AR, BR, RA, RB>> = BR;
 
-// C(m0 :, n0 :) := alpha (sum of the passes) + beta C over one Cfg tile; c is m x n (ldc).
+/// @brief `C(m0 :, n0 :) := alpha (the sum of the passes) + beta C` over one `C` tile; `c` is m x n with leading dimension `ldc`.
+///
+/// The tile body: each pass staged and accumulated in registers (`reg_tile_mma`), then one staged
+/// epilogue (`store_tile_staged`) that writes the elements `mask` keeps. COLLECTIVE over the
+/// executor.
+/// @ingroup api_device_lowlevel
+/// @tparam C the configuration.
+/// @param ex the work-group executor of `C::threads` items.
+/// @param sm the local stage.
+/// @param c the first element of `C`.
+/// @param ldc `C`'s leading dimension.
+/// @param m0 the tile's first row.
+/// @param n0 the tile's first column.
+/// @param m `C`'s row count.
+/// @param n `C`'s column count.
+/// @param alpha the product's scale.
+/// @param beta `C`'s scale; 0 never reads `C`.
+/// @param mask `NoMask` or a `TriMask`.
+/// @param passes the k passes, summed into one accumulator in order.
 template <class C, class Ex, class Scalar, class Mask, class... P>
 BATCHLAS_DEVICE_INLINE void run_tile(const Ex& ex, const device::detail::Smem<C>& sm, Scalar* c, int ldc, int m0, int n0, const int& m, const int& n, Scalar alpha,
                                   Scalar beta, Mask mask, const P&... passes) {
@@ -104,7 +186,13 @@ BATCHLAS_DEVICE_INLINE void run_tile(const Ex& ex, const device::detail::Smem<C>
         ex, lid, local_row, local_col, accum, tile_a, tile_b, c, ldc, m0, n0, m, n, alpha, beta, mask);
 }
 
-// A(i, j) of a symmetric (Herm: Hermitian, real diagonal) A from its UL triangle.
+/// @brief Element `(i, j)` of a symmetric `A` (`Herm`: Hermitian, real diagonal) read from its `UL` triangle.
+/// @ingroup api_device_lowlevel
+/// @tparam UL the stored triangle.
+/// @tparam Herm `true` for Hermitian: the mirrored element is conjugated and the diagonal is real.
+/// @param a the matrix.
+/// @param i the row.
+/// @param j the column.
 template <Uplo UL, bool Herm, class Scalar> BATCHLAS_DEVICE_INLINE std::remove_cv_t<Scalar> sym_at(const Global<Scalar>& a, int i, int j) {
     using V = std::remove_cv_t<Scalar>;
     using A = Arith<V>;
@@ -117,7 +205,14 @@ template <Uplo UL, bool Herm, class Scalar> BATCHLAS_DEVICE_INLINE std::remove_c
     else return a(j, i);
 }
 
-// op(A)(i, j) of a triangular A (UL stored triangle, DG = Unit: an implied unit diagonal).
+/// @brief Element `(i, j)` of `op(A)` for a triangular `A`, zero outside the triangle.
+/// @ingroup api_device_lowlevel
+/// @tparam UL the stored triangle.
+/// @tparam TR `op(A)`.
+/// @tparam DG `Diag::Unit`: an implied unit diagonal, not read.
+/// @param a the matrix.
+/// @param i the row of `op(A)`.
+/// @param j the column of `op(A)`.
 template <Uplo UL, Transpose TR, Diag DG, class Scalar> BATCHLAS_DEVICE_INLINE std::remove_cv_t<Scalar> tri_at(const Global<Scalar>& a, int i, int j) {
     using V = std::remove_cv_t<Scalar>;
     constexpr bool op_lower = (UL == Uplo::Lower) == (TR == Transpose::NoTrans);
@@ -129,18 +224,41 @@ template <Uplo UL, Transpose TR, Diag DG, class Scalar> BATCHLAS_DEVICE_INLINE s
     return inside ? OperandAccessor<V, TR>::load(a.p, a.ld, 0, i, j) : Arith<V>::zero();
 }
 
+/// @brief Compile-time check that `C` is a configuration and the executor has `C::threads` items.
+/// @ingroup api_device_lowlevel
+/// @tparam C the configuration.
+/// @tparam Ex the executor type.
 template <class C, class Ex> BATCHLAS_DEVICE_INLINE void check_group_cfg() {
     static_assert(Config<C>, "device L3: Cfg is an l3::cfg preset");
     static_assert(Ex::size == C::threads, "device L3: the executor has Cfg::threads items (TileM / TR x TileN / TC)");
 }
 
-// Tiles of an m x n C, column-major over tiles: f(m0, n0).
+/// @brief Calls `f(m0, n0)` for every `C::TileM` x `C::TileN` tile of an m x n matrix, column-major over tiles.
+///
+/// Every item makes every call, with a barrier after each (`for_each_tile`). COLLECTIVE.
+/// @ingroup api_device_lowlevel
+/// @tparam C the configuration.
+/// @param ex the executor.
+/// @param m the row count.
+/// @param n the column count.
+/// @param f called as `f(int m0, int n0)`.
 template <class C, class Ex, class F> BATCHLAS_DEVICE_INLINE void for_each_c_tile(const Ex& ex, int m, int n, F&& f) {
     const int tm = (m + C::TileM - 1) / C::TileM, tn = (n + C::TileN - 1) / C::TileN;
     for_each_tile(ex, tm * tn, [&](int t) BATCHLAS_DEVICE_BODY { f((t % tm) * C::TileM, (t / tm) * C::TileN); });
 }
 
-// The rank-k family (syrk, herk, syr2k, her2k) over the tiles that meet C's UL triangle.
+/// @brief The rank-k family's body (syrk, herk, syr2k, her2k): `run_tile` over the tiles of the
+/// n x n `C` that meet its `UL` triangle, masked to the triangle.
+/// @ingroup api_device_lowlevel
+/// @tparam C the configuration.
+/// @tparam UL the triangle of `C` read and written.
+/// @tparam Herm `true` forces a real diagonal.
+/// @param ex the executor.
+/// @param ws the workspace holding the stage.
+/// @param c the matrix `C`.
+/// @param alpha the product's scale.
+/// @param beta `C`'s scale.
+/// @param passes the k passes.
 template <class C, Uplo UL, bool Herm, class Ex, class Scalar, class... P>
 BATCHLAS_DEVICE_INLINE void rank_update(const Ex& ex, const Workspace& ws, const Global<Scalar>& c, Scalar alpha, Scalar beta, const P&... passes) {
     const int n = c.m;
@@ -155,6 +273,22 @@ BATCHLAS_DEVICE_INLINE void rank_update(const Ex& ex, const Workspace& ws, const
 
 // ---- gemm, symm, hemm -----------------------------------------------------------------------
 
+/// @brief `C := alpha op(A) op(B) + beta C` (BLAS gemm) on one matrix per work-group, any m, n and k.
+///
+/// `C` is m x n, `op(A)` m x k and `op(B)` k x n; k is read from `A`. The file's contract applies:
+/// a `WorkGroup` of `Cfg::threads` items, the stage at the start of `ws.local`, COLLECTIVE, and
+/// `C` visible to the work-group on return.
+/// @ingroup api_device_blas3
+/// @tparam TA `op(A)`: `Transpose::NoTrans`, `Trans` or `ConjTrans`.
+/// @tparam TB `op(B)`, likewise.
+/// @tparam Cfg the configuration, an `l3::cfg::RegTiled` of `C`'s element type.
+/// @param ex the work-group executor.
+/// @param alpha the scalar `alpha`: a value or a tag.
+/// @param A the matrix `A` (global memory).
+/// @param B the matrix `B`.
+/// @param beta the scalar `beta`; 0 never reads `C`.
+/// @param[in,out] C the matrix `C`.
+/// @param ws the workspace; `ws.local` holds `l3::smem_bytes<Cfg>()` bytes.
 template <Transpose TA, Transpose TB, class Cfg, class Ex, class MA, class MB, class MC, class AS, class BS>
     requires l3::Config<Cfg>
 BATCHLAS_DEVICE_INLINE void gemm(const Ex& ex, AS alpha, const MA& A, const MB& B, BS beta, const MC& C, const Workspace& ws) {
@@ -176,7 +310,19 @@ BATCHLAS_DEVICE_INLINE void gemm(const Ex& ex, AS alpha, const MA& A, const MB& 
 }
 
 namespace l3 {
-// TS: Trans (symm: A = A^T) or ConjTrans (hemm: A = A^H, real diagonal).
+/// @brief The body of `symm` and `hemm`.
+/// @ingroup api_device_lowlevel
+/// @tparam SD `Side::Left` (`A B`) or `Side::Right` (`B A`).
+/// @tparam UL the stored triangle of `A`.
+/// @tparam TS `Transpose::Trans` (symm: `A = A^T`) or `Transpose::ConjTrans` (hemm: `A = A^H`, real diagonal).
+/// @tparam Cfg the configuration.
+/// @param ex the work-group executor.
+/// @param alpha the scalar `alpha`.
+/// @param A the symmetric or Hermitian matrix.
+/// @param B the general matrix.
+/// @param beta the scalar `beta`.
+/// @param[in,out] C the output.
+/// @param ws the workspace holding the stage.
 template <Side SD, Uplo UL, Transpose TS, class Cfg, class Ex, class MA, class MB, class MC, class AS, class BS>
 BATCHLAS_DEVICE_INLINE void sym_product(const Ex& ex, AS alpha, const MA& A, const MB& B, BS beta, const MC& C, const Workspace& ws) {
     static_assert(TS != Transpose::NoTrans, "symm/hemm: TS is Trans (symmetric) or ConjTrans (Hermitian)");
@@ -199,11 +345,43 @@ BATCHLAS_DEVICE_INLINE void sym_product(const Ex& ex, AS alpha, const MA& A, con
 }
 }  // namespace l3
 
+/// @brief `C := alpha A B + beta C` (`Side::Left`) or `alpha B A + beta C` (`Side::Right`), `A`
+/// symmetric (BLAS symm), on one matrix per work-group.
+///
+/// `C` and `B` are m x n; `A` is m x m (Left) or n x n (Right) and only its `UL` triangle is read.
+/// The file's contract applies.
+/// @ingroup api_device_blas3
+/// @tparam SD `Side::Left` or `Side::Right`.
+/// @tparam UL the stored triangle of `A`.
+/// @tparam Cfg the configuration.
+/// @param ex the work-group executor.
+/// @param alpha the scalar `alpha`: a value or a tag.
+/// @param A the symmetric matrix.
+/// @param B the general matrix.
+/// @param beta the scalar `beta`; 0 never reads `C`.
+/// @param[in,out] C the output.
+/// @param ws the workspace; `ws.local` holds `l3::smem_bytes<Cfg>()` bytes.
 template <Side SD, Uplo UL, class Cfg, class Ex, class MA, class MB, class MC, class AS, class BS>
     requires l3::Config<Cfg>
 BATCHLAS_DEVICE_INLINE void symm(const Ex& ex, AS alpha, const MA& A, const MB& B, BS beta, const MC& C, const Workspace& ws) {
     l3::sym_product<SD, UL, Transpose::Trans, Cfg>(ex, alpha, A, B, beta, C, ws);
 }
+/// @brief `C := alpha A B + beta C` (`Side::Left`) or `alpha B A + beta C` (`Side::Right`), `A`
+/// Hermitian (BLAS hemm), on one matrix per work-group.
+///
+/// As `symm`, with the conjugate of the stored element opposite the triangle and the diagonal's
+/// imaginary part not read. For a real element type it is `symm`. The file's contract applies.
+/// @ingroup api_device_blas3
+/// @tparam SD `Side::Left` or `Side::Right`.
+/// @tparam UL the stored triangle of `A`.
+/// @tparam Cfg the configuration.
+/// @param ex the work-group executor.
+/// @param alpha the scalar `alpha`: a value or a tag.
+/// @param A the Hermitian matrix.
+/// @param B the general matrix.
+/// @param beta the scalar `beta`; 0 never reads `C`.
+/// @param[in,out] C the output.
+/// @param ws the workspace; `ws.local` holds `l3::smem_bytes<Cfg>()` bytes.
 template <Side SD, Uplo UL, class Cfg, class Ex, class MA, class MB, class MC, class AS, class BS>
     requires l3::Config<Cfg>
 BATCHLAS_DEVICE_INLINE void hemm(const Ex& ex, AS alpha, const MA& A, const MB& B, BS beta, const MC& C, const Workspace& ws) {
@@ -218,8 +396,18 @@ BATCHLAS_DEVICE_INLINE void hemm(const Ex& ex, AS alpha, const MA& A, const MB& 
 // caller writes the zhe* name once for every T.
 
 namespace l3 {
-// C := alpha op(A) op(A)^T (TS = ConjTrans: ^H) + beta C. ConjTrans maps Trans to ConjTrans (a
-// real T only).
+/// @brief The body of `syrk` and `herk`: `C := alpha op(A) op(A)^T + beta C` (`TS = ConjTrans`: `^H`) on `C`'s `UL` triangle.
+/// @ingroup api_device_lowlevel
+/// @tparam UL the triangle of `C` read and written.
+/// @tparam TR `op(A)`.
+/// @tparam TS `Transpose::Trans` (syrk) or `Transpose::ConjTrans` (herk).
+/// @tparam Cfg the configuration.
+/// @param ex the work-group executor.
+/// @param alpha the scalar `alpha`.
+/// @param A the matrix `A`.
+/// @param beta the scalar `beta`.
+/// @param[in,out] C the n x n output.
+/// @param ws the workspace holding the stage.
 template <Uplo UL, Transpose TR, Transpose TS, class Cfg, class Ex, class MA, class MC, class AS, class BS>
 BATCHLAS_DEVICE_INLINE void rank_k(const Ex& ex, AS alpha, const MA& A, BS beta, const MC& C, const Workspace& ws) {
     static_assert(TS != Transpose::NoTrans, "syrk/herk: TS is Trans (syrk) or ConjTrans (herk)");
@@ -244,10 +432,25 @@ BATCHLAS_DEVICE_INLINE void rank_k(const Ex& ex, AS alpha, const MA& A, BS beta,
     ex.barrier(Mem::Global);
 }
 
-// C := alpha op(A) op(B)^T + alpha op(B) op(A)^T + beta C (TS = ConjTrans: ^H and conj(alpha) on
-// the second). The two products accumulate in ONE accumulator, sequentially (op(A), op(B)) then
-// (op(B), op(A)) (interleaving them is 1.53x slower, docs/perf/level3.md). ConjTrans stages alpha
-// op(B)^H and conj(alpha) op(A)^H as they are loaded (the epilogue's alpha is 1).
+// The two products accumulate sequentially; interleaving them is 1.53x slower (docs/perf/level3.md).
+/// @brief The body of `syr2k` and `her2k`: `C := alpha op(A) op(B)^T + alpha op(B) op(A)^T + beta C`
+/// (`TS = ConjTrans`: `^H`, and `conj(alpha)` on the second product) on `C`'s `UL` triangle.
+///
+/// The two products accumulate in one accumulator, `(op(A), op(B))` then `(op(B), op(A))`. The
+/// `ConjTrans` form stages `alpha op(B)^H` and `conj(alpha) op(A)^H` as they are loaded, so the
+/// epilogue's `alpha` is 1.
+/// @ingroup api_device_lowlevel
+/// @tparam UL the triangle of `C` read and written.
+/// @tparam TR `op(A)` and `op(B)`.
+/// @tparam TS `Transpose::Trans` (syr2k) or `Transpose::ConjTrans` (her2k).
+/// @tparam Cfg the configuration.
+/// @param ex the work-group executor.
+/// @param alpha the scalar `alpha`.
+/// @param A the matrix `A`.
+/// @param B the matrix `B`.
+/// @param beta the scalar `beta`.
+/// @param[in,out] C the n x n output.
+/// @param ws the workspace holding the stage.
 template <Uplo UL, Transpose TR, Transpose TS, class Cfg, class Ex, class MA, class MB, class MC, class AS, class BS>
 BATCHLAS_DEVICE_INLINE void rank_2k(const Ex& ex, AS alpha, const MA& A, const MB& B, BS beta, const MC& C, const Workspace& ws) {
     static_assert(TS != Transpose::NoTrans, "syr2k/her2k: TS is Trans (syr2k) or ConjTrans (her2k)");
@@ -279,26 +482,80 @@ BATCHLAS_DEVICE_INLINE void rank_2k(const Ex& ex, AS alpha, const MA& A, const M
 }
 }  // namespace l3
 
+/// @brief `C := alpha op(A) op(A)^T + beta C` (BLAS syrk) on the `UL` triangle of `C`, one matrix per work-group.
+///
+/// `C` is n x n; `op(A)` is n x k. Only the `UL` triangle of `C` is read or written. The file's
+/// contract applies.
+/// @ingroup api_device_blas3
+/// @tparam UL the triangle of `C`.
+/// @tparam TR `Transpose::NoTrans` (`A A^T`) or `Trans` (`A^T A`); `ConjTrans` is rejected (use `herk`).
+/// @tparam Cfg the configuration.
+/// @param ex the work-group executor.
+/// @param alpha the scalar `alpha`: a value or a tag.
+/// @param A the matrix `A`.
+/// @param beta the scalar `beta`; 0 never reads `C`.
+/// @param[in,out] C the output.
+/// @param ws the workspace; `ws.local` holds `l3::smem_bytes<Cfg>()` bytes.
 template <Uplo UL, Transpose TR, class Cfg, class Ex, class MA, class MC, class AS, class BS>
     requires l3::Config<Cfg>
 BATCHLAS_DEVICE_INLINE void syrk(const Ex& ex, AS alpha, const MA& A, BS beta, const MC& C, const Workspace& ws) {
     l3::rank_k<UL, TR, Transpose::Trans, Cfg>(ex, alpha, A, beta, C, ws);
 }
-// TR: NoTrans (C := alpha A A^H + beta C) or ConjTrans (alpha A^H A + beta C); Trans is ConjTrans
-// for a real T. alpha, beta real; Im C(i, i) := 0.
+/// @brief `C := alpha op(A) op(A)^H + beta C` (BLAS herk) on the `UL` triangle of `C`, one matrix per work-group.
+///
+/// `alpha` and `beta` are real; `Im C(i, i)` is set to 0, as zherk does. For a real element type
+/// this is `syrk`, so a caller can write `herk` for every type. The file's contract applies.
+/// @ingroup api_device_blas3
+/// @tparam UL the triangle of `C`.
+/// @tparam TR `Transpose::NoTrans` (`A A^H`) or `ConjTrans` (`A^H A`); for a real type `Trans`
+///   means `ConjTrans`.
+/// @tparam Cfg the configuration.
+/// @param ex the work-group executor.
+/// @param alpha the real scalar `alpha`: a value or a tag.
+/// @param A the matrix `A`.
+/// @param beta the real scalar `beta`; 0 never reads `C`.
+/// @param[in,out] C the n x n output.
+/// @param ws the workspace; `ws.local` holds `l3::smem_bytes<Cfg>()` bytes.
 template <Uplo UL, Transpose TR, class Cfg, class Ex, class MA, class MC, class AS, class BS>
     requires l3::Config<Cfg>
 BATCHLAS_DEVICE_INLINE void herk(const Ex& ex, AS alpha, const MA& A, BS beta, const MC& C, const Workspace& ws) {
     if constexpr (is_complex_v<typename Cfg::value_type>) l3::rank_k<UL, TR, Transpose::ConjTrans, Cfg>(ex, alpha, A, beta, C, ws);
     else l3::rank_k<UL, TR == Transpose::NoTrans ? TR : Transpose::Trans, Transpose::Trans, Cfg>(ex, alpha, A, beta, C, ws);
 }
+/// @brief `C := alpha (op(A) op(B)^T + op(B) op(A)^T) + beta C` (BLAS syr2k) on the `UL` triangle of `C`.
+///
+/// `C` is n x n; `op(A)` and `op(B)` are n x k. The file's contract applies.
+/// @ingroup api_device_blas3
+/// @tparam UL the triangle of `C`.
+/// @tparam TR `Transpose::NoTrans` or `Trans`; `ConjTrans` is rejected (use `her2k`).
+/// @tparam Cfg the configuration.
+/// @param ex the work-group executor.
+/// @param alpha the scalar `alpha`: a value or a tag.
+/// @param A the matrix `A`.
+/// @param B the matrix `B`.
+/// @param beta the scalar `beta`; 0 never reads `C`.
+/// @param[in,out] C the output.
+/// @param ws the workspace; `ws.local` holds `l3::smem_bytes<Cfg>()` bytes.
 template <Uplo UL, Transpose TR, class Cfg, class Ex, class MA, class MB, class MC, class AS, class BS>
     requires l3::Config<Cfg>
 BATCHLAS_DEVICE_INLINE void syr2k(const Ex& ex, AS alpha, const MA& A, const MB& B, BS beta, const MC& C, const Workspace& ws) {
     l3::rank_2k<UL, TR, Transpose::Trans, Cfg>(ex, alpha, A, B, beta, C, ws);
 }
-// alpha scales op(B)^H as it is staged and conj(alpha) op(A)^H (the epilogue's alpha is 1); beta
-// real. Trans is ConjTrans for a real T.
+/// @brief `C := alpha op(A) op(B)^H + conj(alpha) op(B) op(A)^H + beta C` (BLAS her2k) on the `UL` triangle of `C`.
+///
+/// `beta` is real and `Im C(i, i)` is set to 0. For a real element type this is `syr2k`. The
+/// file's contract applies.
+/// @ingroup api_device_blas3
+/// @tparam UL the triangle of `C`.
+/// @tparam TR `Transpose::NoTrans` or `ConjTrans`; for a real type `Trans` means `ConjTrans`.
+/// @tparam Cfg the configuration.
+/// @param ex the work-group executor.
+/// @param alpha the scalar `alpha`: a value or a tag.
+/// @param A the matrix `A`.
+/// @param B the matrix `B`.
+/// @param beta the real scalar `beta`; 0 never reads `C`.
+/// @param[in,out] C the n x n output.
+/// @param ws the workspace; `ws.local` holds `l3::smem_bytes<Cfg>()` bytes.
 template <Uplo UL, Transpose TR, class Cfg, class Ex, class MA, class MB, class MC, class AS, class BS>
     requires l3::Config<Cfg>
 BATCHLAS_DEVICE_INLINE void her2k(const Ex& ex, AS alpha, const MA& A, const MB& B, BS beta, const MC& C, const Workspace& ws) {
@@ -310,6 +567,23 @@ BATCHLAS_DEVICE_INLINE void her2k(const Ex& ex, AS alpha, const MA& A, const MB&
 
 // The k range of each tile is the triangle's reach (a loop bound, not a mask): Left, op(A) lower:
 // rows m0 .. read columns [0, min(m, m0 + TileM)); upper: [m0, m). Right likewise over columns.
+/// @brief `C := alpha op(A) B` (`Side::Left`) or `alpha B op(A)` (`Side::Right`), `A` triangular,
+/// out of place (the host's trmm); `B` is unchanged.
+///
+/// `C` and `B` are m x n; `A` is m x m (Left) or n x n (Right), only its `UL` triangle is read,
+/// and `C` must not alias `B`. The file's contract applies.
+/// @ingroup api_device_blas3
+/// @tparam SD `Side::Left` or `Side::Right`.
+/// @tparam UL the stored triangle of `A`.
+/// @tparam TR `op(A)`: `Transpose::NoTrans`, `Trans` or `ConjTrans`.
+/// @tparam DG `Diag::Unit` (an implied unit diagonal, not read) or `Diag::NonUnit`.
+/// @tparam Cfg the configuration.
+/// @param ex the work-group executor.
+/// @param alpha the scalar `alpha`: a value or a tag.
+/// @param A the triangular matrix.
+/// @param B the general matrix.
+/// @param[out] C the output.
+/// @param ws the workspace; `ws.local` holds `l3::smem_bytes<Cfg>()` bytes.
 template <Side SD, Uplo UL, Transpose TR, Diag DG, class Cfg, class Ex, class MA, class MB, class MC, class AS>
     requires l3::Config<Cfg>
 BATCHLAS_DEVICE_INLINE void trmm_out(const Ex& ex, AS alpha, const MA& A, const MB& B, const MC& C, const Workspace& ws) {
@@ -342,10 +616,25 @@ BATCHLAS_DEVICE_INLINE void trmm_out(const Ex& ex, AS alpha, const MA& A, const 
     ex.barrier(Mem::Global);
 }
 
-// Blocked over NB-wide diagonal blocks of op(A), in solve order: the block's columns (Left; rows
-// for Right) are solved by substitution, one column (row) per item, then the not-yet-solved part
-// of B takes B -= op(A)(rest, blk) X(blk, :) (Left) on the tile body (alpha -1, beta 1).
-// A zero diagonal element of a NonUnit A gives Inf / NaN, as BLAS does.
+/// @brief `B := alpha op(A)^-1 B` (`Side::Left`) or `alpha B op(A)^-1` (`Side::Right`), `A`
+/// triangular (BLAS trsm), in place, one matrix per work-group.
+///
+/// Blocked over `NB`-wide diagonal blocks of `op(A)` in solve order: the block's rows of `X` are
+/// solved by substitution, one column of `B` per item (Right: one row), then the unsolved rest of
+/// `B` takes `B -= op(A)(rest, blk) X(blk, :)` on the tile body. A zero diagonal element of a
+/// `Diag::NonUnit` `A` gives Inf or NaN, as BLAS does. The file's contract applies.
+/// @ingroup api_device_blas3
+/// @tparam SD `Side::Left` or `Side::Right`.
+/// @tparam UL the stored triangle of `A`.
+/// @tparam TR `op(A)`: `Transpose::NoTrans`, `Trans` or `ConjTrans`.
+/// @tparam DG `Diag::Unit` or `Diag::NonUnit`.
+/// @tparam Cfg the configuration.
+/// @tparam NB the diagonal block size, `>= 1` (default 32).
+/// @param ex the work-group executor.
+/// @param alpha the scalar `alpha`: a value or a tag (`One` skips the scaling pass).
+/// @param A the triangular matrix, m x m (Left) or n x n (Right).
+/// @param[in,out] B the m x n right-hand side, overwritten by `X`.
+/// @param ws the workspace; `ws.local` holds `l3::smem_bytes<Cfg>()` bytes.
 template <Side SD, Uplo UL, Transpose TR, Diag DG, class Cfg, int NB = 32, class Ex, class MA, class MB, class AS>
     requires l3::Config<Cfg>
 BATCHLAS_DEVICE_INLINE void trsm(const Ex& ex, AS alpha, const MA& A, const MB& B, const Workspace& ws) {

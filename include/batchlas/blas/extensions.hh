@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <complex>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -602,7 +602,8 @@ BATCHLAS_API size_t syevx_direct_buffer_size(Queue& ctx,
 /// @param[out] info      per-item convergence status, or empty; see @ref md_docs_2cpp-api
 /// @return event of the last enqueued kernel
 /// @pre in-order Queue; `A` square
-/// @throws batchlas::unsupported for complex or sparse input
+/// @throws batchlas::unsupported for complex or sparse input, or a device without 32-wide
+///         sub-groups (`Device::supports_sub_group_size(32)`), before any launch
 /// @throws batchlas::invalid_argument for `neigs == 0`, an out-of-range index block,
 ///         \f$\mathit{vl} \ge \mathit{vu}\f$, a too-short `m`, or an out-of-order Queue
 /// @see syevx_direct_subset_supported()
@@ -1042,12 +1043,6 @@ BATCHLAS_API size_t stein_buffer_size(Queue& ctx,
                                       size_t k,
                                       size_t batch_size,
                                       SteinParams<Real> params);
-
-/// @brief Shift used by the CTA STEQR's implicit QR/QL steps. @see @ref algo_steqr
-enum class SteqrShiftStrategy {
-    Lapack = 0,     ///< LAPACK-style implicit shift (the stable dsteqr formulation).
-    Wilkinson = 1,  ///< Wilkinson shift computed from the trailing \f$2 \times 2\f$ block.
-};
 
 /// @brief Parameters for steqr() and steqr_cta(), and for stedc()'s leaf solves.
 template <typename Scalar>

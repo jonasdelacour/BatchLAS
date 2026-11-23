@@ -31,14 +31,19 @@ existing kernels and need no vendor library, so the vendor-free build serves the
 
 | family | driver | `can_run` (`src/ops/potri/potri.cc`) |
 |---|---|---|
-| `cta` | `ops::potri::potri_cta`, mode `Potri`: trtri + lauum in one launch | homogeneous, `n <= cta_max_n<T>(d.slm_budget, d.max_wg)` |
-| `blocked:nb=64`, `blocked:nb=128` (float only) | `ops::potri::blocked::run` | homogeneous, `min(nb, n) <= cta_max_n` |
+| `cta` | `ops::potri::potri_cta`, mode `Potri`: trtri + lauum in one launch | homogeneous, `n <= cta_ceiling<T>(q)` |
+| `blocked:nb=64`, `blocked:nb=128` (float only), `blocked:nb=32` (complex only) | `ops::potri::blocked::run` | homogeneous, `min(nb, n) <= cta_ceiling<T>(q)` |
 
-`cta_max_n` (`potri_native.hh`) is the largest order whose padded tile fits local memory and whose
-register tiles fit two per work-item at 512 work-items. sm_89: float 152, double and cfloat 108,
-cdouble 76; the OpenCL CPU device admits 176 for float. With no table the last-resort order is
-`blocked`, then `cta`. Keys `dtype`, `n:log:3`, `batch:log`; no `uplo` key (Upper runs the same
-kernels on `L = U^H`). \f$\mathrm{nb} = 32\f$ won no cell and is not a candidate.
+`cta_ceiling` (`potri_native.hh`) is `cta_max_n` at the queue's local memory and at the work-group
+cap the launcher uses, `cta_launch_max_wg`: MAX_WORK_GROUP_SIZE, 512 and the kernel's own limit
+(its registers on CUDA, 256 on AdaptiveCpp), so `can_run` and the launch admit the same orders.
+`cta_max_n` is the largest order whose padded tile fits local memory and whose register tiles fit
+two per work-item. sm_89: float 152, double and cfloat 108, cdouble 76; the OpenCL CPU device
+admits 176 for float. With no table the last-resort order is `blocked` (candidate order, so
+nb = 64 before 32), then `cta`. Keys `dtype`, `n:log:3`, `batch:log`; no `uplo` key (Upper runs the
+same kernels on `L = U^H`). \f$\mathrm{nb} = 32\f$ won no sm_89 cell; it is a complex candidate
+only because 32 KiB of local memory (Apple) puts complex's CTA ceiling under 64, where blocked:nb=64
+cannot run and nothing would serve n above the ceiling.
 
 **Tables.** `tuned/potri.sm_89.txt` float and cfloat are `deep` (2026-10-26, RTX 4090 GPU 1, 177
 cells). cta wins every cell it can run; blocked:nb=64 above its ceiling; float nb=128 from \f$n \approx 330\f$.

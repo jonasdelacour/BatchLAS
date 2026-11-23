@@ -49,7 +49,9 @@ using Dev = typename sycl_device::DevMap<Scalar>::type;
 
 void check_device(Queue& ctx, const char* who) {
     const auto dev = ctx.device();
-    if (dev.type != DeviceType::GPU) throw batchlas::invalid_argument(std::string(who) + ": GPU queues only");
+    // A vendor-free host runs these kernels too (select::kHostNative, the host-native gate).
+    if (dev.type != DeviceType::GPU && !select::kHostNative)
+        throw batchlas::invalid_argument(std::string(who) + ": GPU queues only");
     if (!dev.supports_sub_group_size(32))
         throw batchlas::unsupported(std::string(who) + ": device does not offer sub-group size 32");
 }
@@ -148,7 +150,18 @@ int blocked_chunk(Queue& ctx, int n, int nrhs, int batch) {
     return select::grid_capped_chunk(ctx, static_cast<int>(std::min<int64_t>(chunk, batch)), batch);
 }
 
-inline int blocked_part(int chunk, int batch) { return batch < 2 * chunk ? batch : chunk + batch % chunk; }
+// batch / chunk parts (at least one) of near-equal size, the larger first, none above the old
+// remainder-last part. The public trsm and its gemm select by their own batch, so equal parts route
+// alike: 1024 items as 224 x 3 + 352 gave items 672 on another gemm's bits (apple_m5_max).
+struct BlockedParts {
+    int count, base, extra;
+    int size(int i) const { return base + (i < extra ? 1 : 0); }
+    int largest() const { return base + (extra > 0 ? 1 : 0); }
+};
+inline BlockedParts blocked_parts(int chunk, int batch) {
+    const int count = std::max(1, batch / std::max(1, chunk));
+    return {count, batch / count, batch % count};
+}
 
 // One work-group per item: stage and convert the factor into lw, gather B into bw (P^T B).
 template <typename Scalar>
@@ -316,7 +329,7 @@ std::size_t sytrs_blocked_buffer_size(Queue& ctx, const MatrixView<Scalar, Matri
     const int n = static_cast<int>(A.rows()), nrhs = static_cast<int>(B.cols());
     const int batch = static_cast<int>(A.batch_size());
     if (n < 1 || nrhs < 1 || batch < 1) return 0;
-    const int part = blocked_part(blocked_chunk<Scalar>(ctx, n, nrhs, batch), batch);
+    const int part = blocked_parts(blocked_chunk<Scalar>(ctx, n, nrhs, batch), batch).largest();
     return workspace_bytes([&](BumpAllocator& p) { return blocked_layout<Scalar>(ctx, p, n, nrhs, part); });
 }
 
@@ -334,15 +347,15 @@ Event sytrs_blocked_dispatch(Queue& ctx, const MatrixView<Scalar, MatrixFormat::
     const bool rev = uplo == Uplo::Upper;
     const int max_wg = static_cast<int>(ctx.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     const int wg = std::max(32, std::min({kSytrfWgMax, (max_wg / 32) * 32, ((n + 31) / 32) * 32}));
-    const int chunk = blocked_chunk<Scalar>(ctx, n, nrhs, batch);
+    const BlockedParts parts = blocked_parts(blocked_chunk<Scalar>(ctx, n, nrhs, batch), batch);
     BumpAllocator pool(workspace);
-    const auto ws = blocked_layout<Scalar>(ctx, pool, n, nrhs, blocked_part(chunk, batch));
+    const auto ws = blocked_layout<Scalar>(ctx, pool, n, nrhs, parts.largest());
     const int* const piv = pivots.as_span<int>().data();
     auto sync = [&] { if (!ctx.in_order()) ctx.wait(); };
     using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     const Span<const std::uint8_t> mask = detail::call_mask("sytrs_blocked", A, B);
-    for (int b0 = 0, cb = 0; b0 < batch; b0 += cb) {
-        cb = batch - b0 < 2 * chunk ? batch - b0 : chunk;
+    for (int i = 0, b0 = 0; i < parts.count; b0 += parts.size(i), ++i) {
+        const int cb = parts.size(i);
         const Scalar* const a = A.data_ptr() + static_cast<std::ptrdiff_t>(b0) * A.stride();
         Scalar* const bb = B.data_ptr() + static_cast<std::ptrdiff_t>(b0) * B.stride();
         const int32_t* const skip = skip_info ? skip_info + b0 : nullptr;

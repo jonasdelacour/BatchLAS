@@ -8,7 +8,7 @@
 // No vendor arm: the composed arm is the routed sytrf then sytrs, and the contract below is exactly
 // that composition. evidence: docs/perf/sytrf.md
 
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <cstdint>
 #include <stdexcept>
 #include <string>

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 // syevx honours a batch mask (W4c) on tests/masked_contract.hh: A, W, V, m and info of an inactive
 // item keep every byte, and an active item equals the unmasked call with the public syev pinned
-// strictly (cta_fused on a GPU, the LAPACKE loop on the host backend). Direct runs every range on
-// both backends, DirectSubset (lift 2, real T) every range unpinned on a GPU. LOBPCG and Filtered
-// run on a GPU with every ortho; on the host backend (gemm is the host BLAS: these and
-// DirectSubset) a masked call throws before any write. lanczos (lift 2) runs dense, real T, on a
-// GPU. Every mask is device-only; data complex where T is, ld and stride padded for A and V, W, m
-// and info poisoned.
+// strictly (cta_fused on a GPU, blocked on a vendor-free host, the LAPACKE loop beside netlib).
+// Direct runs every range on both backends, DirectSubset (lift 2, real T) every range unpinned on a
+// GPU and a vendor-free host. LOBPCG and Filtered run on a GPU with every ortho and on a vendor-free
+// host; beside a host BLAS (gemm is that BLAS: these and DirectSubset) a masked call throws before
+// any write. lanczos (lift 2) runs dense, real T, on a GPU and a vendor-free host. Every mask is
+// device-only; data complex where T is, ld and stride padded for A and V, W, m and info poisoned.
 // evidence: docs/design/masked-batches.md#masked-batches-tests
 #include <gtest/gtest.h>
 
@@ -142,15 +142,22 @@ protected:
     using R = Real<T>;
     static constexpr Backend B = Config::BackendVal;
     static constexpr bool kHost = B == Backend::NETLIB;
+    // A vendor-free host (select::kHostNative): every child is native and honours the mask, so
+    // LOBPCG, Filtered, DirectSubset and lanczos run masked there as on a GPU.
+    static constexpr bool kHostNative = kHost && !select::kHasNetlib && select::kHostNative;
+    // A host beside netlib: gemm is the host BLAS, which refuses a mask.
+    static constexpr bool kHostBlas = kHost && !kHostNative;
 
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
-        if (kHost && !select::kHasNetlib) GTEST_SKIP() << "no LAPACKE in this build";
+        if (::testing::Test::IsSkipped()) return;  // no device for this backend: ctx is empty
+        if (kHost && !select::kHasNetlib && !kHostNative) GTEST_SKIP() << "no host syev route in this build";
         if (!kHost && this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native families are GPU kernels";
     }
 
     // The public syev family both calls share, pinned strictly and required reached.
-    static const char* syev_family() { return kHost ? "vendor" : "cta_fused"; }
+    // The vendor-free host: blocked (the sub-group solvers stay GPU-only there, syev.cc).
+    static const char* syev_family() { return kHost ? (kHostNative ? "blocked" : "vendor") : "cta_fused"; }
 
     // Bit-identical to the unmasked call where the route allows it: Direct everywhere, and LOBPCG
     // with Householder (complex T). Elsewhere EXPECT_VERIFY mode: m equal, and an item the unmasked
@@ -208,20 +215,32 @@ protected:
     }
     // Runs unmasked first (the shape runs), then masked {0,1,0,1,...}: throws naming the mask, and
     // writes nothing at all (A, V, W, m, info).
-    void expect_refused(const std::string& what, int n, int batch, int neigs, const SyevxParams<T>& p) {
+    void expect_refused(const std::string& what, int n, int batch, int neigs, const SyevxParams<T>& p,
+                        bool uses_larft = false) {
         SCOPED_TRACE(what);
         Queue& q = *this->ctx;
         Problem<T, B> pr(q, n, batch, neigs, JobType::EigenVectors, p, false);
+        // DirectSubset's sy2sb runs larft, which needs 32-wide sub-groups; the AdaptiveCpp host
+        // device (size 1) lacks them, so there its unmasked size query and call are refused too,
+        // and only the masked size query's refusal is checked.
+        const bool larft_refused = uses_larft && !q.device().supports_sub_group_size(32);
         {
-            UnifiedVector<std::byte> ws(std::max<std::size_t>(pr.buffer_size({}), 1));
+            if (larft_refused)
+                EXPECT_THROW((void)pr.buffer_size({}), batchlas::unsupported) << "sized without 32-wide sub-groups";
+            UnifiedVector<std::byte> ws(larft_refused ? 1024 : std::max<std::size_t>(pr.buffer_size({}), 1));
             pr.prepare();
-            ASSERT_NO_THROW(pr.call({}, ws.to_span())) << "the unmasked call must run";
+            if (larft_refused) {
+                EXPECT_THROW(pr.call({}, ws.to_span()), batchlas::unsupported) << "larft ran without 32-wide sub-groups";
+            } else {
+                ASSERT_NO_THROW(pr.call({}, ws.to_span())) << "the unmasked call must run";
+            }
             q.wait();
         }
         std::vector<std::uint8_t> bytes(static_cast<std::size_t>(batch));
         for (int b = 0; b < batch; ++b) bytes[std::size_t(b)] = b % 2;
         const mc::DeviceMask mask(q, bytes);
         EXPECT_THROW((void)pr.buffer_size(mask.span()), batchlas::unsupported) << "the size query must refuse too";
+        if (larft_refused) return;
         UnifiedVector<std::byte> ws(std::max<std::size_t>(pr.buffer_size({}), 1));
         pr.prepare();
         q.wait();
@@ -334,7 +353,7 @@ TYPED_TEST(SyevxMask, DirectSaturatingIdenticalItems) {
 // reach fixes the iteration count, so with Householder active items are bit-identical.
 TYPED_TEST(SyevxMask, LobpcgLeavesInactiveItemsUntouched) {
     using T = typename TestFixture::T;
-    if (TestFixture::kHost) GTEST_SKIP() << "the host backend refuses (LobpcgAndFilteredRefuseOnTheHostBackend)";
+    if (TestFixture::kHostBlas) GTEST_SKIP() << "a host BLAS refuses (LobpcgAndFilteredRefuseOnTheHostBackend)";
     for (const bool largest : {true, false})
         for (const JobType j : {JobType::EigenVectors, JobType::NoEigenVectors})
             this->check(largest ? "lobpcg largest" : "lobpcg smallest", 16, 20, 3, j,
@@ -367,7 +386,7 @@ TYPED_TEST(SyevxMask, LobpcgLeavesInactiveItemsUntouched) {
 // reads converged: without that neutral value it runs to the cap and the active items move.
 TYPED_TEST(SyevxMask, IterativeStopsOnTheActiveItems) {
     using T = typename TestFixture::T;
-    if (TestFixture::kHost) GTEST_SKIP() << "the host backend refuses";
+    if (TestFixture::kHostBlas) GTEST_SKIP() << "a host BLAS refuses (LobpcgAndFilteredRefuseOnTheHostBackend)";
     for (const auto a : {SyevxAlgorithm::LOBPCG, SyevxAlgorithm::Filtered})
         for (const int batch : {20, 1024}) {
             auto p = TestFixture::iterative(a, true);
@@ -381,7 +400,7 @@ TYPED_TEST(SyevxMask, IterativeStopsOnTheActiveItems) {
 
 // Filtered on a GPU: Gershgorin bounds, the interval, sigma and step kernels, and the finalize.
 TYPED_TEST(SyevxMask, FilteredLeavesInactiveItemsUntouched) {
-    if (TestFixture::kHost) GTEST_SKIP() << "the host backend refuses (LobpcgAndFilteredRefuseOnTheHostBackend)";
+    if (TestFixture::kHostBlas) GTEST_SKIP() << "a host BLAS refuses (LobpcgAndFilteredRefuseOnTheHostBackend)";
     for (const bool largest : {true, false})
         for (const JobType j : {JobType::EigenVectors, JobType::NoEigenVectors})
             this->check(largest ? "filtered largest" : "filtered smallest", 16, 20, 3, j,
@@ -392,8 +411,10 @@ TYPED_TEST(SyevxMask, FilteredLeavesInactiveItemsUntouched) {
                     TestFixture::iterative(SyevxAlgorithm::Filtered, true));
     }
 }
+// Beside a host BLAS both arms refuse a mask. A vendor-free host has none to refuse: its natives
+// honour the mask (Lobpcg/FilteredLeavesInactiveItemsUntouched check the contract there).
 TYPED_TEST(SyevxMask, LobpcgAndFilteredRefuseOnTheHostBackend) {
-    if (!TestFixture::kHost) GTEST_SKIP() << "the device gemm honours the mask";
+    if (!TestFixture::kHostBlas) GTEST_SKIP() << "no host BLAS to refuse: the natives honour the mask (*LeavesInactiveItemsUntouched)";
     for (const auto a : {SyevxAlgorithm::LOBPCG, SyevxAlgorithm::Filtered})
         this->expect_refused(a == SyevxAlgorithm::LOBPCG ? "lobpcg" : "filtered", 16, 8, 3,
                              TestFixture::iterative(a, true));
@@ -415,12 +436,12 @@ TYPED_TEST(SyevxMask, DirectSubsetLeavesInactiveItemsUntouched) {
     if constexpr (is_std_complex_v<T>) {
         GTEST_SKIP() << "DirectSubset is real only (complex falls back to Direct)";
     } else {
-        if (TestFixture::kHost) {  // its gemm is the host BLAS: refused before any write
+        if (TestFixture::kHostBlas) {  // its gemm is the host BLAS: refused before any write
             auto p = TestFixture::params(SyevxAlgorithm::DirectSubset);
             p.select = SyevxSelect::Index;
             p.il = 1;
             p.iu = 3;
-            this->expect_refused("direct_subset", 40, 8, 3, p);
+            this->expect_refused("direct_subset", 40, 8, 3, p, true);
             return;
         }
         for (const int n : {40, 70})
@@ -454,7 +475,8 @@ TYPED_TEST(SyevxMask, LanczosLeavesInactiveItemsUntouched) {
     if constexpr (is_std_complex_v<T>) {
         GTEST_SKIP() << "the lanczos case runs real T";
     } else {
-        if (TestFixture::kHost) GTEST_SKIP() << "lanczos's steqr CTA kernel is not built for the host device, unmasked too";
+        // steqr runs its work-group tier on a CPU; the refusal is gemm's, whose host route is the BLAS.
+        if (TestFixture::kHostBlas) GTEST_SKIP() << "a host BLAS refuses a mask: lanczos's gemm has no masked route beside it";
         Queue& q = *this->ctx;
         const int batch = 12;
         for (const int n : {12, 40})

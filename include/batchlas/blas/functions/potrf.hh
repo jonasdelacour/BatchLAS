@@ -5,7 +5,7 @@
 /// @brief Batched Cholesky factorization (potrf) and its workspace query.
 /// @ingroup api_factorizations
 
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <cstdint>
 #include <stdexcept>
 #include <string>

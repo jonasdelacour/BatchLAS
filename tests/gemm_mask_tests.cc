@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <complex>
 #include <cstdint>
+#include <cstdio>
 #include <span>
 #include <string>
 #include <vector>
@@ -118,10 +119,43 @@ protected:
         if (!this->ctx || this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native families are GPU kernels here";
     }
 
+    // Whether s's pinned kernel stages within the device's local memory at its launch width
+    // (test_utils::slm_budget_for): a reg or wide row (split-k's host too) by its slm_bytes, small by
+    // its bucket. Over it (Metal: float reg 128x128 u=4, complex<float> wide 64x64, small NB = 64)
+    // the strict pin must be refused, which check() asserts in place of the contract.
+    bool fits(const Shape& s) const {
+        const auto d = this->ctx->device();
+        const char* w = s.spelling.c_str();
+        int m = 0, n = 0, k = 0, u = 0;
+        if (std::sscanf(w, "reg:m=%d:n=%d:k=%d:u=%d", &m, &n, &k, &u) == 4) {
+            for (const og::RegCfg& r : og::reg_configs)
+                if (r.m == m && r.n == n && r.k == k && r.u == u)
+                    return r.slm_bytes() <= test_utils::slm_budget_for(d, r.threads());
+        } else if (std::sscanf(w, "wide:m=%d:n=%d:k=%d", &m, &n, &k) == 3 ||
+                   std::sscanf(w, "splitk:m=%d:n=%d:k=%d", &m, &n, &k) == 3) {
+            for (const og::WideCfg& c : og::wide_configs)
+                if (c.m == m && c.n == n && c.k == k)
+                    return og::wide_slm_bytes<T>(c) <= test_utils::slm_budget_for(d, c.threads());
+        } else if (s.spelling == "small") {
+            const bool nn = s.ta == Transpose::NoTrans && s.tb == Transpose::NoTrans;
+            const int mx = std::max({s.m, s.n, s.k});
+            return og::small_slm_bytes<T>(nn, mx) <= test_utils::slm_budget_for(d, og::small_wg<T>(nn, mx));
+        }
+        return true;
+    }
+
     // The contract at beta != 0 (pinned, reached unless `reach` is off), then at beta = 0 under the same pin.
     void check(const Shape& s, bool reach = true) {
         SCOPED_TRACE(label(s));
         Queue& q = *this->ctx;
+        if (!fits(s)) {
+            const select::ScopedPin<og::GemmChoice> pin("gemm", s.spelling, select::StrictPin{});
+            Problem<T, B> p(q, s, T(0));
+            auto c = p.make_case();
+            c.prepare();
+            EXPECT_TRUE(test_utils::refused_by_can_run([&] { c.call({}, {}); }));
+            return;
+        }
         {
             Problem<T, B> p(q, s, MatrixView<T>::make(-0.25, 0.5));
             if (reach) {

@@ -43,6 +43,21 @@ constexpr int kN = 8, kLd = 10, kStride = kLd * kN + 3, kBatch = 4, kKd = 2;
 constexpr int kVecStride = kN + 2;
 const std::vector<std::uint8_t> kAlternating{0, 1, 0, 1};
 
+// A mask the host may read, by its queried USM kind: AdaptiveCpp's OpenMP host device reports malloc_device
+// (and non-USM) memory as alloc::host (RC5), so there a DeviceMask is host-readable.
+bool host_readable(Queue& q, Span<const std::uint8_t> m) {
+    const auto kind = sycl::get_pointer_type(m.data(), q->get_context());
+    return kind == sycl::usm::alloc::host || kind == sycl::usm::alloc::shared;
+}
+std::string usm_name(Queue& q, Span<const std::uint8_t> m) {
+    switch (sycl::get_pointer_type(m.data(), q->get_context())) {
+        case sycl::usm::alloc::host: return "mask kind host";
+        case sycl::usm::alloc::shared: return "mask kind shared";
+        case sycl::usm::alloc::device: return "mask kind device";
+        default: return "mask kind unknown";
+    }
+}
+
 // Every operand of every entry, primed with well-posed data: Hermitian, diagonally dominant items,
 // a diagonal CSR pattern, a positive tridiagonal (d, e). With `only` < 0 every view carries `mask`;
 // otherwise only view number `only` does (see masks()).
@@ -151,7 +166,18 @@ struct Entry {
     bool routed = false;  ///< refuses through can_run (NoRouteError text varies): an unmasked twin must run
     std::function<void(Pool<Scalar>&)> call;
     bool pinned = false;  ///< runs under a strict pin, so "cannot run this shape" is can_run's refusal
+    std::function<void(Pool<Scalar>&)> prepare{};  ///< unmasked setup run before the snapshot (honouring checks)
+    std::vector<std::string> packed{};  ///< buffers passed as a flat span, items packed_stride elements apart (wspan)
+    std::size_t packed_stride = kN;     ///< syevx's W: items neigs apart
+    /// Buffers whose ACTIVE items verify_active bounds to a tolerance instead of a byte compare.
+    std::vector<std::string> active_close{};
+    std::function<void(Pool<Scalar>& got, Pool<Scalar>& want, const std::vector<int>& active)> verify_active{};
 };
+
+// The host backend's natives yield to its BLAS, which cannot skip an item. A vendor-free host
+// (select::kHostNative) has no BLAS: there those natives run and honour the mask.
+template <Backend B>
+constexpr bool kHostBlas = B == Backend::NETLIB && !select::kHostNative;
 
 // One masked run (`only` as for Pool): a refusal, and every operand byte unchanged.
 template <typename Scalar>
@@ -209,6 +235,65 @@ bool check_refuses(Queue& q, const Entry<Scalar>& entry, Span<const std::uint8_t
     EXPECT_FALSE(used.empty()) << "the entry views no operand";
     for (const auto& [ordinal, view] : used) expect_refused(q, entry, mask, ws, ordinal, view, nullptr);
     return true;
+}
+
+// One honoured masked batch, `only` as for Pool, for -1 and each view alone: every item the mask
+// clears bit-identical to before the call, every active one the unmasked call's. The unmasked call
+// must write something, or the comparison proves nothing.
+template <typename Scalar>
+void expect_honoured(Queue& q, const Entry<Scalar>& entry, Span<const std::uint8_t> mask, Span<std::byte> ws) {
+    SCOPED_TRACE(entry.name);
+    const auto run = [&](Pool<Scalar>& p) {
+        if (entry.prepare) entry.prepare(p);
+        q.wait();
+        auto before = p.snapshot();
+        entry.call(p);
+        q.wait();
+        return before;
+    };
+    Pool<Scalar> plain(q, {}, ws);
+    std::vector<std::vector<std::byte>> base;
+    ASSERT_NO_THROW(base = run(plain)) << "the unmasked call threw";
+    const auto want = plain.snapshot();
+    ASSERT_NE(want, base) << "the unmasked call wrote nothing";
+    std::vector<std::pair<int, std::string>> used;
+    {
+        Pool<Scalar> probe(q, mask, ws);
+        probe.used = &used;
+        ASSERT_NO_THROW((void)run(probe)) << "a masked call threw";
+    }
+    std::vector<int> onlys{-1};
+    for (const auto& u : used) onlys.push_back(u.first);
+    for (const int only : onlys) {
+        SCOPED_TRACE("operand " + std::to_string(only) + " masked (-1: every one)");
+        Pool<Scalar> p(q, mask, ws, only);
+        std::vector<std::vector<std::byte>> before;
+        ASSERT_NO_THROW(before = run(p));
+        const auto after = p.snapshot();
+        const auto bufs = p.buffers();
+        for (std::size_t i = 0; i < bufs.size(); ++i) {
+            const std::string name = std::get<0>(bufs[i]);
+            const bool packed = std::find(entry.packed.begin(), entry.packed.end(), name) != entry.packed.end();
+            const bool close =
+                std::find(entry.active_close.begin(), entry.active_close.end(), name) != entry.active_close.end();
+            // Every buffer holds kBatch equal items; a packed one kBatch items of packed_stride elements, then a tail.
+            const std::size_t item =
+                packed ? entry.packed_stride * (after[i].size() / Pool<Scalar>::vec_len()) : after[i].size() / kBatch;
+            EXPECT_TRUE(std::equal(after[i].begin() + kBatch * item, after[i].end(), before[i].begin() + kBatch * item))
+                << name << " written past its last item";
+            for (int b = 0; b < kBatch; ++b) {
+                const bool active = kAlternating[std::size_t(b)] != 0;
+                if (active && close) continue;
+                const auto& ref = active ? want[i] : before[i];
+                EXPECT_EQ(std::memcmp(after[i].data() + b * item, ref.data() + b * item, item), 0)
+                    << name << " item " << b << (active ? " differs from the unmasked call" : " was written");
+            }
+        }
+        std::vector<int> active;
+        for (int b = 0; b < kBatch; ++b)
+            if (kAlternating[std::size_t(b)] != 0) active.push_back(b);
+        if (entry.verify_active) entry.verify_active(p, plain, active);
+    }
 }
 
 // gemm, whose native families honour the mask (W1a): plain, and heterogeneous with a k == 0 item.
@@ -314,6 +399,39 @@ std::vector<NativeEntry<Scalar>> tridiag_entries() {
     return out;
 }
 
+// The routed ops a host BLAS refuses (kHostBlas) and a vendor-free host's natives honour. gemm and
+// the level-3 ops but spmm (whose direct runs on either host) reach the BLAS; potrf's natives are
+// GPU kernels (W2a) there, so LAPACK potrf refuses, and with it posv and potrs, whose children
+// (potrf, trsm) refuse; sygvd_factored has only compose, whose back-transform (trsm, trmm) is the
+// BLAS. On a device they all honour the mask (potrf_mask_tests, sygvd_mask_tests).
+template <typename Scalar, Backend B>
+std::vector<Entry<Scalar>> host_routed_entries() {
+    using P = Pool<Scalar>;
+    const auto L = Uplo::Lower;
+    std::vector<Entry<Scalar>> out = gemm_entries<Scalar, B>();
+    out.push_back({"potrf", true, [=](P& p) { potrf<B, Scalar>(p.q, p.mat(p.a), L, p.ws, p.ispan()); }});
+    out.push_back({"posv", true, [=](P& p) { posv<B, Scalar>(p.q, p.mat(p.a), p.mat(p.b), L, p.ws, p.ispan()); }});
+    out.push_back({"potrs", true, [=](P& p) { potrs<B, Scalar>(p.q, p.mat(p.a), p.mat(p.b), L); }});
+    for (auto& e : level3_entries<Scalar, B>())
+        if (e.name != "spmm") out.push_back(std::move(e));
+    const auto sygvd = [=](P& p) {
+        sygvd_factored<B, Scalar>(p.q, p.mat(p.a), p.mat(p.b), p.wspan(), 1, JobType::EigenVectors, L, p.ws,
+                                  p.ispan());
+    };
+    if constexpr (kHostBlas<B>) {  // a refusal writes nothing, so the masked run skips the factor
+        out.push_back({"sygvd_factored", true, [=](P& p) {
+                           if (!p.masked()) potrf<B, Scalar>(p.q, p.mat(p.b), L, p.ws, p.ispan());
+                           sygvd(p);
+                       }});
+    } else {  // every item of B factored, unmasked and before the snapshot
+        out.push_back({"sygvd_factored", true, sygvd, false, [=](P& p) {
+                           const MV<Scalar> Bf(p.b.data(), kN, kN, kLd, kStride, kBatch, p.pb.data());
+                           potrf<B, Scalar>(p.q, Bf, L, p.ws, p.ispan());
+                       }, {"w"}});
+    }
+    return out;
+}
+
 // The routed ops: the public op entries, each refused by every family's can_run term.
 // gemv honours the mask (W1a): gemv_candidates_tests' Masked* cases hold its contract.
 // sytrf, sytrs and sysv honour it (W4b): sytrf_mask_tests holds their contract.
@@ -324,32 +442,15 @@ std::vector<Entry<Scalar>> routed_entries() {
     const auto L = Uplo::Lower;
     const auto N = Transpose::NoTrans;
     std::vector<Entry<Scalar>> out;
-    // The host backend's natives yield to its BLAS, which cannot skip an item: gemm refuses there,
-    // and so do the level-3 ops, whose natives are GPU families (spmm's direct runs there).
-    // potrf's natives are GPU kernels (W2a), so the host's LAPACK potrf refuses, and with it posv and
-    // potrs, whose children (potrf, trsm) refuse there. On a device all three honour the mask, and
-    // potri's cta runs on either backend (potrf_mask_tests holds the contracts).
-    if constexpr (B == Backend::NETLIB) {
-        for (auto& e : gemm_entries<Scalar, B>()) out.push_back(std::move(e));
-        out.push_back({"potrf", true, [=](P& p) { potrf<B, Scalar>(p.q, p.mat(p.a), L, p.ws, p.ispan()); }});
-        out.push_back({"posv", true, [=](P& p) { posv<B, Scalar>(p.q, p.mat(p.a), p.mat(p.b), L, p.ws, p.ispan()); }});
-        out.push_back({"potrs", true, [=](P& p) { potrs<B, Scalar>(p.q, p.mat(p.a), p.mat(p.b), L); }});
-        for (auto& e : level3_entries<Scalar, B>())
-            if (e.name != "spmm") out.push_back(std::move(e));
-    }
+    if constexpr (kHostBlas<B>)
+        for (auto& e : host_routed_entries<Scalar, B>()) out.push_back(std::move(e));
+    // potri's cta runs on either backend (potrf_mask_tests holds the contract).
     // getrf, getrs, gesv, getri and inv honour the mask (W2b, lift 1): tests/getrf_mask_tests.cc and
     // tests/getrs_mask_tests.cc hold their contract. geqrf, orgqr and ormqr honour it (W2c, lift 1):
     // tests/geqrf_mask_tests.cc and tests/ormqr_mask_tests.cc. sygst honours it in every family (W3c,
     // lift 1): tests/sygvd_mask_tests.cc.
     // gesvd and sygvd honour the mask in every family but the device vendors (lift 2: gesvd_mask_tests,
-    // sygvd_mask_tests). On the host backend sygvd_factored has only compose, whose back-transform
-    // (trsm, trmm) is its BLAS, which refuses.
-    if constexpr (B == Backend::NETLIB)
-        out.push_back({"sygvd_factored", true, [=](P& p) {
-                           if (!p.masked()) potrf<B, Scalar>(p.q, p.mat(p.b), L, p.ws, p.ispan());
-                           sygvd_factored<B, Scalar>(p.q, p.mat(p.a), p.mat(p.b), p.wspan(), 1, JobType::EigenVectors,
-                                                     L, p.ws, p.ispan());
-                       }});
+    // sygvd_mask_tests).
     return out;
 }
 
@@ -443,90 +544,125 @@ std::vector<Entry<Scalar>> vendor_entries() {
     return out;
 }
 
+// The per-family, sub-op and util entries a host BLAS refuses (kHostBlas) and a vendor-free host's
+// natives honour: each reaches gemm or syrk, the BLAS there. On a device they honour the mask
+// (ormqr_mask_tests, ortho_mask_tests, syev_mask_tests, syevx_mask_tests).
+template <typename Scalar, Backend B>
+std::vector<Entry<Scalar>> host_direct_entries() {
+    using P = Pool<Scalar>;
+    using R = Real<Scalar>;
+    const auto L = Uplo::Lower;
+    const auto N = Transpose::NoTrans;
+    std::vector<Entry<Scalar>> out;
+    const auto add = [&](const char* name, std::function<void(P&)> f) { out.push_back({name, false, std::move(f)}); };
+    add("ormqr_blocked",
+        [=](P& p) { ormqr_blocked<B, Scalar>(p.q, p.mat(p.a), p.mat(p.c), Side::Left, N, p.tspan(), p.ws); });
+    add("ormbr", [=](P& p) {
+        const VectorView<Scalar> t(p.tau.data(), kN, kBatch, 1, kN);  // ormbr's tau is packed by batch
+        (void)ormbr<B, Scalar>(p.q, p.mat(p.a), p.masks(p.tau.data()) ? t.with_batch_mask(p.mask) : t, p.mat(p.c), 'Q',
+                               Side::Left, N, p.ws);
+    });
+    out.back().packed = {"tau"};
+    out.push_back({"ortho(M)", true,
+                   [=](P& p) { ortho<B, Scalar>(p.q, p.mat(p.a, kN, 2), p.mat(p.z, kN, 2), N, N, p.ws); }});
+    out.push_back({"ritz_values", true, [=](P& p) {
+                       ritz_values<B, Scalar, MatrixFormat::Dense>(p.q, p.mat(p.a), p.mat(p.z), p.vec(p.w), p.ws);
+                   }});
+    add("syfn", [=](P& p) { syfn<B, Scalar>(p.q, p.mat(p.a), p.mat(p.c), SyfnFunction<R>::exp(), L, p.ws, p.ispan()); });
+    add("syfn_from_eigen", [=](P& p) {
+        syfn_from_eigen<B, Scalar>(p.q, p.mat(p.z), p.wspan(), p.mat(p.c), SyfnFunction<R>::exp(), p.ws, p.ispan());
+    });
+    add("syev_align", [=](P& p) { syev_align<B, Scalar>(p.q, p.mat(p.z), p.wspan(), p.mat(p.v), R(1e-3), p.ws); });
+    if constexpr (!is_std_complex_v<Scalar>) {  // real only
+        add("lanczos", [=](P& p) {
+            lanczos<B, Scalar, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), p.ws, JobType::EigenVectors, p.mat(p.z));
+        });
+        out.back().packed = {"w"};
+    }
+    if constexpr (B == Backend::NETLIB) {  // the syevx arms over gemm and ortho (syevx_mask_tests)
+        const auto ev = JobType::EigenVectors;
+        const auto add_w = [&](const char* name, std::function<void(P&)> f) {
+            add(name, std::move(f));
+            out.back().packed = {"w"};
+            out.back().packed_stride = 2;  // neigs
+        };
+        if constexpr (!is_std_complex_v<Scalar>)
+            add_w("syevx_direct_subset", [=](P& p) {
+                syevx_direct_subset<B, Scalar, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), P::flat(p.m), 2, p.ws,
+                                                                    ev, p.mat(p.z), SyevxParams<Scalar>());
+            });
+        add_w("syevx_lobpcg", [=](P& p) {
+            syevx_lobpcg<B, Scalar, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z), SyevxParams<Scalar>());
+        });
+        add_w("syevx_filtered", [=](P& p) {
+            syevx_filtered<B, Scalar, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z), SyevxParams<Scalar>());
+        });
+        // Its batch filter degree folds over the active items, so they need not match the unmasked
+        // call bit for bit (complex<float> does not): their W and Z are bounded instead, every
+        // other buffer byte-compared. W against the unmasked call's; the two Z columns as
+        // eigenpairs of A (A itself byte-compared); Z past those columns untouched.
+        out.back().active_close = {"w", "Z"};
+        out.back().verify_active = [](P& got, P& want, const std::vector<int>& active) {
+            constexpr int kNeigs = 2;
+            double dw = 0;
+            for (const int b : active)
+                for (int i = 0; i < kNeigs; ++i) {
+                    const std::size_t e = std::size_t(b) * kNeigs + i;
+                    dw = std::max(dw, double(std::abs(got.w[e] - want.w[e])) / std::max(1.0, double(std::abs(want.w[e]))));
+                }
+            EXPECT_VERIFY(Scalar, verify::Check::values, kN, dw) << "active W against the unmasked call";
+            const MV<Scalar> A(got.a.data(), kN, kN, kLd, kStride, kBatch), Z(got.z.data(), kN, kNeigs, kLd, kStride, kBatch);
+            const VectorView<R> w(got.w.data(), kNeigs, kBatch, 1, kNeigs);
+            EXPECT_VERIFY(Scalar, verify::Check::eigen_residual, kN, MV<Scalar>::eigen_residual(got.q, A, Z, w, active));
+            EXPECT_VERIFY(Scalar, verify::Check::orthogonality, kNeigs, MV<Scalar>::orthogonality(got.q, Z, active));
+            int outside = 0;
+            for (const int b : active)
+                for (int k = 0; k < kStride; ++k) {
+                    const std::size_t at = std::size_t(b) * kStride + k;
+                    if (k / kLd >= kNeigs || k % kLd >= kN) outside += std::memcmp(&got.z[at], &want.z[at], sizeof(Scalar)) != 0;
+                }
+            EXPECT_EQ(outside, 0) << "active Z written outside its n x neigs block";
+        };
+    }
+    return out;
+}
+
 // The per-family, sub-op and util entries of blas/extensions.hh, extra.hh and internal/ (real Scalar).
 template <typename Scalar, Backend B>
 std::vector<Entry<Scalar>> direct_entries() {
     using P = Pool<Scalar>;
-    using R = Real<Scalar>;
-    const auto L = Uplo::Lower;
     const auto N = Transpose::NoTrans;
     const auto all = SvdVectors::All;
     const auto ev = JobType::EigenVectors;
     std::vector<Entry<Scalar>> out;
     const auto add = [&](const char* name, std::function<void(P&)> f) { out.push_back({name, false, std::move(f)}); };
+    if constexpr (kHostBlas<B>)
+        for (auto& e : host_direct_entries<Scalar, B>()) out.push_back(std::move(e));
+    // ormqx_cta, ormqr_blocked, sytrd_blocked, sytrd_sy2sb and the band reduction honour the mask on a
+    // device (W2c, W3b, lift 1): tests/ormqr_mask_tests.cc and tests/syev_mask_tests.cc. ortho,
+    // ritz_values, norm and cond honour it (W4c): norm_mask_tests and ortho_mask_tests, ortho's
+    // Cholesky family included. bdsdc honours it on either backend (gesvd_mask_tests).
     // Every syev and gesvd family honours the mask on a device (lift 2: syev_mask_tests and
-    // gesvd_mask_tests); on the host backend their CTA leaves are not built, and gesvd_blocked's
-    // general path refuses (its gemm is the host BLAS).
+    // gesvd_mask_tests); on the host backend their CTA leaves are not built, and gesvd_blocked refuses
+    // outright (refuse_batch_mask), host BLAS or not. So does gebrd_blocked.
     if constexpr (B == Backend::NETLIB)
         add("gesvd_blocked", [=](P& p) {
             gesvd_blocked<B, Scalar>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, p.ws, p.ispan());
         });
-    // ormqx_cta, ormqr_blocked, sytrd_blocked, sytrd_sy2sb and the band reduction honour the mask
-    // on a device (W2c, W3b, lift 1): tests/ormqr_mask_tests.cc and tests/syev_mask_tests.cc. On
-    // NETLIB ormqr_blocked's gemm children are the host BLAS, which refuses.
+    // gebrd_blocked and ormbr honour the mask on a device (W4a); ormbr sits in host_direct_entries.
     if constexpr (B == Backend::NETLIB)
-        add("ormqr_blocked",
-            [=](P& p) { ormqr_blocked<B, Scalar>(p.q, p.mat(p.a), p.mat(p.c), Side::Left, N, p.tspan(), p.ws); });
-    // gebrd_blocked and ormbr honour the mask on a device (W4a); NETLIB's gemm children cannot.
-    if constexpr (B == Backend::NETLIB) {
         add("gebrd_blocked", [=](P& p) {
             gebrd_blocked<B, Scalar>(p.q, p.mat(p.a), p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.tq), p.vec(p.tp), p.ws);
         });
-        add("ormbr",
-            [=](P& p) { ormbr<B, Scalar>(p.q, p.mat(p.a), p.vec(p.tau), p.mat(p.c), 'Q', Side::Left, N, p.ws); });
-    }
-    // syevx and syevx_direct honour the mask (W4c): syevx_mask_tests holds their contract. LOBPCG and
-    // Filtered refuse it on the host backend (its gemm is the host BLAS); on a GPU they honour it with
-    // every ortho, Chol2 included (syevx_mask_tests).
-    // DirectSubset (real only) honours it on a device (lift 2); on the host backend sy2sb's gemm refuses.
-    if constexpr (B == Backend::NETLIB && !is_std_complex_v<Scalar>)
-        add("syevx_direct_subset", [=](P& p) {
-            syevx_direct_subset<B, Scalar, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), P::flat(p.m), 2, p.ws, ev,
-                                                                p.mat(p.z), SyevxParams<Scalar>());
-        });
-    if constexpr (B == Backend::NETLIB) {
-        add("syevx_lobpcg", [=](P& p) {
-            syevx_lobpcg<B, Scalar, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z), SyevxParams<Scalar>());
-        });
-        add("syevx_filtered", [=](P& p) {
-            syevx_filtered<B, Scalar, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z), SyevxParams<Scalar>());
-        });
-    }
-    // ortho, ritz_values, norm and cond honour the mask (W4c): norm_mask_tests and ortho_mask_tests
-    // hold their contract, ortho's Cholesky family included. On the host backend ritz_values and
-    // ortho(M) reach its BLAS gemm, which refuses.
-    if constexpr (B == Backend::NETLIB)
-        out.push_back({"ortho(M)", true,
-                       [=](P& p) { ortho<B, Scalar>(p.q, p.mat(p.a, kN, 2), p.mat(p.z, kN, 2), N, N, p.ws); }});
-    if constexpr (B == Backend::NETLIB)
-        out.push_back({"ritz_values", true, [=](P& p) {
-                           ritz_values<B, Scalar, MatrixFormat::Dense>(p.q, p.mat(p.a), p.mat(p.z), p.vec(p.w), p.ws);
-                       }});
-    // syfn honours the mask on a device (lift 2, syev_mask_tests); the host backend's syrk is its BLAS.
-    if constexpr (B == Backend::NETLIB) {
-        add("syfn",
-            [=](P& p) { syfn<B, Scalar>(p.q, p.mat(p.a), p.mat(p.c), SyfnFunction<R>::exp(), L, p.ws, p.ispan()); });
-        add("syfn_from_eigen", [=](P& p) {
-            syfn_from_eigen<B, Scalar>(p.q, p.mat(p.z), p.wspan(), p.mat(p.c), SyfnFunction<R>::exp(), p.ws, p.ispan());
-        });
-    }
-    // syev_align honours the mask (W3b) where its gemm does; the host backend's gemm is its BLAS.
-    if constexpr (B == Backend::NETLIB)
-        add("syev_align", [=](P& p) { syev_align<B, Scalar>(p.q, p.mat(p.z), p.wspan(), p.mat(p.v), R(1e-3), p.ws); });
+    // syevx and syevx_direct honour the mask (W4c): syevx_mask_tests holds their contract. LOBPCG,
+    // Filtered and DirectSubset (real only) sit in host_direct_entries: a host BLAS refuses them, a
+    // GPU and a vendor-free host honour the mask (syevx_mask_tests).
     // iluk_apply and iluk's device path honour the mask (W4c, tests/iluk_mask_tests.cc). This batch
     // takes the host path, which only the host backend's CPU queue can read a device-only mask on.
     if constexpr (B != Backend::NETLIB) {
         add("iluk_factorize", [=](P& p) { (void)iluk_factorize<B, Scalar>(p.q, p.csr()); });
         add("iluk_factorize(workspace)",
             [=](P& p) { (void)iluk_factorize<B, Scalar>(p.q, p.csr(), p.ws, ILUKParams<Scalar>(), nullptr); });
-    }
-    if constexpr (!is_std_complex_v<Scalar>) {  // real-only: tridiagonal and bidiagonal stages, lanczos, lascl, cond
-        // bdsdc honours the mask on either backend, lanczos on a device (lift 2: gesvd_mask_tests,
-        // syevx_mask_tests); on the host backend lanczos's gemm is its BLAS.
-        if constexpr (B == Backend::NETLIB)
-            add("lanczos",
-                [=](P& p) { lanczos<B, Scalar, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), p.ws, ev,
-                                                                    p.mat(p.z)); });
     }
     return out;
 }
@@ -675,8 +811,8 @@ TYPED_TEST_SUITE(BatchMaskEntries, EntryTypes);
 TYPED_TEST(BatchMaskEntries, RoutedOpsRefuseADeviceOnlyMaskBeforeWriting) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
-    // Every routed op honours the mask on a device (lift 2): only the host backend's BLAS-bound ops refuse.
-    if (B != Backend::NETLIB) GTEST_SKIP() << "every routed op honours a mask on a device backend";
+    // Every routed op honours the mask on a device (lift 2): only the host BLAS-bound ops refuse.
+    if (!kHostBlas<B>) GTEST_SKIP() << "no host BLAS: every routed op honours the mask (HostNativesHonourADeviceOnlyMask)";
     Queue& q = *this->ctx;
     const masked_contract::DeviceMask mask(q, kAlternating);
     // Only a build without the backend's library may lack a route (herk has no native kernel).
@@ -687,12 +823,13 @@ TYPED_TEST(BatchMaskEntries, RoutedOpsRefuseADeviceOnlyMaskBeforeWriting) {
     EXPECT_GT(checked, 0) << "no routed op ran unmasked, so no refusal was checked";
 }
 
-// gemm runs a masked batch natively on a device backend, whichever operand carries the mask: C's
-// inactive items (0, 2) bit-identical, its active ones the unmasked call's, A and B unwritten.
+// gemm runs a masked batch natively on a device backend and on a vendor-free host, whichever
+// operand carries the mask: C's inactive items (0, 2) bit-identical, its active ones the unmasked
+// call's, A and B unwritten.
 TYPED_TEST(BatchMaskEntries, GemmRunsADeviceOnlyMaskNatively) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
-    if constexpr (B == Backend::NETLIB) GTEST_SKIP() << "the host backend's gemm is its BLAS, which refuses";
+    if constexpr (kHostBlas<B>) GTEST_SKIP() << "a host BLAS serves gemm and refuses the mask (RoutedOpsRefuse...)";
     Queue& q = *this->ctx;
     const masked_contract::DeviceMask mask(q, kAlternating);
     for (const auto& e : gemm_entries<T, B>()) {
@@ -727,8 +864,8 @@ TYPED_TEST(BatchMaskEntries, GemmRunsADeviceOnlyMaskNatively) {
     }
 }
 
-// The level-3 ops and spmm run a masked batch natively (spmm's direct on the host backend too),
-// pinned native, whichever operand carries the mask: the written operand's inactive items bit-identical, its active
+// The level-3 ops and spmm run a masked batch natively (beside a host BLAS only spmm's direct on
+// the host backend), pinned native, whichever operand carries the mask: the written operand's inactive items bit-identical, its active
 // ones the unmasked call's, every other operand unwritten.
 TYPED_TEST(BatchMaskEntries, Level3RunsADeviceOnlyMaskNatively) {
     using T = typename TestFixture::ScalarType;
@@ -736,7 +873,7 @@ TYPED_TEST(BatchMaskEntries, Level3RunsADeviceOnlyMaskNatively) {
     Queue& q = *this->ctx;
     const masked_contract::DeviceMask mask(q, kAlternating);
     for (const auto& e : level3_entries<T, B>()) {
-        if (B == Backend::NETLIB && e.name != "spmm") continue;
+        if (kHostBlas<B> && e.name != "spmm") continue;
         SCOPED_TRACE(e.name);
         // Native pins (gemm's for the families over it): Auto may give the unmasked call the vendor.
         const select::ScopedPin<std::monostate> pin(e.name, "native", select::StrictPin{});
@@ -840,11 +977,29 @@ TYPED_TEST(BatchMaskEntries, FamilyStageAndUtilEntriesRefuseADeviceOnlyMask) {
     for (const auto& e : direct_entries<T, B>()) check_refuses<T>(q, e, mask.span(), this->ws());
 }
 
+// The entries a host BLAS refuses run natively on a vendor-free host and honour the mask, whichever
+// operand carries it.
+TYPED_TEST(BatchMaskEntries, HostNativesHonourADeviceOnlyMask) {
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (B != Backend::NETLIB || kHostBlas<B>) {
+        GTEST_SKIP() << "a device backend (GemmRuns..., Level3Runs...) or a host BLAS (the refusal cases)";
+    } else {
+        Queue& q = *this->ctx;
+        const masked_contract::DeviceMask mask(q, kAlternating);
+        for (const auto& e : host_routed_entries<T, B>()) expect_honoured<T>(q, e, mask.span(), this->ws());
+        for (const auto& e : host_direct_entries<T, B>()) expect_honoured<T>(q, e, mask.span(), this->ws());
+    }
+}
+
+// astype reads the mask on the host when its queried USM kind allows (AstypeCopiesOnlyAHostReadableUsmMask).
 TYPED_TEST(BatchMaskEntries, VerificationEntriesRefuseADeviceOnlyMask) {
     using T = typename TestFixture::ScalarType;
     Queue& q = *this->ctx;
     const masked_contract::DeviceMask mask(q, kAlternating);
-    for (const auto& e : check_entries<T>()) check_refuses<T>(q, e, mask.span(), this->ws());
+    const bool readable = host_readable(q, mask.span());
+    for (const auto& e : check_entries<T>())
+        if (!(readable && e.name == "MatrixView::astype(device-only mask)")) check_refuses<T>(q, e, mask.span(), this->ws());
 }
 
 TYPED_TEST(BatchMaskEntries, LinalgWrappersRefuseADeviceOnlyMask) {
@@ -855,12 +1010,12 @@ TYPED_TEST(BatchMaskEntries, LinalgWrappersRefuseADeviceOnlyMask) {
 }
 
 // The syev capability queries answer from can_run, and every native family honours the mask (lift
-// 2): a masked view gets the unmasked view's answers.
+// 2): a masked view gets the unmasked view's answers. A vendor-free host answers for blocked.
 TYPED_TEST(BatchMaskEntries, SyevSupportQueriesIgnoreTheMask) {
     using T = typename TestFixture::ScalarType;
     namespace sd = ops::syev::detail;
     constexpr Backend B = TestFixture::BackendType;
-    if (B == Backend::NETLIB) GTEST_SKIP() << "no syev family serves the host backend";
+    if (kHostBlas<B>) GTEST_SKIP() << "a host with LAPACKE serves syev by its vendor loop: no native family to query";
     Queue& q = *this->ctx;
     const masked_contract::DeviceMask mask(q, kAlternating);
     Pool<T> plain(q, {}, this->ws());
@@ -875,21 +1030,29 @@ TYPED_TEST(BatchMaskEntries, SyevSupportQueriesIgnoreTheMask) {
               sd::syev_supports_two_stage<T>(q, A, Uplo::Lower));
 }
 
-// astype copies the mask on the host with no Queue: shared USM copies, a device-only or a foreign
-// (non-USM) mask is refused before any data is converted.
+// astype copies the mask on the host with no Queue: shared USM copies; a device-only or a foreign
+// (non-USM) mask is refused before any data is converted, unless its kind queried on the queue's
+// context reads host-readable (RC5: AdaptiveCpp's OpenMP device), and then it copies too.
 TYPED_TEST(BatchMaskEntries, AstypeCopiesOnlyAHostReadableUsmMask) {
     using T = typename TestFixture::ScalarType;
     Queue& q = *this->ctx;
     Pool<T> p(q, {}, this->ws());
     UnifiedVector<std::uint8_t> shared(kBatch);
     for (int b = 0; b < kBatch; ++b) shared[b] = kAlternating[std::size_t(b)];
-    const auto copied = p.mat(p.a).with_batch_mask(shared.to_span()).template astype<T>();
-    ASSERT_TRUE(copied.has_batch_mask());
-    for (int b = 0; b < kBatch; ++b) EXPECT_EQ(copied.batch_mask()[b], kAlternating[std::size_t(b)]);
     const masked_contract::DeviceMask device(q, kAlternating);
     std::vector<std::uint8_t> foreign(kAlternating);
-    for (const auto m : {device.span(), Span<const std::uint8_t>(foreign.data(), foreign.size())})
-        EXPECT_THROW((void)p.mat(p.a).with_batch_mask(m).template astype<T>(), batchlas::unsupported);
+    const auto expect_copied = [&](Span<const std::uint8_t> m) {
+        const auto copied = p.mat(p.a).with_batch_mask(m).template astype<T>();
+        ASSERT_TRUE(copied.has_batch_mask());
+        EXPECT_NE(copied.batch_mask().data(), m.data()) << "astype aliased the mask instead of copying it";
+        for (int b = 0; b < kBatch; ++b) EXPECT_EQ(copied.batch_mask()[b], kAlternating[std::size_t(b)]);
+    };
+    expect_copied(Span<const std::uint8_t>(shared.data(), shared.size()));
+    for (const auto m : {device.span(), Span<const std::uint8_t>(foreign.data(), foreign.size())}) {
+        SCOPED_TRACE(usm_name(q, m));
+        if (host_readable(q, m)) expect_copied(m);
+        else EXPECT_THROW((void)p.mat(p.a).with_batch_mask(m).template astype<T>(), batchlas::unsupported);
+    }
 }
 
 }  // namespace

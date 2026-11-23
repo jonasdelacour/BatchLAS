@@ -54,22 +54,24 @@ inline bool gesvd_use_blocked_gebrd(int32_t n, GesvdNativeMode mode) {
 using ops::gesvd::GesvdBidiagSolver;
 using ops::gesvd::gesvd_bidiag_solver;
 
-// True when the Blocked path solves the bidiagonal problem DIRECTLY (bdsdc or
-// bdsqr) rather than through the tridiagonal of B^T B. Both direct solvers write
-// the bidiagonal singular vectors themselves, so the eigenvector scratch and the
-// tridiagonal solver workspace are not allocated on those paths.
-inline bool gesvd_direct_bidiag(GesvdNativeMode mode) {
-    return mode == GesvdNativeMode::Blocked
-        && gesvd_bidiag_solver() != GesvdBidiagSolver::NormalEquations;
+// True when the bidiagonal problem is solved DIRECTLY (bdsdc or bdsqr) rather
+// than through the tridiagonal of B^T B, in both modes: the normal equations form
+// u_i = B v_i / sigma_i, so U's orthogonality error grows as eps * kappa^2
+// (defect 18), and CTA mode keeps only its gebrd_cta / ormqx_cta ends. Both direct
+// solvers write the bidiagonal singular vectors themselves, so the eigenvector
+// scratch and the tridiagonal solver workspace are not allocated on those paths.
+// BATCHLAS_GESVD_BIDIAG=normal still selects the normal equations.
+inline bool gesvd_direct_bidiag() {
+    return gesvd_bidiag_solver() != GesvdBidiagSolver::NormalEquations;
 }
 
-// A thin tall U forces a direct bidiagonal solve, deliberately overriding
-// BATCHLAS_GESVD_BIDIAG=normal: the normal-equations path allocates m x m
-// scratch and patch_zero_left_vectors writes m columns of U, overrunning a
-// k-column U. The override reads only the arguments, so buffer_size and the
-// run path cannot disagree about which path runs.
-inline bool gesvd_direct_bidiag(GesvdNativeMode mode, bool thin_tall_u) {
-    return gesvd_direct_bidiag(mode) || (mode == GesvdNativeMode::Blocked && thin_tall_u);
+// A thin tall U forces a direct bidiagonal solve in either mode, deliberately
+// overriding BATCHLAS_GESVD_BIDIAG=normal: the normal-equations path allocates
+// m x m scratch and patch_zero_left_vectors writes m columns of U, overrunning a
+// k-column U. CTA's entries also refuse a thin job. The override reads only the
+// argument, so buffer_size and the run path cannot disagree about which path runs.
+inline bool gesvd_direct_bidiag(bool thin_tall_u) {
+    return gesvd_direct_bidiag() || thin_tall_u;
 }
 
 inline bool gesvd_stage_profile_enabled() {
@@ -884,7 +886,7 @@ Event gesvd_native_impl(Queue& ctx,
         const bool use_blocked_gebrd = gesvd_use_blocked_gebrd(k, mode);
         const int32_t gebrd_block_size = tuning::gebrd_block_size_for_n(k);
         const bool thin_tall_u = want_u && u_cols < m;
-        const bool direct_bidiag = kComplex || gesvd_direct_bidiag(mode, thin_tall_u);
+        const bool direct_bidiag = kComplex || gesvd_direct_bidiag(thin_tall_u);
         // Only a FULL U needs order-m tridiagonal buffers; a thin U cannot reach
         // the normal-equations branch, so they shrink to k (else the m x m cost
         // of a 10000 x 32 problem just moves into the workspace).
@@ -956,8 +958,8 @@ Event gesvd_native_impl(Queue& ctx,
         });
 
         // ---- Bidiagonal SVD ----
-        // Direct solve on B itself; the else branch (CTA mode, =normal) forms
-        // B^T B and squares kappa.
+        // Direct solve on B itself; the else branch (BATCHLAS_GESVD_BIDIAG=normal)
+        // forms B^T B and squares kappa.
         // evidence: docs/perf/gesvd.md#gesvd-defect-a-the-normal-equations-square-kappa
         // Direct solvers write only the leading k x k of U and V^H; U's columns
         // k..m-1 are seeded to I and completed by the back-transform, since
@@ -1279,7 +1281,7 @@ size_t gesvd_native_buffer_size(Queue& ctx,
         // Mirrors gesvd_native_impl: thin tall U forces the direct bidiagonal
         // solve, which makes the order-m buffers unreachable.
         const bool thin_tall_u = want_u && u_cols < m;
-        const bool direct_bidiag = kComplex || gesvd_direct_bidiag(mode, thin_tall_u);
+        const bool direct_bidiag = kComplex || gesvd_direct_bidiag(thin_tall_u);
         const size_t max_order = (want_u && u_cols == m) ? std::max(m, k) : k;
         bytes += BumpAllocator::allocation_size<Real>(ctx, k * batch);                             // d
         bytes += BumpAllocator::allocation_size<Real>(ctx, (k > 0 ? k - 1 : 0) * batch);          // e
@@ -1566,10 +1568,11 @@ Event gesvd_cta(Queue& ctx,
     if (std::max(a_in.rows(), a_in.cols()) > ops::gesvd::kGesvdCtaMaxDim) {
         throw batchlas::invalid_argument("gesvd_cta: currently supports max(m, n) <= 32");
     }
-    // Mode CTA always takes the normal-equations branch, whose
-    // patch_zero_left_vectors writes m columns of U unconditionally. Refuse a
-    // genuinely thin request rather than overrun. can_run (src/ops/gesvd/gesvd.cc)
-    // refuses canonical Thin, so Auto never gets here and a `cta` pin throws;
+    // A genuinely thin request is refused. Were it let through, a thin tall U
+    // would still be solved directly under BATCHLAS_GESVD_BIDIAG=normal
+    // (gesvd_direct_bidiag(thin_tall_u)), never by patch_zero_left_vectors.
+    // can_run (src/ops/gesvd/gesvd.cc) refuses canonical Thin, so Auto never
+    // gets here and a `cta` pin throws;
     // this guards DIRECT callers.
     {
         const int64_t k = std::min<int64_t>(a_in.rows(), a_in.cols());
@@ -1611,10 +1614,11 @@ Event gesvd_cta(Queue& ctx,
     if (std::max(a_in.rows(), a_in.cols()) > ops::gesvd::kGesvdCtaMaxDim) {
         throw batchlas::invalid_argument("gesvd_cta: currently supports max(m, n) <= 32");
     }
-    // Mode CTA always takes the normal-equations branch, whose
-    // patch_zero_left_vectors writes m columns of U unconditionally. Refuse a
-    // genuinely thin request rather than overrun. can_run (src/ops/gesvd/gesvd.cc)
-    // refuses canonical Thin, so Auto never gets here and a `cta` pin throws;
+    // A genuinely thin request is refused. Were it let through, a thin tall U
+    // would still be solved directly under BATCHLAS_GESVD_BIDIAG=normal
+    // (gesvd_direct_bidiag(thin_tall_u)), never by patch_zero_left_vectors.
+    // can_run (src/ops/gesvd/gesvd.cc) refuses canonical Thin, so Auto never
+    // gets here and a `cta` pin throws;
     // this guards DIRECT callers.
     {
         const int64_t k = std::min<int64_t>(a_in.rows(), a_in.cols());

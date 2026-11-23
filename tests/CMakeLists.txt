@@ -1008,10 +1008,10 @@ if(BATCHLAS_TEST_TARGET_SET STREQUAL "all")
     endif()
 endif()
 
-# examples/device/: the device API guide's worked examples (docs/design/device-la.md), each a
+# examples/device/: the device API guide's worked examples (docs/guide/device-api.md), each a
 # smoke ctest that exits 0 when its numbers check out. Label 'blas' with the device_lapack_* tests.
 if(BATCHLAS_TEST_TARGET_SET STREQUAL "all")
-    foreach(_example potrf_any_n getrs_any_n syev_any_n gemm_group)
+    foreach(_example potrf_any_n getrs_any_n syev_any_n gemm_group geqrf_orgqr sytrf_sytrs gesvd_any_n spmm_csr)
         add_executable(device_example_${_example} "${PROJECT_SOURCE_DIR}/examples/device/${_example}.cc")
         batchlas_configure_binary_target(device_example_${_example})
         batchlas_gpu_test_command(_example_cmd device_example_${_example})
@@ -1019,4 +1019,34 @@ if(BATCHLAS_TEST_TARGET_SET STREQUAL "all")
         set_tests_properties(device_example_${_example} PROPERTIES LABELS "blas" TIMEOUT 300)
         batchlas_test_needs_gpu(device_example_${_example})
     endforeach()
+endif()
+
+# The same examples and every public device header from the source include/ alone, with only the
+# SYCL flags a consumer would pass: the header-only device API (examples/device_header_only_test.sh).
+if(BATCHLAS_TEST_TARGET_SET STREQUAL "all" AND BATCHLAS_BASH_PROGRAM)
+    if(BATCHLAS_SYCL_IMPL_ACPP)
+        set(_header_only_flags ${BATCHLAS_SYCL_CONSUMER_OPTIONS})
+    else()
+        set(_header_only_flags -fsycl)
+        if(BATCHLAS_SYCL_TARGETS_STRING)
+            list(APPEND _header_only_flags "-fsycl-targets=${BATCHLAS_SYCL_TARGETS_STRING}")
+        endif()
+        separate_arguments(_header_only_backend UNIX_COMMAND "${BATCHLAS_SYCL_BACKEND_OPTION_STRING}")
+        list(APPEND _header_only_flags ${_header_only_backend})
+        if(BATCHLAS_SYCL_RUNTIME_DIR)
+            list(APPEND _header_only_flags "-Wl,-rpath,${BATCHLAS_SYCL_RUNTIME_DIR}")
+        endif()
+    endif()
+    if(BATCHLAS_DEVICE_NO_VECTOR_TYPES)
+        list(APPEND _header_only_flags -DBATCHLAS_DEVICE_NO_VECTOR_TYPES=1)
+    endif()
+    add_test(NAME device_header_only_tests
+        COMMAND ${BATCHLAS_TEST_GPU_LAUNCHER}
+                "${BATCHLAS_BASH_PROGRAM}" "${PROJECT_SOURCE_DIR}/examples/device_header_only_test.sh"
+                --compiler "${CMAKE_CXX_COMPILER}"
+                --build-include "${PROJECT_BINARY_DIR}/include"
+                -- ${_header_only_flags})
+    set_tests_properties(device_header_only_tests PROPERTIES
+        LABELS "packaging;slow" SKIP_RETURN_CODE 77 TIMEOUT 1800)
+    batchlas_test_needs_gpu(device_header_only_tests)
 endif()

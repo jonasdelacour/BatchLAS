@@ -1095,8 +1095,8 @@ TYPED_TEST(TrsmOperationsTest, AlphaZeroIgnoresNanUnderEveryRoute) {
     std::cout << "[ alpha=0  ] backend " << int(B) << " routes:" << reached << " (" << runs << " solves)\n";
     EXPECT_GT(runs, 0) << "no trsm route admitted this shape";
 
-    // A mask carried by A alone still decides which items of B are zeroed; off the GPU no
-    // route honours a mask, and alpha == 0 refuses it as alpha == 1 does.
+    // A mask carried by A alone still decides which items of B are zeroed; off the GPU only a
+    // vendor-free host runs a native (select::kHostNative), else alpha == 0 refuses it as 1 does.
     auto p = make(5, Side::Left, nan);
     UnifiedVector<std::uint8_t> mask(bs, std::uint8_t{1});
     mask[1] = 0;
@@ -1105,7 +1105,7 @@ TYPED_TEST(TrsmOperationsTest, AlphaZeroIgnoresNanUnderEveryRoute) {
                    Transpose::NoTrans, Diag::NonUnit);
         q.wait();
     };
-    if (q.device().type != DeviceType::GPU) {
+    if (q.device().type != DeviceType::GPU && !(B == Backend::NETLIB && select::kHostNative)) {
         EXPECT_ANY_THROW(masked());
         return;
     }

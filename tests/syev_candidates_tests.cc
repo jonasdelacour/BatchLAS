@@ -668,7 +668,11 @@ TYPED_TEST(SyevCandidates, CoverageRowCarriesChoiceAndNativeFlags) {
     }
 }
 
-// On a CPU queue no native family can run: native pins throw and Auto is the vendor.
+// On a CPU queue with netlib no native family can run: native pins throw and Auto is the vendor.
+// A vendor-free host (select::kHostNative) runs blocked; two_stage (sy2sb's geqrf has no host route)
+// and the sub-group solvers (wrong or out of bounds on the OpenCL CPU, syev.cc) throw at the pin,
+// the capability answers agree, and Auto takes the last resort, blocked.
+// evidence: docs/design/vendor-independence.md#the-host-native-gate
 template <typename Config>
 class SyevCandidatesCpu : public test_utils::BatchLASTest<Config> {};
 TYPED_TEST_SUITE(SyevCandidatesCpu, Types);
@@ -680,6 +684,35 @@ TYPED_TEST(SyevCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     if (this->ctx->device().type == DeviceType::GPU) GTEST_SKIP() << "a GPU queue";
     const ScopedEnvVar clear("BATCHLAS_SYEV_ROUTE", nullptr);
     const Spec s{8, 2};
+    auto run = [&](Eig<T>& p) {
+        UnifiedVector<std::byte> ws(
+            std::max<std::size_t>(syev_buffer_size<B, T>(*this->ctx, p.A(), p.w.to_span(), s.jobz, s.uplo), 1));
+        (void)syev<B, T>(*this->ctx, p.A(), p.w.to_span(), s.jobz, s.uplo, ws.to_span(), Span<int32_t>{});
+        this->ctx->wait();
+    };
+    if constexpr (B == Backend::NETLIB && batchlas::select::kHostNative) {
+        for (const C& c : sy::candidates<T>()) {
+            if (std::holds_alternative<sy::Vendor>(c)) continue;
+            auto p = make_eig<T>(s);
+            const Pin pin("syev", c);
+            // GPU-only there: two_stage (sy2sb's geqrf) and the sub-group solvers (syev.cc).
+            if (!std::holds_alternative<sy::Blocked>(c)) {
+                EXPECT_THROW(((void)syev_buffer_size<B, T>(*this->ctx, p.A(), p.w.to_span(), s.jobz, s.uplo)),
+                             std::invalid_argument);
+                continue;
+            }
+            EXPECT_EQ(traced_choice([&] { run(p); }), select::to_string(c));
+            expect_solved(*this->ctx, p, "cpu " + select::to_string(c));
+        }
+        auto sq = make_eig<T>(s);
+        EXPECT_FALSE(batchlas::ops::syev::detail::syev_supports_cta<T>(*this->ctx, sq.A()));
+        EXPECT_TRUE(batchlas::ops::syev::detail::syev_supports_blocked<T>(*this->ctx, sq.A(), Uplo::Lower));
+        EXPECT_FALSE(batchlas::ops::syev::detail::syev_supports_two_stage<T>(*this->ctx, sq.A(), Uplo::Upper));
+        auto p = make_eig<T>(s);
+        EXPECT_EQ(traced_choice([&] { run(p); }), "blocked");
+        expect_solved(*this->ctx, p, "cpu auto");
+        return;
+    }
     for (const C& c : sy::candidates<T>()) {
         if (std::holds_alternative<sy::Vendor>(c)) continue;
         auto p = make_eig<T>(s);

@@ -180,6 +180,13 @@ jobs:
         # junit missing a registered test fails, the same junit under -LE slow
         # passes; --min-tests fails under its floor. Needs only ctest, no build.
         run: python3 .github/ci/compare_failures.py --self-test
+      - name: The release-notes extractor still reads the changelog
+        # release.yml runs it only on a tag push, so a regression would surface
+        # at the moment of release. The fixture pins Keep a Changelog headings,
+        # a fenced heading, link definitions, and refusal of an undated,
+        # yanked, empty or missing section and of a tag that disagrees with
+        # CMakeLists.txt or version.hh.
+        run: python3 .github/ci/release_notes.py --self-test
       - name: The Markdown location rule still discriminates
         # Same self-test-first reason. Pins a root plan file, any root
         # Markdown (README.md and AGENTS.md included), a nested docs/ and a

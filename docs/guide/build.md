@@ -28,11 +28,12 @@ tested by hand, or untested.
 | --- | --- | --- | --- |
 | Primary | `intel/llvm` DPC++ (clang 22) built `--cuda`, CUDA 13.3, Ubuntu 26.04 | RTX 4090, `sm_89` | Library, tests, benchmarks; CI GPU gate |
 | Second GPU box | same toolchain | RTX PRO 6000, `sm_120` | Built and tested; `sm_120` tables measured here |
-| AdaptiveCpp generic | AdaptiveCpp 25.10.0, LLVM 20, SSCP, CUDA 13.2 | RTX PRO 6000, `sm_120` | Built and tested; ledger `tests/known-failures-acpp.txt` |
-| AdaptiveCpp multipass CUDA | AdaptiveCpp `develop` (25.10.0+), `BATCHLAS_ACPP_TARGETS=cuda:sm_89`, CUDA 12.8 | RTX 4090, `sm_89` | Built and tested; ledger `tests/known-failures-acpp-cuda.txt` ([multipass CUDA](../design/sycl-implementations.md#sycl-impl-cuda-aot)) |
+| AdaptiveCpp generic | AdaptiveCpp 25.10.0, LLVM 20, SSCP, CUDA 13.2 | RTX PRO 6000, `sm_120` | Experimental: built and tested; ledger `tests/known-failures-acpp.txt` |
+| AdaptiveCpp multipass CUDA | AdaptiveCpp `develop` (25.10.0+), `BATCHLAS_ACPP_TARGETS=cuda:sm_89`, CUDA 12.8 | RTX 4090, `sm_89` | Experimental: built and tested; ledger `tests/known-failures-acpp-cuda.txt` ([multipass CUDA](../design/sycl-implementations.md#sycl-impl-cuda-aot)) |
 | Apple GPU | AdaptiveCpp + local patches, Homebrew `llvm@21`, macOS 27 | M5 Max, Metal | float and complex<float> on the GPU ([below](#macos-apple-gpu-through-adaptivecpp-metal)) |
 | CPU only | oneAPI `icpx` 2025.x | none | Builds; no NVIDIA support |
-| AMD / ROCm, Windows | — | — | Untested |
+| AMD / ROCm | — | — | Unsupported (code paths only): no build or CI job compiles them, nothing runs them |
+| Windows | — | — | Untested |
 
 Other NVIDIA architectures should work (the build targets the detected GPU). `main` has known test
 failures: compare against `tests/known-failures.txt`, not `ctest`'s exit code.
@@ -172,6 +173,16 @@ cmake --build build-acpp-metal-tests --target gemm_tests -j8
 ctest --preset acpp-metal-tests -R '^gemm_tests$'
 ```
 
+The patched toolchain is required. A stock AdaptiveCpp, or one missing a patch, builds BatchLAS
+without complaint, and the kernels then fail at their first launch, or compute wrong values. For
+example, without 0014 the complex<float> paths listed in
+`scripts/macos/adaptivecpp-patches/0014-upstream.txt` (potrf, posv, potrs, potri, sygvd, ortho)
+and the float `reg:`/`wide:` gemm tiles fail MSL compilation with "assigning 'threadgroup void *' to
+'device void *'". The script refuses a checkout whose branch does not carry exactly the patches in
+the directory. When a patch is added or changed, re-run it with `ACPP_REAPPLY=1 SKIP_BREW=1` and
+clear `~/.acpp/apps`. No BatchLAS rebuild is needed for an emitter-only patch: kernels are
+translated at launch.
+
 Configure prints `Native SYCL GPU backend (Metal): TRUE; device fp64: OFF`. A full serial `ctest`
 takes about an hour (first-launch JIT); its failure ledger is
 `tests/known-failures-acpp-metal.txt`. macOS traps (adaptivity level, JIT cache, `DYLD_` paths,
@@ -223,9 +234,10 @@ Consumer CMake recipe, the same-compiler rule and `-fsycl` flags: [the C++ API](
 - **`cmake --install` never removes files.** A leftover `blas/`, `util/` or `internal/` in
   `<prefix>/include` shadows current headers; under a shared prefix those names may belong to
   another package.
-- **`SOVERSION` 0, no release tag.** Every 0.x library is `.so.0` and the version check is
-  `ExactVersion`, so pin to a commit. Link `BatchLAS::batchlas`;
-  `find_package(BatchLAS CONFIG REQUIRED COMPONENTS ...)` is not supported.
+- **The SONAME is the major version.** 1.x libraries are `.so.1` (`.1.dylib`) and
+  `find_package(BatchLAS 1.0)` accepts any 1.x; what the number promises is in
+  [versioning and compatibility](../cpp-api.md#versioning-and-compatibility). Link
+  `BatchLAS::batchlas`; `find_package(BatchLAS CONFIG REQUIRED COMPONENTS ...)` is not supported.
 
 ## Repository layout
 

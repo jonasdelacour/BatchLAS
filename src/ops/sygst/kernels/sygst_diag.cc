@@ -9,6 +9,7 @@
 #include <batchlas/device/lapack/sygst.hh>
 #include <src/sycl/device_scalar.hh>
 #include <src/queue.hh>
+#include <src/select/select.hh>
 #include <src/sycl/impl.hh>
 
 #include <sycl/sycl.hpp>
@@ -34,16 +35,18 @@ template <bool Inverse, int KB, typename Scalar, typename D>
 void launch_diag(Queue& ctx, D* ap, int lda, std::ptrdiff_t stride_a, const D* bp, int ldb, std::ptrdiff_t stride_b,
                  int kb_rt, int batch, bool lower, D* hp, int ldh, std::ptrdiff_t stride_h, const std::uint8_t* mask) {
     const int kb = KB ? KB : kb_rt;
-    const int ipw = diag_items_per_group<Scalar>(kb), ldf = diag_ldf<Scalar>(kb), lds = kb + 1;
+    // can_run's cap (sygst.cc): the same device facts, so the admitted group is the launched one.
+    const std::size_t cap = diag_slm_cap(select::describe(ctx.device(), ctx.backend(), false).slm_budget_for(kDiagWg));
+    const int ipw = diag_items_per_group<Scalar>(kb, cap), ldf = diag_ldf<Scalar>(kb), lds = kb + 1;
     const int fper = kb * ldf, sper = kb * lds, groups = (batch + ipw - 1) / ipw;
-    const int wg = (ipw * kb + 31) / 32 * 32;
+    const int wg = diag_group_size<Scalar>(kb, cap);
     const std::size_t packs = (static_cast<std::size_t>(ipw) * (fper + sper) + kVec<D> - 1) / kVec<D>;
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<Pack<D>, 1> slm(sycl::range<1>(packs), h);
         batchlas::impl::parallel_for<SygstDiagKernel<D, Inverse, KB>>(
             h, sycl::nd_range<1>(static_cast<std::size_t>(groups) * wg, wg), [=](sycl::nd_item<1> it) {
                 // The arguments name the captures in the hand kernel's order (its parameter order).
-                // I2: a masked item is a dead block, never loaded, computed or stored.
+                // I2: a masked item is a dead block, never loaded or stored.
                 device::sygs2_group<Inverse, KB>(
                     device::RtGroup<>{it}, static_cast<int>(it.get_local_id(0)), kb, lower, it.get_group(0), ipw,
                     reinterpret_cast<D*>(&slm[0]), fper,

@@ -27,6 +27,15 @@ inline constexpr bool kHasCudaVendor =  // all three; configure rejects a partia
 template <Backend B>
 inline constexpr bool native_gpu_backend = B == Backend::CUDA || B == Backend::SYCL;
 
+/// Host-native routes (vendor-free host). `evidence: docs/design/vendor-independence.md#the-host-native-gate`
+inline constexpr bool kHostNative = BATCHLAS_HAS_HOST_NATIVE;
+template <Backend B>
+inline constexpr bool native_backend = native_gpu_backend<B> || (B == Backend::NETLIB && kHostNative);
+template <typename DeviceFacts>  // select::Device (select.hh includes this header)
+constexpr bool natives_run_on(const DeviceFacts& d) {
+    return d.is_gpu || (kHostNative && !d.has_vendor);
+}
+
 template <Backend B>  // gemm gemv trsm trmm symm syrk syr2k hemm herk her2k (ROCm: not the last three, level3.cc)
 inline constexpr bool level3_vendor_available =
     B == Backend::CUDA   ? kHasCudaVendor :

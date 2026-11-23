@@ -45,8 +45,9 @@ select::Key key_of(const MV<Scalar>& A, const MV<Scalar>& C, Side side, Transpos
 }
 
 // Correctness only (R3). Neither family serves complex Trans: ormqr_blocked throws `unsupported`
-// and cuSOLVER / LAPACKE / rocSOLVER unmqr reject 'T' (cuSOLVER status 3). Blocked is also kept
-// off non-GPU queues; dimension checks are left to the drivers. Both run
+// and cuSOLVER / LAPACKE / rocSOLVER unmqr reject 'T' (cuSOLVER status 3). Blocked runs where
+// the natives do (select::natives_run_on: a GPU, or a vendor-free host); dimension checks are left
+// to the drivers. Both run
 // each item at the top-level extents (no heterogeneous A or C). No batch term: the sub-ops run a
 // batch past 65535 as slices, vendor-free too (known-defects #16). Masked: Blocked and NETLIB's host
 // loop skip an inactive item; a strided vendor call cannot.
@@ -57,7 +58,7 @@ bool can_run(const OrmqrChoice& c, const select::Device& d, const MV<Scalar>& A,
     const bool defined = !(is_std_complex_v<Scalar> && trans == Transpose::Trans) && !A.is_heterogeneous() &&
                          !C.is_heterogeneous();
     return std::visit(overloaded{
-        [&](Blocked) { return defined && d.is_gpu; },
+        [&](Blocked) { return defined && select::natives_run_on(d); },
         [&](Vendor) { return defined && d.has_vendor && (!masked || B == Backend::NETLIB); },
     }, c);
 }

@@ -184,9 +184,9 @@ Event sytrd_cta(Queue& ctx,
     auto& e = const_cast<VectorView<Scalar>&>(e_out);
     auto& tau = const_cast<VectorView<Scalar>&>(tau_out);
 
-    // CTA backend: requires subgroup size 32 on NVIDIA-like devices.
-    if (!ctx.device().supports_sub_group_size(32)) {
-        throw batchlas::unsupported("sytrd_cta: device does not support subgroup size 32 required for CTA kernels.");
+    // GPU only: this TU builds without CPU targets, and the OpenCL CPU offers sub-group size 32.
+    if (ctx.device().type != DeviceType::GPU || !ctx.device().supports_sub_group_size(32)) {
+        throw batchlas::unsupported("sytrd_cta: needs a GPU with subgroup size 32 (the CTA kernels have no CPU image).");
     }
 
     auto launch = [&](auto P_tag, bool upper) {

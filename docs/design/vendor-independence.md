@@ -70,6 +70,73 @@ and SYCL). With cuBLAS present the answer is `true` for every type on CUDA. The 
 than where those kernels run vendor-free; widening it changes ortho's and ormqr's choices, which are
 unmeasured.
 
+### The host-native gate
+
+A vendor-free build's host queue (`Backend::NETLIB` with no LAPACKE/CBLAS) runs BatchLAS's own
+kernels, the ones the GPU runs; nothing is skipped and no host reference code is added.
+
+- CMake derives `BATCHLAS_HAS_HOST_NATIVE` = host backend AND a CPU SYCL target AND NOT
+  (`BATCHLAS_HAS_LAPACKE` AND `BATCHLAS_HAS_CBLAS`) (`cmake/BatchLASDependencies.cmake`) and emits
+  it in `backend_config.h`; the header-only default is 0 (`include/batchlas/config.hh`).
+- With it set, `BATCHLAS_NO_CPU_OBJECT_LIBS` (`src/CMakeLists.txt`) is empty: cta, level3, posv
+  and gesv keep their CPU images, so the tiny tiers of getrf, gesv, potrf and posv can run on the
+  host. Only vendor-free builds pay that link time; the posv and gesv tiny-tier CPU AOT is its
+  long pole (over 30 minutes before the split).
+- `select::native_backend<B>` (compile time) is `native_gpu_backend<B> || (B == NETLIB &&
+  kHostNative)`. `select::natives_run_on(d)` (run time) is `d.is_gpu || (kHostNative &&
+  !d.has_vendor)`.
+- With netlib present (full and Metal builds) `kHostNative` is 0. `native_backend` is then
+  `native_gpu_backend` and `natives_run_on(d)` is `d.is_gpu`, so the routing of those builds cannot
+  change. gemm, gemv and spmm keep their older rule `d.is_gpu || !d.has_vendor` (`gemm.cc`),
+  because their kernels have a CPU image in every build.
+
+An op adopts the gate in its `src/ops/<op>/<op>.cc` and changes both halves together. If only one
+half changes, the op either compiles a route that `can_run` never admits, or admits a family whose
+launch throws `internal_error`. The worked example is `syrk.cc`:
+
+```cpp
+// can_run
+const bool native = select::native_backend<B> && select::natives_run_on(d) && homogeneous && ...;
+// launch, each native arm
+if constexpr (select::native_backend<B>) return <native kernel>; else throw batchlas::internal_error(...);
+```
+
+trsm's kernels are not templated on the backend, so trsm changes only the run-time half. That
+covers its `can_run` and the alpha == 0 mask refusal in `trsm.cc`. getrf, getri, getrs and gesv
+are the same case: their gates read `(B != NETLIB || kHostNative) && natives_run_on(d)`, which keeps
+ROCm's native routes. Their pivot format is safe on that host because a vendor-free NETLIB has no
+LAPACKE: native getrf writes every pivot, so all of them are 1-based int32 packed. gesv's tiny
+tier keeps its sub-group broadcast in a vendor-free build (`gesv_tiny_slm` in `gesv_tiny.cc`): the
+opencl:cpu image of its local-memory pivot row solves float N = 32 wrongly (residual 2.0, odd items
+never written), while the broadcast arm is right at every column bucket and RHS width. The
+`GesvTest` n = 31, 32 float rows on opencl:cpu fail without it. geqrf, orgqr and ormqr are the
+same: their `can_run` takes `natives_run_on`, and the launch-side GPU checks
+(`native::require_launchable` in `src/kernels/common/launch.hh`, `ormqx_cta`) also admit a host
+queue when `BATCHLAS_HAS_HOST_NATIVE` keeps the CPU image. ormqr_blocked refuses a mask only where
+gemm is the host BLAS (`!native_backend<B>`). gesvd and sygst change only the run-time half for
+their Blocked family (gesvd's Jacobi and Cta stay GPU-only; on NETLIB gesvd Blocked takes the
+unblocked gebrd and refuses a batch mask, since its gebrd and ormbr children cannot skip an item).
+sygvd's Compose accepts a masked batch on a vendor-free host, whose trsm and trmm are natives, and
+syfn refuses a host mask only where its syrk and herk are the host BLAS. Adopted so far: syrk, herk,
+syr2k, her2k, symm, hemm, trmm, trsm, getrf, getri, getrs, gesv, geqrf, orgqr, ormqr, gesvd, sygst,
+sygvd and syfn (ortho's Householder arm follows). To verify an op, read its `BATCHLAS_COVERAGE_OUT`
+`reached` rows on `NETLIB` in a vendor-free tree.
+
+syev's kernels are templated on the backend and compiled for NETLIB in every build, so syev
+changes only the run-time half (`B != NETLIB || kHostNative`, then `natives_run_on`): the host
+runs `blocked`, Auto's last resort. `two_stage` stays GPU-only, as its `sy2sb` runs the public
+`geqrf`; so do the sub-group solvers `cta`, `cta_fused` and `jacobi` (`d.is_gpu` in `can_run`):
+on the OpenCL CPU, where the cta library has a CPU image in this build, steqr_cta's body reads out
+of bounds and the 32-wide sytrd_cta and Jacobi return NaN (2026-11-21, not localised; the DPC++
+sub-group collectives themselves are exact there). Their entry points stay GPU-only, and steqr
+runs steqr_wg on the CPU. Only sytrd_sb2st's sub-group chase accepts the CPU under
+`BATCHLAS_HAS_HOST_NATIVE`: it matches the device API there, which its work-group kernel does not
+(device_lapack_sb2st_tests WideBand). syevx's DirectSubset
+degrades to Direct on that host (its back-transform is LAPACKE's ormqr). NETLIB stedc runs the
+divide and conquer there instead of `steqr_legacy`, whose rotation store is
+\f$(n - 1) \cdot \mathit{max\_sweeps} \cdot (n/2 + 1)\f$ per item (37 GB at \f$n = 300\f$, batch
+1024, double); with netlib it stays `steqr_legacy`.
+
 ## Vendor independence: headers keyed on the library axis
 
 The math-library includes in `src/linalg-impl.hh` (`<cublas_v2.h>`, `<cusparse.h>`,
@@ -178,7 +245,7 @@ is present is not a kernel that runs.
 
 | script | what it is for | why it can be trusted |
 |---|---|---|
-| `scripts/route_diff.sh capture\|compare` | prove a change moved no selection decision | zero `reached` rows is a hard error. Keys on `(kind, op, scalar, backend, shape_class, origin, algo, native flags, uplo, side, diag, transA, transB)`; drops `m`, `n`, `k`, `batch`, call count. The only tool that sees a vendor-to-vendor change. |
+| `scripts/route_diff.sh capture` / `compare` | prove a change moved no selection decision | zero `reached` rows is a hard error. Keys on `(kind, op, scalar, backend, shape_class, origin, algo, native flags, uplo, side, diag, transA, transB)`; drops `m`, `n`, `k`, `batch`, call count. The only tool that sees a vendor-to-vendor change. |
 | `scripts/coverage_merge.sh` | merge the per-pid shards of a ctest run | sums `calls`, de-duplicates `linked` |
 | `scripts/facade_symbol_check.sh` | public entry points are not defined in a vendor component | matches Itanium mangling; `nm -C` fails on concept-constrained templates |
 | `scripts/rocm_syntax_check.sh` | `-fsyntax-only` the three ROCm vendor TUs | only `sycl::get_native<ext_oneapi_hip>` errors are expected on a CUDA-only DPC++; anything else is real |
@@ -187,7 +254,7 @@ is present is not a kernel that runs.
 | `scripts/check_kernel_entry_calls.py` | kernel bodies in files that include a public device LA header directly (and every file under `include/batchlas/device/`) call no local lambda or view `operator()` directly (the DPC++ SemaSYCL kernel-body quirk); a `BATCHLAS_DEVICE_BODY` callee or kernel body is the sanctioned invoker; ctest `kernel_entry_calls_tests` | flags the base `PotriCtaKernel` (`s`, `g_at`); its self-test plants four breaks, five sanctioned calls and a transitive-include file |
 | `BATCHLAS_SELECT_TRACE=1` | print each decision, its table and the runner-up | one line per call, indented under its parent op |
 
-## The vendor-free build {#vendor-free-status}
+## Vendor-free status
 
 | | vendor-free CUDA | Metal (AdaptiveCpp, Apple GPU) |
 |---|---|---|

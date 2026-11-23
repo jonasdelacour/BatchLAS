@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Device LA reductions and lane exchanges: one complex-aware xor
-// shuffle, ONE butterfly (any mask range, either order, any associative op), the leader-only
-// shift fold, the reduce-scatter and the ArgMax pair with its merge rule (allreduce, with or
-// without Scratch, is level1.hh's). A `part` is a sycl::sub_group or a SubGroupPartition (detail/sg_partition/).
+/** @file
+ * @brief Reductions and lane exchanges: the complex-aware xor shuffle, the butterfly, the
+ * leader-only shift fold, the reduce-scatter, and the ArgMax pair with its merge rule.
+ * @ingroup api_device_blas1
+ *
+ * A `part` is a sycl::sub_group or a SubGroupPartition. allreduce, with or without Scratch, is in
+ * level1.hh.
+ */
 
 #include <climits>
 #include <cstdint>
@@ -18,15 +22,24 @@
 namespace batchlas::device {
 
 namespace alg {
-struct NanAsInf {};  // iamax: a NaN key ranks as +inf (found, and no compare sees a NaN)
+/// @brief iamax: a NaN key ranks as +inf, so it is found and no compare sees a NaN.
+/// @ingroup api_device_blas1
+struct NanAsInf {};
+/// @brief A NaN key never beats a number.
+/// @ingroup api_device_blas1
 struct NanSkip {};
+/// @brief amax_by: any NaN key makes the result NaN, as amax does.
+/// @ingroup api_device_blas1
 struct NanPropagate {};
 }  // namespace alg
 
-// {index, value} of a maximum; index < 0 is "no candidate" (an item that owned nothing).
+/// @brief The {index, value} of a maximum; index < 0 is "no candidate" (an item that owned
+/// nothing).
+/// @ingroup api_device_blas1
+/// @tparam Real the key type
 template <class Real> struct ArgMax {
-    int index;
-    Real value;
+    int index;  ///< The index of the maximum, or < 0 for no candidate.
+    Real value;  ///< The key of the maximum.
 };
 
 namespace detail {
@@ -41,9 +54,15 @@ template <class T> inline constexpr bool is_argmax_v = false;
 template <class Real> inline constexpr bool is_argmax_v<ArgMax<Real>> = true;
 }  // namespace detail
 
-// v of lane (lane ^ m). Complex values and ArgMax pairs move member by member (a shuffle is
-// one 32/64-bit word per call). `part` is a sycl::sub_group, a SubGroupPartition, or an executor
-// holding one (Partition: its .part), as the Jacobi kernels call it.
+/// @brief v of lane (lane ^ m), member by member for a complex value or an ArgMax pair.
+/// @ingroup api_device_blas1
+///
+/// A shuffle moves one 32- or 64-bit word per call. part is a sycl::sub_group, a
+/// SubGroupPartition, or an executor holding one (Partition: its `.part`).
+/// @param part the sub-group, partition, or partition executor
+/// @param v this lane's value
+/// @param m the xor mask
+/// @return lane (lane ^ m)'s v
 template <class Part, class T> BATCHLAS_DEVICE_INLINE T shuffle_xor(const Part& part, T v, std::uint32_t m) {
     if constexpr (requires { part.part; }) {
         return shuffle_xor(part.part, v, m);
@@ -57,7 +76,12 @@ template <class Part, class T> BATCHLAS_DEVICE_INLINE T shuffle_xor(const Part& 
     }
 }
 
-// v of lane (lane + d); past the end: unspecified.
+/// @brief v of lane (lane + d); past the end it is unspecified.
+/// @ingroup api_device_blas1
+/// @param part the sub-group or partition
+/// @param v this lane's value
+/// @param d the lane offset
+/// @return lane (lane + d)'s v
 template <class Part, class T> BATCHLAS_DEVICE_INLINE T shuffle_down(const Part& part, T v, std::uint32_t d) {
     if constexpr (Arith<T>::is_complex) {
         using A = Arith<T>;
@@ -67,13 +91,8 @@ template <class Part, class T> BATCHLAS_DEVICE_INLINE T shuffle_down(const Part&
     }
 }
 
-// xor butterfly over the masks Lo, 2 Lo, .., Hi / 2 (powers of two): every lane of each aligned
-// Hi-lane block ends with op over the Hi / Lo values whose lane agrees with it outside [Lo, Hi).
-// Order alg::BflyDown applies masks Hi/2 .. Lo, alg::BflyAsc Lo .. Hi/2 (another evaluation order,
-// so a strict port names its hand kernel's). Op is called op(mine, theirs) and must be
-// associative; for a commutative op every lane gets the identical value.
-// detail::butterfly_inline is the same body always_inline, for an op that replaces an always_inline
-// hand butterfly (inline policy, core.hh); butterfly forwards to it.
+// detail::butterfly_inline is the same body always_inline, for an op that replaces an
+// always_inline hand butterfly (inline policy, core.hh); butterfly forwards to it.
 namespace detail {
 template <int Lo, int Hi, class Order = alg::BflyDown, class Part, class T, class Op>
 BATCHLAS_DEVICE_INLINE T butterfly_inline(const Part& part, T v, Op op) {
@@ -89,13 +108,36 @@ BATCHLAS_DEVICE_INLINE T butterfly_inline(const Part& part, T v, Op op) {
     return v;
 }
 }  // namespace detail
+/// @brief COLLECTIVE: the xor butterfly over the masks Lo, 2 Lo, ..., Hi / 2 (powers of two).
+/// @ingroup api_device_blas1
+///
+/// Every lane of each aligned Hi-lane block ends with op over the Hi / Lo values whose lane agrees
+/// with it outside [Lo, Hi). Op is called `op(mine, theirs)` and must be associative; for a
+/// commutative op every lane gets the identical value.
+/// @tparam Lo the smallest mask, a power of two
+/// @tparam Hi the block width, a power of two >= Lo
+/// @tparam Order alg::BflyDown (masks Hi / 2 down to Lo) or alg::BflyAsc (Lo up to Hi / 2):
+///         two evaluation orders, so a strict port names its hand kernel's
+/// @param part the sub-group or partition
+/// @param v this lane's value
+/// @param op the associative operation
+/// @return the reduction over the lane's block
 template <int Lo, int Hi, class Order = alg::BflyDown, class Part, class T, class Op>
 BATCHLAS_DEVICE_HELPER T butterfly(const Part& part, T v, Op op) {
     return detail::butterfly_inline<Lo, Hi, Order>(part, v, op);
 }
-// The same over a run-time, uniform power-of-two width hi (masks hi/2 .. lo, or lo .. hi/2),
-// lo >= 1. always_inline, unsigned masks: the hand form it replaced (plain inline, cdouble
-// geqr2 resident: +4 REG).
+/// @brief COLLECTIVE: the butterfly over a run-time, uniform power-of-two width hi: masks hi / 2
+/// down to lo, or lo up to hi / 2.
+/// @ingroup api_device_blas1
+/// @tparam Order alg::BflyDown or alg::BflyAsc
+/// @param part the sub-group or partition
+/// @param v this lane's value
+/// @param op the associative operation
+/// @param lo the smallest mask, >= 1
+/// @param hi the block width, a power of two
+/// @return the reduction over the lane's block
+// always_inline with unsigned masks: the hand form it replaced (plain inline, cdouble geqr2
+// resident: +4 REG).
 template <class Order = alg::BflyDown, class Part, class T, class Op>
 BATCHLAS_DEVICE_INLINE T butterfly(const Part& part, T v, Op op, int lo, int hi) {
     const auto ulo = static_cast<std::uint32_t>(lo), uhi = static_cast<std::uint32_t>(hi);
@@ -107,9 +149,20 @@ BATCHLAS_DEVICE_INLINE T butterfly(const Part& part, T v, Op op, int lo, int hi)
     return v;
 }
 
-// Shift fold of lanes {l + s t : t < Count} onto head lane l (stride s: Unit, Ext or a run-time
-// Dyn), op(v0, op(v1, ..)) in the tree order Count/2 .. 1; other lanes hold partials (LEADER-ONLY
-// result: broadcast it if every lane needs it). Count * s <= the partition width.
+/// @brief COLLECTIVE, leader-only result: the shift fold of lanes {l + s t : t < Count} onto head
+/// lane l.
+/// @ingroup api_device_blas1
+///
+/// It computes op(v0, op(v1, ...)) in the tree order Count / 2 down to 1; the other lanes hold
+/// partials, so broadcast the result if every lane needs it. Count * s must not exceed the
+/// partition width.
+/// @tparam Count the number of lanes folded, a power of two
+/// @tparam Stride the lane stride type: Unit, Ext or a run-time Dyn
+/// @param part the sub-group or partition
+/// @param v this lane's value
+/// @param op the operation (default sycl::plus)
+/// @param stride the lane stride s
+/// @return the fold on the head lane; partials elsewhere
 template <int Count, class Part, class T, class Op = sycl::plus<T>, class Stride = Unit>
 BATCHLAS_DEVICE_HELPER T shift_reduce(const Part& part, T v, Op op = {}, Stride stride = {}) {
     static_assert(detail::is_pow2(Count), "shift_reduce: Count is a power of two");
@@ -126,10 +179,19 @@ template <int N> constexpr int ilog2() {
 }
 }  // namespace detail
 
-// Reduce-scatter of K values over the P = Ex::size lanes of a partition executor (K | P, both
-// powers of two; x a Frag<T, K> or T[K]): lane l returns the sum over all lanes of x[l / (P / K)].
-// log2(K) halving steps over the xor masks P/2 .. P/K, then an all-reduce over the low
-// log2(P / K) lane bits. Consumes x. (The one-sided Jacobi Gram and column-norm passes.)
+/// @brief COLLECTIVE: the reduce-scatter of K values over the P = Ex::size lanes of a partition
+/// executor.
+/// @ingroup api_device_blas1
+///
+/// Lane l returns the sum over all lanes of `x[l / (P / K)]`: log2(K) halving steps over the xor
+/// masks P / 2 down to P / K, then an all-reduce over the low log2(P / K) lane bits. Consumes x.
+/// @tparam K the number of values, a power of two dividing P
+/// @tparam Ex a partition executor (sub_whole)
+/// @tparam X `Frag<T, K>` or `T[K]`
+/// @param ex the executor
+/// @param x the K values; overwritten
+/// @return this lane's sum
+// The one-sided Jacobi Gram and column-norm passes use it.
 template <int K, class Ex, class X> BATCHLAS_DEVICE_INLINE auto reduce_scatter(const Ex& ex, X& x) {
     using T = std::remove_cvref_t<decltype(x[0])>;
     constexpr int P = Ex::size;
@@ -161,11 +223,6 @@ template <int K, class Ex, class X> BATCHLAS_DEVICE_INLINE auto reduce_scatter(c
     return T(x[0]);
 }
 
-// ---- the pivot search's merge and fold (iamax, level1.hh) ------------------------------------
-// One rule: (ov, oi) beats (bv, bi) when larger, or equal with the index the Tie prefers
-// (alg::TieLowest, alg::TieHighest, or alg::TieRt{low} at run time). Keys reach it NaN-free
-// (iamax maps them by its NaN policy), so the rule is commutative and associative and every
-// butterfly order gives the same pair. An empty candidate carries the seed key and loses.
 namespace detail {
 template <class Tie> BATCHLAS_DEVICE_INLINE bool tie_prefers(const Tie& tie, int oi, int bi) {
     if constexpr (std::is_same_v<Tie, alg::TieLowest>) return oi < bi;
@@ -193,43 +250,92 @@ template <class Real, class Tie> BATCHLAS_DEVICE_INLINE void argmax_take(ArgMax<
     }
 }
 }  // namespace detail
+/// @brief The better of two ArgMax candidates: the larger key, or on a tie the index Tie prefers.
+/// @ingroup api_device_blas1
+///
+/// Keys must be NaN-free (iamax maps them by its NaN policy); then the rule is commutative and
+/// associative, so every butterfly order gives the same pair. An empty candidate carries the
+/// seed key and loses.
+/// @tparam Tie alg::TieLowest, alg::TieHighest, or alg::TieRt (chosen at run time)
+/// @param a one candidate
+/// @param b the other candidate
+/// @param tie the tie rule
+/// @return the winner
 template <class Real, class Tie = alg::TieLowest>
 BATCHLAS_DEVICE_INLINE ArgMax<Real> argmax_merge(const ArgMax<Real>& a, const ArgMax<Real>& b, const Tie& tie = {}) {
     ArgMax<Real> r = a;
     detail::argmax_take(r, b.value, b.index, tie);
     return r;
 }
+/// @brief argmax_merge as a binary operation, for a butterfly or a group reduction.
+/// @ingroup api_device_blas1
+/// @tparam Tie the tie rule type
 template <class Tie = alg::TieLowest> struct ArgMaxMerge {
-    Tie tie{};
+    Tie tie{};  ///< The tie rule.
+    /// @brief The winner of a and b.
+    /// @param a one candidate
+    /// @param b the other candidate
+    /// @return argmax_merge(a, b, tie)
     template <class Real> BATCHLAS_DEVICE_INLINE ArgMax<Real> operator()(const ArgMax<Real>& a,
                                                                          const ArgMax<Real>& b) const {
         return argmax_merge(a, b, tie);
     }
 };
 
-// nteams value and index slots of local memory for a Group-scope pivot exchange. Fence is the
-// barriers'. Standalone = false: ONE barrier, and the caller's next barrier precedes the next
-// write to the slots (getrf's B1); true: self-contained, a second barrier frees the slots on
-// return and an executor of one team takes neither (sytrf, whose matrix the Global fence orders).
+/// @brief nteams value and index slots of local memory for a Scope::Group pivot exchange.
+/// @ingroup api_device_blas1
+///
+/// Standalone = false: ONE barrier, and the caller's next barrier precedes the next write to the
+/// slots. Standalone = true: self-contained; a second barrier frees the slots on return, and an
+/// executor of one team takes neither.
+/// @tparam VS the value slots' type (a pointer or local view)
+/// @tparam IS the index slots' type
+/// @tparam Fence the barriers' fence
+/// @tparam Standalone true for the self-contained form
+// getrf's B1 uses Standalone = false; sytrf, whose matrix the Global fence orders, uses true.
 template <class VS, class IS, Mem Fence = Mem::Local, bool Standalone = false> struct ArgMaxSlots {
-    static constexpr Mem fence = Fence;
-    static constexpr bool standalone = Standalone;
-    VS v;
-    IS i;
+    static constexpr Mem fence = Fence;  ///< The barriers' fence.
+    static constexpr bool standalone = Standalone;  ///< The Standalone argument.
+    VS v;  ///< The value slots, nteams of them.
+    IS i;  ///< The index slots, nteams of them.
 };
+/// @brief The ArgMaxSlots over value slots v and index slots i.
+/// @ingroup api_device_blas1
+/// @tparam Fence the barriers' fence
+/// @tparam Standalone true for the self-contained form
+/// @param v the value slots
+/// @param i the index slots
+/// @return the ArgMaxSlots
 template <Mem Fence = Mem::Local, bool Standalone = false, class VS, class IS>
 BATCHLAS_DEVICE_INLINE ArgMaxSlots<VS, IS, Fence, Standalone> argmax_slots(VS v, IS i) {
     return {v, i};
 }
+/// @brief True when S is an ArgMaxSlots.
+/// @ingroup api_device_blas1
+/// @tparam S the type to test
 template <class S> inline constexpr bool is_argmax_slots_v = false;
+/// @cond
 template <class VS, class IS, Mem F, bool St> inline constexpr bool is_argmax_slots_v<ArgMaxSlots<VS, IS, F, St>> = true;
+/// @endcond
 
-// Every item's candidate a to the executor's winner, uniform. The team folds by an xor butterfly
-// (a Partition over its P lanes, masks 1 .. P/2, the tiny tiers' order; a sub-group over its
-// `lanes` (None: team_size_of; a runtime executor's caller passes the width it read once), masks
-// lanes/2 .. 1). At Group scope lane 0 of team t then writes slots[t], ONE barrier, and every
-// item scans the slots in team order from {none, seed}; with no slots (None) two group
-// collectives fold it (the key, then the index).
+/// @brief COLLECTIVE: every item's candidate a to the executor's winner, uniform.
+/// @ingroup api_device_blas1
+///
+/// The team folds by an xor butterfly: a Partition over its P lanes (masks 1 up to P / 2, the tiny
+/// tiers' order), a sub-group over its `lanes` (masks lanes / 2 down to 1). At Scope::Group lane 0
+/// of team t then writes slots[t], ONE barrier, and every item scans the slots in team order from
+/// {none, seed}; with no slots (None) two group collectives fold it, the key and then the index.
+/// @tparam Tie the tie rule type
+/// @tparam S an ArgMaxSlots, or None
+/// @tparam W None (the team size), or int (a run-time executor's width, read once by the caller)
+/// @param ex the executor
+/// @param a this item's candidate
+/// @param tie the tie rule
+/// @param slots the local slots of a Scope::Group exchange, or None
+/// @param none the index of no candidate
+/// @param seed the key of no candidate
+/// @param lanes the sub-group width to fold over (W = int)
+/// @return the winner, on every item
 template <class Ex, class Real, class Tie, class S, class W = None>
 BATCHLAS_DEVICE_INLINE ArgMax<Real> argmax_allreduce(const Ex& ex, ArgMax<Real> a, const Tie& tie, S slots, int none, Real seed, W lanes = {}) {
     if constexpr (requires { ex.part; }) {
@@ -285,23 +391,36 @@ BATCHLAS_DEVICE_INLINE ArgMax<Real> argmax_allreduce(const Ex& ex, ArgMax<Real> 
     }
 }
 
-// The minimum offered by any item of a work-group (one local int, a relaxed atomic): reset() by
-// the leader, barrier, offer() from any item, barrier, value() (INT_MAX if none; or_zero(): 0).
+/// @brief The minimum offered by any item of a work-group: one local int, a relaxed atomic.
+/// @ingroup api_device_blas1
+///
+/// The leader calls reset(), then a barrier, offer() from any item, a barrier, then value()
+/// (INT_MAX if nothing was offered; or_zero(): 0).
 struct AtomicMinSlot {
-    int* p;
+    int* p;  ///< The local int.
+    /// @brief The leader sets the slot to INT_MAX.
+    /// @param ex the executor
     template <class Ex> BATCHLAS_DEVICE_INLINE void reset(const Ex& ex) const {
         if (ex.leader()) *p = INT_MAX;
     }
+    /// @brief Offers v: the slot keeps the minimum.
+    /// @param v the value
     BATCHLAS_DEVICE_INLINE void offer(int v) const {
         sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::work_group, sycl::access::address_space::local_space>(*p)
             .fetch_min(v);
     }
+    /// @brief The minimum offered, INT_MAX if none.
     BATCHLAS_DEVICE_INLINE int value() const { return *p; }
+    /// @brief The minimum offered, 0 if none.
     BATCHLAS_DEVICE_INLINE int or_zero() const {
         const int v = *p;
         return v == INT_MAX ? 0 : v;
     }
 };
+/// @brief The AtomicMinSlot over the local int at p.
+/// @ingroup api_device_blas1
+/// @param p a local int
+/// @return the slot
 BATCHLAS_DEVICE_INLINE AtomicMinSlot atomic_min_slot(int* p) { return {p}; }
 
 }  // namespace batchlas::device

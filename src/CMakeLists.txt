@@ -53,13 +53,18 @@ set(BATCHLAS_OBJECT_LIBS
     batchlas_extra_obj
     batchlas_sycl_obj
 )
-# GPU-only device-code clusters: compiled and device-linked without the CPU SYCL target.
-set(BATCHLAS_NO_CPU_OBJECT_LIBS
-    batchlas_extensions_cta_obj
-    batchlas_extensions_posv_obj
-    batchlas_extensions_gesv_obj
-    batchlas_extensions_level3_obj
-)
+# GPU-only device-code clusters: compiled and device-linked without the CPU SYCL target. A
+# vendor-free host runs the cta, level3, posv and gesv kernels (BATCHLAS_HAS_HOST_NATIVE,
+# src/select/vendor.hh native_backend), so there all four keep their CPU images; only
+# vendor-free builds pay that link time (posv/gesv tiny-tier CPU AOT is the long pole).
+set(BATCHLAS_NO_CPU_OBJECT_LIBS "")
+# The component (.so) of each such library device-links with the same targets as its objects.
+set(_batchlas_host_native_no_cpu "")
+if(NOT BATCHLAS_HAS_HOST_NATIVE)
+    list(APPEND BATCHLAS_NO_CPU_OBJECT_LIBS batchlas_extensions_posv_obj batchlas_extensions_gesv_obj
+         batchlas_extensions_cta_obj batchlas_extensions_level3_obj)
+    set(_batchlas_host_native_no_cpu NO_CPU_TARGETS)
+endif()
 
 if(TARGET batchlas_backends_cuda_obj)
     list(APPEND BATCHLAS_OBJECT_LIBS batchlas_backends_cuda_obj)
@@ -198,9 +203,10 @@ target_sources(batchlas_selection_obj PRIVATE ops/gesv/gesv.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/gesvd/gesvd.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/spmm/spmm.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/syev/syev.cc)
-# The level-3 seven carry their own native kernels, and every native arm's can_run needs d.is_gpu,
-# so they build GPU-only (BATCHLAS_NO_CPU_OBJECT_LIBS) in a library of their own: their CPU images
-# were 590 of the backends link's 713 CPU-seconds and could never launch.
+# The level-3 seven carry their own native kernels, and with a host netlib every native arm's
+# can_run needs a GPU (select::natives_run_on), so they build GPU-only (BATCHLAS_NO_CPU_OBJECT_LIBS)
+# in a library of their own: their CPU images were 590 of the backends link's 713 CPU-seconds and
+# could never launch. A vendor-free host launches them, so there the library keeps its CPU image.
 # evidence: docs/developer/agent-guide.md section 7 (Build Performance)
 target_sources(batchlas_extensions_level3_obj PRIVATE ops/symm/symm.cc ops/hemm/hemm.cc ops/herk/herk.cc)
 target_sources(batchlas_extensions_level3_obj PRIVATE ops/her2k/her2k.cc ops/syrk/syrk.cc ops/syr2k/syr2k.cc)
@@ -244,13 +250,12 @@ function(batchlas_configure_component target)
     # libbatchlas_*.so whose DT_SONAME was the same bare name, so two versions
     # could not coexist in one prefix, no distribution could package it, and an
     # ABI break was indistinguishable from a rebuild. VERSION gives the real
-    # file (libbatchlas_core.so.0.1.0), SOVERSION the DT_SONAME and the runtime
-    # symlink (.so.0), and CMake adds the .so devel symlink itself.
+    # file (libbatchlas_core.so.1.0.0), SOVERSION the DT_SONAME and the runtime
+    # symlink (.so.1), and CMake adds the .so devel symlink itself.
     #
-    # PROJECT_VERSION_MAJOR is 0 today, so every library is .so.0: that is the
-    # honest statement, not an oversight. SemVer promises nothing across 0.x
-    # minors, which is why the package version file is ExactVersion while the
-    # major stays 0 (see cmake/BatchLASPackaging.cmake).
+    # SOVERSION is the major: an ABI break covered by the 1.x promise bumps it,
+    # and the package version file (SameMajorVersion, cmake/BatchLASPackaging.cmake)
+    # draws the same line for find_package.
     set_target_properties(${target} PROPERTIES
         VERSION "${PROJECT_VERSION}"
         SOVERSION "${PROJECT_VERSION_MAJOR}"
@@ -367,25 +372,25 @@ batchlas_configure_component(batchlas_extensions_stedc)
 add_library(batchlas_extensions_cta SHARED
     $<TARGET_OBJECTS:batchlas_extensions_cta_obj>
 )
-batchlas_configure_component(batchlas_extensions_cta NO_CPU_TARGETS)
+batchlas_configure_component(batchlas_extensions_cta ${_batchlas_host_native_no_cpu})
 
 # src/ops/CMakeLists.txt, EXTENSIONS_POSV_SOURCES: one tiny-tier TU each, split from cta.
 add_library(batchlas_extensions_posv SHARED
     $<TARGET_OBJECTS:batchlas_extensions_posv_obj>
 )
-batchlas_configure_component(batchlas_extensions_posv NO_CPU_TARGETS)
+batchlas_configure_component(batchlas_extensions_posv ${_batchlas_host_native_no_cpu})
 
 add_library(batchlas_extensions_gesv SHARED
     $<TARGET_OBJECTS:batchlas_extensions_gesv_obj>
 )
-batchlas_configure_component(batchlas_extensions_gesv NO_CPU_TARGETS)
+batchlas_configure_component(batchlas_extensions_gesv ${_batchlas_host_native_no_cpu})
 
 # ops/{symm,hemm,herk,her2k,syrk,syr2k,trmm}.cc from backends and trsm's kernels from sycl (see above
-# and src/ops/CMakeLists.txt): GPU-only.
+# and src/ops/CMakeLists.txt): GPU-only unless BATCHLAS_HAS_HOST_NATIVE.
 add_library(batchlas_extensions_level3 SHARED
     $<TARGET_OBJECTS:batchlas_extensions_level3_obj>
 )
-batchlas_configure_component(batchlas_extensions_level3 NO_CPU_TARGETS)
+batchlas_configure_component(batchlas_extensions_level3 ${_batchlas_host_native_no_cpu})
 
 add_library(batchlas_util SHARED
     $<TARGET_OBJECTS:batchlas_util_obj>

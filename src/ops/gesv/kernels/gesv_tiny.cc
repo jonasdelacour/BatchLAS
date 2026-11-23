@@ -13,6 +13,7 @@
 // The solution vector is NOT permuted -- x_i is the i-th unknown -- so the store writes
 // rX at row `rowid`, exactly as the factor store does.
 
+#include <batchlas/backend_config.h>
 #include <src/ops/gesv/gesv_native.hh>
 #include <src/kernels/common/info_target.hh>
 #include <src/kernels/common/launch.hh>
@@ -297,10 +298,14 @@ BATCHLAS_UNROLL_FULL
     }
 };
 
-// The local-memory row is for the 32-bit types at N >= 16, where it was measured.
+// The local-memory row is for the 32-bit types at N >= 16, where it was measured. A vendor-free
+// build keeps the sub-group broadcast: its opencl:cpu image of the float row kernels at N = 32 solves
+// wrongly (residual 2.0, odd items unwritten); the broadcast arm is right there at every NC and NR.
+// evidence: docs/design/vendor-independence.md#the-host-native-gate
 template <typename Scalar, int N>
 constexpr bool gesv_tiny_slm() {
-    return (std::is_same_v<Scalar, float> || std::is_same_v<Scalar, std::complex<float>>) && N >= 16;
+    return !BATCHLAS_HAS_HOST_NATIVE &&
+           (std::is_same_v<Scalar, float> || std::is_same_v<Scalar, std::complex<float>>) && N >= 16;
 }
 
 template <typename Scalar, int N, int NC, int NR, int MinBlocks, bool Masked>

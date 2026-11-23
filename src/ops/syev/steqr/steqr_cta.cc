@@ -183,8 +183,9 @@ Event steqr_cta(Queue& ctx, const VectorView<Real>& d_in, const VectorView<Real>
         throw batchlas::invalid_argument("steqr_cta currently supports 1 <= n <= 32.");
     }
 
-    // The CTA kernels build without CPU targets (NO_CPU_TARGETS), and the Intel OpenCL CPU
-    // offers sub-group size 32, so only a GPU reaches the launch.
+    // GPU only, the CPU takes steqr_wg. The CTA kernels have a CPU image only in a vendor-free
+    // build, and there SteqrCTAKernel<float, 32, true> reads out of bounds on the OpenCL CPU
+    // (SIGSEGV, 2026-11-21, not localised); the Intel OpenCL CPU also offers sub-group size 32.
     if (ctx.device().type != DeviceType::GPU || !ctx.device().supports_sub_group_size(32)) {
         return steqr_wg<B, Real>(ctx, d_in, e_in, eigenvalues, ws, jobz, params, eigvects, info);
     }
@@ -221,13 +222,10 @@ Event steqr_cta(Queue& ctx, const VectorView<Real>& d_in, const VectorView<Real>
     // Copy back eigenvalues.
     (void)VectorView<Real>::copy(ctx, evals, d);
 
-    // Optional fail-fast diagnostics: avoids silent non-convergence.
-    // Note: checking requires synchronization, so keep it opt-in.
-    // Diagnostics, and the OPPOSITE of a safety override: it ADDS a check,
-    // so gating it off under a locked-down build would entrench the silent
-    // non-convergence its default already has. First-character truthiness
-    // {1,t,T,y,Y} -- neither env_truthy nor env_falsy -- so the field is the
-    // raw value and the parser stays here.
+    // Opt-in fail-fast diagnostics against silent non-convergence (the check synchronises). The OPPOSITE of a
+    // safety override: it ADDS a check, so gating it off under a locked-down build would entrench the silent
+    // non-convergence its default already has. First-character truthiness {1,t,T,y,Y} -- neither env_truthy
+    // nor env_falsy -- so the field is the raw value and the parser stays here.
     if (const char* v = batchlas::settings().diagnostics.steqr_cta_check.get()) {
         const bool enabled = (v[0] == '1') || (v[0] == 't') || (v[0] == 'T') || (v[0] == 'y') || (v[0] == 'Y');
         if (enabled) {

@@ -41,11 +41,13 @@ select::Key key_of(const Args<Scalar>& a) {
 template <Backend B, class Scalar>
 bool can_run(const SygvdChoice& c, const select::Device& d, const Args<Scalar>& a) {
     const bool homogeneous = !a.A.is_heterogeneous() && !a.B.is_heterogeneous() && a.A.rows() >= 1;
-    // Compose honours a batch mask on a device, the NETLIB vendor on the host (where compose's trsm
-    // and trmm are the host BLAS, which refuses after sygst has written A); cuSOLVER cannot skip an item.
+    // Compose honours a batch mask wherever its children are natives (a device, a vendor-free host),
+    // the NETLIB vendor on a LAPACKE host (where compose's trsm and trmm are the host BLAS, which
+    // refuses after sygst has written A); cuSOLVER cannot skip an item.
     const bool masked = batchlas::detail::any_batch_mask(a.A, a.B);
+    const bool children_native = B != Backend::NETLIB || select::natives_run_on(d);
     return std::visit(overloaded{
-        [&](Compose) { return homogeneous && (!masked || B != Backend::NETLIB); },
+        [&](Compose) { return homogeneous && (!masked || children_native); },
         [&](Vendor) {
             return vendor_linked<B> && d.has_vendor && homogeneous && !a.factored && (!masked || B == Backend::NETLIB);
         },

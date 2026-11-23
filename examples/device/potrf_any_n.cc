@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// The device API guide's worked example (docs/design/device-la.md#device-la-worked-examples):
+// The device API guide's worked example (docs/guide/device-api.md#device-guide-example-potrf):
 // a user kernel that factors a batch of n x n SPD matrices with device::potrf, for any n.
 // with_tier picks ONE tier on the host from n and the device's limits; each tier is a separate
 // kernel, so no kernel carries the registers of a path it never takes. launch<R, Tier, T> gives
@@ -28,24 +28,32 @@ int run(sycl::queue& q, int n, int batch) {
     q.copy(host.data(), a, host.size()).wait();
 
     const char* tier = "";
+    // [device-guide-frame] begin: the launch frame docs/guide/device-api.md quotes
     using R = device::routine::potrf<Uplo::Lower>;
     device::with_tier<R, T>(q.get_device(), n, [&]<class Tier>(Tier) {
-        tier = device::tier::is_reg_v<Tier> ? "Reg" : device::tier::is_cta_v<Tier> ? "Cta" : "Blocked";
+        tier = device::tier::is_reg_v<Tier>   ? "Reg"
+               : device::tier::is_cta_v<Tier> ? "Cta"
+                                              : "Blocked";
         using L = device::launch<R, Tier, T>;
-        const auto sz = L::buffer_size(n);  // potrf's tiers need no global workspace
-        std::byte* gws = sz.global_bytes ? sycl::malloc_device<std::byte>(sz.global_bytes * batch, q) : nullptr;
+        const auto sz = L::buffer_size(n);  // potrf: no global workspace
+        const std::size_t gbytes = sz.global_bytes * batch;
+        auto* gws = gbytes ? sycl::malloc_device<std::byte>(gbytes, q) : nullptr;
         q.submit([&](sycl::handler& h) {
              auto slm = device::local_workspace<L>(h, sz);
-             h.parallel_for(L::nd_range(batch), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(L::sg_size) {
+             h.parallel_for(L::nd_range(batch),
+                 [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(L::sg_size) {
                  const auto ex = L::exec(it);
                  const auto s = L::slot(it, batch);  // {b, live}
-                 const int info = device::potrf<Uplo::Lower, Tier>(ex, device::mat(a + s.b * stride, n, n, ld),
-                                                                   L::workspace(it, slm, gws, sz), s.live);
+                 const auto A = device::mat(a + s.b * stride, n, n, ld);
+                 const auto ws = L::workspace(it, slm, gws, sz);
+                 const int info =
+                     device::potrf<Uplo::Lower, Tier>(ex, A, ws, s.live);
                  if (s.live && ex.leader()) info_out[s.b] = info;
              });
          }).wait_and_throw();
         if (gws) sycl::free(gws, q);
     });
+    // [device-guide-frame] end
 
     std::vector<T> l(host.size());
     std::vector<int> hinfo(batch);

@@ -36,6 +36,7 @@
 #include <map>
 #include <optional>
 #include <random>
+#include <set>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -216,10 +217,12 @@ class SytrfTest : public test_utils::BatchLASTest<Config> {
 protected:
     using T = typename Config::ScalarType;
     static constexpr Backend Bk = Config::BackendVal;
+    // The natives run on every GPU backend, and on NETLIB only in a vendor-free build (kHostNative).
+    static constexpr bool kNatives = Bk != Backend::NETLIB || select::kHostNative;
 
     static std::vector<ops::sytrf::SytrfChoice> routes(int n) {
         std::vector<ops::sytrf::SytrfChoice> r;
-        if (Bk != Backend::NETLIB) {
+        if (kNatives) {
             if (n <= 32) r.push_back(ops::sytrf::Cta{});
             r.push_back(ops::sytrf::Wg{});
             r.push_back(ops::sytrf::Blocked{});
@@ -270,8 +273,8 @@ protected:
 
     std::vector<ops::sysv::SysvChoice> sysv_routes(int n) const {
         std::vector<ops::sysv::SysvChoice> r;
-        if (Bk == Backend::NETLIB && !select::kHasNetlib) return r;  // compose's sytrf has no route
-        if (Bk != Backend::NETLIB && n <= 32) r.push_back(ops::sysv::Cta{});
+        if (!kNatives && !select::kHasNetlib) return r;  // compose's sytrf has no route
+        if (kNatives && n <= 32) r.push_back(ops::sysv::Cta{});
         r.push_back(ops::sysv::Compose{});
         return r;
     }
@@ -279,19 +282,18 @@ protected:
     // Whether sytrs `cta` can take order n here: the register tile and this device's local memory.
     bool cta_fits(int n) const {
         const auto& d = select::describe(this->ctx->device(), Bk, false);
-        return Bk != Backend::NETLIB && n <= ops::sytrf::kSytrsCtaMaxN &&
+        return kNatives && n <= ops::sytrf::kSytrsCtaMaxN &&
                static_cast<int64_t>(ops::sytrf::sytrs_cta_slm_bytes<T>(n)) <= d.slm_budget;
     }
 
     std::vector<ops::sytrs::SytrsChoice> solve_routes(int n) const {
         std::vector<ops::sytrs::SytrsChoice> r;
-        if (Bk != Backend::NETLIB) {
+        if (kNatives) {
             if (cta_fits(n)) r.push_back(ops::sytrs::Cta{});
             r.push_back(ops::sytrs::Blocked{});
             r.push_back(ops::sytrs::Wg{});
-        } else if (select::kHasNetlib) {
-            r.push_back(ops::sytrs::Vendor{});
         }
+        if (Bk == Backend::NETLIB && select::kHasNetlib) r.push_back(ops::sytrs::Vendor{});
         return r;
     }
 };
@@ -417,7 +419,7 @@ TYPED_TEST(SytrfTest, SingularItemReportsInfoWithoutDisturbingTheOthers) {
 // the cta factor plus sytrs (both reduce over one sub-group).
 TYPED_TEST(SytrfTest, CtaAndWgAgreeBitForBit) {
     using T = typename TestFixture::T;
-    if constexpr (TestFixture::Bk == Backend::NETLIB) GTEST_SKIP() << "no native route on NETLIB";
+    if constexpr (!TestFixture::kNatives) GTEST_SKIP() << "no native route on a NETLIB queue with netlib linked";
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
         for (int n : {7, 24, 32}) {
             auto p = make_sys<T>(n, 2, 9, uplo, Gen::random, 500u + unsigned(n));
@@ -487,7 +489,7 @@ TYPED_TEST(SytrfTest, WgPivotsMatchVendor) {
 // the blocked tier with its trailing gemm (n = 170).
 TYPED_TEST(SytrfTest, SaturatingBatchIsBitIdenticalToItemZero) {
     using T = typename TestFixture::T;
-    if constexpr (TestFixture::Bk == Backend::NETLIB) GTEST_SKIP() << "no native route on NETLIB";
+    if constexpr (!TestFixture::kNatives) GTEST_SKIP() << "no native route on a NETLIB queue with netlib linked";
     const int batch = 1024;
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
         for (int route = 0; route < 4; ++route) {
@@ -516,7 +518,7 @@ TYPED_TEST(SytrfTest, SaturatingBatchIsBitIdenticalToItemZero) {
 // shipped table runs cta at 32 and wg at 33 (bit-identical to the pinned run).
 TYPED_TEST(SytrfTest, CtaCeilingStraddled) {
     using T = typename TestFixture::T;
-    if constexpr (TestFixture::Bk == Backend::NETLIB) GTEST_SKIP() << "no native route on NETLIB";
+    if constexpr (!TestFixture::kNatives) GTEST_SKIP() << "no native route on a NETLIB queue with netlib linked";
     for (int n : {32, 33}) {
         auto pinned = make_sys<T>(n, 1, 128, Uplo::Lower, Gen::random, 31u);
         auto autop = make_sys<T>(n, 1, 128, Uplo::Lower, Gen::random, 31u);
@@ -556,7 +558,7 @@ TYPED_TEST(SytrfTest, ArgumentChecks) {
 // 31), where a panel ends one column late and the next starts one late.
 TYPED_TEST(SytrfTest, BlockedMatchesWgAndVendor) {
     using T = typename TestFixture::T;
-    if constexpr (TestFixture::Bk == Backend::NETLIB) GTEST_SKIP() << "no native route on NETLIB";
+    if constexpr (!TestFixture::kNatives) GTEST_SKIP() << "no native route on a NETLIB queue with netlib linked";
     const bool vendor = TestFixture::Bk == Backend::CUDA && select::kHasCudaVendor;
     constexpr int nb = ops::sytrf::kSytrfBlockedNb;
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
@@ -596,7 +598,7 @@ TYPED_TEST(SytrfTest, BlockedMatchesWgAndVendor) {
 // and the tail (the panel's info must survive the hand-off), {40, 70} in panels only.
 TYPED_TEST(SytrfTest, SingularColumnsReportTheFirstInLoopOrder) {
     using T = typename TestFixture::T;
-    if constexpr (TestFixture::Bk == Backend::NETLIB) GTEST_SKIP() << "no native route on NETLIB";
+    if constexpr (!TestFixture::kNatives) GTEST_SKIP() << "no native route on a NETLIB queue with netlib linked";
     const int n = 100, s = 3;
     const std::vector<std::vector<int>> zero_sets{{40, 70}, {95}, {4}, {40, 95}, {4, 60}};
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
@@ -627,7 +629,7 @@ TYPED_TEST(SytrfTest, SingularColumnsReportTheFirstInLoopOrder) {
 // evidence: docs/perf/sytrf.md#sytrf-termination
 TYPED_TEST(SytrfTest, NonFiniteAndAliasedItemsTerminate) {
     using T = typename TestFixture::T;
-    if constexpr (TestFixture::Bk == Backend::NETLIB) GTEST_SKIP() << "no native route on NETLIB";
+    if constexpr (!TestFixture::kNatives) GTEST_SKIP() << "no native route on a NETLIB queue with netlib linked";
     const T nan = MV<T>::make(std::numeric_limits<double>::quiet_NaN(), 0.0);
     const T inf = MV<T>::make(std::numeric_limits<double>::infinity(), 1.0);
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
@@ -661,7 +663,8 @@ TYPED_TEST(SytrfTest, NonFiniteAndAliasedItemsTerminate) {
 // access, and the other items are still solved. Every native sytrs family.
 TYPED_TEST(SytrfTest, SytrsMalformedPivotsGiveNaN) {
     using T = typename TestFixture::T;
-    if constexpr (TestFixture::Bk == Backend::NETLIB) GTEST_SKIP() << "LAPACKE ?sytrs does not check ipiv";
+    // With netlib the host's only sytrs is LAPACKE's, which does not check ipiv; a vendor-free host runs the natives.
+    if constexpr (!TestFixture::kNatives) GTEST_SKIP() << "LAPACKE ?sytrs does not check ipiv";
     const int n = 40;
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
         for (const auto& c : this->solve_routes(n)) {
@@ -695,7 +698,8 @@ TYPED_TEST(SytrfTest, SytrsEveryFamily) {
             for (int n : {1, 3, 17, 32, 33, 64, 65, 128, 129, 300})
                 for (int nrhs : {1, 8, 9}) {
                     if (gen == Gen::kkt && n < 3) continue;
-                    if (TestFixture::Bk == Backend::NETLIB && (n > 65 || nrhs == 8)) continue;  // one family: LAPACKE
+                    // The host queue: fewer cells (LAPACKE, or the natives on a CPU); the GPU rows take the rest.
+                    if (TestFixture::Bk == Backend::NETLIB && (n > 65 || nrhs == 8)) continue;
                     for (const auto& c : this->solve_routes(n)) {
                         auto p = make_sys<T>(n, nrhs, 4, uplo, gen, 2000u + unsigned(n) + 7u * unsigned(nrhs));
                         this->factor_auto(p);
@@ -784,7 +788,7 @@ TYPED_TEST(SytrfTest, SytrsTwoByTwoAcrossTheLaneBoundary) {
 // columns), blocked (its trsm and chunked passes) and wg.
 TYPED_TEST(SytrfTest, SytrsSaturatingBatchIsBitIdenticalToItemZero) {
     using T = typename TestFixture::T;
-    if constexpr (TestFixture::Bk == Backend::NETLIB) GTEST_SKIP() << "no native route on NETLIB";
+    if constexpr (!TestFixture::kNatives) GTEST_SKIP() << "no native route on a NETLIB queue with netlib linked";
     const int batch = 1024;
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
         for (const auto& [c, n] : {std::pair{ops::sytrs::SytrsChoice{ops::sytrs::Cta{}}, 32},
@@ -806,7 +810,7 @@ TYPED_TEST(SytrfTest, SytrsSaturatingBatchIsBitIdenticalToItemZero) {
 // 128 at all), and Auto solves on both sides.
 TYPED_TEST(SytrfTest, SytrsCtaCeilingStraddled) {
     using T = typename TestFixture::T;
-    if constexpr (TestFixture::Bk == Backend::NETLIB) GTEST_SKIP() << "no native route on NETLIB";
+    if constexpr (!TestFixture::kNatives) GTEST_SKIP() << "no native route on a NETLIB queue with netlib linked";
     for (int n : {ops::sytrf::kSytrsCtaMaxN, ops::sytrf::kSytrsCtaMaxN + 1}) {
         auto p = make_sys<T>(n, 2, 128, Uplo::Lower, Gen::random, 37u);
         this->factor_auto(p);
@@ -846,12 +850,12 @@ TYPED_TEST(SytrfTest, SytrsSkipListEveryFamily) {
             }
 }
 
-// blocked's batch chunks (forced to 7 over 23 items: 7 + 7 + 9), in order and out of order: every
+// blocked's batch chunks (forced to 7 over 23 items: parts 8 + 8 + 7), in order and out of order: every
 // item is solved from its own factor and pivots, a malformed list in the last part gives that item
 // NaN, and sysv's skip list reaches the item in the second part.
 TYPED_TEST(SytrfTest, SytrsBlockedChunksKeepEachItemsPivots) {
     using T = typename TestFixture::T;
-    if constexpr (TestFixture::Bk == Backend::NETLIB) GTEST_SKIP() << "no native route on NETLIB";
+    if constexpr (!TestFixture::kNatives) GTEST_SKIP() << "no native route on a NETLIB queue with netlib linked";
     else {
         const int n = 45, batch = 23;
         const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "7");
@@ -882,11 +886,34 @@ TYPED_TEST(SytrfTest, SytrsBlockedChunksKeepEachItemsPivots) {
     }
 }
 
+// blocked's parts are one size where the batch allows it, so its trsm children select at one key:
+// a chunk forced to 7 over 24 items is 8 + 8 + 8, and every reached trsm row has batch 8. Uneven
+// parts (the old 7 + 7 + 10) re-selected per part, and on apple_m5_max the part of 352 of a
+// 1024-item batch ran another gemm (SytrsSaturatingBatchIsBitIdenticalToItemZero, items 672 on).
+// BREAK: the old remainder-last loop gives trsm rows at batch 7 and 10.
+TYPED_TEST(SytrfTest, SytrsBlockedPartsSelectTheirTrsmAtOneBatch) {
+    using T = typename TestFixture::T;
+    if constexpr (!TestFixture::kNatives) GTEST_SKIP() << "no native route on a NETLIB queue with netlib linked";
+    else {
+        const int n = 45, batch = 24;
+        const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "7");
+        ASSERT_EQ(tuning::blocked_chunk_items(batch, 1, 1, 1), 7) << "the override did not reach the accessor";
+        auto p = make_sys<T>(n, 3, batch, Uplo::Lower, Gen::kkt, 2950u);
+        this->factor_auto(p);
+        const auto rows = ts::reached_rows([&] { this->solve(p, ops::sytrs::Blocked{}); });
+        std::set<long long> batches;
+        for (const auto& r : rows)
+            if (r.op == "trsm") batches.insert(r.batch);
+        EXPECT_EQ(batches, (std::set<long long>{8})) << "blocked's parts are not one size";
+        EXPECT_VERIFY(T, Check::solve, n, this->residual(p));
+    }
+}
+
 // Linked is not reached: each pinned native family leaves a `reached,sytrs` coverage row with its
 // own spelling and the call's key (m = k = n, n = nrhs). threadsafe: the child re-executes the binary.
 TYPED_TEST(SytrfTest, SytrsPinnedFamiliesAreReached) {
     using T = typename TestFixture::T;
-    if constexpr (TestFixture::Bk == Backend::NETLIB) GTEST_SKIP() << "no native route on NETLIB";
+    if constexpr (!TestFixture::kNatives) GTEST_SKIP() << "no native route on a NETLIB queue with netlib linked";
     else {
         const std::vector<std::tuple<ops::sytrs::SytrsChoice, int, int, std::string>> runs{
             {ops::sytrs::Cta{}, 16, 4, "cta"}, {ops::sytrs::Blocked{}, 48, 3, "blocked"}, {ops::sytrs::Wg{}, 40, 2, "wg"}};

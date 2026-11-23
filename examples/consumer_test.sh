@@ -196,6 +196,93 @@ grep -q 'PASS' "${run_log}" || fail "consumer example did not report PASS"
 say "consumer ran and the numbers are right"
 
 # ---------------------------------------------------------------------------
+# Phase 3b: one version everywhere, and find_package draws the major line.
+# The installed version.hh, the CMake package (BatchLAS_VERSION), the string the
+# consumer compiled in and the SONAME must agree. Then the probes that pin
+# SameMajorVersion against a MAJOR.MINOR.PATCH install:
+#   MAJOR.0 accepted (the example's own request): ExactVersion refuses it;
+#   (MAJOR-1).99 refused: AnyNewerVersion accepts it;
+#   MAJOR.(MINOR+1) and (MAJOR+1).0 refused: every CMake mode refuses both, so
+#   they only catch a hand-written version file that accepts too much.
+# SameMinorVersion passes all of them while MINOR is 0. The probes are first run
+# against CMake's own ExactVersion/AnyNewerVersion files, so a probe that stops
+# telling the modes apart turns this red.
+# ---------------------------------------------------------------------------
+version_hh="${prefix}/include/batchlas/version.hh"
+[[ -f "${version_hh}" ]] || fail "missing installed header: include/batchlas/version.hh"
+hdr_part() { sed -n "s/^#define BATCHLAS_VERSION_$1 *//p" "${version_hh}" | tr -d '"[:space:]'; }
+hdr_major="$(hdr_part MAJOR)"
+hdr_version="${hdr_major}.$(hdr_part MINOR).$(hdr_part PATCH)"
+[[ "$(hdr_part STRING)" == "${hdr_version}" ]] \
+    || fail "version.hh: BATCHLAS_VERSION_STRING '$(hdr_part STRING)' is not MAJOR.MINOR.PATCH '${hdr_version}'"
+[[ "${hdr_major}" =~ ^[0-9]+$ ]] || fail "version.hh: BATCHLAS_VERSION_MAJOR '${hdr_major}' is not a number"
+pkg_version="$(sed -n 's/^-- BatchLAS package version \([^ ]*\) .*/\1/p' "${log_dir}/configure.log" | head -n 1)"
+[[ "${pkg_version}" == "${hdr_version}" ]] \
+    || fail "find_package reports BatchLAS ${pkg_version:-<none>}, the installed version.hh says ${hdr_version}"
+grep -qx "batchlas version = ${hdr_version}" "${run_log}" \
+    || fail "the consumer compiled in a BATCHLAS_VERSION_STRING other than ${hdr_version} (see ${run_log})"
+if ! compgen -G "${prefix}/lib*/libbatchlas*.so.${hdr_major}" >/dev/null && \
+   ! compgen -G "${prefix}/lib*/libbatchlas*.${hdr_major}.dylib" >/dev/null && \
+   ! compgen -G "${prefix}/lib*/libbatchlas*.a" >/dev/null; then
+    fail "no installed libbatchlas*.so.${hdr_major} / .${hdr_major}.dylib: the SONAME does not follow the major version"
+fi
+accept_request="${hdr_major}.0"
+grep -qx "BATCHLAS_CONSUMER_REQUIRE_VERSION:STRING=${accept_request}" "${consumer_build}/CMakeCache.txt" \
+    || fail "the example's find_package did not ask for ${accept_request} (see ${consumer_build}/CMakeCache.txt)"
+refuse_requests=("${hdr_major}.$(( $(hdr_part MINOR) + 1 ))" "$((hdr_major + 1)).0")
+[[ ${hdr_major} -gt 0 ]] && refuse_requests+=("$((hdr_major - 1)).99")
+
+# The probe set against CMake's own version files for this version.
+mode_script="${work_dir}/version-mode.cmake"
+cat >"${mode_script}" <<'EOF'
+include(CMakePackageConfigHelpers)
+write_basic_package_version_file("${OUT}" VERSION "${VER}" COMPATIBILITY "${MODE}")
+set(PACKAGE_FIND_VERSION "${REQ}")
+string(REPLACE "." ";" _parts "${REQ}")
+list(LENGTH _parts PACKAGE_FIND_VERSION_COUNT)
+list(GET _parts 0 PACKAGE_FIND_VERSION_MAJOR)
+list(GET _parts 1 PACKAGE_FIND_VERSION_MINOR)
+set(PACKAGE_FIND_VERSION_PATCH 0)
+include("${OUT}")
+message("compatible=${PACKAGE_VERSION_COMPATIBLE}")
+EOF
+mode_accepts() {
+    # $1 = COMPATIBILITY mode, $2 = request; exit 0 iff that mode's file accepts the request
+    local out
+    out="$("${cmake_bin}" -DMODE="$1" -DREQ="$2" -DVER="${hdr_version}" \
+        -DOUT="${work_dir}/version-$1.cmake" -P "${mode_script}" 2>&1)" \
+        || fail "cmake -P ${mode_script} (${1}, ${2}) failed: ${out}"
+    [[ "${out}" == *"compatible=TRUE"* ]]
+}
+mode_accepts SameMajorVersion "${accept_request}" \
+    || fail "probe self-check: SameMajorVersion refuses ${accept_request}"
+any_newer_caught=0
+for req in "${refuse_requests[@]}"; do
+    ! mode_accepts SameMajorVersion "${req}" || fail "probe self-check: SameMajorVersion accepts ${req}"
+    mode_accepts AnyNewerVersion "${req}" && any_newer_caught=1
+done
+! mode_accepts ExactVersion "${accept_request}" \
+    || fail "probe self-check: ExactVersion accepts ${accept_request}, so that probe cannot tell it apart"
+[[ ${hdr_major} -eq 0 || ${any_newer_caught} -eq 1 ]] \
+    || fail "probe self-check: AnyNewerVersion refuses all of ${refuse_requests[*]}, so no probe tells it apart"
+
+for req in "${refuse_requests[@]}"; do
+    req_log="${log_dir}/configure-request-${req}.log"
+    if configure_consumer "${work_dir}/build-request-${req}" \
+            -DBATCHLAS_CONSUMER_REQUIRE_VERSION="${req}" >"${req_log}" 2>&1; then
+        fail "find_package(BatchLAS ${req}) accepted a ${hdr_version} install (full log: ${req_log})"
+    fi
+    # CMake lists the rejected candidate with its version; anything else failed for another reason.
+    grep -q "version: ${hdr_version}" "${req_log}" || {
+        tail -n 40 "${req_log}" >&2
+        fail "find_package(BatchLAS ${req}) failed, but not by refusing version ${hdr_version} (full log: ${req_log})"
+    }
+done
+say "version ${hdr_version}: version.hh, package, compiled string and SONAME agree;" \
+    "find_package accepts ${accept_request}, refuses ${refuse_requests[*]}" \
+    "(probes checked against CMake's ExactVersion/AnyNewerVersion files)"
+
+# ---------------------------------------------------------------------------
 # Phase 4: the include-collision probe. Build the same example again with
 # consumer-owned blas/enums.hh, util/workspace.hh and internal/ormqr_blocked.hh
 # ahead of BatchLAS's headers -- see consumer/decoy_include/util/workspace.hh.

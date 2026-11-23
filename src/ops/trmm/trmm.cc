@@ -58,10 +58,10 @@ bool can_run(const TrmmChoice& c, const select::Device& d, Queue& q, const MV<Sc
              const MV<Scalar>& C, Side side) {
     // Both natives honour a batch mask; the vendor's per-item loop cannot skip an item.
     const bool masked = batchlas::detail::any_batch_mask(A, Bm, C);
-    constexpr bool kWired = select::native_gpu_backend<B>;  // D6: portable kernels, wired for CUDA and SYCL
+    constexpr bool kWired = select::native_backend<B>;  // D6: portable kernels: CUDA, SYCL, vendor-free NETLIB
     const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
-    const bool native = kWired && d.is_gpu && homogeneous && d.max_wg >= kNativeWg && C.rows() >= 1 &&
-                        C.cols() >= 1 && A.batch_size() >= 1;
+    const bool native = kWired && select::natives_run_on(d) && homogeneous && d.max_wg >= kNativeWg &&
+                        C.rows() >= 1 && C.cols() >= 1 && A.batch_size() >= 1;
     return std::visit(overloaded{
         [&](Triangular) {
             return native && backend::detail::trmm_tiles_supported(A, Bm, C, side) &&
@@ -111,7 +111,7 @@ Event launch(Queue& q, const TrmmChoice& c, const MV<Scalar>& A, const MV<Scalar
              Uplo uplo, Transpose transA, Diag diag) {
     return std::visit(overloaded{
         [&](Triangular) -> Event {
-            if constexpr (select::native_gpu_backend<B>)
+            if constexpr (select::native_backend<B>)
                 return level3::for_each_chunk(q, A.batch_size(), level3::grid_chunk<B>(q), [&](int f, int n) {
                     return backend::detail::trmm_triangular_tiles<Scalar>(q, level3::batch_range(A, f, n),
                                                                           level3::batch_range(Bm, f, n),
@@ -119,13 +119,13 @@ Event launch(Queue& q, const TrmmChoice& c, const MV<Scalar>& A, const MV<Scalar
                                                                           transA, diag);
                 });
             else
-                throw batchlas::internal_error("trmm: triangular is wired for native GPU backends only");  // can_run refuses it
+                throw batchlas::internal_error("trmm: triangular is wired for native backends only");  // can_run refuses it
         },
         [&](Expand) -> Event {
-            if constexpr (select::native_gpu_backend<B>)
+            if constexpr (select::native_backend<B>)
                 return launch_expand<B, Scalar>(q, A, Bm, C, alpha, side, uplo, transA, diag);
             else
-                throw batchlas::internal_error("trmm: expand is wired for native GPU backends only");  // can_run refuses it
+                throw batchlas::internal_error("trmm: expand is wired for native backends only");  // can_run refuses it
         },
         [&](Vendor) -> Event {
             if constexpr (select::has_library<B>(spec.vendor))

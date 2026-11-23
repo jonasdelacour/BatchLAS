@@ -6,7 +6,7 @@
 ///        factored B.
 /// @ingroup api_eigen
 
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <cstdint>
 
 #include <batchlas/util/sycl-device-queue.hh>

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <algorithm>
 #include <stdexcept>
 #include <string>
@@ -227,6 +227,25 @@ template <typename Scalar>
 inline Matrix<Scalar, MatrixFormat::Dense> like(const MatrixView<Scalar, MatrixFormat::Dense>& A) {
     return Matrix<Scalar, MatrixFormat::Dense>(A.rows(), A.cols(), A.batch_size());
 }
+
+/// @brief Runs a wrapper body through on_in_order_queue, draining its queue if the body throws.
+// A throw (a routed op's NoRouteError) leaves the body's earlier launches running on locals and on
+// an in-order Queue that unwinding destroys: linalg::qr's copy of A ran on after geqrf threw and
+// crashed the OpenCL CPU (linalg_layer_tests SIGSEGV in CopyKernel3D).
+template <typename F>
+inline auto ordered(Queue& ctx, F&& body) {
+    return ::batchlas::detail::on_in_order_queue(ctx, [&](Queue& q) {
+        try {
+            return body(q);
+        } catch (...) {
+            try {
+                q.wait();
+            } catch (...) {  // the body's error is the one to report
+            }
+            throw;
+        }
+    });
+}
 }  // namespace detail
 
 /// @addtogroup api_linalg
@@ -309,8 +328,9 @@ inline Matrix<Scalar, MatrixFormat::Dense> scaled(Queue& ctx,
 }
 
 // ---- value-returning wrappers ---------------------------------------------
-// A wrapper that submits more than once runs its body through on_in_order_queue: on an
-// out-of-order Queue the copy of A would otherwise race the factorisation that reads it.
+// A wrapper that submits more than once runs its body through detail::ordered (on_in_order_queue,
+// drained on a throw): on an out-of-order Queue the copy of A would otherwise race the
+// factorisation that reads it.
 // The Hermitian wrappers mirror the named triangle on their copy: some drivers read the
 // other one (defect 14).
 // evidence: docs/design/api-conventions.md#api-conventions-linalg-wrappers-order-their-own-launches
@@ -388,7 +408,7 @@ inline Matrix<Scalar, MatrixFormat::Dense> gram(Queue& ctx,
     const bool inner = trans != Transpose::NoTrans;
     const int n = inner ? A.cols() : A.rows();
     Matrix<Scalar, MatrixFormat::Dense> C(n, n, A.batch_size());
-    (void)::batchlas::detail::on_in_order_queue(ctx, [&](Queue& q) {
+    (void)detail::ordered(ctx, [&](Queue& q) {
         if constexpr (RealScalar<Scalar>) {
             (void)syrk(q, A, C,
                        SyrkOptions<Scalar>{.uplo = kDefaultUplo,
@@ -421,7 +441,7 @@ inline Matrix<Scalar, MatrixFormat::Dense> solve_triangular(Queue& ctx,
                                                             const TrsmOptions<Scalar>& opts = {}) {
     detail::refuse_batch_mask("solve_triangular", A, B);
     Matrix<Scalar, MatrixFormat::Dense> X(B.rows(), B.cols(), B.batch_size());
-    (void)::batchlas::detail::on_in_order_queue(ctx, [&](Queue& q) {
+    (void)detail::ordered(ctx, [&](Queue& q) {
         (void)MatrixView<Scalar, MatrixFormat::Dense>::copy(q, X, B);
         return trsm(q, A, X, opts);
     });
@@ -451,7 +471,7 @@ inline Cholesky<Scalar> cholesky(Queue& ctx,
     ::batchlas::detail::require_square("cholesky", "A", A);
     auto F = detail::like(A);
     UnifiedVector<int32_t> info(static_cast<size_t>(A.batch_size()));
-    (void)::batchlas::detail::on_in_order_queue(ctx, [&](Queue& q) {
+    (void)detail::ordered(ctx, [&](Queue& q) {
         (void)MatrixView<Scalar, MatrixFormat::Dense>::copy(q, F, A);
         (void)potrf(q, F, PotrfOptions{.uplo = uplo, .info = info.to_span()});
         // Vendor Upper potrf overwrites the other triangle; zero it for a clean factor.
@@ -475,7 +495,7 @@ inline UnifiedVector<typename base_type<Scalar>::type> eigvalsh(Queue& ctx,
     UnifiedVector<typename base_type<Scalar>::type> W(static_cast<size_t>(A.rows()) *
                                                       static_cast<size_t>(A.batch_size()));
     auto work = detail::like(A);
-    (void)::batchlas::detail::on_in_order_queue(ctx, [&](Queue& q) {
+    (void)detail::ordered(ctx, [&](Queue& q) {
         (void)MatrixView<Scalar, MatrixFormat::Dense>::copy(q, work, A);
         (void)work.hermitize(q, uplo);
         (void)syev(q, work, W.to_span(), {.jobz = JobType::NoEigenVectors, .uplo = uplo});
@@ -513,7 +533,7 @@ inline Eigh<Scalar> eigh(Queue& ctx,
     // here would find batchlas::linalg::detail.
     ::batchlas::detail::require_square("eigh", "A", A);
     auto V = detail::like(A);
-    (void)::batchlas::detail::on_in_order_queue(ctx, [&](Queue& q) {
+    (void)detail::ordered(ctx, [&](Queue& q) {
         (void)MatrixView<Scalar, MatrixFormat::Dense>::copy(q, V, A);
         (void)V.hermitize(q, uplo);
         // Positional because SyevOptions has no `info` field.
@@ -574,7 +594,7 @@ inline EighSubset<Scalar> eigh_subset(Queue& ctx,
         UnifiedVector<int32_t>(static_cast<size_t>(batch))};
     const MatrixView<Scalar, MatrixFormat::Dense> V =
         vectors ? MatrixView<Scalar, MatrixFormat::Dense>(r.vectors) : MatrixView<Scalar, MatrixFormat::Dense>();
-    (void)::batchlas::detail::on_in_order_queue(ctx, [&](Queue& q) {
+    (void)detail::ordered(ctx, [&](Queue& q) {
         auto lease = q.workspace(syevx_buffer_size(q, A, r.values.to_span(), r.count.to_span(),
                                                    static_cast<size_t>(k), jobz, V, subset));
         return syevx(q, A, r.values.to_span(), r.count.to_span(), static_cast<size_t>(k),
@@ -644,7 +664,7 @@ inline Solve<Scalar> solve(Queue& ctx,
     auto LU = detail::like(A);
     Matrix<Scalar, MatrixFormat::Dense> X(B.rows(), B.cols(), B.batch_size());
     UnifiedVector<int32_t> info(static_cast<size_t>(A.batch_size()));
-    (void)::batchlas::detail::on_in_order_queue(ctx, [&](Queue& q) {
+    (void)detail::ordered(ctx, [&](Queue& q) {
         (void)MatrixView<Scalar, MatrixFormat::Dense>::copy(q, LU, A);
         (void)MatrixView<Scalar, MatrixFormat::Dense>::copy(q, X, B);
         const size_t n_pivots = static_cast<size_t>(A.rows()) * static_cast<size_t>(A.batch_size());
@@ -689,7 +709,7 @@ inline Solve<Scalar> solve_spd(Queue& ctx,
     auto F = detail::like(A);
     Matrix<Scalar, MatrixFormat::Dense> X(B.rows(), B.cols(), B.batch_size());
     UnifiedVector<int32_t> info(static_cast<size_t>(A.batch_size()));
-    (void)::batchlas::detail::on_in_order_queue(ctx, [&](Queue& q) {
+    (void)detail::ordered(ctx, [&](Queue& q) {
         (void)MatrixView<Scalar, MatrixFormat::Dense>::copy(q, F, A);
         (void)MatrixView<Scalar, MatrixFormat::Dense>::copy(q, X, B);
         auto lease = q.workspace(posv_buffer_size(q, F, X, uplo));
@@ -753,7 +773,7 @@ inline Inv<Scalar> inv(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>
     auto LU = detail::like(A);
     auto Ainv = detail::like(A);
     UnifiedVector<int32_t> info(static_cast<size_t>(A.batch_size()));
-    (void)::batchlas::detail::on_in_order_queue(ctx, [&](Queue& q) {
+    (void)detail::ordered(ctx, [&](Queue& q) {
         (void)MatrixView<Scalar, MatrixFormat::Dense>::copy(q, LU, A);
         const size_t n_pivots = static_cast<size_t>(A.rows()) * static_cast<size_t>(A.batch_size());
         auto pivot_bytes = q.workspace(n_pivots * sizeof(int64_t));
@@ -870,7 +890,7 @@ inline Svd<Scalar> svd(Queue& ctx,
     const MV Uv = opts.jobu == SvdVectors::None ? MV() : MV(U);
     const MV Vhv = opts.jobvh == SvdVectors::None ? MV() : MV(Vh);
 
-    (void)::batchlas::detail::on_in_order_queue(ctx, [&](Queue& q) {
+    (void)detail::ordered(ctx, [&](Queue& q) {
         (void)MV::copy(q, work, A);
         if (opts.hermitian_uplo) (void)work.hermitize(q, *opts.hermitian_uplo);
         // Positional because GesvdOptions has no `info` field; size and call take one branch.
@@ -925,7 +945,7 @@ inline Lu<Scalar> lu(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& 
     UnifiedVector<int64_t> pivots(static_cast<size_t>(A.rows()) *
                                   static_cast<size_t>(A.batch_size()));
     UnifiedVector<int32_t> info(static_cast<size_t>(A.batch_size()));
-    (void)::batchlas::detail::on_in_order_queue(ctx, [&](Queue& q) {
+    (void)detail::ordered(ctx, [&](Queue& q) {
         (void)MatrixView<Scalar, MatrixFormat::Dense>::copy(q, LU, A);
         return ::batchlas::getrf(q, LU, pivots.to_span(), info.to_span());
     });
@@ -956,7 +976,7 @@ inline Qr<Scalar> qr(Queue& ctx, const MatrixView<Scalar, MatrixFormat::Dense>& 
     auto Q = detail::like(A);
     Matrix<Scalar, MatrixFormat::Dense> R(n, n, batch);
     UnifiedVector<Scalar> tau(static_cast<size_t>(n) * static_cast<size_t>(batch));
-    (void)::batchlas::detail::on_in_order_queue(ctx, [&](Queue& q) {
+    (void)detail::ordered(ctx, [&](Queue& q) {
         (void)MatrixView<Scalar, MatrixFormat::Dense>::copy(q, Q, A);
         (void)geqrf(q, Q, tau.to_span());
         if (n > 0) (void)triangular_mask_into<Scalar>(q, Q(Slice(0, n), Slice()), R, Uplo::Upper);

@@ -5,7 +5,8 @@
 /// @brief `batchlas::portable::` group broadcast, shuffles and sums for any trivially copyable or complex `T`.
 ///
 /// Under DPC++ these names are the `sycl::` functions themselves (using-declarations),
-/// so a call compiles to exactly the direct `sycl::` call. Under AdaptiveCpp they are
+/// so a call compiles to exactly the direct `sycl::` call; group_broadcast and joint_exclusive_scan
+/// are wrappers, which forward except on a SPIR work-group (see their TRAPs). Under AdaptiveCpp they are
 /// wrappers: a value not 1, 2, 4 or 8 bytes wide moves word by word and a `std::complex` sum
 /// reduces its real and imaginary parts separately. A separate namespace keeps
 /// unqualified calls on sub-group partitions (sg_partition.hh) resolving as before.
@@ -14,7 +15,7 @@
 /// tree wholesale); the device BLAS headers include it. Not a stable interface.
 /// @ingroup api_internal_helpers
 
-#include <batchlas/backend_config.h>
+#include <batchlas/config.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -379,8 +380,102 @@ inline OutPtr joint_exclusive_scan(Group g, InPtr first, InPtr last, OutPtr resu
 
 #else
 
-using sycl::group_broadcast;
-using sycl::joint_exclusive_scan;
+namespace detail {
+template <typename G>
+inline constexpr bool kWorkGroup = false;
+template <int D>
+inline constexpr bool kWorkGroup<sycl::group<D>> = true;
+
+// The source's local linear id: item 0, a linear id, or a sycl::id<D> (row-major, as
+// get_local_linear_id counts).
+template <typename Group>
+inline std::size_t source_linear_id(const Group&) {
+    return 0;
+}
+template <typename Group, typename I>
+    requires std::is_integral_v<I>
+inline std::size_t source_linear_id(const Group&, I id) {
+    return static_cast<std::size_t>(id);
+}
+template <typename Group, int D>
+inline std::size_t source_linear_id(const Group& g, sycl::id<D> id) {
+    const sycl::range<D> r = g.get_local_range();
+    std::size_t l = 0;
+    for (int k = 0; k < D; ++k) l = l * r[k] + id[k];
+    return l;
+}
+}  // namespace detail
+
+// TRAP (DPC++ CPU device, spir64_x86_64): sycl::group_broadcast over a WORK-GROUP launched
+// with reqd_sub_group_size(32) reaches lanes 0..15 of each sub-group only; lanes 16..31 keep
+// their own x (WG 256: 128 of 256 items at 4 to 16 bytes, and short and bool fail too; the
+// Blocked device syev's sytrd lost its reflector scale, 2026-11-21). The SPIR device pass ORs the source's bits
+// over the group word by word instead, exact for every trivially copyable T: a T that is not a
+// whole number of words rides zero-padded in the last 32-bit word (device::detail::group_bcast
+// ORs one 4- or 8-byte word the same way). NVPTX, AMDGCN, the host pass and sub-groups call
+// sycl::group_broadcast unchanged.
+/// @brief `sycl::group_broadcast`, correct on every item of a SPIR work-group for every
+/// trivially copyable `T`. Collective.
+/// @param[in] g   group or sub-group; every work-item of it must call
+/// @param[in] x   this work-item's value; only the source work-item's is used
+/// @param[in] id  local id of the source work-item (omitted: work-item 0)
+/// @return        the source work-item's `x`, on every work-item
+template <typename Group, typename T, typename... Id>
+    requires sycl::is_group_v<Group>
+inline T group_broadcast(Group g, T x, Id... id) {
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+    if constexpr (detail::kWorkGroup<Group>) {
+        static_assert(std::is_trivially_copyable_v<T>, "portable::group_broadcast moves T by its bytes");
+        using W = std::conditional_t<sizeof(T) % 8 == 0, std::uint64_t, std::uint32_t>;
+        constexpr std::size_t kN = (sizeof(T) + sizeof(W) - 1) / sizeof(W);
+        W w[kN] = {};
+        if (g.get_local_linear_id() == detail::source_linear_id(g, id...)) std::memcpy(w, &x, sizeof(T));
+        for (std::size_t i = 0; i < kN; ++i) w[i] = sycl::reduce_over_group(g, w[i], sycl::bit_or<W>());
+        T out = x;
+        std::memcpy(&out, w, sizeof(T));
+        return out;
+    }
+#endif
+    return sycl::group_broadcast(g, x, id...);
+}
+
+// TRAP (DPC++ CPU device, the same pass): sycl::joint_exclusive_scan over a WORK-GROUP at
+// reqd_sub_group_size(32) carries a wrong value from one chunk of the group's width to the next
+// (WG 256, n = 300: 2816 of 19200 results wrong; n <= WG and exclusive_scan_over_group exact,
+// 2026-11-21). device::stedc's laed2 scans a merge of up to n poles there, so its permutation sent
+// the merge's gathers out of bounds (SIGSEGV in device_lapack_stedc_tests). The SPIR device pass
+// scans chunk by chunk and carries through group_broadcast above, as the acpp branch does.
+/// @brief `sycl::joint_exclusive_scan` with an initial value; `result` may equal `first`. Collective.
+/// @param[in]  g       group or sub-group; every work-item of it must call with the same range
+/// @param[in]  first   start of the input range \f$[\mathit{first}, \mathit{last})\f$ of \f$n\f$ elements
+/// @param[in]  last    one past its end
+/// @param[out] result  start of the \f$n\f$-element output; may equal `first` (in place)
+/// @param[in]  init    initial value \f$r_0\f$
+/// @param[in]  op      binary scan operator, e.g. `sycl::plus<T>`
+/// @return             `result + n`, one past the last element written
+template <typename Group, typename InPtr, typename OutPtr, typename T, typename Op>
+    requires sycl::is_group_v<Group>
+inline OutPtr joint_exclusive_scan(Group g, InPtr first, InPtr last, OutPtr result, T init, Op op) {
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+    if constexpr (detail::kWorkGroup<Group>) {
+        const std::ptrdiff_t n = last - first;
+        const std::ptrdiff_t lid = static_cast<std::ptrdiff_t>(g.get_local_linear_id());
+        const std::ptrdiff_t width = static_cast<std::ptrdiff_t>(g.get_local_linear_range());
+        T carry = init;
+        for (std::ptrdiff_t chunk = 0; chunk < n; chunk += width) {
+            const std::ptrdiff_t i = chunk + lid;
+            const T x = i < n ? static_cast<T>(first[i]) : carry;
+            const T out = sycl::exclusive_scan_over_group(g, x, carry, op);
+            if (i < n) result[i] = out;
+            carry = portable::group_broadcast(g, op(out, x), width - 1);
+        }
+        sycl::group_barrier(g);
+        return result + n;
+    }
+#endif
+    return sycl::joint_exclusive_scan(g, first, last, result, init, op);
+}
+
 using sycl::joint_reduce;
 using sycl::permute_group_by_xor;
 using sycl::reduce_over_group;

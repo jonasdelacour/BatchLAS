@@ -393,8 +393,9 @@ Event ormbr(Queue& ctx,
             Transpose trans,
             const Span<std::byte>& ws,
             int32_t block_size) {
-    // NETLIB's gemm is its host BLAS, which cannot skip an item: refuse before any child runs.
-    if constexpr (!select::native_gpu_backend<B>) ::batchlas::detail::refuse_batch_mask("ormbr", a_in, tau_in, c_in);
+    // Beside a host BLAS NETLIB's gemm cannot skip an item: refuse before any child runs. A
+    // vendor-free host's children (ormqr_blocked, the P apply's gemm) are natives that honour it.
+    if constexpr (!select::native_backend<B>) ::batchlas::detail::refuse_batch_mask("ormbr", a_in, tau_in, c_in);
     // Every operand carries the call's mask whichever brought it, so the children see it. 'Q' runs
     // ormqx_cta or ormqr_blocked.
     const auto mask = ::batchlas::detail::call_mask("ormbr", a_in, tau_in, c_in);

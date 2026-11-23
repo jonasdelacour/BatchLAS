@@ -1,10 +1,16 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// LAPACK xGEQR2, geqrf's panel leaves: geqr2 (team executor, any memory) and geqr2_reg (a row per
-// item, panel in registers); and xGEQRF in a kernel, geqrf<tier::Blocked<NB>> (geqr2 panels and
-// larfb trailing updates on the in-group Level 3). detail: pieces core has no strict
-// spelling for yet. Statement boundaries are load-bearing (fp-contract=on fuses a*b+c only within
-// one expression).
+/// @file
+/// @brief Householder QR inside a kernel: `geqrf`, LAPACK's xGEQRF on one matrix per work-group.
+///
+/// `geqrf<Tier>(ex, a, tau, ws)` factors one m x n matrix (any m, n) with `tier::Blocked<NB>`:
+/// `geqr2` on each NB-wide panel, then the panel's block reflector (`larft`, `larfb`) on the
+/// columns to its right, on the in-group Level 3. The panel leaves `geqr2` (a team executor, any
+/// memory) and `geqr2_reg` (one row per work-item, the panel in registers) are in
+/// @ref api_device_lowlevel. Reference: @ref api_device_lapack_qr.
+/// @ingroup api_device_lapack_qr
+// detail: pieces core has no strict spelling for yet. Statement boundaries are load-bearing
+// (fp-contract=on fuses a*b+c only within one expression).
 
 #include <cstddef>
 #include <cstdint>
@@ -106,11 +112,26 @@ template <int C, class Scalar> BATCHLAS_DEVICE_INLINE void frag_rank1(Scalar v, 
 
 }  // namespace detail
 
-// xGEQR2 on a (m x n) in place, ex = RtGroup<Scope::Sub> (sub-group barriers and reductions: no
-// static shared, docs/perf/qr.md#the-48-kib-launch-hole) or <Scope::Group>. Core larfg<
+/// @brief xGEQR2 inside a kernel: unblocked Householder QR of the m x n `a` in place, the panel
+/// leaf of `geqrf`.
+///
+/// The first `tau.size()` columns are reduced (`tau.size() <= min(m, n)`): R overwrites the upper
+/// triangle of those columns, the reflectors' vectors the part below it (unit diagonal implied),
+/// and `tau(j)` receives reflector j's scalar (xLARFG's convention; it is applied as `conj(tau)`,
+/// as zgeqr2 does). Columns past `tau.size()` receive the reflectors' update. Collective over
+/// `ex`: every item calls it with the same arguments, `a` visible to every item on entry. On
+/// return `tau` is visible, and so is `a` except the last reduced diagonal entry, which the leader
+/// stores after the final barrier: barrier before another item reads it.
+/// @tparam Ex  `RtGroup<Scope::Sub>` (sub-group barriers and reductions) or `RtGroup<Scope::Group>`
+/// @tparam MA  a matrix operand in any memory space
+/// @tparam VT  a vector operand
+/// @param[in]     ex   the executor
+/// @param[in,out] a    the matrix; R and the reflectors on return
+/// @param[out]    tau  the reflector scalars, one per reduced column
+/// @ingroup api_device_lowlevel
+// Scope::Sub: no static shared, docs/perf/qr.md#the-48-kib-launch-hole. Core larfg<
 // alg::LarfgLapack> (alpha's phase kept; docs/perf/qr.md#a-residual-test-cannot-guard-a-convention), then
-// core larf<Left, arith::Fma> with conj(tau) (zgeqr2's); tau(j) per reflector, the first
-// tau.size() <= min(m, n) columns are reduced. COLLECTIVE.
+// core larf<Left, arith::Fma> with conj(tau) (zgeqr2's).
 // ex, a and tau by value, and plain inline: the body is simplified before it is inlined, and
 // through references it keeps another CFG (FP64 resident sub-group panel +2 REG, an occupancy step).
 template <class Ex, class MA, class VT>
@@ -223,10 +244,20 @@ inline void geqr2_reg_body(sycl::nd_item<1> it, D* a, int ld, int m, int n, int 
 }
 }  // namespace detail
 
-// xGEQR2 on an m x n panel a (a global Mat), n <= N, a row per item of the work-group ex
-// (RtGroup<Scope::Group>); m <= its size; tau.size() <= min(m, n) reflectors, launch-uniform.
-// Rows >= m run every barrier (no early return). Scratch (local): sred 2 reals, sw N scalars per
-// sub-group, plus 1 (butterflies, never reduce_over_group: the 48 KB hole).
+/// @brief xGEQR2 on an m x n panel held in registers, one row per work-item of the work-group.
+///
+/// `n <= N`, m at most the work-group size, and `tau.size() <= min(m, n)` reflectors, the same on
+/// every item. Every item of the work-group calls it: rows at or past m still run every barrier.
+/// The results are stored as `geqr2` stores them; `a` and `tau` are written by their owners and a
+/// barrier is needed before another item reads them.
+/// @tparam N  the compile-time column bound
+/// @param[in]     ex    an `RtGroup<Scope::Group>`
+/// @param[in,out] a     the panel, a `Mat` over global memory
+/// @param[out]    tau   the reflector scalars
+/// @param         sred  local scratch: 2 reals per sub-group
+/// @param         sw    local scratch of a's scalar type: N per sub-group, plus 1
+/// @ingroup api_device_lowlevel
+// Butterflies, never reduce_over_group: the 48 KB hole.
 template <int N, class Ex, class MA, class VT, class Real, class D>
 BATCHLAS_DEVICE_INLINE void geqr2_reg(const Ex& ex, const MA& a, const VT& tau, Real* sred, D* sw) {
     static_assert(Ex::runtime && !Ex::sub_whole, "geqr2_reg: ex is an RtGroup<Scope::Group>");
@@ -237,6 +268,8 @@ BATCHLAS_DEVICE_INLINE void geqr2_reg(const Ex& ex, const MA& a, const VT& tau, 
 // ---- xGEQRF: the public in-kernel op (tier::Blocked) -----------------------------------------
 
 namespace routine {
+/// @brief The routine tag of `geqrf`, for `with_tier`, `launch` and `buffer_size`.
+/// @ingroup api_device_lapack_qr
 struct geqrf {
     static constexpr const char* name = "geqrf";
 };
@@ -290,6 +323,14 @@ template <class Tier> inline constexpr bool geqrf_is_blocked_v = false;
 template <int NB, class A> inline constexpr bool geqrf_is_blocked_v<tier::Blocked<NB, A>> = true;
 }  // namespace detail
 
+/// @brief `geqrf` in `tier::Blocked<NB, A>`: one m x n matrix per work-group, any m and n.
+///
+/// The executor is `WorkGroup<cfg::threads, 32>`, where `cfg` (`larfb_cfg_t<A, Scalar>`) is the
+/// in-group Level 3 configuration: `A` itself when it is an `l3::cfg` preset, else a 256-item
+/// default. The kernel must run at sub-group size 32 (`BATCHLAS_REQD_SG_SIZE(sg_size)`).
+/// `buffer_size(m, n)` is one matrix's local and global bytes; `buffer_size(n)` is the square
+/// case.
+/// @ingroup api_device_lapack_qr
 template <int NB, class A, class Scalar> struct tier_info<routine::geqrf, tier::Blocked<NB, A>, Scalar> {
     using cfg = larfb_cfg_t<A, Scalar>;
     static constexpr int wg_size = cfg::threads, sg_size = 32;
@@ -299,23 +340,40 @@ template <int NB, class A, class Scalar> struct tier_info<routine::geqrf, tier::
     static constexpr WorkspaceSize buffer_size(int m, int n) { return detail::geqrf_size<NB, cfg, Scalar>(m, n); }
     static constexpr WorkspaceSize buffer_size(int n) { return buffer_size(n, n); }
 };
+/// @brief The tiers `with_tier` tries for `geqrf`: `tier::Blocked<larfb_default_nb<Scalar>()>`.
+/// @ingroup api_device_lapack_qr
 template <class Scalar> struct tiers<routine::geqrf, Scalar> {
     using type = tier::list<tier::Blocked<larfb_default_nb<Scalar>()>>;
 };
 
-/// @brief ?GEQRF in a kernel: A = Q R in place for one m x n matrix (any m, n).
+/// @brief xGEQRF inside a kernel: \f$A = QR\f$ in place for one m x n matrix (any m, n).
 ///
-/// R overwrites a's upper triangle, the reflectors' vectors (LAPACK storage, unit diagonal
-/// implied) the part below it, tau their k = min(m, n) scalars (xLARFG's convention; the apply
-/// uses conj(tau), zgeqr2's). Collective over a WorkGroup<tier_info<...>::wg_size, 32>; a visible
-/// on entry, a and tau visible on return. One tier per kernel (with_tier<routine::geqrf, T>).
-/// @param ex   the executor
-/// @param a    this matrix (l3::Global, a global Mat or device::item)
-/// @param tau  k scalars, a unit-stride vector operand (device::vec)
-/// @param ws   ws.local >= local_bytes, ws.global this matrix's slice of global_bytes of
-///             buffer_size<routine::geqrf, Tier, T>(m, n); contents undefined on return
-/// @return 0, or -i for a bad i-th argument after the executor (2: tau shorter than k, 3: no
-///         global workspace), uniform
+/// R overwrites the upper triangle of `a`, the reflectors' vectors (LAPACK storage, unit diagonal
+/// implied) the part below it, and `tau` their k = min(m, n) scalars (xLARFG's convention; the
+/// apply uses `conj(tau)`, as zgeqr2 does). `orgqr` forms Q from this storage and `ormqr`
+/// applies it.
+///
+/// Collective over the tier's executor, `tier_info<routine::geqrf, Tier, T>::executor`: every
+/// item calls it with the same arguments. `a` visible to every item on entry; `a` and `tau`
+/// visible on return. One tier per kernel: the host picks it with `with_tier<routine::geqrf, T>`.
+/// @pre The kernel runs at sub-group size 32 (`BATCHLAS_REQD_SG_SIZE(32)`).
+/// @tparam Tier  `tier::Blocked<NB, Alg>`, the only tier; `Alg` is an `l3::cfg` preset or the
+///               default
+/// @tparam Ex    the executor type, `WorkGroup<cfg::threads, 32>`
+/// @tparam MA    a global matrix operand: `l3::Global`, a `Mat` over global memory, or
+///               `device::item`
+/// @tparam Tau   a unit-stride vector operand (`device::vec`), not a pointer
+/// @param[in]     ex   the executor
+/// @param[in,out] a    this matrix; R and the reflectors on return
+/// @param[out]    tau  at least k scalars
+/// @param[in]     ws   `ws.local` at least `local_bytes` and `ws.global` this matrix's slice of
+///                     `global_bytes`, both of `buffer_size<routine::geqrf, Tier, T>(m, n)`;
+///                     contents undefined on return
+/// @return `info`, the same on every item
+/// @retval 0   success, including k = 0
+/// @retval -2  `tau` is shorter than k (nothing written)
+/// @retval -3  `ws.global` is null (nothing written)
+/// @ingroup api_device_lapack_qr
 template <class Tier, class Ex, class MA, class Tau>
 BATCHLAS_DEVICE_INLINE int geqrf(const Ex& ex, const MA& a, const Tau& tau, const Workspace& ws) {
     using T = std::remove_cvref_t<decltype(a(0, 0))>;

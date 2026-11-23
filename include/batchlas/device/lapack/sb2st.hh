@@ -1,7 +1,19 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// sb2st: a Hermitian (real: symmetric) matrix in lower band storage -> real tridiagonal by bulge
-// chasing, inside the caller's kernel, on storage the caller prepared:
+/// @file
+/// @brief The second stage of the two-stage tridiagonal reduction, `sb2st`: a symmetric or
+/// Hermitian matrix in lower band storage to real tridiagonal form by bulge chasing, inside a
+/// kernel.
+///
+/// `sb2st<UL, Tier>` runs xSBTRD / xHBTRD's %Givens chase on one `SgpPartition<P>` per matrix, any
+/// n and any kd >= 0; the band is overwritten. Tiers: `tier::Cta<N>` (band and rotation scratch in
+/// local memory, n <= N) and `tier::Blocked<NB>` (the band chased in place, scratch in the
+/// caller's global slice; NB is unused, a band chase has no panel). Size the workspace with
+/// `buffer_size<routine::sb2st<UL, KDMax>, Tier, T>(n, kd)`. Both tiers launch at sub-group size
+/// 32. The chase kernels `sb2st_givens_chase` and `sb2st_hh_chase` are in
+/// @ref api_device_lowlevel. The first stage is `sy2sb`.
+/// @ingroup api_device_lapack_eig
+// On storage the caller prepared:
 //   sb2st_givens_chase(ex, ab, kd, c, work)   xSBTRD / xHBTRD's Givens chase on one sub-group
 //                                             partition
 //   sb2st_hh_chase(ex, rows, A, n, kd, vl, wl, V, tau)      the two-stage Householder chase
@@ -13,15 +25,8 @@
 //   HermBandLower    a writable Hermitian matrix in LAPACK lower band storage
 //   hemv_band        a team-per-row loop in lockstep, in T's own operators
 // Each element is the C++ expression of the kernel it was lifted from (std::complex operators,
-// one expression per FMA chain), so a strict port stays bit-identical.
-//
-// Public op (host sytrd_sb2st): sb2st<UL, Tier>(ex, ab, d, e, tau, kd, ws)
-// on one SgpPartition<P> per matrix, any n, any kd >= 0; ab (kd + 1 rows, lower band) is
-// overwritten. Tiers: Cta<N> (band and rotation scratch in local memory, n <= N) and Blocked<NB>
-// (band chased in place, scratch in the caller's global slice; NB unused: a band chase has no
-// panel). Sizes: buffer_size<routine::sb2st<UL, KDMax>, Tier, T>(n, kd); with_tier:
-// routine::sb2st<UL, KDMax>.
-// The host sub-group route runs the same body (detail::givens_on + finalize_tridiag) with its
+// one expression per FMA chain), so a strict port stays bit-identical. The public op is the host
+// sytrd_sb2st's; the host sub-group route runs the same body (detail::givens_on + finalize_tridiag) with its
 // run-time storage choice.
 
 #include <array>
@@ -173,11 +178,17 @@ BATCHLAS_DEVICE_INLINE void hemv_band(const Ex& ex, AS alpha_, const MA& a, cons
 
 }  // namespace detail
 
-// xSBTRD / xHBTRD's bulge chase (lower band, kd >= 2) for one matrix on one sub-group partition
-// executor ex (SgpPartition<P>): ab the n-column band, a Mat (kd + 1 rows used, any ld; global or
-// local), c (real) and work the rotation scratch vectors of n + kd + 2 elements, zeroed by the
-// caller. On return the band holds the tridiagonal in rows 0 and 1 (complex: the off-diagonal
-// not yet made real).
+/// @brief xSBTRD / xHBTRD's %Givens bulge chase on a lower band, kd >= 2, for one matrix on one
+/// sub-group partition.
+///
+/// On return the band holds the tridiagonal in rows 0 and 1; for complex data the off-diagonal
+/// is not yet made real (`sb2st` does that). COLLECTIVE over `ex`.
+/// @param[in]     ex    the `SgpPartition<P>` executor
+/// @param[in,out] ab    the n-column band, a `Mat` with kd + 1 rows used, any ld, global or local
+/// @param[in]     kd    the semibandwidth, >= 2
+/// @param         c     real rotation scratch of n + kd + 2 elements, zeroed by the caller
+/// @param         work  rotation scratch of n + kd + 2 elements, zeroed by the caller
+/// @ingroup api_device_lowlevel
 template <class Ex, class MB, class VC, class VW>
 BATCHLAS_DEVICE_INLINE void sb2st_givens_chase(const Ex& ex, const MB& ab, int kd, const VC& c, const VW& work) {
     using T = typename MB::value_type;
@@ -351,11 +362,21 @@ BATCHLAS_DEVICE_INLINE void sb2st_givens_chase(const Ex& ex, const MB& ab, int k
     }
 }
 
-// The two-stage Householder chase (xSYTRD_SB2ST's sweep schedule, one sweep at a time) for one
-// matrix on a work-group: A the working band (bandwidth >= 2 kd, the bulge fill fits), vl / wl
-// kd-element local buffers, reflector k stored as V(:, k) = (v; 0) (v(0) = 1) and tau(k). rows: the
-// team-per-row executor of the window updates. The reflector count follows the host-side schedule
-// (build_sb2st_hh_schedule), which the back-transform indexes V by. Exit: A holds the tridiagonal.
+/// @brief The two-stage Householder bulge chase (xSYTRD_SB2ST's sweep schedule, one sweep at a
+/// time) for one matrix on a work-group.
+///
+/// The reflector count follows the host-side schedule (build_sb2st_hh_schedule), by which the
+/// back-transform indexes V. On return A holds the tridiagonal. COLLECTIVE over `ex`.
+/// @param[in]     ex       the work-group executor
+/// @param[in]     rows     the team-per-row executor of the window updates
+/// @param[in,out] A        the working band, bandwidth >= 2 kd so that the bulge fill fits
+/// @param[in]     n        the order of the matrix
+/// @param[in]     kd       the semibandwidth of the input band
+/// @param         vloc     kd elements of local memory
+/// @param         wloc     kd elements of local memory
+/// @param[out]    Vb       reflector k as V(:, k) = (v; 0), v(0) = 1
+/// @param[out]    tau_out  tau(k) of reflector k
+/// @ingroup api_device_lowlevel
 template <class Ex, class Rows, class Scalar, class VL, class WL, class VOut, class TauOut>
 BATCHLAS_DEVICE_INLINE void sb2st_hh_chase(const Ex& ex, const Rows& rows, const detail::HermBandLower<Scalar>& A, int n, int kd, const VL& vloc,
                                         const WL& wloc, const VOut& Vb, const TauOut& tau_out) {
@@ -406,9 +427,23 @@ BATCHLAS_DEVICE_INLINE void sb2st_hh_chase(const Ex& ex, const Rows& rows, const
         const int32_t m = r1 - r0 + 1;
         const auto y = A.col(col, r0, m);  // (alpha; x)
         const auto v = vec(vloc, m);
-        // xLARFG scalars from alpha and an unscaled ||x|| (abs2 per element, one reduction).
-        const auto x = fn_vec(m - 1, [A, col, r0](int k) BATCHLAS_DEVICE_BODY { return A.get(r0 + 1 + k, col); });
-        const Real xnorm = sycl::sqrt(sumsq<alg::Unfused>(ex, x));
+        // xLARFG scalars from alpha and ||x||: abs2 per element of x scaled by 2^-e, e the exponent of
+        // max |x| (larfg_lanes' scaling; a max reduction, then the sum). Unscaled, the squares of a
+        // 2^-64 band flushed to zero on Metal and every reflector was the identity. A power of two
+        // scales exactly: without under- or overflow the bits are the unscaled sum's.
+        Real mag = Real(0);
+        for_each_owned(ex, m - 1, [&](int k) BATCHLAS_DEVICE_BODY {
+            const Scalar xk = A.get(r0 + 1 + k, col);
+            mag = sycl::fmax(mag, sycl::fmax(sycl::fabs(Arith<Scalar>::re(xk)), sycl::fabs(Arith<Scalar>::im(xk))));
+        });
+        const Real xmax = detail::scope_reduce<Scope::Own>(ex, mag, sycl::maximum<Real>());
+        const int xexp = (xmax > Real(0) && sycl::isfinite(xmax)) ? sycl::clamp(static_cast<int>(sycl::ilogb(xmax)), -120, 120) : 0;
+        const Real sc = sycl::ldexp(Real(1), -xexp);
+        const auto x = fn_vec(m - 1, [A, col, r0, sc](int k) BATCHLAS_DEVICE_BODY {
+            const Scalar xk = A.get(r0 + 1 + k, col);
+            return Arith<Scalar>::make(Arith<Scalar>::re(xk) * sc, Arith<Scalar>::im(xk) * sc);
+        });
+        const Real xnorm = sycl::sqrt(sumsq<alg::Unfused>(ex, x)) * sycl::ldexp(Real(1), xexp);
         const Scalar alpha = y(0);
         const auto h = larfg_scalars<alg::Phase>(alpha, xnorm, m);
 
@@ -607,11 +642,17 @@ template <class M> BATCHLAS_DEVICE_INLINE int band_ld(const M& a) {
 }  // namespace detail
 
 namespace routine {
-// with_tier's tag: KDMax bounds the band width the tier filter sizes local memory for.
+/// @brief The routine tag of `sb2st` for `with_tier`, `launch` and `buffer_size`.
+/// @tparam UL     `Uplo::Lower` (lower band storage only)
+/// @tparam KDMax  the semibandwidth `with_tier` sizes local memory for (>= 0)
+/// @ingroup api_device_lapack_eig
 template <Uplo UL, int KDMax> struct sb2st {
     static_assert(KDMax >= 0, "routine::sb2st: KDMax >= 0");
+    /// The name `with_tier` puts in its error message.
     static constexpr const char* name = "sb2st";
+    /// The semibandwidth bound, `KDMax`.
     static constexpr int kd_max = KDMax;
+    /// The semibandwidth used at order n: min(KDMax, max(n - 1, 0)).
     static constexpr int kd_at(int n) { return n - 1 < KDMax ? (n - 1 < 0 ? 0 : n - 1) : KDMax; }
 };
 }  // namespace routine
@@ -633,23 +674,54 @@ template <Uplo UL, int KDMax, class Tier, class Scalar> struct Sb2stTierInfo {
 };
 }  // namespace detail
 
+/// @brief The `tier::Cta<N>` tier of `sb2st`: n <= N, one matrix per `SgpPartition<32>`
+/// (`wg_size` 32, `sg_size` 32), the band and the rotation scratch in local memory.
+///
+/// `buffer_size(n, kd)` is one matrix's workspace at (n, kd), zero when no chase runs (n <= 0 or
+/// kd <= 1); `buffer_size(n)` is the same at the tag's `kd_at(n)`.
+/// @ingroup api_device_lapack_eig
 template <Uplo UL, int KDMax, int N, class A, class Scalar>
 struct tier_info<routine::sb2st<UL, KDMax>, tier::Cta<N, A>, Scalar> : detail::Sb2stTierInfo<UL, KDMax, tier::Cta<N, A>, Scalar> {};
+/// @brief The `tier::Blocked<NB>` tier of `sb2st`: any n, one matrix per `SgpPartition<32>`
+/// (`wg_size` 32, `sg_size` 32), the band chased in place and the rotation scratch in global
+/// memory; NB is unused.
+///
+/// `buffer_size(n, kd)` and `buffer_size(n)` as for the `tier::Cta<N>` tier.
+/// @ingroup api_device_lapack_eig
 template <Uplo UL, int KDMax, int NB, class A, class Scalar>
 struct tier_info<routine::sb2st<UL, KDMax>, tier::Blocked<NB, A>, Scalar> : detail::Sb2stTierInfo<UL, KDMax, tier::Blocked<NB, A>, Scalar> {};
+/// @brief The tiers `with_tier` tries for `sb2st`: `tier::Cta<4096>`, then `tier::Blocked<32>`.
+/// @ingroup api_device_lapack_eig
 template <Uplo UL, int KDMax, class Scalar> struct tiers<routine::sb2st<UL, KDMax>, Scalar> {
     using type = tier::list<tier::Cta<4096>, tier::Blocked<32>>;
 };
 
-// sb2st<UL, Tier>(ex, ab, d, e, tau, kd, ws): the lower band ab (kd + 1 rows used, ld >= kd + 1,
-// n = ab.cols()) of one Hermitian (real: symmetric) matrix -> the real tridiagonal (d, e), n and
-// n - 1 elements, tau (n - 1) = 0, by xSBTRD / xHBTRD's Givens bulge chase on one SgpPartition<P>
-// (any P; every lane calls it with the same arguments; inputs visible on entry). ab is
-// overwritten: rows 0 and 1 hold the tridiagonal (complex: made real), the rest is scratch. ws:
-// this matrix's slice of buffer_size<routine::sb2st<UL, KDMax>, Tier, T>(n, kd) (any KDMax; Cta:
-// local; Blocked: global).
-// Returns 0, or -i for a bad i-th argument after the executor (1 ab: rows < kd + 1, or n > N for
-// Cta<N>; 2 d, 3 e, 4 tau: too short; 5 kd < 0), uniform. Outputs are visible on return.
+/// @brief xSBTRD / xHBTRD on one symmetric or Hermitian matrix in lower band storage inside a
+/// kernel: the real tridiagonal (d, e) by a %Givens bulge chase.
+///
+/// n = `ab.cols()`. ab is overwritten: rows 0 and 1 hold the tridiagonal (made real for complex
+/// data), the rest is scratch. tau(0..n-2) is set to 0, since the chase keeps no reflectors.
+/// COLLECTIVE over `ex`, a `SgpPartition<P>` of any P: every lane calls with the same
+/// arguments, the inputs visible on entry; every output is visible on return. Launch at
+/// sub-group size 32.
+/// @tparam UL    `Uplo::Lower` (the only form)
+/// @tparam Tier  `tier::Cta<N>` or `tier::Blocked<NB>`
+/// @param[in]     ex   the `SgpPartition<P>` executor
+/// @param[in,out] ab   the band, kd + 1 rows used, ld >= kd + 1, n columns
+/// @param[out]    d    at least n elements, the diagonal
+/// @param[out]    e    at least n - 1 elements, the off-diagonal
+/// @param[out]    tau  at least n - 1 elements, set to 0
+/// @param[in]     kd   the semibandwidth, >= 0
+/// @param         ws   this matrix's slices of `buffer_size<routine::sb2st<UL, KDMax>, Tier, T>(n, kd)`
+///                     (any KDMax; local for `tier::Cta<N>`, global for `tier::Blocked<NB>`)
+/// @retval 0   success
+/// @retval -1  ab has fewer than kd + 1 rows, or n > N for `tier::Cta<N>`
+/// @retval -2  d is shorter than n
+/// @retval -3  e is shorter than n - 1
+/// @retval -4  tau is shorter than n - 1
+/// @retval -5  kd < 0
+/// @return     The value is uniform over the executor.
+/// @ingroup api_device_lapack_eig
 template <Uplo UL, class Tier, class Ex, class AB, class D, class E, class Tau>
 BATCHLAS_DEVICE_INLINE int sb2st(const Ex& ex, const AB& ab, const D& d, const E& e, const Tau& tau, int kd, const Workspace& ws) {
     static_assert(UL == Uplo::Lower, "sb2st: lower band storage only (as host sytrd_sb2st)");

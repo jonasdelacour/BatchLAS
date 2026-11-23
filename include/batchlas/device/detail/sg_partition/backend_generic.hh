@@ -8,7 +8,7 @@
 
 #include <cstdint>
 
-#include <batchlas/backend_config.h>
+#include <batchlas/config.hh>
 
 namespace batchlas::sgp {
 

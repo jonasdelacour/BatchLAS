@@ -49,6 +49,12 @@ struct GesvdConfig {
     static constexpr Backend BackendVal = B;
 };
 
+// Blocked runs on a GPU backend and, vendor-free, on the host (select::natives_run_on); Jacobi and
+// Cta stay GPU-only.
+template <Backend B>
+inline constexpr bool kBlockedRuns = B == Backend::CUDA || B == Backend::ROCM ||
+                                     (B == Backend::NETLIB && select::kHostNative);
+
 template <template <typename, Backend> class Config>
 struct backend_real_types {
     using tuple_type = decltype(std::tuple_cat(
@@ -142,9 +148,7 @@ TYPED_TEST(GesvdTest, ValuesOnlyMatchesLapacke) {
     using Real = typename TestFixture::Real;
     constexpr Backend B = TestFixture::B;
 
-#if !BATCHLAS_VERIFY_HAVE_LAPACKE
-    GTEST_SKIP() << "reference LAPACKE backend unavailable.";
-#else
+    // The reference is LAPACKE, or vendor-free the host Jacobi of expect_singular_values_match_lapacke.
     const int n = 8;
     const int batch = 3;
 
@@ -176,7 +180,6 @@ TYPED_TEST(GesvdTest, ValuesOnlyMatchesLapacke) {
     evt.wait();
 
     test_utils::expect_singular_values_match_lapacke(A_ref, s);
-#endif
 }
 
 namespace {
@@ -197,7 +200,7 @@ inline bool gesvd_bidiag_is_normal_equations() {
 template <typename Real>
 inline batchlas::verify::Slack gesvd_cta_slack() {
     return {std::is_same_v<Real, float> ? 0.25 : 0.5,
-            "gesvd cta provider always takes the normal-equations bidiagonal path (squares the condition number); measured c 52 float / 113 double, accepted bounds 64 / 128 n eps"};
+            "gesvd cta provider solves the bidiagonal directly since defect 18 (measured c 3.2 float / 4.8 double at n=16); the normal-equations path it replaced fails 64 / 128 n eps (U 1.7e-3 float, 8.4e-12 double, case AN), as BATCHLAS_GESVD_BIDIAG=normal still shows"};
 }
 
 template <typename Scalar, Backend B>
@@ -347,9 +350,7 @@ TYPED_TEST(GesvdHermitianComplexTest, ValuesOnlyMatchesLapacke) {
     using Real = typename TestFixture::Real;
     constexpr Backend B = TestFixture::B;
 
-#if !BATCHLAS_VERIFY_HAVE_LAPACKE
-    GTEST_SKIP() << "reference LAPACKE backend unavailable.";
-#else
+    // The reference is LAPACKE, or vendor-free the host Jacobi of expect_singular_values_match_lapacke.
     const int n = 12;
     const int batch = 2;
 
@@ -383,15 +384,14 @@ TYPED_TEST(GesvdHermitianComplexTest, ValuesOnlyMatchesLapacke) {
     evt.wait();
 
     test_utils::expect_singular_values_match_lapacke(A_ref, s);
-#endif
 }
 
 TYPED_TEST(GesvdHermitianComplexTest, BlockedProviderFullVectorsMatchHermitianSvd) {
     using Scalar = typename TestFixture::Scalar;
     constexpr Backend B = TestFixture::B;
 
-    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "blocked native provider is only dispatched on GPU backends.";
+    if constexpr (!kBlockedRuns<B>) {
+        GTEST_SKIP() << "blocked runs on GPU backends and a vendor-free host.";
     } else {
         const int n = 48;
         const int batch = 2;
@@ -503,8 +503,8 @@ TYPED_TEST(GesvdTest, BlockedProviderCoversAllJobCombinations) {
     using Scalar = typename TestFixture::Scalar;
     constexpr Backend B = TestFixture::B;
 
-    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "blocked native provider is only dispatched on GPU backends.";
+    if constexpr (!kBlockedRuns<B>) {
+        GTEST_SKIP() << "blocked runs on GPU backends and a vendor-free host.";
     } else {
         const int n = 64;
         const int batch = 2;
@@ -596,8 +596,8 @@ TYPED_TEST(GesvdTest, BlockedProviderHandlesRepeatedAndTinySingularValues) {
     using Real = typename TestFixture::Real;
     constexpr Backend B = TestFixture::B;
 
-    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "blocked native provider is only dispatched on GPU backends.";
+    if constexpr (!kBlockedRuns<B>) {
+        GTEST_SKIP() << "blocked runs on GPU backends and a vendor-free host.";
     } else {
         const int n = 64;
         const int batch = 2;
@@ -687,8 +687,8 @@ TYPED_TEST(GesvdTest, BlockedProviderTallRectangularFullVectors) {
     using Scalar = typename TestFixture::Scalar;
     constexpr Backend B = TestFixture::B;
 
-    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "blocked native provider is only dispatched on GPU backends.";
+    if constexpr (!kBlockedRuns<B>) {
+        GTEST_SKIP() << "blocked runs on GPU backends and a vendor-free host.";
     } else {
         const int m = 24;
         const int n = 16;
@@ -728,8 +728,8 @@ TYPED_TEST(GesvdTest, BlockedUniformlyTinyInput) {
     using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     constexpr Backend B = TestFixture::B;
 
-    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "blocked native provider is only dispatched on GPU backends.";
+    if constexpr (!kBlockedRuns<B>) {
+        GTEST_SKIP() << "blocked runs on GPU backends and a vendor-free host.";
     } else {
         const int m = 24, n = 16, batch = 2;
         const Real tiny = std::ldexp(Real(1), std::is_same_v<Real, float> ? -30 : -60);
@@ -798,8 +798,8 @@ TYPED_TEST(GesvdTest, BlockedProviderLargeTallRectangularFullVectors) {
     using Real = typename base_type<Scalar>::type;
     constexpr Backend B = TestFixture::B;
 
-    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "blocked native provider is only dispatched on GPU backends.";
+    if constexpr (!kBlockedRuns<B>) {
+        GTEST_SKIP() << "blocked runs on GPU backends and a vendor-free host.";
     } else {
         const int m = 192;
         const int n = 128;
@@ -920,8 +920,8 @@ TYPED_TEST(GesvdTest, DefaultProviderKeepsSingularValuesAtHighCondition) {
     using Real = typename TestFixture::Real;
     constexpr Backend B = TestFixture::B;
 
-    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "native gesvd providers are only dispatched on GPU backends.";
+    if constexpr (!kBlockedRuns<B>) {
+        GTEST_SKIP() << "blocked runs on GPU backends and a vendor-free host.";
     } else {
         const int n = 32;
         const int batch = 4;
@@ -1045,8 +1045,8 @@ TYPED_TEST(GesvdTest, ThinWorkspaceIsSmallerThanFull) {
     using Real = typename TestFixture::Real;
     constexpr Backend B = TestFixture::B;
 
-    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "native blocked provider is only dispatched on GPU backends.";
+    if constexpr (!kBlockedRuns<B>) {
+        GTEST_SKIP() << "blocked runs on GPU backends and a vendor-free host.";
     } else {
         const int m = 512;
         const int n = 32;
@@ -1159,6 +1159,57 @@ TYPED_TEST(GesvdTest, CtaRejectsGenuinelyThinAndItsPinThrows) {
     }
 }
 
+// gesvd_cta under BATCHLAS_GESVD_BIDIAG=normal with a thin tall U: the normal equations would
+// write m columns into a k-column U. The run entry itself must refuse (not only the size query
+// and can_run), with a workspace large enough for the full-U path and a U inside a wider, padded
+// buffer whose every entry, the k..m-1 overrun columns included, keeps its poison.
+TYPED_TEST(GesvdTest, CtaThinTallUnderNormalEquationsIsRefused) {
+    using Scalar = typename TestFixture::Scalar;
+    using Real = typename TestFixture::Real;
+    constexpr Backend B = TestFixture::B;
+
+    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
+        GTEST_SKIP() << "native CTA provider is only dispatched on GPU backends.";
+    } else {
+        ScopedEnvVar bidiag("BATCHLAS_GESVD_BIDIAG", "normal");
+        const int m = 32, n = 8, k = 8, batch = 3;
+        constexpr Real kPoison = Real(7777.25);
+        auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(m, n, false, batch, 8106);
+        Matrix<Scalar, MatrixFormat::Dense> Ubig(m + 3, m, batch), Ufull(m, m, batch), Vh(k, n, batch);
+        Scalar* up = Ubig.view().data_ptr();
+        const size_t u_elems = static_cast<size_t>(Ubig.view().stride()) * batch;
+        for (size_t i = 0; i < u_elems; ++i) up[i] = Scalar(kPoison);
+        const auto U = Ubig.view()({0, m}, {0, k});
+        UnifiedVector<Real> s(static_cast<size_t>(k) * batch, kPoison);
+
+        EXPECT_THROW((gesvd_cta_buffer_size<B, Scalar>(*this->ctx, A, s.to_span(), U, Vh, SvdVectors::Thin,
+                                                       SvdVectors::Thin)),
+                     std::invalid_argument);
+        const size_t ws_bytes = gesvd_cta_buffer_size<B, Scalar>(*this->ctx, A, s.to_span(), Ufull, Vh,
+                                                                 SvdVectors::All, SvdVectors::Thin);
+        UnifiedVector<std::byte> ws(ws_bytes);
+        EXPECT_THROW(((void)gesvd_cta<B, Scalar>(*this->ctx, A, s.to_span(), U, Vh, SvdVectors::Thin,
+                                                 SvdVectors::Thin, ws.to_span()),
+                      this->ctx->wait()),
+                     std::invalid_argument);
+        this->ctx->wait();
+        size_t inside = 0, outside = 0;
+        const int64_t ld = Ubig.view().ld(), stride = Ubig.view().stride();
+        for (size_t i = 0; i < u_elems; ++i) {
+            const int64_t r = (static_cast<int64_t>(i) % stride) % ld, c = (static_cast<int64_t>(i) % stride) / ld;
+            (r < m && c < k ? inside : outside) += up[i] != Scalar(kPoison);
+        }
+        EXPECT_EQ(inside, 0u) << "gesvd_cta wrote U on a refused thin call";
+        EXPECT_EQ(outside, 0u) << "gesvd_cta wrote past U's m x k block (the m-column overrun)";
+        for (size_t i = 0; i < s.size(); ++i) EXPECT_EQ(s[i], kPoison) << "wrote s[" << i << "]";
+
+        Matrix<Scalar, MatrixFormat::Dense> Uthin(m, k, batch);
+        const std::string pinned = run_gesvd_with_provider<Scalar, B>(*this->ctx, A, s, Uthin, Vh,
+                                                                      SvdVectors::Thin, SvdVectors::Thin, "cta");
+        EXPECT_NE(pinned.find("cannot run this shape"), std::string::npos) << pinned;
+    }
+}
+
 // The only test of the direct-bidiag forcing rule. Without it, a thin tall U
 // under BATCHLAS_GESVD_BIDIAG=normal reaches patch_zero_left_vectors, which
 // writes m columns into a U that has only k.
@@ -1167,8 +1218,8 @@ TYPED_TEST(GesvdTest, ThinTallUnderNormalEquationsBidiag) {
     using Real = typename TestFixture::Real;
     constexpr Backend B = TestFixture::B;
 
-    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "native blocked provider is only dispatched on GPU backends.";
+    if constexpr (!kBlockedRuns<B>) {
+        GTEST_SKIP() << "blocked runs on GPU backends and a vendor-free host.";
     } else {
         ScopedEnvVar bidiag("BATCHLAS_GESVD_BIDIAG", "normal");
 
@@ -1209,8 +1260,8 @@ TYPED_TEST(GesvdTest, TallNarrowBelowCtaCap) {
     using Real = typename TestFixture::Real;
     constexpr Backend B = TestFixture::B;
 
-    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "native blocked provider is only dispatched on GPU backends.";
+    if constexpr (!kBlockedRuns<B>) {
+        GTEST_SKIP() << "blocked runs on GPU backends and a vendor-free host.";
     } else {
         struct Shape { int m; int n; };
         const Shape shapes[] = {{256, 8}, {256, 16}, {512, 32}};
@@ -1249,8 +1300,8 @@ TYPED_TEST(GesvdTest, BlockedGebrdMatchesUnblockedAtSmallN) {
     using Real = typename TestFixture::Real;
     constexpr Backend B = TestFixture::B;
 
-    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "native blocked provider is only dispatched on GPU backends.";
+    if constexpr (!kBlockedRuns<B>) {
+        GTEST_SKIP() << "blocked runs on GPU backends and a vendor-free host.";
     } else {
         const int m = 192, n = 16, k = 16, batch = 3;
 
@@ -1544,8 +1595,8 @@ void check_hermitian_upper(Queue& ctx, int n, const char* pin) {
 TYPED_TEST(GesvdGeneralComplexTest, BlockedGradedPaddedShapesAndJobs) {
     using Scalar = typename TestFixture::Scalar;
     constexpr Backend B = TestFixture::B;
-    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "native gesvd providers are only dispatched on GPU backends.";
+    if constexpr (!kBlockedRuns<B>) {
+        GTEST_SKIP() << "blocked runs on GPU backends and a vendor-free host.";
     } else {
         const std::pair<int, int> shapes[] = {{48, 48}, {96, 96}, {130, 70}, {70, 130}};
         const SvdVectors jobs[][2] = {{SvdVectors::All, SvdVectors::All},
@@ -1568,8 +1619,8 @@ TYPED_TEST(GesvdGeneralComplexTest, BlockedGradedPaddedShapesAndJobs) {
 TYPED_TEST(GesvdGeneralComplexTest, AutoServesComplexGeneralAboveTheJacobiCap) {
     using Scalar = typename TestFixture::Scalar;
     constexpr Backend B = TestFixture::B;
-    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "native gesvd providers are only dispatched on GPU backends.";
+    if constexpr (!kBlockedRuns<B>) {
+        GTEST_SKIP() << "blocked runs on GPU backends and a vendor-free host.";
     } else {
         for (auto [m, n] : {std::pair{96, 96}, std::pair{160, 100}, std::pair{100, 160}}) {
             SCOPED_TRACE("m=" + std::to_string(m) + " n=" + std::to_string(n));
@@ -1584,8 +1635,8 @@ TYPED_TEST(GesvdGeneralComplexTest, BlockedSaturatingBatchIsBitIdentical) {
     using Scalar = typename TestFixture::Scalar;
     using Real = typename TestFixture::Real;
     constexpr Backend B = TestFixture::B;
-    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "native gesvd providers are only dispatched on GPU backends.";
+    if constexpr (!kBlockedRuns<B>) {
+        GTEST_SKIP() << "blocked runs on GPU backends and a vendor-free host.";
     } else {
         const int n = 72, batch = 1024;
         PaddedBatch<Scalar> A(n, n, batch), U(n, n, batch), Vh(n, n, batch);
@@ -1606,8 +1657,8 @@ TYPED_TEST(GesvdGeneralComplexTest, BlockedSaturatingBatchIsBitIdentical) {
 
 TYPED_TEST(GesvdHermitianComplexTest, BlockedUpperIgnoresTheLowerTriangle) {
     constexpr Backend B = TestFixture::B;
-    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "native gesvd providers are only dispatched on GPU backends.";
+    if constexpr (!kBlockedRuns<B>) {
+        GTEST_SKIP() << "blocked runs on GPU backends and a vendor-free host.";
     } else {
         for (int n : {48, 96}) check_hermitian_upper<typename TestFixture::Scalar, B>(*this->ctx, n, "blocked");
         check_hermitian_upper<typename TestFixture::Scalar, B>(*this->ctx, 96, nullptr);  // Auto
@@ -1616,8 +1667,8 @@ TYPED_TEST(GesvdHermitianComplexTest, BlockedUpperIgnoresTheLowerTriangle) {
 
 TYPED_TEST(GesvdTest, BlockedUpperIgnoresTheLowerTriangle) {
     constexpr Backend B = TestFixture::B;
-    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "native gesvd providers are only dispatched on GPU backends.";
+    if constexpr (!kBlockedRuns<B>) {
+        GTEST_SKIP() << "blocked runs on GPU backends and a vendor-free host.";
     } else {
         for (int n : {48, 96}) check_hermitian_upper<typename TestFixture::Scalar, B>(*this->ctx, n, "blocked");
         check_hermitian_upper<typename TestFixture::Scalar, B>(*this->ctx, 96, nullptr);  // Auto
@@ -2064,8 +2115,8 @@ void check_blocked_chunked(Queue& ctx, Queue& run_q, int m, int n, int batch, co
 TYPED_TEST(GesvdTest, BlockedChunksKeepEveryItemAndJob) {
     using Scalar = typename TestFixture::Scalar;
     constexpr Backend B = TestFixture::B;
-    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "the blocked native provider is GPU only";
+    if constexpr (!kBlockedRuns<B>) {
+        GTEST_SKIP() << "blocked runs on GPU backends and a vendor-free host";
     } else {
         const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "7");
         ASSERT_EQ(tuning::blocked_chunk_items(23, 1, 1, 1), 7) << "the override did not reach the accessor";
@@ -2087,8 +2138,8 @@ TYPED_TEST(GesvdTest, BlockedChunksKeepEveryItemAndJob) {
 TYPED_TEST(GesvdTest, BlockedChunksUnderNormalEquationsBidiag) {
     using Scalar = typename TestFixture::Scalar;
     constexpr Backend B = TestFixture::B;
-    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "the blocked native provider is GPU only";
+    if constexpr (!kBlockedRuns<B>) {
+        GTEST_SKIP() << "blocked runs on GPU backends and a vendor-free host";
     } else {
         const ScopedEnvVar bidiag("BATCHLAS_GESVD_BIDIAG", "normal");
         const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "7");
@@ -2106,8 +2157,8 @@ TYPED_TEST(GesvdTest, BlockedChunksUnderNormalEquationsBidiag) {
 TYPED_TEST(GesvdTest, BlockedChunksOnAnOutOfOrderQueue) {
     using Scalar = typename TestFixture::Scalar;
     constexpr Backend B = TestFixture::B;
-    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "the blocked native provider is GPU only";
+    if constexpr (!kBlockedRuns<B>) {
+        GTEST_SKIP() << "blocked runs on GPU backends and a vendor-free host";
     } else {
         const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "7");
         Queue ooo(*this->ctx, false);
@@ -2117,13 +2168,15 @@ TYPED_TEST(GesvdTest, BlockedChunksOnAnOutOfOrderQueue) {
 }
 
 // The query is one part's: chunk 7 over 23 items needs what 9 items (7 + 23 % 7) need unchunked,
-// and less than all 23.
+// and less than all 23. The driver's L2 chunk is a GPU schedule: a CPU queue (vendor-free host)
+// runs gesvd in one pass, where the knob can only shrink a child's own parts (measured 8574208 B
+// chunked against 8706816 B whole, float), never grow the query.
 TYPED_TEST(GesvdTest, BlockedChunksWorkspaceIsTheLargestPart) {
     using Scalar = typename TestFixture::Scalar;
     using Real = typename TestFixture::Real;
     constexpr Backend B = TestFixture::B;
-    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "the blocked native provider is GPU only";
+    if constexpr (!kBlockedRuns<B>) {
+        GTEST_SKIP() << "blocked runs on GPU backends and a vendor-free host";
     } else {
         const int m = 44, n = 36, batch = 23;
         Matrix<Scalar, MatrixFormat::Dense> A(m, n, batch), U(m, m, batch), Vh(n, n, batch);
@@ -2144,8 +2197,13 @@ TYPED_TEST(GesvdTest, BlockedChunksWorkspaceIsTheLargestPart) {
             nine = query(9);
             whole = query(batch);
         }
-        EXPECT_EQ(chunked, nine);
-        EXPECT_LT(chunked, whole);
+        if (this->ctx->device().type == DeviceType::GPU) {
+            EXPECT_EQ(chunked, nine);
+            EXPECT_LT(chunked, whole);
+        } else {
+            EXPECT_LE(chunked, whole);
+            EXPECT_LT(nine, whole);
+        }
     }
 }
 
@@ -2203,8 +2261,8 @@ TYPED_TEST(GesvdTest, BlockedChunksAtSaturatingBatchAreBitIdentical) {
     using Scalar = typename TestFixture::Scalar;
     using Real = typename TestFixture::Real;
     constexpr Backend B = TestFixture::B;
-    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "the blocked native provider is GPU only";
+    if constexpr (!kBlockedRuns<B>) {
+        GTEST_SKIP() << "blocked runs on GPU backends and a vendor-free host";
     } else {
         using MV = MatrixView<Scalar, MatrixFormat::Dense>;
         const int n = 36, batch = 1024;
@@ -2233,5 +2291,56 @@ TYPED_TEST(GesvdTest, BlockedChunksAtSaturatingBatchAreBitIdentical) {
         const VectorView<Real> s0(s.data(), n, 1);
         EXPECT_VERIFY(Scalar, batchlas::verify::Check::factorization, n,
                       MV::svd_residual(*this->ctx, A0.batch_range(0, 1), U.batch_range(0, 1), s0, Vh.batch_range(0, 1)));
+    }
+}
+
+// gebrd's reflector norms when the squares of the entries leave the range: the same 40 x 33
+// matrix at 2^0 (control), then with squares subnormal and below the smallest subnormal (float
+// 2^-70 / 2^-76, double 2^-520 / 2^-560); padded A, d / e / tau at gapped strides, d / e poisoned.
+// gebrd_unblocked runs gebd2 (one matrix per work-item), gebrd_blocked the labrd panel (device
+// backends). Oracle: the bidiagonal's singular values (host Jacobi in double, rescaled by the
+// exact 2^-x) against the unscaled matrix's.
+template <typename Config>
+class GebrdScaledTest : public test_utils::BatchLASTest<Config> {
+protected:
+    using Scalar = typename Config::ScalarType;
+    using Real = typename base_type<Scalar>::type;
+    static constexpr Backend B = Config::BackendVal;
+};
+using GebrdScaledTypes = typename test_utils::backend_types<GesvdConfig>::type;
+TYPED_TEST_SUITE(GebrdScaledTest, GebrdScaledTypes);
+
+TYPED_TEST(GebrdScaledTest, ReflectorNormsSurviveSquaresBelowTheNormalRange) {
+    using Scalar = typename TestFixture::Scalar;
+    using Real = typename TestFixture::Real;
+    constexpr Backend B = TestFixture::B;
+    const int m = 40, n = 33, batch = 3, nb = 8, sd = n + 2, se = n + 1;
+    const auto R0 = Matrix<Scalar, MatrixFormat::Dense>::Random(m, n, false, batch, 20261123);
+    const std::array<int, 3> exps = std::is_same_v<Real, float> ? std::array<int, 3>{0, -70, -76} : std::array<int, 3>{0, -520, -560};
+    for (const std::string kernel : {"unblocked", "blocked"})
+    for (int x : exps) {
+        if (B == Backend::NETLIB && kernel == "blocked") continue;  // the host's gesvd runs gebd2 only
+        SCOPED_TRACE(::testing::Message() << "gebrd " << kernel << ", entries scaled by 2^" << x);
+        auto A = ts::padded<Scalar>(m, n, batch);
+        for (int b = 0; b < batch; ++b)
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < m; ++i) A.view()(i, j, b) = R0.view()(i, j, b) * Real(std::ldexp(1.0, x));
+        UnifiedVector<Real> d(std::size_t(sd) * batch, Real(1000)), e(std::size_t(se) * batch, Real(1000));
+        UnifiedVector<Scalar> tq(std::size_t(sd) * batch), tp(std::size_t(sd) * batch);
+        const VectorView<Real> dv(d.data(), n, batch, 1, sd), ev(e.data(), n - 1, batch, 1, se);
+        const VectorView<Scalar> tqv(tq.data(), n, batch, 1, sd), tpv(tp.data(), n, batch, 1, sd);
+        UnifiedVector<std::byte> ws(kernel == "blocked" ? gebrd_blocked_buffer_size<B, Scalar>(*this->ctx, A.view(), dv, ev, tqv, tpv, nb) : 0);
+        if (kernel == "unblocked") (void)gebrd_unblocked<B, Scalar>(*this->ctx, A.view(), dv, ev, tqv, tpv);
+        else (void)gebrd_blocked<B, Scalar>(*this->ctx, A.view(), dv, ev, tqv, tpv, ws.to_span(), nb);
+        this->ctx->wait();
+        UnifiedVector<Real> s(std::size_t(n) * batch);
+        for (int b = 0; b < batch; ++b) {
+            std::vector<double> bd(std::size_t(n) * n, 0.0), sv;
+            for (int i = 0; i < n; ++i) bd[std::size_t(i) * n + i] = std::ldexp(double(d[std::size_t(b) * sd + i]), -x);
+            for (int i = 0; i + 1 < n; ++i) bd[std::size_t(i + 1) * n + i] = std::ldexp(double(e[std::size_t(b) * se + i]), -x);
+            ASSERT_TRUE(test_utils::jacobi_singular_values<double>(n, n, bd, sv)) << "item " << b;
+            for (int j = 0; j < n; ++j) s[std::size_t(b) * n + j] = Real(sv[std::size_t(j)]);
+        }
+        test_utils::expect_singular_values_match_lapacke(R0.view(), s);
     }
 }

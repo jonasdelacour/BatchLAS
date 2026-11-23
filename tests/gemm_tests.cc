@@ -103,6 +103,23 @@ bool WideTileFitsOrIsRefused(Queue& ctx, const char* word) {
     expect_pin_refused<Scalar>(ctx, word, 100, 70, 90, Transpose::NoTrans, Transpose::NoTrans);
     return false;
 }
+// The same for `small`, its local memory spelled apart from choice.hh: 128 / (2 NB) slots of
+// NB x (NB + 1) on 128 lanes, NB the bucket (8, 16, 32, 64) of max(m, n, k), or the float NN tiled
+// leg's (33..56) 2 NB (NB + 4) on (NB / 4)^2 lanes. complex<float> at NB = 64 is over Metal's budget.
+template <typename Scalar>
+bool SmallFitsOrIsRefused(Queue& ctx, int m, int n, int k, Transpose ta, Transpose tb) {
+    if (!NativePinsRun(ctx)) return true;
+    const int mx = std::max({m, n, k});
+    const bool tiled = std::is_same_v<Scalar, float> && ta == Transpose::NoTrans && tb == Transpose::NoTrans &&
+                       mx > 32 && mx <= 56;
+    const int nb = tiled ? (mx <= 48 ? 48 : 56) : mx <= 8 ? 8 : mx <= 16 ? 16 : mx <= 32 ? 32 : 64;
+    const int wg = tiled ? (nb / 4) * (nb / 4) : 128;
+    const std::int64_t bytes =
+        std::int64_t(tiled ? 2 * nb * (nb + 4) : (128 / (2 * nb)) * nb * (nb + 1)) * std::int64_t(sizeof(Scalar));
+    if (bytes <= test_utils::slm_budget_for(ctx.device(), wg)) return true;
+    expect_pin_refused<Scalar>(ctx, "small", m, n, k, ta, tb);
+    return false;
+}
 #define SKIP_UNLESS_WIDE_FITS(T, ctx, word) \
     if (!WideTileFitsOrIsRefused<T>(ctx, word)) GTEST_SKIP() << word << " is above this device's local memory budget; the refusal was checked instead"
 
@@ -388,6 +405,9 @@ TYPED_TEST(GemmTest, HeterogeneousBatchedGemmNativePinAppliesPerItem) {
     for (const char* word : words) {
         SCOPED_TRACE(word);
         if (!WideTileFitsOrIsRefused<ScalarType>(*(this->ctx), word)) continue;
+        if (std::string_view(word) == "small" &&
+            !SmallFitsOrIsRefused<ScalarType>(*(this->ctx), mm, mn, mk, Transpose::NoTrans, Transpose::NoTrans))
+            continue;
         reset();
         {
             const GemmPin pin(word);
@@ -595,17 +615,13 @@ TYPED_TEST(GemmTest, HeterogeneousKZeroBetaZeroWritesZeros) {
                                   ScalarType(3), ScalarType(0));
 }
 
-// The homogeneous twin: batch > 1, k == 0, beta == 0 is not split per item, so on NETLIB it
-// reaches the vendor loop's own k == 0 branch. C is a padded sub-block of a NaN-filled buffer.
+// The homogeneous twin: batch > 1, k == 0, beta == 0 is not split per item. gemm.cc answers k == 0
+// before select (fill_zeros), every build and backend. C is a padded sub-block of a NaN-filled buffer.
+// BREAK: dropping gemm.cc's k == 0 fill leaves the NaNs (vendor-free: NoRouteError, no family takes k == 0).
 TYPED_TEST(GemmTest, HomogeneousKZeroBetaZeroWritesZeros) {
     using ScalarType = typename TestFixture::ScalarType;
     using Real = typename base_type<ScalarType>::type;
     using MV = MatrixView<ScalarType, MatrixFormat::Dense>;
-    constexpr Backend Ba = TestFixture::BackendType;
-    // No native gemm family takes k == 0, so vendor-free this shape has no route (NoRouteError).
-    constexpr bool kVendor = Ba == Backend::NETLIB ? bool(BATCHLAS_HAS_CBLAS)
-                           : Ba == Backend::ROCM ? bool(BATCHLAS_HAS_ROCBLAS) : bool(BATCHLAS_HAS_CUBLAS);
-    if (!kVendor) GTEST_SKIP() << "k == 0 is vendor-only";
     constexpr int batch = 3, m = 17, n = 11, ldc = m + 5, stride = ldc * n + 9;
     UnifiedVector<ScalarType> a(1), b(1), c(static_cast<size_t>(stride) * batch);
     for (auto& x : c) x = ScalarType(std::numeric_limits<Real>::quiet_NaN());
@@ -1611,6 +1627,7 @@ TYPED_TEST(GemmTest, SmallBatchedMatchesVendorOnRaggedShapes) {
         for (Transpose tb : ops) {
             for (const auto& s : shapes) {
                 if (std::max({s[0], s[1], s[2]}) > kMax) continue;
+                if (!SmallFitsOrIsRefused<ScalarType>(*this->ctx, s[0], s[1], s[2], ta, tb)) continue;
                 for (ScalarType beta : {ScalarType(0), make(-1.5, 0.75)}) {
                     SCOPED_TRACE(::testing::Message() << "m=" << s[0] << " n=" << s[1]
                                                       << " k=" << s[2]);
@@ -1650,6 +1667,9 @@ TYPED_TEST(GemmTest, SmallTiledMatchesVendor) {
 // compared, so a store past the view's rows or columns is caught.
 TYPED_TEST(GemmTest, SmallBatchedStridedSubviewWritesOnlyItsView) {
     using ScalarType = typename TestFixture::ScalarType;
+    const auto fits = [&](int m, int n, int k, Transpose t) {
+        return SmallFitsOrIsRefused<ScalarType>(*this->ctx, m, n, k, t, t);
+    };
     run_forced_wide_transposed_check<ScalarType>(
         *(this->ctx), "small", 29, 31, 17, Transpose::NoTrans, Transpose::NoTrans,
         ScalarType(1), /*parent=*/64, /*row_offset=*/3, /*batch_size=*/5);
@@ -1661,12 +1681,14 @@ TYPED_TEST(GemmTest, SmallBatchedStridedSubviewWritesOnlyItsView) {
         ScalarType(1), /*parent=*/64, /*row_offset=*/1, /*batch_size=*/5);
     if constexpr (sizeof(ScalarType) == 16) return;  // above its ceiling of 32
     // The tiled leg (NN, max 33..56) for float, both instantiations; NB = 64 otherwise.
-    run_forced_wide_transposed_check<ScalarType>(
-        *(this->ctx), "small", 45, 51, 38, Transpose::NoTrans, Transpose::NoTrans,
-        ScalarType(1), /*parent=*/96, /*row_offset=*/3, /*batch_size=*/5);
-    run_forced_wide_transposed_check<ScalarType>(
-        *(this->ctx), "small", 35, 40, 44, Transpose::NoTrans, Transpose::NoTrans,
-        ScalarType(0), /*parent=*/96, /*row_offset=*/1, /*batch_size=*/5);
+    if (fits(45, 51, 38, Transpose::NoTrans))
+        run_forced_wide_transposed_check<ScalarType>(
+            *(this->ctx), "small", 45, 51, 38, Transpose::NoTrans, Transpose::NoTrans,
+            ScalarType(1), /*parent=*/96, /*row_offset=*/3, /*batch_size=*/5);
+    if (fits(35, 40, 44, Transpose::NoTrans))
+        run_forced_wide_transposed_check<ScalarType>(
+            *(this->ctx), "small", 35, 40, 44, Transpose::NoTrans, Transpose::NoTrans,
+            ScalarType(0), /*parent=*/96, /*row_offset=*/1, /*batch_size=*/5);
 }
 
 TYPED_TEST(GemmTest, WideTransposedNC64Ragged) {

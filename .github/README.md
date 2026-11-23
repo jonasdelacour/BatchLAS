@@ -13,19 +13,27 @@ every measurement behind a routing decision).
 
 ## Status
 
-- **Research code, no release tag.** Pin to a commit. `main` carries known test failures, tracked
-  in `tests/known-failures.txt` ([CI](../docs/ci.md)).
+- **Release 1.0.0**, the first tagged release: what changed is in the
+  [changelog](../docs/changelog.md), and what 1.x keeps stable in
+  [versioning and compatibility](../docs/cpp-api.md#versioning-and-compatibility). Tests with known
+  failures per toolchain are tracked in `tests/known-failures*.txt` ([CI](../docs/ci.md)).
 - **Scalar types**: `float`, `double`, `std::complex<float>`, `std::complex<double>`.
 - **SYCL implementations**: DPC++ (`intel/llvm` built with CUDA) and AdaptiveCpp 25.10
   (`-DBATCHLAS_SYCL_IMPL=ACPP`) from one tree
   ([two SYCL implementations](../docs/design/sycl-implementations.md)).
+- **Tested platforms** ([full table](../docs/guide/build.md#tested-platforms)): DPC++ with CUDA on
+  RTX 4090 (`sm_89`, CI gate) and RTX PRO 6000 (`sm_120`); vendor-free builds on the same GPUs and
+  their host CPU. AdaptiveCpp on Linux (generic SSCP and multipass CUDA) is **experimental**. Apple
+  GPUs need AdaptiveCpp with every local patch in `scripts/macos/adaptivecpp-patches/` (0001 to
+  0014; [macOS](../docs/guide/build.md#macos-apple-gpu-through-adaptivecpp-metal)). ROCm is
+  **unsupported (code paths only)**.
 
 | Backend | Runs on | Status |
 | --- | --- | --- |
 | `CUDA` | NVIDIA GPUs: native SYCL kernels plus cuBLAS/cuSOLVER/cuSPARSE | RTX 4090 (`sm_89`) in daily CI; RTX PRO 6000 (`sm_120`) built and tested |
 | `SYCL` | a GPU without a vendor library: native kernels only | Apple M5 Max through AdaptiveCpp Metal; `float` and `complex<float>` only; not in CI |
 | `NETLIB` | host LAPACKE/CBLAS plus native kernels on a CPU device | built and tested beside the GPU backends |
-| `ROCM` | AMD GPUs: rocBLAS/rocSOLVER/rocSPARSE | code paths exist; syntax-checked only, not built or run |
+| `ROCM` | AMD GPUs: rocBLAS/rocSOLVER/rocSPARSE | **unsupported (code paths only)**: no build or CI job compiles them, nothing runs them |
 
 A vendor-free build (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) runs native kernels only; its gaps are in
 [vendor independence](../docs/design/vendor-independence.md#vendor-free-status).
@@ -92,6 +100,11 @@ ctx.wait();                                          // nothing is readable befo
 ```
 
 Matrices are column-major in device-accessible (USM) memory.
+
+The in-kernel API (`batchlas::device`: BLAS and LAPACK called from your own kernels) needs no
+build at all: `-I BatchLAS/include` plus your SYCL flags
+([header-only use](../docs/cpp-api.md#the-device-api-without-building-batchlas),
+[examples/device/](https://github.com/jonasdelacour/BatchLAS/tree/main/examples/device)).
 
 - Toolchain, presets, CMake options, tests, benchmarks, Python, macOS:
   [building guide](../docs/guide/build.md).

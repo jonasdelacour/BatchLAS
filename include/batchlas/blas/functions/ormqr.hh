@@ -5,7 +5,7 @@
 /// @brief Batched application of Q from geqrf reflectors (ormqr/unmqr) and its workspace query.
 /// @ingroup api_qr
 
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <algorithm>
 #include <optional>
 #include <stdexcept>

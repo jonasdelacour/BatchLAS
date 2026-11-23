@@ -1,6 +1,6 @@
 # Known defects {#design_known_defects}
 
-> **Status:** current · checked 2026-10-29
+> **Status:** current · checked 2026-11-21
 
 Open defects located to a line, with symptom, cause and what a fix needs. A fixed defect keeps a
 short entry only while code, tests or other pages cite its heading or number. Performance debt is
@@ -107,14 +107,20 @@ a selection key, so `spmm_tests` skips misaligned cases unless the route is pinn
 
 ## Defect 18: `gesvd_cta` left vectors lose orthogonality as eps times kappa squared
 
-Open. CTA mode always takes the normal-equations branch (`gesvd_direct_bidiag` is true only for
-`Blocked`, `src/ops/gesvd/kernels/gesvd_blocked.cc:71-73`), and `build_bidiag_vectors` forms
-\f$u_i = B v_i / \sigma_i\f$, scaling the error of \f$v_i\f$ by \f$\sigma_{\max}/\sigma_i\f$:
-\f$\max|U^T U - I|\f$ reaches \f$\varepsilon\kappa^2\f$ (\f$V\f$ stays at \f$1.5 \times 10^{-6}\f$ in float). Same root as
-[gesvd defect A](../perf/gesvd.md#gesvd-defect-a-the-normal-equations-square-kappa). Reached under
-Auto on sm_120 (14 double `vec=all` non-square rows), pin-only on sm_89. Red:
-`GesvdTest.CtaProviderCoversAllJobCombinations`, float and double, in `tests/known-failures.txt`.
-**Fix needs:** the direct bidiagonal solver in CTA mode, or no `cta` family for real general input.
+Fixed 2026-11-20 (61d8703e). CTA mode always took the normal-equations branch, and
+`build_bidiag_vectors` formed \f$u_i = B v_i / \sigma_i\f$, scaling the error of \f$v_i\f$ by
+\f$\sigma_{\max}/\sigma_i\f$: \f$\max|U^T U - I|\f$ reached \f$\varepsilon\kappa^2\f$ (float
+\f$1.7 \times 10^{-3}\f$, double \f$8.4 \times 10^{-12}\f$ at \f$n = 16\f$). Same root as
+[gesvd defect A](../perf/gesvd.md#gesvd-defect-a-the-normal-equations-square-kappa).
+Only the default changed: `gesvd_direct_bidiag()` (`src/ops/gesvd/kernels/gesvd_blocked.cc`) no
+longer depends on the mode, so CTA and blocked both default to a direct bidiagonal solve, and its
+one-argument overload `gesvd_direct_bidiag(thin_tall_u)` forces the direct solve for a thin tall U in
+either mode (CTA's entries refuse a thin job anyway). CTA keeps `gebrd_cta` and `ormqx_cta` and
+solves \f$B\f$ with `bdsdc`/`bdsqr` like blocked. `BATCHLAS_GESVD_BIDIAG=normal` still reaches the
+normal equations for real types without a thin tall U; complex types never do (the run path and
+`buffer_size` compute `kComplex || gesvd_direct_bidiag(thin_tall_u)`). Guards:
+`GesvdTest.CtaProviderCoversAllJobCombinations`, float and double;
+`GesvdTest.CtaThinTallUnderNormalEquationsIsRefused`.
 
 ## Defect 19: Upper potrf beyond the CTA ceiling has no vendor-free route
 
@@ -166,6 +172,77 @@ exposed the same way.
 |---|---|---|
 | 2 | `cond` and `norm` called `syev_vendor_or_throw` directly and threw in a vendor-free build | both call the public `syev` and `syev_buffer_size` |
 | 23 | `gebrd_cta`, `ormqx_cta` and `syev_jacobi_cta` returned per partition before work-group barriers on a batch tail | fixed 2026-10-28: dead partitions run a zero tile with every store guarded by `live`; `*BatchTailStoresNothingAndKeepsItemsBitwise` |
+
+## Metal sygst: a partly live sub-group passed each barrier twice {#known-defects-metal-sygst-barrier}
+
+Fixed (b733fbab). `sygs2_group` (`include/batchlas/device/lapack/sygst.hh`) wrapped work in a
+per-item `if (active)` beside its barriers, and AdaptiveCpp's Metal code repeats such a branch's
+barriers on both sides ([the trap](#known-defects-toolchain-traps)): a partly live sub-group reached
+each barrier twice and released the others a phase early, so the first block of that sub-group
+came out wrong. Seen as blocked `sygst`/`sygvd` residuals near 0.3 to 7 (float `blocked:nb=32`)
+and as bit-identity failures at batch 1024 (items 20 at \f$n = 5\f$ and 8 at \f$n = 12\f$). The
+`device_lapack_sygst_tests` device-vs-host bit mismatches on Metal
+(`BitIdenticalToPinnedHostRouteItype*`), triaged at first as cross-instantiation rounding (RC7 of the
+Metal triage), were the same bug (RC15). Every item now runs both passes: a dead block's items on
+their own unloaded slot, items past `ipw * kb` repeating item `t % (ipw * kb)`. The diagonal
+group's local-memory target is the device budget at its own work-group size, so `complex<float>`
+`blocked:nb=32` runs on Apple (55903879). Guards:
+`SygvdTest.SaturatingSygstBlockedIsBitIdenticalToItemZero`, `SygvdTest.SygvdSolvesEveryItypeOnEveryFamily`,
+`DeviceApiSygstTest.BitIdenticalToPinnedHostRoute*`.
+
+## Fixed in the 1.0.0 release work {#known-defects-fixed-for-1-0-0}
+
+| defect | cause | fix | guard |
+|---|---|---|---|
+| `syev_cta` wrong on Metal: \f$\lambda_{\max}\f$ 1.19 for 1 on graded SPD input | `larfg_lanes`' unscaled sum of squares under flush-to-zero dropped every \f$\lvert x\rvert < 2^{-63}\f$, so `sytrd_cta`'s reflector was not orthogonal | 53fcac77: \f$\lVert x\rVert\f$ scaled by a power of two (exact) | `syev_jacobi_cta_tests` asserts `Check::values` |
+| Jacobi rotation cosine 252 eps on Metal (bound 180) | the AdaptiveCpp path skipped the FMA Newton step after `1/sqrt` that the NVPTX path takes | 53fcac77: the same step on AdaptiveCpp | `RotationCosineKeepsEigenvectorsOrthonormal` |
+| `potri` on the host device admitted orders 125-176 that then threw | `can_run` read `d.max_wg`, the launch the kernel's own limit | 7e5d7baa: both read `cta_ceiling(q)` | `potri_tests` pins derived from the ceiling |
+| blocked `sytrs` items 672 on lost bit identity at batch 1024 | the remainder-last split ran the children at two batch sizes, so they selected different kernels | 9693cc0a: near-equal parts | `SytrsSaturatingBatchIsBitIdenticalToItemZero`; forced chunk 7 over 24 items |
+| `ormqx_cta` item-dependent garbage on the OpenCL CPU | packed partitions assume 32-wide sub-groups; the kernels did not require them | 265915cb: `reqd_sub_group_size(32)` on both kernels | `OrmqrMask.SaturatingOrmqxCta` |
+| blocked device `syev` wrong from \f$n = 18\f$ on the OpenCL CPU | `sycl::group_broadcast` reached lanes 0..15 only ([trap](#known-defects-toolchain-traps)) | 34eb2e99, 1066d690: `portable::group_broadcast` ORs the bits on SPIR | `group_collectives_tests` |
+| device `stedc` SIGSEGV on the OpenCL CPU | `joint_exclusive_scan` carried a wrong value between chunks, so `laed2` gathered out of bounds | ed2c6148: chunked scan on SPIR | `device_lapack_stedc_tests` |
+| `sytrd_sb2st` work-group kernel: \f$d\f$, \f$e\f$ off by \f$6 \times 10^{4}\f$ of the band norm on the OpenCL CPU | an `nr == 0` step has no barrier between the read of the published counters and the next publish | ef5757dc: two alternating slots | `DeviceApiSb2stTest.WideBandMatchesTheWorkGroupRoute` |
+| masked float `steqr_wg` on Metal: \f$Z\f$ not orthonormal (\f$\lvert Z \rvert \approx 400\f$) | `MatrixView::fill`'s null mask read an earlier kernel's buffer binding ([trap](#known-defects-toolchain-traps)), so a fifth of the 2.9 MB rotation fill was skipped | AdaptiveCpp patch 0015; 2dea7e5a also drops that fill | `QueueTest.NullPointerArgumentReadsNullAfterAKernelThatBoundItsSlot`, `BatchMaskUtilities.UnmaskedUtilityAfterAKernelThatBoundItsSlotsWritesEveryItem` |
+| `steqr_wg` NaN on an all-subnormal block (CUDA too); `stedc` graded float leaves info 2 | `ssfmin / anorm` overflowed to inf | 84782e3e: `block_scale` capped at `1 / min` | `SteqrTest.SubnormalBlockConverges`, `StedcTest.GradedSubnormalLeavesConverge` |
+| `syev` blocked, `syevx` Direct: "only 16 remaining" at \f$n = 4\f$ on the OpenCL CPU | slices sized as if the workspace began on the device's 128-byte alignment | 09d24192: one alignment quantum counted | `syev`, `syev_mask` and `syevx` on opencl:cpu; `BatchPartsUnderAScratchBudget` |
+| `linalg_layer_tests` SIGSEGV when a wrapped call threw | the wrapper freed its buffers while its enqueued copy ran | 81b11727: every multi-launch wrapper waits before rethrowing | `LinalgWrappers.QrDrainsItsCopyWhenGeqrfThrows` |
+| CTA kernels failed with "No kernel named" on a CPU queue | the CTA cluster has no CPU image, and the OpenCL CPU reports sub-group size 32 | 4a73d559: sub-group-32 sites also require a GPU; CTA entry points throw `unsupported` | vendor-free and full gate trees |
+
+## Toolchain traps {#known-defects-toolchain-traps}
+
+Compiler and runtime behaviour that broke BatchLAS kernels. Each is worked around in the code;
+none is fixed in the toolchain.
+
+- **AdaptiveCpp Metal duplicates barriers around a per-item branch.** A barrier next to an
+  `if (item_is_live)` is emitted on both sides of the branch, so a partly live sub-group passes it
+  twice and releases the others a phase early. Keep every item on the same path through a barrier
+  and mask the stores instead. Hit by [sygst](#known-defects-metal-sygst-barrier).
+- **Metal flushes subnormals to zero, also inside a sum of squares.** An unscaled
+  \f$\sum x_i^2\f$ loses every \f$\lvert x_i\rvert < 2^{-63}\f$ in float. Scale by a power of two
+  first, as LAPACK's `nrm2` does (`larfg_lanes`, 53fcac77). Tests that need subnormals probe the
+  device with the device-core fixtures' `flushes_subnormals<R>()` (`tests/device_core_common.hh`).
+- **AdaptiveCpp Metal needs patch 0014** to type pointers through PHI and select cycles; without
+  it the `complex<float>` shaders of `potrf`, `posv`, `potrs`, `potri`, `sygvd` and `ortho` fail
+  to compile ("incompatible operand types"). A true private-vs-device select still fails: write a
+  branch, not a select (`scripts/macos/adaptivecpp-patches/0014-upstream.txt`).
+- **AdaptiveCpp Metal needs patch 0015** to pass a null pointer kernel argument as null. Without
+  it, a kernel with at most six parameters, batched into a command buffer after another kernel,
+  reads that kernel's buffer binding instead of the null pointer. An unmasked utility's null mask
+  then skips every item whose stale byte is zero. A wait between the two launches, or
+  `BATCHLAS_METAL_FLUSH_EACH_OP=1`, hides it (`scripts/macos/adaptivecpp-patches/0015-upstream.txt`).
+- **DPC++ OpenCL CPU, `reqd_sub_group_size(32)`:** a work-group `sycl::group_broadcast` reaches
+  lanes 0..15 of each sub-group only, and `joint_exclusive_scan` over a work-group carries a wrong
+  value between chunks once \f$n\f$ exceeds the group. Use `portable::group_broadcast` and
+  `portable::joint_exclusive_scan` (`include/batchlas/util/group-collectives.hh`).
+- **DPC++ OpenCL CPU runs a work-group's sub-groups one after another between barriers,** so a
+  value published in local memory and rewritten before the next barrier is read stale or early
+  (`sytrd_sb2st`, ef5757dc). On the GPU the same code happens to work.
+- **DPC++ OpenCL CPU miscompiles:** the unrolled guarded `device::load` of a `complex<double>`
+  column at a run-time order (`sygs2_group` loads through a rolled loop under `__SPIR__`, 85e71a45),
+  and the fully unrolled float `gesv` tiny kernels at column bucket 32, which read sub-group id 0 in
+  both sub-groups (the partition comes from the work-item id on SPIR, b9f9a8f0; a vendor-free build
+  keeps the sub-group broadcast arm, 4fe69005). Other bodies using `device::load` at a run-time
+  live count were not audited.
 
 ## LOBPCG picked a spurious zero Ritz value from a null P column
 
@@ -232,6 +309,21 @@ Located to a line, not confirmed by a test.
 - **`gesvdj_cta` global rescale ignores columns 32..63 on the C=64 rung**
   (`src/ops/gesvd/kernels/gesvdj_cta.cc:356`): overflow headroom is narrower than designed; see
   [global power-of-two scaling](gesvd.md#gesvdj_cta-global-power-of-two-scaling).
+- **Unscaled sums of squares left after 1.0.0** (the flush-to-zero trap in
+  [toolchain traps](#known-defects-toolchain-traps)): `ortho`'s normalisation (`ortho.hh:80`),
+  `lanczos`' beta (`lanczos.cc:152`), `ritz_values.hh:50`, `syevx` LOBPCG
+  (`syevx_lobpcg.cc:730-732`, `:931`, `:1118`), `house2` (`scalar.hh:463`, tridiagonal solver) and
+  `lange` Frobenius (`src/util/norm.cc`). Each loses accuracy only when every entry of the vector is
+  below about \f$2^{-63}\f$ on a device that flushes subnormals; each needs its own graded test,
+  scheduled for 1.x. The reflector norms (`larfg_lanes`, `latrd`, `sb2st`, `gebrd`, legacy `sytrd`)
+  are scaled.
+- **Sub-group-32 routes without a capability check.** `ormqr`, `syev` and `gesvd` Blocked and `syev`
+  TwoStage reach `larft`/`sy2sb`, which need 32-wide sub-groups, with no `supports_sub_group_size(32)`
+  term in `can_run`; the public `ormbr<NETLIB>` throws a message opening with `larft` on AdaptiveCpp's
+  OpenMP host. None is reachable in the 1.0.0 release configurations' tests (every DPC++ and Metal
+  device there has 32-wide sub-groups, and those routes stay behind `natives_run_on` on that host);
+  a vendor-free AdaptiveCpp host or a GPU without size 32 would expose them. `syevx` DirectSubset
+  has the check (757348c6); the others are 1.x work.
 - Matrix containers and the environment parser are tracked on their pages:
   [matrix model](matrix-model.md#matrix-model-open-debts),
   [environment](environment.md#environment-parser-defects-recorded-not-fixed).

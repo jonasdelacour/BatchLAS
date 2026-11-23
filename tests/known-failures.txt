@@ -1,9 +1,8 @@
 # Known test failures on `main`. A debt ledger, not an allowlist.
 #
-# This project's test suite is NOT green, and has not been for some time. A CI
-# job that fails on any non-zero ctest exit can therefore never go green, so it
-# would be switched off within a week. This file is what lets the gate mean
-# something in the meantime: .github/ci/compare_failures.py fails the build on
+# As of 1.0.0 this ledger is EMPTY: the dev-tests suite is green, and it must stay green. It
+# remains the gate's input so a future debt is recorded, dated and reviewed, never silently
+# tolerated: .github/ci/compare_failures.py fails the build on
 # any failure that is NOT listed here, and warns loudly when a listed one starts
 # passing so a fix cannot be silently re-broken later.
 #
@@ -52,19 +51,9 @@
 # the fixing commit in that union was not bisected.
 
 # --- gesvd --------------------------------------------------------------------
-# Verified 2026-10-09 on the acpp-dual-build branch (threadripper02, GPU-only
-# and full-target trees; index 2 is the full-target position of float/CUDA).
-# docs/design/known-defects.md entry 18: the cta provider's U loses
-# orthogonality as eps*kappa^2 (normal equations). Red since the Philox
-# generator (a305bcf0) drew a kappa=497 matrix for the AN case; 8 of 80 seeds
-# fail. Not a tolerance problem: jacobi and blocked reach 6e-6 on the same input.
-gesvd_tests::GesvdTest/2.CtaProviderCoversAllJobCombinations;type_param=GesvdConfig<float,(batchlas::Backend)1>
-# double/CUDA (index 3) fails the same orthogonality check on threadripper02
-# (sm_120, 2026-10-12: 8.39e-12 against the 128 n eps cta slack). Observed as
-# GesvdTest/1 on a GPU-only tree and as GesvdTest/3 on a full-target tree of
-# main 30627f1f (not the dev-tests preset); not yet seen on the 4090 box, where
-# a pass is reported by compare_failures as a NEWLY PASSING warning.
-gesvd_tests::GesvdTest/3.CtaProviderCoversAllJobCombinations;type_param=GesvdConfig<double,(batchlas::Backend)1>
+# GesvdTest/{2,3}.CtaProviderCoversAllJobCombinations (float, double CUDA) removed 2026-11-22 for
+# 1.0.0: defect 18 (docs/design/known-defects.md) is fixed. CTA mode solves the bidiagonal directly
+# instead of through the normal equations; green x3 and over an 80-seed sweep on JRHNBR.
 
 # --- DELIBERATELY ABSENT ------------------------------------------------------
 # sytrd_blocked_tests::SytrdBlockedLatrdGridCudaTest.GridMatchesLegacyTridiagonal

@@ -10,33 +10,16 @@
 # Unlike the main ledger this may name a WHOLE ctest test: a binary that aborts writes no gtest
 # XML, so there is no case to name. That masks every case in it -- keep such entries few, and
 # delete each one the day its binary stops aborting (compare_failures reports it NEWLY PASSING).
-#
-# Recorded 2026-10-25 by scripts/gate.sh --only full on main 6478aed7 (build-gate, 143 tests).
-# Same set as the #194 gate on 0832ea91 (2026-10-24), which attributed each to main.
 
-# --- CPU (NETLIB, Backend 6) instantiations launch GPU-only CTA kernels ---------------------------
-# "No kernel named _ZTSN8batchlas14SteqrCTAKernelIfLm16ELb1EEE" / "...Sytd2CTAKernelIfLm8ELb0EEE":
-# the CTA kernels now live in NO_CPU_TARGETS libraries (#196, docs/developer/agent-guide.md §7
-# "Component libraries"), but the NETLIB path on the opencl:cpu queue still reaches them.
-# steqr_tests then segfaults (no XML), so it is listed whole. A real defect, not the box.
-steqr_tests
-syev_blocked_tests::SyevBlockedTest/0.EigenvaluesOnlyLowerMatchesNetlib;type_param=(anonymous namespace)::SyevBlockedConfig<float,(batchlas::Backend)6>
-syev_blocked_tests::SyevBlockedTest/1.EigenvaluesOnlyLowerMatchesNetlib;type_param=(anonymous namespace)::SyevBlockedConfig<double,(batchlas::Backend)6>
-syev_blocked_tests::SyevBlockedTest/2.EigenvaluesOnlyLowerMatchesNetlib;type_param=(anonymous namespace)::SyevBlockedConfig<std::complex<float>,(batchlas::Backend)6>
-syev_blocked_tests::SyevBlockedTest/3.EigenvaluesOnlyLowerMatchesNetlib;type_param=(anonymous namespace)::SyevBlockedConfig<std::complex<double>,(batchlas::Backend)6>
-
-# --- DPC++ assertion in adjustNDRangePerKernel (commands.cpp:2246) --------------------------------
-# The process aborts on the runtime's own assert while launching on the opencl:cpu device.
-# Not yet attributed to a kernel; whole tests because the abort leaves no gtest XML.
-gesvd_tests
-ormqr_cta_tests
-sytrd_cta_tests
-util_device_queue_tests
-
-# --- tuned table content, not this box ------------------------------------------------------------
-# gemm.sm_120.txt has 0 timed double rows (tests/tuned_tables_tests.cc:480). Host-independent:
-# move to tests/known-failures.txt or retune, but CI runs no ctest, so it was first seen here.
-tuned_tables_tests::TunedTables.Sm120TablesAreDeepLedgerTablesNamingTheirLedger
+# EMPTY as of 1.0.0 (2026-11-22). Every entry below was removed after passing in the release gates on
+# this box (scripts/gate.sh on release/1.0, full target, dev-tests preset):
+#   steqr_tests, syev_blocked_tests EigenvaluesOnlyLowerMatchesNetlib x4: the NETLIB path no longer
+#     reaches GPU-only CTA kernels (capability guards in the CTA entry points, and host-native routes in
+#     vendor-free builds); see docs/design/vendor-independence.md#the-host-native-gate.
+#   gesvd_tests, ormqr_cta_tests, sytrd_cta_tests, util_device_queue_tests (the DPC++
+#     adjustNDRangePerKernel abort): 5/5 green on rerun; no fixing commit was bisected.
+#   tuned_tables_tests Sm120TablesAreDeepLedgerTablesNamingTheirLedger: gemm double/cdouble on sm_120
+#     are exempt as FP64-deferred on 1:64 GPUs (383c6261, docs/developer/agent-guide.md section 10).
 
 # --- DELIBERATELY ABSENT: timing races (a listed case that passes would read NEWLY PASSING) -------
 # tune_race_gpu_tests::TuneRaceGpu.LeanRaceCutsAGrossLoserBeforeTheWarmUp: a timing race (the

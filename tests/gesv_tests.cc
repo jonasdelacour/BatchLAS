@@ -22,6 +22,7 @@
 #include <src/ops/gesv/gesv_native.hh>
 #include <src/ops/getrf/getrf_native.hh>
 #include <src/ops/gesv/choice.hh>
+#include <src/select/vendor.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -169,8 +170,9 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        if (this->ctx->device().type != DeviceType::GPU)
-            GTEST_SKIP() << "the fused gesv tier is GPU-only";
+        if (this->ctx->device().type != DeviceType::GPU &&
+            !(BackendType == Backend::NETLIB && batchlas::select::kHostNative))
+            GTEST_SKIP() << "the fused gesv tier runs on a GPU or a vendor-free host (gesv.cc can_run)";
         if (!this->ctx->device().supports_sub_group_size(32))
             GTEST_SKIP() << "device does not offer sub-group size 32";
     }

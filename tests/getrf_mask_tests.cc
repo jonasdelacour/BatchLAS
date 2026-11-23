@@ -64,7 +64,7 @@ struct Problem {
           piv(std::size_t(std::min(s.m, s.n)) * s.batch), info(std::size_t(s.batch)) {}
 
     // NETLIB writes int64 pivots; every native family packs 1-based int32 in the span's first half.
-    static constexpr bool kInt64Pivots = B == Backend::NETLIB;
+    static constexpr bool kInt64Pivots = B == Backend::NETLIB && !select::kHostNative;  // vendor-free: natives
 
     void fill() {
         Scalar* p = A.data_ptr();
@@ -120,7 +120,10 @@ protected:
     using T = typename Config::ScalarType;
     static constexpr Backend B = Config::BackendVal;
 
-    bool device() const { return this->ctx->device().type == DeviceType::GPU && B != Backend::NETLIB; }
+    // The native families run: a GPU, or a vendor-free host (select::kHostNative).
+    bool device() const {
+        return B == Backend::NETLIB ? select::kHostNative : this->ctx->device().type == DeviceType::GPU;
+    }
 
     void check(const Shape& s) {
         SCOPED_TRACE(label(s));

@@ -141,11 +141,32 @@ protected:
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
-        if (!this->ctx || this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native families are GPU kernels here";
+        // A vendor-free host runs the native families too (select::kHostNative).
+        constexpr bool kHostRuns = B == Backend::NETLIB && select::kHostNative;
+        if (!this->ctx || (this->ctx->device().type != DeviceType::GPU && !kHostRuns))
+            GTEST_SKIP() << "the native families are GPU kernels here";
     }
 
     static T alpha() { return MV<T>::make(0.75, -0.5); }
     static T beta() { return MV<T>::make(-0.25, 0.5); }
+
+    // Whether s's pinned family stages within the device's local memory at its launch width
+    // (test_utils::slm_budget_for), from each op's staging constants. Over it (Metal: complex<float>
+    // mirror, syr2k and her2k triangular) the strict pin must be refused, which check() asserts.
+    bool fits(const std::string& op, const Spec& s) const {
+        const auto d = this->ctx->device();
+        const auto within = [&](std::int64_t bytes, int wg) { return bytes <= test_utils::slm_budget_for(d, wg); };
+        const std::int64_t n = s.c.rows;
+        if (s.spelling == "mirror") return within(ops::mirror::slm_bytes<T>(), ops::mirror::kWg);
+        if (s.spelling == "gram" && op == "herk") return within(ops::herk::gram_slm_bytes<T>(n), ops::herk::gram_threads(n));
+        if (s.spelling == "gram") return within(ops::syrk::gram_slm_bytes<T>(n), ops::syrk::gram_threads(n));
+        if (s.spelling != "triangular") return true;
+        if (op == "syrk") return within(ops::syrk::triangular_slm_bytes<T>(), ops::syrk::kTriangularWg);
+        if (op == "herk") return within(ops::herk::triangular_slm_bytes<T>(), ops::herk::kTriangularWg);
+        if (op == "syr2k") return within(ops::syr2k::triangular_slm_bytes<T>(), 256);
+        if (op == "her2k") return within(ops::her2k::triangular_slm_bytes<T>(), ops::her2k::kTriangularWg);
+        return true;
+    }
 
     // The contract at beta != 0 (pinned, reached unless `reach` is off), then at beta = 0 on the same pin.
     template <typename Choice>
@@ -153,6 +174,14 @@ protected:
                bool reach = true) {
         SCOPED_TRACE(std::string(opname) + " " + s.spelling + " batch " + std::to_string(s.batch));
         Queue& q = *this->ctx;
+        if (!fits(opname, s)) {
+            const select::ScopedPin<Choice> pin(opname, s.spelling, select::StrictPin{});
+            Problem<T> p(q, s.a, s.b, s.c, s.batch, s.identical, false, op);
+            auto c = p.make_case(s.chunk_items);
+            c.prepare();
+            EXPECT_TRUE(test_utils::refused_by_can_run([&] { c.call({}, {}); }));
+            return;
+        }
         std::optional<select::ScopedPin<ops::gemm::GemmChoice>> gemm_pin;
         if (s.over_gemm) gemm_pin.emplace("gemm", "tiled", select::StrictPin{});
         {

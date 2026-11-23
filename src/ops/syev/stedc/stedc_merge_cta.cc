@@ -230,7 +230,8 @@ void stedc_merge_fused_cta(Queue& ctx,
                            const StedcParams<Real>& params,
                            int32_t* info,
                            int64_t info_nodes_per_item) {
-    const bool has32 = ctx.device().supports_sub_group_size(32);
+    // This TU builds without CPU targets, and the OpenCL CPU offers sub-group size 32.
+    const bool has32 = ctx.device().type == DeviceType::GPU && ctx.device().supports_sub_group_size(32);
 
     if (!has32) {
         stedc_merge_fused<B, Real>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params, info, info_nodes_per_item);

@@ -83,6 +83,33 @@ protected:
         }
         return Transpose::Trans;
     }
+
+    // Q_ref = op(Q) of A's reflectors (Q_ref holds the identity on entry): the vendor ormqr where the
+    // library is built, else MatrixView::form_q, the verification module's own reflector product
+    // (no ormqr route), so a vendor-free build still has a reference independent of ormqr_blocked.
+    void reference_q(const Matrix<T, MatrixFormat::Dense>& A, UnifiedVector<T>& tau, Matrix<T, MatrixFormat::Dense>& Q_ref,
+                     Side side, Transpose trans) {
+        Queue& q = *this->ctx;
+        if constexpr (select::factorization_vendor_available<B>) {
+            UnifiedVector<std::byte> ws(
+                ops::ormqr::detail::ormqr_vendor_buffer_size_or_throw<B, T>(q, A, Q_ref, side, trans, tau.to_span()));
+            (void)ops::ormqr::detail::ormqr_vendor_or_throw<B, T>(q, A, Q_ref, side, trans, tau.to_span(), ws.to_span());
+            q.wait();
+        } else {
+            const int n = A.rows();
+            const VectorView<T> tv(tau.data(), n, A.batch_size(), 1, n);
+            for (int b = 0; b < A.batch_size(); ++b) {
+                const auto Q = MatrixView<T, MatrixFormat::Dense>::form_q(q, A.view(), tv, b, n);
+                for (int j = 0; j < n; ++j)
+                    for (int i = 0; i < n; ++i) {
+                        auto v = trans == Transpose::NoTrans ? Q(i, j, 0) : Q(j, i, 0);
+                        if constexpr (test_utils::is_complex<T>::value)
+                            if (trans != Transpose::NoTrans) v = std::conj(v);
+                        Q_ref(i, j, b) = static_cast<T>(v);
+                    }
+            }
+        }
+    }
 };
 
 TYPED_TEST_SUITE(OrmqrBlockedTest, OrmqrBlockedTestTypes);
@@ -112,7 +139,8 @@ batchlas::verify::Slack recon_slack() {
         return {1.0, "the library bound (double's old 1e-10 entrywise is looser)"};
 }
 
-// ormqr_blocked and the backend ormqr are each judged against Q formed on the host from the reflectors.
+// ormqr_blocked and the reference Q (the vendor ormqr, or form_q without one) are each judged against
+// A0 = Q R with geqrf's R (orthogonality and reconstruction), a check that runs no ormqr route.
 TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingle) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::B;
@@ -134,8 +162,7 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingle) {
     Matrix<T, MatrixFormat::Dense> Q_blk = Matrix<T, MatrixFormat::Dense>::Identity(n, batch);
 
     {
-        UnifiedVector<std::byte> ws_ref(batchlas::ops::ormqr::detail::ormqr_vendor_buffer_size_or_throw<B, T>(*this->ctx, A, Q_ref, Side::Left, Transpose::NoTrans, tau.to_span()));
-        (void)batchlas::ops::ormqr::detail::ormqr_vendor_or_throw<B, T>(*this->ctx, A, Q_ref, Side::Left, Transpose::NoTrans, tau.to_span(), ws_ref.to_span());
+        this->reference_q(A, tau, Q_ref, Side::Left, Transpose::NoTrans);
         this->ctx->wait();
     }
 
@@ -182,8 +209,7 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingleTrans) {
     Matrix<T, MatrixFormat::Dense> Q_blk = Matrix<T, MatrixFormat::Dense>::Identity(n, batch);
 
     {
-        UnifiedVector<std::byte> ws_ref(batchlas::ops::ormqr::detail::ormqr_vendor_buffer_size_or_throw<B, T>(*this->ctx, A, Q_ref, Side::Left, this->trans_h(), tau.to_span()));
-        (void)batchlas::ops::ormqr::detail::ormqr_vendor_or_throw<B, T>(*this->ctx, A, Q_ref, Side::Left, this->trans_h(), tau.to_span(), ws_ref.to_span());
+        this->reference_q(A, tau, Q_ref, Side::Left, this->trans_h());
         this->ctx->wait();
     }
 
@@ -230,8 +256,7 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingle) {
     Matrix<T, MatrixFormat::Dense> Q_blk = Matrix<T, MatrixFormat::Dense>::Identity(n, batch);
 
     {
-        UnifiedVector<std::byte> ws_ref(batchlas::ops::ormqr::detail::ormqr_vendor_buffer_size_or_throw<B, T>(*this->ctx, A, Q_ref, Side::Right, Transpose::NoTrans, tau.to_span()));
-        (void)batchlas::ops::ormqr::detail::ormqr_vendor_or_throw<B, T>(*this->ctx, A, Q_ref, Side::Right, Transpose::NoTrans, tau.to_span(), ws_ref.to_span());
+        this->reference_q(A, tau, Q_ref, Side::Right, Transpose::NoTrans);
         this->ctx->wait();
     }
 
@@ -278,9 +303,7 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingleTrans) {
     Matrix<T, MatrixFormat::Dense> Q_blk = Matrix<T, MatrixFormat::Dense>::Identity(n, batch);
 
     {
-        UnifiedVector<std::byte> ws_ref(
-            batchlas::ops::ormqr::detail::ormqr_vendor_buffer_size_or_throw<B, T>(*this->ctx, A, Q_ref, Side::Right, this->trans_h(), tau.to_span()));
-        (void)batchlas::ops::ormqr::detail::ormqr_vendor_or_throw<B, T>(*this->ctx, A, Q_ref, Side::Right, this->trans_h(), tau.to_span(), ws_ref.to_span());
+        this->reference_q(A, tau, Q_ref, Side::Right, this->trans_h());
         this->ctx->wait();
     }
 
@@ -327,8 +350,7 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceBatched) {
     Matrix<T, MatrixFormat::Dense> Q_blk = Matrix<T, MatrixFormat::Dense>::Identity(n, batch);
 
     {
-        UnifiedVector<std::byte> ws_ref(batchlas::ops::ormqr::detail::ormqr_vendor_buffer_size_or_throw<B, T>(*this->ctx, A, Q_ref, Side::Left, Transpose::NoTrans, tau.to_span()));
-        (void)batchlas::ops::ormqr::detail::ormqr_vendor_or_throw<B, T>(*this->ctx, A, Q_ref, Side::Left, Transpose::NoTrans, tau.to_span(), ws_ref.to_span());
+        this->reference_q(A, tau, Q_ref, Side::Left, Transpose::NoTrans);
         this->ctx->wait();
     }
 
@@ -411,12 +433,13 @@ TYPED_TEST(OrmqrBlockedTest, BlockedChunksApplyEachItemsOwnQ) {
     ASSERT_EQ(tuning::blocked_chunk_items(batch, 1, 1, 1), 7) << "the override did not reach the accessor";
     auto p = make_chunk_problem<T>(*this->ctx, batch, false);
     const auto A = p.A();
-    const bool gpu = this->ctx->device().type == DeviceType::GPU;
+    // The blocked pin runs where the natives do: a GPU, or a vendor-free host (can_run).
+    const bool natives = this->ctx->device().type == DeviceType::GPU || (B == Backend::NETLIB && select::kHostNative);
     Queue ooo(*this->ctx, /*in_order=*/false);
     for (Side side : {Side::Left, Side::Right})
         for (Transpose tr : {Transpose::NoTrans, this->trans_h()})
             for (bool facade : {false, true}) {
-                if (facade && !gpu) continue;   // the blocked pin is GPU-only (can_run)
+                if (facade && !natives) continue;   // the blocked pin needs the natives
                 const int rows = side == Side::Left ? p.nq : p.q, cols = side == Side::Left ? p.q : p.nq;
                 auto [c, C] = make_chunk_c<T>(rows, cols, batch, 99u + unsigned(side == Side::Left) * 7u + unsigned(tr), false);
                 const UnifiedVector<T> c0(c);
@@ -533,7 +556,8 @@ TYPED_TEST(OrmqrBlockedTest, BlockedPastTheGridLimitIsBitIdentical) {
 TYPED_TEST(OrmqrBlockedTest, BlockedChunksFitAWorkspaceSizedAtLargerOperands) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::B;
-    if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the blocked pin is GPU-only (can_run)";
+    if (this->ctx->device().type != DeviceType::GPU && !(B == Backend::NETLIB && select::kHostNative))
+        GTEST_SKIP() << "the blocked pin runs on a GPU or a vendor-free host (can_run)";
     const int batch = 23;
     const select::ScopedPin<ops::ormqr::OrmqrChoice> pin("ormqr", ops::ormqr::Blocked{});
     auto p = make_chunk_problem<T>(*this->ctx, batch, false);

@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// LAPACK xORMBR / xUNMBR for gebrd's upper bidiagonal reduction (A m x n, m >= n): C := op(Q) C,
-// C op(Q), op(P) C or C op(P), Q = H(0) .. H(n-1) with H(i) = I - tauq(i) v v^H (v(i) = 1, v below
-// in A(i+1:, i)), P = G(0) .. G(n-2) with G(i) = I - taup(i) u u^H (u(i+1) = 1, u(i+2:) =
-// conj(A(i, i+2:)): gebrd's rows hold conj(u)). tier::Blocked<1>: any order on a work-group, one
-// core larf per reflector (Left: a team per column; Right: an item per row of C).
+/// @file
+/// @brief Applying the bidiagonal reduction's transforms inside a kernel: `ormbr`, LAPACK's
+/// xORMBR / xUNMBR for `gebrd`'s upper bidiagonal form.
+///
+/// `ormbr<VT, SD, TR>(ex, A, tau, C, ws)` multiplies C by Q or P of \f$A = Q B P^H\f$ from either
+/// side, on one work-group, with `tier::Blocked<1>`. Reference: @ref api_device_lapack_qr.
+/// @ingroup api_device_lapack_qr
+// One core larf per reflector (Left: a team per column; Right: an item per row of C).
 
 #include <cstdint>
 #include <type_traits>
@@ -23,15 +26,24 @@
 namespace batchlas::device {
 
 namespace routine {
+/// @brief The routine tag of `ormbr<VT, SD, TR>`, for `with_tier`, `launch` and `buffer_size`.
+/// @ingroup api_device_lapack_qr
 template <Vect VT, Side SD, Transpose TR> struct ormbr {
     static constexpr const char* name = "ormbr";
 };
 }  // namespace routine
 
+/// @brief The tiers `with_tier` tries for `ormbr<VT, SD, TR>`: `tier::Blocked<1>`.
+/// @ingroup api_device_lapack_qr
 template <Vect VT, Side SD, Transpose TR, class Scalar> struct tiers<routine::ormbr<VT, SD, TR>, Scalar> {
     using type = tier::list<tier::Blocked<1>>;
 };
-// No workspace (C is updated in place); any work-group width runs it.
+/// @brief `ormbr<VT, SD, TR>` in `tier::Blocked<1>`: one C of any order per work-group, no
+/// workspace.
+///
+/// C is updated in place, so `buffer_size` is zero. `with_tier` checks `WorkGroup<256, 32>`, but
+/// any work-group width runs it.
+/// @ingroup api_device_lapack_qr
 template <Vect VT, Side SD, Transpose TR, class Scalar> struct tier_info<routine::ormbr<VT, SD, TR>, tier::Blocked<1>, Scalar> {
     static constexpr int wg_size = 256, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
@@ -40,10 +52,33 @@ template <Vect VT, Side SD, Transpose TR, class Scalar> struct tier_info<routine
     static constexpr WorkspaceSize buffer_size(int) { return {}; }
 };
 
-// xORMBR, host order (A, tau, C, ws), vect / side / trans as template parameters (Vect::Q: tauq,
-// Vect::P: taup). Q / P has order C.rows() (Left) or C.cols() (Right), which must be A.rows() (Q)
-// or A.cols() (P); A is m x n, m >= n. Trans is real only. COLLECTIVE over a work-group; A, tau, C
-// visible on entry, C on return. Returns 0, or -1 / -3 for a mismatched A / C (nothing written).
+/// @brief xORMBR / xUNMBR inside a kernel: C := op(Q) C, C op(Q), op(P) C or C op(P) for the Q
+/// and P of `gebrd`'s reduction \f$A = Q B P^H\f$ (A m x n, m >= n, B upper bidiagonal).
+///
+/// \f$Q = H_0 \cdots H_{n-1}\f$ with \f$H_i = I - \tau^q_i v_i v_i^H\f$ (\f$v_i(i) = 1\f$, the
+/// rest of \f$v_i\f$ below the diagonal in column i of A), and \f$P = G_0 \cdots G_{n-2}\f$ with
+/// \f$G_i = I - \tau^p_i u_i u_i^H\f$ (\f$u_i(i+1) = 1\f$, the rest of \f$u_i\f$ conjugated in row
+/// i of A, right of the superdiagonal). Q or P has order C.rows() (Left) or C.cols() (Right),
+/// which must be A.rows() for Q and A.cols() for P. Arguments in the host order
+/// (A, tau, C, ws). Collective over a work-group executor, every item with the same arguments;
+/// A, tau and C visible to every item on entry, C visible on return. The fifth argument, a
+/// `Workspace`, is not used: pass `Workspace{}`.
+/// @pre The executor's sub-group size `SG` is the kernel's (32 for the tier's executor).
+/// @tparam VT    `Vect::Q` (pass `gebrd`'s `tauq`) or `Vect::P` (pass `taup`)
+/// @tparam SD    `Side::Left` or `Side::Right`
+/// @tparam TR    `Transpose::NoTrans`, `Transpose::ConjTrans`, or `Transpose::Trans` for a real
+///               type
+/// @tparam Tier  `tier::Blocked<1>`, the default and only tier
+/// @tparam Ex    a `WorkGroup` executor
+/// @param[in]     ex   the executor
+/// @param[in]     A    `gebrd`'s output, m x n with m >= n
+/// @param[in]     tau  `tauq` (n scalars) for Q, `taup` for P
+/// @param[in,out] C    the matrix to multiply, updated in place
+/// @return `info`, the same on every item
+/// @retval 0   success
+/// @retval -1  A has fewer rows than columns (nothing written)
+/// @retval -3  C's order on side SD does not match A (nothing written)
+/// @ingroup api_device_lapack_qr
 template <Vect VT, Side SD, Transpose TR, class Tier = tier::Blocked<1>, class Ex, class MA, class TV, class MC>
 BATCHLAS_DEVICE_INLINE int ormbr(const Ex& ex, const MA& A, const TV& tau, const MC& C, const Workspace&) {
     using T = typename MC::value_type;

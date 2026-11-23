@@ -158,7 +158,6 @@ struct C60 {
 TYPED_TEST(SyevAlignTest, C60HueckelSpectrumIsIh) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
-    TEST_SUPPORT_SKIP_NETLIB_WITHOUT_LAPACK(B);
     C60<T, B> c(*this->ctx, 1);
     const std::vector<int> s = cluster_starts(c.lam.data(), 60, 1e-3);
     auto cluster_of = [&](int j) {
@@ -189,7 +188,6 @@ TYPED_TEST(SyevAlignTest, C60HueckelSpectrumIsIh) {
 TYPED_TEST(SyevAlignTest, C60RotatedDegenerateSubspacesAlignToPrevious) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
-    TEST_SUPPORT_SKIP_NETLIB_WITHOUT_LAPACK(B);
     constexpr int n = 60, batch = 5;
     C60<T, B> c(*this->ctx, batch);
     const double tol = 1e-3;
@@ -210,7 +208,6 @@ TYPED_TEST(SyevAlignTest, C60RotatedDegenerateSubspacesAlignToPrevious) {
 TYPED_TEST(SyevAlignTest, C60SignAndPhaseFlipsAreUndone) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
-    TEST_SUPPORT_SKIP_NETLIB_WITHOUT_LAPACK(B);
     constexpr int n = 60;
     C60<T, B> c(*this->ctx, 1);
     std::vector<int> singles(n + 1);
@@ -226,7 +223,6 @@ TYPED_TEST(SyevAlignTest, C60SignAndPhaseFlipsAreUndone) {
 TYPED_TEST(SyevAlignTest, SaturatingBatchIsBitIdentical) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
-    TEST_SUPPORT_SKIP_NETLIB_WITHOUT_LAPACK(B);
     constexpr int n = 60, batch = 1024;
     C60<T, B> c(*this->ctx, batch);
     Matrix<T> Q(n, n, batch);
@@ -283,7 +279,6 @@ void pair_case(Queue& q, const std::vector<std::vector<double>>& lams, const std
 TYPED_TEST(SyevAlignTest, NearDegeneratePairStraddlesTolerance) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
-    TEST_SUPPORT_SKIP_NETLIB_WITHOUT_LAPACK(B);
     const double tol = 1e-2, thr = tol * 7.0;
     std::vector<std::vector<double>> lams;
     for (double g : {0.9 * thr, 1.1 * thr}) lams.push_back({0, 1, 2, 3, 3 + g, 5, 6, 7});
@@ -297,7 +292,6 @@ TYPED_TEST(SyevAlignTest, NearDegeneratePairStraddlesTolerance) {
 TYPED_TEST(SyevAlignTest, NearZeroClusterUsesTheItemScale) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
-    TEST_SUPPORT_SKIP_NETLIB_WITHOUT_LAPACK(B);
     const double tol = 1e-13;
     std::vector<std::vector<double>> lams;
     for (double s : {1.0, 1e-14})
@@ -334,7 +328,6 @@ TYPED_TEST(SyevAlignTest, OrthogonalSubspacesKeepV) {
 TYPED_TEST(SyevAlignTest, AlignsOnAnOutOfOrderQueue) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
-    TEST_SUPPORT_SKIP_NETLIB_WITHOUT_LAPACK(B);
     constexpr int n = 60, batch = 64;
     C60<T, B> c(*this->ctx, batch);
     Queue ooo(*this->ctx, /*in_order=*/false);

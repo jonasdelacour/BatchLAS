@@ -71,9 +71,16 @@ TYPED_TEST(DeviceCoreLevel1Test, RsclTakesTheReciprocalOnlyWhenItIsFinite) {
     constexpr int n = 37;
     const auto x_h = vals<T>(n, 5);
     const T d1 = val<T>(17) + T(R(2));
-    const T d2 = T(std::numeric_limits<R>::min() * R(0.25));  // 1 / d2 overflows: divide arm
+    // The divide arm: 1 / d2 overflows. A device that flushes subnormals (Metal) reads that d2
+    // as 0, so there d2 = 2^(emax - 1), whose reciprocal flushes to zero, and x2 = x 2^(emax - 2).
+    const bool ftz = d.template flushes_subnormals<R>();
+    constexpr int emax = std::numeric_limits<R>::max_exponent;
+    const T d2 = ftz ? T(std::ldexp(R(1), emax - 1)) : T(std::numeric_limits<R>::min() * R(0.25));
+    auto x2_h = x_h;
+    if (ftz)
+        for (auto& v : x2_h) v *= std::ldexp(R(1), emax - 2);
     T* x1 = d.up(x_h);
-    T* x2 = d.up(x_h);
+    T* x2 = d.up(x2_h);
     d.template run<32>(1, 0, [=](sycl::nd_item<1> it, unsigned char*) {
         const batchlas::device::SubGroup<32> ex{it.get_sub_group()};
         batchlas::device::rscl(ex, d1, batchlas::device::vec(x1, n));
@@ -81,7 +88,7 @@ TYPED_TEST(DeviceCoreLevel1Test, RsclTakesTheReciprocalOnlyWhenItIsFinite) {
     });
     const auto g1 = d.down(x1, n), g2 = d.down(x2, n);
     for (int i = 0; i < n; ++i) {
-        const LD<T> ref1 = wide(x_h[i]) / wide(d1), ref2 = wide(x_h[i]) / wide(d2);
+        const LD<T> ref1 = wide(x_h[i]) / wide(d1), ref2 = wide(x2_h[i]) / wide(d2);
         EXPECT_LE(err(g1[i], ref1), tol<T>() * static_cast<double>(std::abs(ref1))) << i;
         if constexpr (!is_cplx<T>) {  // complex: the divide arm is Arith div, whose range is |d|^2's
             EXPECT_TRUE(std::isfinite(static_cast<double>(std::abs(g2[i])))) << "divide arm " << i;

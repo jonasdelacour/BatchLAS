@@ -201,7 +201,9 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native tiers are GPU kernels";
+        // The native tiers run where select::natives_run_on does: a GPU, or a vendor-free host.
+        if (this->ctx->device().type != DeviceType::GPU && !(B == Backend::NETLIB && select::kHostNative))
+            GTEST_SKIP() << "the native tiers run on a GPU or a vendor-free host";
         if (!this->ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "no sub-group size 32";
     }
 
@@ -640,8 +642,11 @@ TYPED_TEST(PotrfCandidates, BareNativePicksTheBestRunnableNonVendor) {
     static constexpr Backend B = TestFixture::B;
     const ScopedEnvVar clear("BATCHLAS_POTRF_ROUTE", nullptr);
     const auto& dev = select::device_of<B>(*this->ctx, select::Lib::solver);
+    // A device with no table at all (the vendor-free host) takes the last resort, blocked (§5.5).
+    const bool untabled = select::tables_in_borrow_order("potrf", select::dtype_name<T>(), dev).empty();
     for (int n : {16, 64, 128, 256, 512}) {
         auto pick = [&](bool native_only) {
+            if (untabled) return std::string("blocked");
             return test_utils::shipped_table_pick<C>(
                 "potrf", select::dtype_name<T>(), dev, select::Key{{"uplo", "L"}, {"n", n}, {"batch", 128}}, [&] {
                     auto q = make_prob<T>(n, 128, Uplo::Lower, 20u);

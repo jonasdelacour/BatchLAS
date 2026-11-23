@@ -177,12 +177,15 @@ protected:
     using MV = MVof<T>;
     static constexpr Backend B = Config::BackendVal;
     static constexpr bool kVendor = batchlas::select::factorization_vendor_available<B>;
+    // A vendor-free host runs the native families. evidence: docs/design/vendor-independence.md#the-host-native-gate
+    static constexpr bool kHostRun = B == Backend::NETLIB && batchlas::select::kHostNative;
 
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native tiers are GPU kernels";
+        if (this->ctx->device().type != DeviceType::GPU && !kHostRun)
+            GTEST_SKIP() << "the native tiers run on a GPU or a vendor-free host";
         if (!this->ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "no sub-group size 32";
     }
 
@@ -273,6 +276,7 @@ protected:
                     UnifiedVector<std::byte> vw(std::max<std::size_t>(
                         1, backend::geqrf_vendor_buffer_size<B, T>(q, A, p.tau.to_span())));
                     (void)backend::geqrf_vendor<B, T>(q, A, p.tau.to_span(), vw.to_span());
+                    q.wait();  // ~UnifiedVector frees vw without waiting
                 } else {
                     if (why) *why = "no vendor in this build";
                     return false;
@@ -517,8 +521,10 @@ TYPED_TEST(GeqrfCandidates, ClassWordsAndSpellings) {
     using T = typename TestFixture::T;
     const Spec s{40, 24, 3};
     const std::string auto_pick = this->auto_choice(s);
-    EXPECT_EQ(auto_pick, this->table_pick(s)) << "Auto against the shipped table";
-    const std::string native_pick = this->table_pick(s, true);
+    // A host reads no shipped table: Auto and bare `native` both take the last-resort walk.
+    const bool tabled = this->ctx->device().type == DeviceType::GPU;
+    if (tabled) EXPECT_EQ(auto_pick, this->table_pick(s)) << "Auto against the shipped table";
+    const std::string native_pick = tabled ? this->table_pick(s, true) : auto_pick;
     ASSERT_NE(native_pick, test_utils::kNoTableEntryRuns);
     const std::string vendor_pick = TestFixture::kVendor ? "vendor" : auto_pick;
     const std::pair<const char*, std::string> expect[] = {
@@ -578,6 +584,8 @@ TYPED_TEST(GeqrfCandidates, ScopedPinBeatsTheEnvironment) {
 // the tiny window and its gaps, the CTA/Blocked crossover. A regenerated table moves the
 // expectation, not the test.
 TYPED_TEST(GeqrfCandidates, AutoReadsTheTranscribedTable) {
+    if (this->ctx->device().type != DeviceType::GPU)
+        GTEST_SKIP() << "a host reads no shipped table; the last-resort case covers it";
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GEQRF_ROUTE", nullptr);
     struct Row { int m, n; };
@@ -710,6 +718,7 @@ TYPED_TEST(GeqrfCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     const std::string backend = B == Backend::CUDA   ? "CUDA"
                                 : B == Backend::ROCM ? "ROCM"
                                 : B == Backend::SYCL ? "SYCL"
+                                : B == Backend::NETLIB ? "NETLIB"
                                                      : "?";
     ASSERT_TRUE(rows.count("40 24 24")) << "no 40x24 row";
     const auto& f = rows["40 24 24"];
@@ -732,8 +741,8 @@ TYPED_TEST(GeqrfCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     }
 }
 
-// On a CPU queue no native
-// family can run, so native pins throw and Auto is the vendor (or no route without one).
+// On a CPU queue with netlib no native
+// family can run, so native pins throw and Auto is the vendor. A vendor-free host runs them all.
 template <typename Config>
 class GeqrfCandidatesCpu : public test_utils::BatchLASTest<Config> {};
 TYPED_TEST_SUITE(GeqrfCandidatesCpu, Types);
@@ -744,6 +753,28 @@ TYPED_TEST(GeqrfCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     if (!this->ctx) GTEST_SKIP() << "no queue";
     if (this->ctx->device().type == DeviceType::GPU) GTEST_SKIP() << "a GPU queue";
     const ScopedEnvVar clear("BATCHLAS_GEQRF_ROUTE", nullptr);
+    // A vendor-free host (select::kHostNative) runs every native family, pinned and under Auto.
+    // evidence: docs/design/vendor-independence.md#the-host-native-gate
+    if constexpr (B == Backend::NETLIB && batchlas::select::kHostNative) {
+        const auto run = [&](Qr<T>& q) {
+            const std::size_t ws = geqrf_buffer_size<B, T>(*this->ctx, q.A(), q.tau.to_span());
+            UnifiedVector<std::byte> w(std::max<std::size_t>(1, ws));
+            (void)geqrf<B, T>(*this->ctx, q.A(), q.tau.to_span(), w.to_span());
+            this->ctx->wait();
+        };
+        for (const C& c : gq::candidates<T>()) {
+            if (std::holds_alternative<gq::Vendor>(c)) continue;
+            auto q = make_qr<T>(Spec{9, 9, 3});
+            const Pin pin("geqrf", c);
+            EXPECT_EQ(traced_choice([&] { run(q); }), select::to_string(c));
+            expect_factored(*this->ctx, q, "cpu " + name(c, q.s) + " pinned");
+        }
+        auto q = make_qr<T>(Spec{12, 8, 2});
+        const std::string got = traced_choice([&] { run(q); });  // tiny takes only a square A
+        EXPECT_TRUE(got == "cta" || got == "blocked") << "auto took " << got;
+        expect_factored(*this->ctx, q, "cpu auto");
+        return;
+    }
     auto p = make_qr<T>(Spec{12, 8, 2});
     for (const C& c : gq::candidates<T>()) {
         if (std::holds_alternative<gq::Vendor>(c)) continue;
@@ -815,11 +846,15 @@ TYPED_TEST(GeqrfCanRunDevice, DeviceClausesRefuseTheNativeFamilies) {
     ASSERT_TRUE(runs(ok, sq, tiny) && runs(ok, sq, cta) && runs(ok, sq, blocked) && runs(ok, big, blocked));
     EXPECT_FALSE(runs(ok, sq, vendor));
 
-    auto cpu = ok;   cpu.is_gpu = false;
-    auto nosg = ok;  nosg.has_sg32 = false;
-    for (const select::Device* d : {&cpu, &nosg})
+    // A host with a vendor never runs the natives; a vendor-free host runs them iff the build keeps
+    // their CPU images (select::kHostNative). evidence: docs/design/vendor-independence.md#the-host-native-gate
+    auto vendor_cpu = ok;  vendor_cpu.is_gpu = false;  vendor_cpu.has_vendor = true;
+    auto bare_cpu = ok;    bare_cpu.is_gpu = false;
+    auto nosg = ok;        nosg.has_sg32 = false;
+    for (const select::Device* d : {&vendor_cpu, &nosg})
         for (const C& c : {tiny, cta, blocked}) EXPECT_FALSE(runs(*d, sq, c)) << select::to_string(c);
-    auto vendor_cpu = cpu;  vendor_cpu.has_vendor = true;
+    for (const C& c : {tiny, cta, blocked})
+        EXPECT_EQ(runs(bare_cpu, sq, c), select::kHostNative) << select::to_string(c) << " on a vendor-free host";
     EXPECT_TRUE(runs(vendor_cpu, sq, vendor));
 
     // Blocked needs one CTA element of SLM, not the fit: straddle the smallest such budget.

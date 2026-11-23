@@ -119,16 +119,16 @@ function(batchlas_install_package)
         "${PROJECT_BINARY_DIR}/BatchLASConfig.cmake"
         INSTALL_DESTINATION "${BATCHLAS_INSTALL_CMAKEDIR}"
     )
-    # ExactVersion, not SameMajorVersion, while the major is 0. SemVer promises
-    # nothing across 0.x minors, so SameMajorVersion made find_package(BatchLAS
-    # 0.1) accept a 0.9 install whose ABI is unrelated - a false promise the
-    # SOVERSION (also 0, see batchlas_configure_component) cannot catch either,
-    # because every 0.x ships as .so.0. Revisit at 1.0: SameMajorVersion becomes
-    # the right answer the moment the major number carries a guarantee.
+    # SameMajorVersion: from 1.0 the major number carries the API/ABI promise
+    # (docs/cpp-api.md, "Versioning and compatibility"), so find_package(BatchLAS
+    # 1.0) accepts any 1.x at or above 1.0 and refuses 0.x and 2.x - the same line
+    # the SONAME draws (.so.1, see batchlas_configure_component). 0.x was
+    # ExactVersion because SemVer promises nothing across 0.x minors.
+    # consumer_test.sh checks both directions.
     write_basic_package_version_file(
         "${PROJECT_BINARY_DIR}/BatchLASConfigVersion.cmake"
         VERSION "${PROJECT_VERSION}"
-        COMPATIBILITY ExactVersion
+        COMPATIBILITY SameMajorVersion
     )
 
     install(EXPORT BatchLASTargets

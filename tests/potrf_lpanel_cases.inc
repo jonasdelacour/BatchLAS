@@ -498,9 +498,10 @@ TYPED_TEST(PotrfLpanelTest, CeilingIsCappedByBothMemoryAndWorkGroupSize) {
     ASSERT_GT(cap, 0);
     EXPECT_LE(cap, (max_wg / 32) * 32);
 
-    // A budget so large that only the work-group cap can bind.
+    // A budget so large that only the work-group cap can bind, or on a device whose work-group
+    // exceeds it (opencl:cpu, 8192) resident::resident_max_n's search bound n_hi = 4096.
     EXPECT_EQ((ops::potrf::potrf_lpanel_max_n_for_slm<T>(std::size_t(1) << 40, max_wg)),
-              (max_wg / 32) * 32);
+              std::min((max_wg / 32) * 32, 4096));
 
     // ... and a work-group cap so large that only memory can bind; that answer must be
     // strictly larger than the CTA tier's at the same budget, which is the whole point.
@@ -544,8 +545,9 @@ TYPED_TEST(PotrfLpanelTest, FirstColumnReciprocalIsAccurate) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
     // Measured worst (eps), RTX 4090: float and cfloat 1.053 with rsqrt + Newton (origin/main's
-    // bare rsqrt.approx fold: 1.306), double and cdouble 1.148.
-    constexpr double kMaxEps = std::is_same_v<R, float> ? 1.1 : 1.2;
+    // bare rsqrt.approx fold: 1.306), double and cdouble 1.148; float and cfloat on the 1 / sqrt
+    // path (rsqrt_newton_path() false: Metal M5 Max 1.163, opencl:cpu 1.163).
+    const double kMaxEps = std::is_same_v<R, float> && this->rsqrt_newton_path() ? 1.1 : 1.2;
 
     const auto rel_err = [](R got, long double want) {
         constexpr long double eps = std::numeric_limits<R>::epsilon();

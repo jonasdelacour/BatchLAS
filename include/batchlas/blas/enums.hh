@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 
 #include <complex>
 #include <concepts>
@@ -359,6 +359,13 @@ inline constexpr std::string_view to_string(Side v) {
     return "Side(?)";
 }
 
+/// @brief Shift used by the CTA STEQR's implicit QR/QL steps. @see @ref algo_steqr
+// Here, not in extensions.hh, so the device STEQR/SYEV headers need no host API.
+enum class SteqrShiftStrategy {
+    Lapack = 0,     ///< LAPACK-style implicit shift (the stable dsteqr formulation).
+    Wilkinson = 1,  ///< Wilkinson shift computed from the trailing \f$2 \times 2\f$ block.
+};
+
 /// @brief Order in which eigenvalues (and their vectors) are returned.
 enum class SortOrder {
     Ascending,   ///< Smallest first.
@@ -411,8 +418,10 @@ inline constexpr std::string_view to_string(ApplyOrder v) {
 /// DirectSubset on CSR runs LOBPCG. A non-extremal SyevxSelect range is never
 /// degraded to a different part of the spectrum: on CSR input, or with an
 /// explicit LOBPCG or Filtered, it throws batchlas::invalid_argument (under the
-/// environment override the dense case runs Direct instead). `syevx` and
-/// `syevx_buffer_size` resolve the choice identically.
+/// environment override the dense case runs Direct instead). On a device without
+/// 32-wide sub-groups an explicit DirectSubset throws batchlas::unsupported, while Auto
+/// and the environment override run Direct. `syevx` and `syevx_buffer_size` resolve
+/// the choice identically.
 /// @see @ref perf_syevx for the routing thresholds, @ref design_syevx for the tiers.
 enum class SyevxAlgorithm {
     Auto,           ///< Heuristic selection on format, \f$n\f$, batch size and jobz (the default).

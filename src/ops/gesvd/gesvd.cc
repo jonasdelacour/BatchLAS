@@ -62,7 +62,8 @@ bool packed(const MV<Scalar>& M) {
     return M.batch_size() == 1 || M.stride() == static_cast<std::int64_t>(M.ld()) * M.cols();
 }
 
-// Correctness only (R3): false means the driver throws or answers wrongly. Jacobi has no
+// Correctness only (R3): false means the driver throws or answers wrongly. Jacobi and Cta need a
+// GPU; Blocked runs wherever natives do (a vendor-free host too). Jacobi has no
 // Hermitian form; Cta runs complex input only through the Hermitian shortcut and cannot write a
 // genuinely thin U; Blocked takes complex general (complex gebrd to a real bidiagonal) and either
 // Hermitian triangle (syev_blocked mirrors Upper into Lower). Vendor is exactly what its binding
@@ -78,7 +79,11 @@ bool can_run(const GesvdChoice& c, const select::Device& d, const MV<Scalar>& A,
     const std::int64_t m = A.rows(), n = A.cols(), md = std::max(m, n);
     const bool masked = detail::any_batch_mask(A, U, Vh);
     const bool homogeneous = !A.is_heterogeneous();
-    const bool native = d.is_gpu && homogeneous && m >= 1 && n >= 1 && A.batch_size() >= 1;
+    const bool shape_ok = homogeneous && m >= 1 && n >= 1 && A.batch_size() >= 1;
+    // Jacobi and Cta are sub-group kernels with GPU-only entry guards; Blocked also runs on a
+    // vendor-free host (select::natives_run_on), where its NETLIB arms take the unblocked gebrd.
+    const bool native = d.is_gpu && shape_ok;
+    const bool blocked_native = select::natives_run_on(d) && shape_ok;
     const bool square = m == n;
     const bool vendor_binds = B == Backend::CUDA
         ? md <= ops::gesvd::kGesvdVendorCudaMaxDim && packed(A) && !j.thin() && (j.vectors() || square) &&
@@ -97,7 +102,7 @@ bool can_run(const GesvdChoice& c, const select::Device& d, const MV<Scalar>& A,
         [&](Blocked) {
             const bool mask_ok = !masked || ops::gesvd::gesvd_blocked_honours_mask<B, Scalar>(
                                                 m, n, j.jobu != SvdVectors::None, j.jobvh != SvdVectors::None);
-            return native && mask_ok && (!j.herm || square);
+            return blocked_native && mask_ok && (!j.herm || square);
         },
         [&](Vendor) { return d.has_vendor && homogeneous && (!masked || B == Backend::NETLIB) && vendor_binds; },
     }, c);

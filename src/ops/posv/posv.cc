@@ -46,9 +46,11 @@ bool can_run(const PosvChoice& c, const select::Device& d, const MatrixView<Scal
     // tiny honours a batch mask; cta and blocked run their children (potrf, the solve) on the masked views.
     const int64_t n = A.rows(), nrhs = B.cols();
     const bool homogeneous = !A.is_heterogeneous() && !B.is_heterogeneous();
-    const bool native = d.is_gpu && d.has_sg32 && homogeneous && n >= 1 && nrhs >= 1 && A.batch_size() >= 1;
+    const bool native = select::natives_run_on(d) && d.has_sg32 && homogeneous && n >= 1 && nrhs >= 1 &&
+                        A.batch_size() >= 1;
     return std::visit(overloaded{
         [&](Tiny) {
+            // A vendor-free host has the posv library's CPU image (off BATCHLAS_NO_CPU_OBJECT_LIBS).
             return native && n <= ops::posv::posv_tiny_max_n<Scalar>() && nrhs <= ops::posv::kPosvTinyMaxRhs &&
                    d.max_wg >= resident::kTinyWgSize;
         },

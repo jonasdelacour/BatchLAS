@@ -15,8 +15,9 @@ Four pages are derived from the tree on every docs build, so they cannot drift:
                         choice.hh), table keys and tuner grid, and for each
                         tuned/<op>.<device>.txt table its provenance
                         and which family ranks first over which n range.
-  device_api.md         every public batchlas::device function's signature, by
-                        header (device_api_page.py).
+  device_api.dox        the group design_device_la_api under api_device: every
+                        public batchlas::device signature with its brief, by
+                        group and header (device_api_page.py).
 
 Usage:
     python3 docs/tools/gen_db_pages.py --out build/docs/generated
@@ -359,10 +360,17 @@ def selection_page(root):
     return "\n".join(out) + "\n"
 
 
+# Pages an older generator wrote; left in a reused --out they would define a label twice.
+STALE = ("device_api.md",)
+
+
 def write(out_dir, root):
     os.makedirs(out_dir, exist_ok=True)
     pages = {"results_database.md": results_page(root), "evidence_index.md": evidence_page(root),
-             "selection_tables.md": selection_page(root), "device_api.md": device_api_page.page(root)}
+             "selection_tables.md": selection_page(root), "device_api.dox": device_api_page.page(root)}
+    for stale in STALE:
+        if os.path.exists(os.path.join(out_dir, stale)):
+            os.remove(os.path.join(out_dir, stale))
     for name, text in pages.items():
         with open(os.path.join(out_dir, name), "w", encoding="utf-8") as fh:
             fh.write(text)
@@ -400,6 +408,9 @@ def self_test():
                      "dtype=float n=1 batch=8 | tiny 0.01 | lpanel:8 0.2 # converted\n"
                      "dtype=float n=4 batch=8 | tiny 0.01 | lpanel:8 0.2 # converted\n"
                      "dtype=float n=64 batch=8 | lpanel:8 0.1 | tiny 0.3 # deep\n")
+        os.makedirs(os.path.join(root, "out"))
+        with open(os.path.join(root, "out", STALE[0]), "w") as fh:
+            fh.write("# Old {#design_device_la_api}\n")
         pages = write(os.path.join(root, "out"), root)
         res, ev = pages["results_database.md"], pages["evidence_index.md"]
         sel = pages["selection_tables.md"]
@@ -417,7 +428,10 @@ def self_test():
             ("selection table row", "| float | sm_89 | converted 2, deep 1 | 2026-10-04 | `tiny` 2 (n 1..4), `lpanel:8` 1 (n 64..64) |" in sel),
         ]
         checks.append(("device api scan", device_api_page.self_test()[0]))
-        checks.append(("device api page", "{#design_device_la_api}" in pages["device_api.md"]))
+        dev = pages["device_api.dox"]
+        checks.append(("device api page", "@defgroup design_device_la_api " in dev and "\n@ingroup api_device\n" in dev))
+        checks.append(("device api on the real headers", not device_api_page.check_page(REPO)))
+        checks.append(("stale page removed", not os.path.exists(os.path.join(root, "out", STALE[0]))))
         bad = [name for name, ok in checks if not ok]
         if bad:
             print("gen_db_pages --self-test: FAILED: %s" % ", ".join(bad))

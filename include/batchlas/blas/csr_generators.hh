@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <batchlas/blas/matrix.hh>
 
 #include <complex>

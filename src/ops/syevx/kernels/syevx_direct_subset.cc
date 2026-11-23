@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <complex>
 #include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/blas/functions.hh>
@@ -33,6 +34,7 @@
 #include <src/ops/syev/sytrd/sytrd_sb2st_hh.hh>
 #include <vector>
 #include <src/ops/ormqr/vendor.hh>
+#include <src/select/vendor.hh>
 #include <src/util/batch_mask.hh>
 #include <batchlas/device.hh>
 
@@ -50,6 +52,19 @@ inline size_t subset_w_sub_len(int64_t n, int64_t capacity, bool value_range) {
                        : static_cast<size_t>(capacity);
 }
 
+// Beside netlib the host's gemm and ormqr are LAPACKE/CBLAS (no mask); vendor-free, all native.
+template <Backend B>
+inline constexpr bool kSubsetHostBlas = B == Backend::NETLIB && !select::kHostNative;
+
+// sy2sb's WY update (larft) and sb2st_hh's chase run 32-wide sub-groups on every backend, beside a
+// host BLAS too; acpp's OpenMP host enumerates only size 1. Refused before any launch.
+inline void refuse_without_sg32(Queue& ctx, const char* who) {
+    if (!ctx.device().supports_sub_group_size(32))
+        throw batchlas::unsupported(std::string(who) +
+                                    ": the device has no 32-wide sub-groups, which sytrd_sy2sb's WY update "
+                                    "needs; use SyevxAlgorithm::Direct");
+}
+
 }  // namespace
 
 template <Backend B, typename Scalar, MatrixFormat MFormat>
@@ -63,9 +78,9 @@ Event syevx_direct_subset(Queue& ctx,
                           const MatrixView<Scalar, MatrixFormat::Dense>& V,
                           const SyevxParams<Scalar>& params,
                           Span<int32_t> info) {
-    // The plumbing below carries the mask to every child and kernel. On the host backend gemm is the
-    // host BLAS, which refuses a mask: refused here, before info_clear writes an item.
-    if constexpr (B == Backend::NETLIB) ::batchlas::detail::refuse_batch_mask("syevx_direct_subset", A, V);
+    // The plumbing below carries the mask to every child and kernel. Beside a host BLAS gemm is that
+    // BLAS, which refuses a mask: refused here, before info_clear writes an item.
+    if constexpr (kSubsetHostBlas<B>) ::batchlas::detail::refuse_batch_mask("syevx_direct_subset", A, V);
     const Span<const std::uint8_t> mask = ::batchlas::detail::call_mask("syevx_direct_subset", A, V);
     using Real = typename base_type<Scalar>::type;
 
@@ -76,6 +91,7 @@ Event syevx_direct_subset(Queue& ctx,
         throw batchlas::unsupported(
             "syevx_direct_subset: only real scalar types with dense input are supported");
     } else {
+        refuse_without_sg32(ctx, "syevx_direct_subset");
         const int32_t n = static_cast<int32_t>(A.rows());
         const int32_t batch = static_cast<int32_t>(A.batch_size());
         // Stride of W and columns of V; never the per-item count nor w_sub_len
@@ -272,7 +288,7 @@ Event syevx_direct_subset(Queue& ctx,
                                            static_cast<size_t>(tau_sy2sb_n) * batch);
 
                     size_t bytes_ormqr = 0;
-                    if constexpr (B == Backend::NETLIB) {
+                    if constexpr (kSubsetHostBlas<B>) {
                         bytes_ormqr = ops::ormqr::detail::ormqr_vendor_buffer_size_or_throw<B, Scalar>(
                             ctx, v1_view, v_sub_rows, Side::Left, Transpose::NoTrans, tau1_flat);
                     } else {
@@ -281,7 +297,7 @@ Event syevx_direct_subset(Queue& ctx,
                             ormqr_block_size);
                     }
                     auto ormqr_ws = pool.allocate<std::byte>(ctx, bytes_ormqr);
-                    if constexpr (B == Backend::NETLIB) {
+                    if constexpr (kSubsetHostBlas<B>) {
                         (void)ops::ormqr::detail::ormqr_vendor_or_throw<B, Scalar>(ctx, v1_view, v_sub_rows, Side::Left,
                                                     Transpose::NoTrans, tau1_flat, ormqr_ws);
                     } else {
@@ -375,8 +391,9 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
         return 0;
     } else {
         // Must reject exactly what the solver rejects.
-        if constexpr (B == Backend::NETLIB)
+        if constexpr (kSubsetHostBlas<B>)
             ::batchlas::detail::refuse_batch_mask("syevx_direct_subset_buffer_size", A, V);
+        refuse_without_sg32(ctx, "syevx_direct_subset_buffer_size");
         const auto mask = ::batchlas::detail::call_mask("syevx_direct_subset_buffer_size", A, V);
         (void)W;
         const int32_t n = static_cast<int32_t>(A.rows());
@@ -396,17 +413,17 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
         const int32_t ormqr_block_size = tuning::ormqr_block_size_for_n(n);
         const int32_t nrefl = detail::sb2st_hh_num_reflectors(n, kd);
 
-        size_t bytes = 0;
-        bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(n) * n * batch);
-        bytes += BumpAllocator::allocation_size<Scalar*>(ctx, static_cast<size_t>(batch));
-        bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(kd + 1) * n * batch);
-        bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(tau_sy2sb_n) * batch);
+        // A measuring() replay: a hand sum missed the padding below an unaligned workspace base.
+        BumpAllocator pool = BumpAllocator::measuring();
+        (void)pool.allocate<Scalar>(ctx, static_cast<size_t>(n) * n * batch);
+        (void)pool.allocate<Scalar*>(ctx, static_cast<size_t>(batch));
+        (void)pool.allocate<Scalar>(ctx, static_cast<size_t>(kd + 1) * n * batch);
+        (void)pool.allocate<Scalar>(ctx, static_cast<size_t>(tau_sy2sb_n) * batch);
         if (want_eigenvectors) {
-            bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(n) * batch);
+            (void)pool.allocate<Scalar>(ctx, static_cast<size_t>(n) * batch);
         }
 
-        // Shapes must match the runtime views exactly so the provider choices agree.
-        // Masked like the runtime views, so each size query picks the masked family.
+        // Shapes and masks match the runtime views, so each size query picks the same family.
         using MV = MatrixView<Scalar, MatrixFormat::Dense>;
         const auto a_dummy = MV(nullptr, n, n, n, static_cast<int64_t>(n) * n, batch).with_batch_mask(mask);
         const auto ab_dummy =
@@ -414,33 +431,32 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
         const auto tau_sy2sb_dummy = VectorView<Scalar>(nullptr, tau_sy2sb_n, batch, 1,
                                                         tau_sy2sb_n).with_batch_mask(mask);
 
-        bytes += BumpAllocator::allocation_size<std::byte>(
+        (void)pool.allocate<std::byte>(
             ctx, sytrd_sy2sb_buffer_size<B, Scalar>(ctx, a_dummy, ab_dummy, tau_sy2sb_dummy, Uplo::Lower, kd));
 
-        bytes += BumpAllocator::allocation_size<Real>(ctx, static_cast<size_t>(n) * batch);
-        bytes += BumpAllocator::allocation_size<Real>(ctx, static_cast<size_t>(std::max(0, n - 1)) * batch);
+        (void)pool.allocate<Real>(ctx, static_cast<size_t>(n) * batch);
+        (void)pool.allocate<Real>(ctx, static_cast<size_t>(std::max(0, n - 1)) * batch);
 
         // Householder chase: reflectors, taus and the 2 x n tridiagonal band.
         const int32_t nr = std::max<int32_t>(1, nrefl);
-        bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(kd) * nr * batch);
-        bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(nr) * batch);
-        bytes += BumpAllocator::allocation_size<Scalar>(ctx, static_cast<size_t>(2) * n * batch);
-        bytes += BumpAllocator::allocation_size<std::byte>(
-            ctx, detail::sytrd_sb2st_hh_buffer_size<B, Scalar>(ctx, n, kd, batch));
+        (void)pool.allocate<Scalar>(ctx, static_cast<size_t>(kd) * nr * batch);
+        (void)pool.allocate<Scalar>(ctx, static_cast<size_t>(nr) * batch);
+        (void)pool.allocate<Scalar>(ctx, static_cast<size_t>(2) * n * batch);
+        (void)pool.allocate<std::byte>(ctx, detail::sytrd_sb2st_hh_buffer_size<B, Scalar>(ctx, n, kd, batch));
 
         // w_sub, then m. Mirrors the runtime allocation order exactly.
-        bytes += BumpAllocator::allocation_size<Real>(ctx, w_sub_len * batch);
-        bytes += BumpAllocator::allocation_size<int32_t>(ctx, static_cast<size_t>(batch));
+        (void)pool.allocate<Real>(ctx, w_sub_len * batch);
+        (void)pool.allocate<int32_t>(ctx, static_cast<size_t>(batch));
 
         StebzParams<Real> bp;
         bp.range = rr.value_range ? EigenRangeType::Value : EigenRangeType::Index;
-        bytes += BumpAllocator::allocation_size<std::byte>(ctx, stebz_buffer_size<B, Real>(ctx, n, batch, bp));
+        (void)pool.allocate<std::byte>(ctx, stebz_buffer_size<B, Real>(ctx, n, batch, bp));
 
         if (want_eigenvectors) {
             SteinParams<Real> sp;
             // Sized on the CAPACITY, which is what the solver passes as stein's k: its
             // scratch grid is n * k * batch whether or not a column ends up used.
-            bytes += BumpAllocator::allocation_size<std::byte>(
+            (void)pool.allocate<std::byte>(
                 ctx, stein_buffer_size<B, Real>(ctx, n, static_cast<size_t>(capacity), batch, sp));
 
             // Q1 back-transform; shapes mirror the runtime slices exactly.
@@ -453,7 +469,7 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
                                          .with_batch_mask(mask);
                 Span<Scalar> tau1_flat(nullptr, static_cast<size_t>(tau_sy2sb_n) * batch);
                 size_t bytes_ormqr = 0;
-                if constexpr (B == Backend::NETLIB) {
+                if constexpr (kSubsetHostBlas<B>) {
                     bytes_ormqr = ops::ormqr::detail::ormqr_vendor_buffer_size_or_throw<B, Scalar>(
                         ctx, v1_dummy, c_dummy, Side::Left, Transpose::NoTrans, tau1_flat);
                 } else {
@@ -461,11 +477,11 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
                         ctx, v1_dummy, c_dummy, Side::Left, Transpose::NoTrans, tau1_flat,
                         ormqr_block_size);
                 }
-                bytes += BumpAllocator::allocation_size<std::byte>(ctx, bytes_ormqr);
+                (void)pool.allocate<std::byte>(ctx, bytes_ormqr);
             }
         }
 
-        return bytes;
+        return pool.required_bytes();
     }
 }
 

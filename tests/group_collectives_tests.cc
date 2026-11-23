@@ -14,12 +14,16 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <string>
 #include <vector>
 
+#include <batchlas/backend_config.h>
 #include <batchlas/blas/linalg.hh>
+#include <batchlas/device/detail/kernel_attrs.hh>
 #include <batchlas/util/group-collectives.hh>
 
 #include <src/queue.hh>
+#include <src/sycl/impl.hh>
 
 using namespace batchlas;
 
@@ -123,17 +127,28 @@ TEST(GroupCollectivesTest, PortableGroupReductionsAreExact) {
     Queue gpu(Device::default_device());
     check_portable_group_reductions_on<float>(gpu, "default device");
     if (!test_utils::kNativeGpuLacksFp64) check_portable_group_reductions_on<double>(gpu, "default device");
-#if BATCHLAS_HAS_CPU_TARGET
-    std::unique_ptr<Queue> cpu;
+}
+
+namespace {
+// The CPU legs are tests of their own: a CPU device that cannot be opened skips them visibly
+// (GTEST_SKIP with the reason), so a run without one never reports the leg as passed.
+std::unique_ptr<Queue> open_cpu_queue(std::string& why) {
     try {
-        cpu = std::make_unique<Queue>(Device("cpu"));
+        return std::make_unique<Queue>(Device("cpu"));
     } catch (const std::exception& e) {
-        std::cout << "[ INFO ] cpu leg not run: " << e.what() << std::endl;
-        return;
+        why = e.what();
+        return nullptr;
     }
+}
+}  // namespace
+
+TEST(GroupCollectivesTest, PortableGroupReductionsAreExactOnTheCpu) {
+    if (!BATCHLAS_HAS_CPU_TARGET) GTEST_SKIP() << "no CPU SYCL target in this build";
+    std::string why;
+    const auto cpu = open_cpu_queue(why);
+    if (!cpu) GTEST_SKIP() << "no CPU device: " << why;
     check_portable_group_reductions_on<float>(*cpu, "cpu device");
     check_portable_group_reductions_on<double>(*cpu, "cpu device");
-#endif
 }
 
 namespace {
@@ -159,6 +174,133 @@ int significant_bits(std::int64_t v) {
 }
 
 }  // namespace
+
+namespace {
+
+// Group b's source value: hashed bits, with -0 at b % 7 == 3 and a NaN payload at b % 7 == 5
+// (a sum-based broadcast loses both; bit identity is checked).
+template <typename T> struct real_of {
+    using type = T;
+};
+template <typename R> struct real_of<std::complex<R>> {
+    using type = R;
+};
+// Six bytes: not a whole number of 4-byte words, so it rides zero-padded in the last word.
+using Six = std::array<std::uint16_t, 3>;
+template <> struct real_of<Six> {
+    using type = std::uint16_t;
+};
+
+template <typename T> T bcast_value(std::uint64_t b) {
+    using R = typename real_of<T>::type;
+    const auto real = [](std::uint64_t h) {
+        if constexpr (std::is_same_v<R, bool>) return ((h >> 40) & 1) != 0;  // either value, per item
+        else if constexpr (std::is_integral_v<R>) return static_cast<R>(h >> 33);
+        else return static_cast<R>(std::ldexp(static_cast<double>(h >> 20), -30)) - R(1000);
+    };
+    R re = real(test_hash(b)), im = real(test_hash(b + 99991));
+    if constexpr (!std::is_integral_v<R>) {
+        if (b % 7 == 3) re = R(-0.0);
+        if (b % 7 == 5) re = std::numeric_limits<R>::quiet_NaN();
+    }
+    if constexpr (std::is_same_v<T, Six>) return Six{re, im, real(test_hash(b + 7))};
+    else if constexpr (std::is_same_v<T, R>) return re;
+    else return T(re, im);
+}
+
+// Every item of every group must get the source's bits: the source at item 0, 17 and wg - 1,
+// as a linear id and as a sycl::id<1>. Each item first holds its own distinct value, so an item
+// the broadcast misses keeps a wrong one. ReqdSg32: launched at reqd_sub_group_size(32), where
+// DPC++'s CPU device reached only lanes 0..15 of each sub-group (2026-11-21).
+template <typename T, bool ReqdSg32> int check_portable_broadcast(Queue& ctx, size_t wg, const char* where) {
+    constexpr size_t kBatch = 256, kSrc = 3;
+    const size_t srcs[kSrc] = {0, std::min<size_t>(17, wg - 1), wg - 1};
+    UnifiedVector<T> mine(kBatch * wg), out(kBatch * wg * kSrc * 2);
+    for (size_t b = 0; b < kBatch; ++b)
+        for (size_t i = 0; i < wg; ++i) mine[b * wg + i] = bcast_value<T>(b * 4099 + i + 1);
+    const T* pm = mine.data();
+    T* po = out.data();
+    const size_t s0 = srcs[0], s1 = srcs[1], s2 = srcs[2];
+    const auto body = [=](sycl::nd_item<1> it) {
+        const auto g = it.get_group();
+        const size_t gid = it.get_global_linear_id();
+        const T x = pm[gid];
+        const size_t o = gid * kSrc * 2;
+        po[o + 0] = batchlas::portable::group_broadcast(g, x);
+        po[o + 1] = batchlas::portable::group_broadcast(g, x, s1);
+        po[o + 2] = batchlas::portable::group_broadcast(g, x, s2);
+        po[o + 3] = batchlas::portable::group_broadcast(g, x, sycl::id<1>(s0));
+        po[o + 4] = batchlas::portable::group_broadcast(g, x, sycl::id<1>(s1));
+        po[o + 5] = batchlas::portable::group_broadcast(g, x, sycl::id<1>(s2));
+    };
+    if constexpr (ReqdSg32)
+        ctx->parallel_for(sycl::nd_range<1>(kBatch * wg, wg), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) { body(it); });
+    else
+        ctx->parallel_for(sycl::nd_range<1>(kBatch * wg, wg), body);
+    ctx.wait_and_throw();
+    int bad = 0;
+    for (size_t b = 0; b < kBatch && bad < 8; ++b)
+        for (size_t i = 0; i < wg && bad < 8; ++i)
+            for (size_t k = 0; k < kSrc * 2; ++k) {
+                const T want = mine[b * wg + srcs[k % kSrc]];
+                const bool ok = std::memcmp(&out[(b * wg + i) * kSrc * 2 + k], &want, sizeof(T)) == 0;
+                bad += !ok;
+                EXPECT_TRUE(ok) << where << " wg=" << wg << " reqd_sg32=" << ReqdSg32 << " group " << b << " item " << i
+                                << " source " << srcs[k % kSrc] << (k < kSrc ? " (linear id)" : " (sycl::id)");
+            }
+    return bad;
+}
+
+template <typename T> void check_portable_broadcast_on(Queue& ctx, const char* where) {
+    if (std::is_same_v<typename real_of<T>::type, double> && !sycl_queue(ctx).get_device().has(sycl::aspect::fp64)) return;
+    const auto sgs = sycl_queue(ctx).get_device().get_info<sycl::info::device::sub_group_sizes>();
+    const bool sg32 = BATCHLAS_SYCL_IMPL_ACPP || std::find(sgs.begin(), sgs.end(), size_t(32)) != sgs.end();
+    const size_t max_wg = std::min<size_t>(1024, ctx.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+    for (size_t wg : {size_t(32), size_t(64), size_t(96), size_t(256), max_wg}) {
+        if (wg > max_wg) continue;
+        if (check_portable_broadcast<T, false>(ctx, wg, where) != 0) return;
+        if (sg32 && check_portable_broadcast<T, true>(ctx, wg, where) != 0) return;
+    }
+}
+
+// Every T the wrapper must move: 1, 2, 4, 6, 8 and 16 bytes (6: zero-padded in its last word).
+// Not 6 on a Metal device: its shader compiler has no 48-bit integer, which a 6-byte copy lowers
+// to (acpp's word split never moves one; no library kernel broadcasts a 6-byte T).
+void check_portable_broadcast_all(Queue& ctx, const char* where) {
+    const auto each = [&](auto tag, const char* type) {
+        SCOPED_TRACE(type);
+        check_portable_broadcast_on<decltype(tag)>(ctx, where);
+    };
+    each(bool{}, "bool");
+    each(std::uint8_t{}, "uint8");
+    each(std::int16_t{}, "int16");
+    each(std::int32_t{}, "int32");
+    each(float{}, "float");
+    if (!batchlas::impl::is_metal(batchlas::impl::backend_of(sycl_queue(ctx).get_device()))) each(Six{}, "uint16[3]");
+    each(double{}, "double");
+    each(std::complex<float>{}, "complex<float>");
+    each(std::complex<double>{}, "complex<double>");
+}
+
+}  // namespace
+
+// portable::group_broadcast over a work-group reaches every item with the source's exact bits,
+// for every T above, at reqd_sub_group_size(32) and without. Red with `using
+// sycl::group_broadcast` (the bare DPC++ call), or with the OR pass limited to sizeof(T) % 4 == 0
+// (the first wrapper): the CPU leg at reqd_sub_group_size(32), and there only bool, uint8, int16
+// and uint16[3] in the second case.
+TEST(GroupCollectivesTest, PortableWorkGroupBroadcastReachesEveryItem) {
+    Queue gpu(Device::default_device());
+    check_portable_broadcast_all(gpu, "default device");
+}
+
+TEST(GroupCollectivesTest, PortableWorkGroupBroadcastReachesEveryItemOnTheCpu) {
+    if (!BATCHLAS_HAS_CPU_TARGET) GTEST_SKIP() << "no CPU SYCL target in this build";
+    std::string why;
+    const auto cpu = open_cpu_queue(why);
+    if (!cpu) GTEST_SKIP() << "no CPU device: " << why;
+    check_portable_broadcast_all(*cpu, "cpu device");
+}
 
 // P0.6: a double WORK-GROUP sum through batchlas::portable is exact on every SYCL implementation.
 // Only acpp generic (SSCP) rounds its own reduce, so only there does disabling kExactWgReducePass

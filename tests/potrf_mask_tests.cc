@@ -22,6 +22,7 @@
 #include <src/ops/potrf/choice.hh>
 #include <src/ops/potrf/potrf_native.hh>
 #include <src/ops/potri/choice.hh>
+#include <src/ops/potri/potri_native.hh>
 #include <src/ops/potrs/choice.hh>
 #include <src/select/vendor.hh>
 #include <tests/masked_contract.hh>
@@ -32,6 +33,7 @@
 #include <algorithm>
 #include <complex>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <span>
 #include <string>
@@ -164,15 +166,43 @@ protected:
     static constexpr Backend B = Config::BackendVal;
 
     bool gpu() const { return this->ctx && this->ctx->device().type == DeviceType::GPU; }
+    // Where the native families run (select::natives_run_on): a GPU, or a vendor-free host.
+    bool natives() const { return gpu() || (this->ctx && B == Backend::NETLIB && select::kHostNative); }
 
     // The pinned spelling: potri's full flag rides in the shape's spelling ("cta:full=0").
     static std::string pin_of(const Shape& s) { return s.spelling.starts_with("cta:full") ? "cta" : s.spelling; }
+
+    // Whether s's pinned family holds its block in the device's local memory (LOCAL_MEM_SIZE less the
+    // 4 KiB reserve): potrf cta and potri cta the whole matrix, potri blocked one min(nb, n) block.
+    // Over it (complex<float> on Metal) the strict pin must be refused, which check() asserts.
+    bool fits(const Shape& s) const {
+        const auto dev = this->ctx->device();
+        const auto budget = static_cast<std::size_t>(test_utils::slm_budget_for(dev, 1 << 30));
+        const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+        const auto potri_block = [&](int m) {
+            return ops::potri::cta_fits(m, ops::potri::kCtaTs<T>, sizeof(T), sizeof(typename base_type<T>::type), budget, max_wg);
+        };
+        const std::string pin = pin_of(s);
+        int nb = 0;
+        if (s.op == Op::potrf && pin == "cta") return s.n <= ops::potrf::potrf_cta_max_n_for_slm<T>(budget);
+        if (s.op == Op::potri && pin == "cta") return potri_block(s.n);
+        if (s.op == Op::potri && std::sscanf(pin.c_str(), "blocked:nb=%d", &nb) == 1) return potri_block(std::min(nb, s.n));
+        return true;
+    }
 
     template <typename Choice>
     void check(const Shape& s, bool reach = true) {
         SCOPED_TRACE(label(s));
         Queue& q = *this->ctx;
         Problem<T, B> p(q, s);
+        if (!fits(s)) {
+            const select::ScopedPin<Choice> pin(op_name(s.op), pin_of(s), select::StrictPin{});
+            const mc::Case c = p.make_case();
+            UnifiedVector<std::byte> ws(std::size_t(1) << 22);
+            c.prepare();
+            EXPECT_TRUE(test_utils::refused_by_can_run([&] { c.call({}, ws.to_span()); }));
+            return;
+        }
         // A masked call never reaches the vendor, so the composites' children take a native family
         // in the unmasked reference too: the same route, bit for bit.
         using Pin = select::ScopedPin<std::monostate>;
@@ -251,7 +281,7 @@ TYPED_TEST_SUITE(PotrfMask, Types);
 
 // Every potrf and posv native family's kernels, both triangles and every register bucket.
 TYPED_TEST(PotrfMask, PackedAndCtaFamiliesLeaveInactiveItemsUntouched) {
-    if (!this->gpu()) GTEST_SKIP() << "potrf's and posv's natives are GPU kernels";
+    if (!this->natives()) GTEST_SKIP() << "the natives run on a GPU or a vendor-free host";
     for (const Shape& s : this->potrf_shapes(24, false)) this->template check<ops::potrf::PotrfChoice>(s);
     for (const Shape& s : this->posv_shapes(24, false)) this->template check<ops::posv::PosvChoice>(s);
 }
@@ -286,7 +316,7 @@ TYPED_TEST(PotrfMask, LasclLeavesInactiveItemsUntouched) {
 // potrf blocked and potri blocked chunk the batch: every part edge, a wholly inactive part, both
 // triangles, a trailing update past one fold block (n > nb + W).
 TYPED_TEST(PotrfMask, BlockedFamiliesLeaveInactiveItemsUntouched) {
-    if (!this->gpu()) GTEST_SKIP() << "the blocked families are GPU drivers";
+    if (!this->natives()) GTEST_SKIP() << "the blocked families run on a GPU or a vendor-free host";
     this->template check<ops::potrf::PotrfChoice>({Op::potrf, "blocked", 100, 0, 24, Uplo::Lower, 0, false, 8});
     this->template check<ops::potrf::PotrfChoice>({Op::potrf, "blocked", 72, 0, 21, Uplo::Upper, 0, false, 5});
     this->template check<ops::potri::PotriChoice>({Op::potri, "blocked:nb=64", 150, 0, 24, Uplo::Lower, 0, false, 8});
@@ -296,7 +326,7 @@ TYPED_TEST(PotrfMask, BlockedFamiliesLeaveInactiveItemsUntouched) {
 // The solves: posv's cta (potrf, then the fused solve) and blocked (potrf, then two trsm), and
 // potrs' fused kernel and trsm pair, both triangles and every fused nrhs bucket.
 TYPED_TEST(PotrfMask, SolveFamiliesLeaveInactiveItemsUntouched) {
-    if (!this->gpu()) GTEST_SKIP() << "posv's and potrs' natives are GPU families";
+    if (!this->natives()) GTEST_SKIP() << "the solve natives run on a GPU or a vendor-free host";
     this->template check<ops::posv::PosvChoice>({Op::posv, "cta", 12, 2, 16, Uplo::Lower});
     this->template check<ops::posv::PosvChoice>({Op::posv, "cta", 37, 5, 16, Uplo::Upper});
     this->template check<ops::posv::PosvChoice>({Op::posv, "blocked", 70, 3, 16, Uplo::Upper});
@@ -330,7 +360,7 @@ TYPED_TEST(PotrfMask, AutoRunsAMaskedPotrfNatively) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::B;
     using MV = MatrixView<T, MatrixFormat::Dense>;
-    if (!this->gpu()) GTEST_SKIP() << "potrf's natives are GPU kernels";
+    if (!this->natives()) GTEST_SKIP() << "potrf natives run on a GPU or a vendor-free host";
     Queue& q = *this->ctx;
     const Shape s{Op::potrf, "auto", 24, 0, 32, Uplo::Lower, 0, true};
     Problem<T, B> p(q, s);
@@ -350,7 +380,7 @@ TYPED_TEST(PotrfMask, AutoRunsAMaskedPotrfNatively) {
 // The saturating batch (>= 1024, identical items) for every packed and SLM kernel: holes in
 // every packed work-group, active items bit-identical to each other and to the unmasked call.
 TYPED_TEST(PotrfMask, SaturatingIdenticalItems) {
-    if (!this->gpu()) GTEST_SKIP() << "potrf's and posv's natives are GPU kernels";
+    if (!this->natives()) GTEST_SKIP() << "the natives run on a GPU or a vendor-free host";
     for (const Shape& s : this->potrf_shapes(1024, true)) this->template check<ops::potrf::PotrfChoice>(s, false);
     for (const Shape& s : this->posv_shapes(1024, true)) this->template check<ops::posv::PosvChoice>(s, false);
     this->template check<ops::posv::PosvChoice>({Op::posv, "cta", 20, 3, 1024, Uplo::Lower, 0, true}, false);

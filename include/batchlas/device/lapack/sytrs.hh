@@ -1,8 +1,17 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// LAPACK ?sytrs / ?sytrs2 on device, from sytrf's Bunch-Kaufman factor in the
-// logical lower form (lapack/sytrf.hh's reversal). sytrs_col is ?sytrs on one right-hand side.
-// The converted form (?sytrs2) first runs ?syconv (each step's interchange applied to the earlier
+/// @file
+/// @ingroup api_device_lapack_ldl
+/// @brief ?SYTRS in a kernel: the solve \f$A X = B\f$ for one symmetric indefinite matrix from
+/// sytrf()'s Bunch-Kaufman factor and pivots, X overwriting B.
+///
+/// The routine is sytrs(); its routine tag is routine::sytrs. Its tiers are `tier::Cta<32>`,
+/// `tier::Cta<64>`, `tier::Cta<128>` (the converted ?SYTRS2 form in local memory) and
+/// `tier::Blocked<1>` (?SYTRS on the factor in global memory, any n); `tier::Blocked<NB>` with
+/// NB > 1 (?SYTRS2 on the in-group trsm) is offered but not in `tiers_t`. The kernels
+/// sytrs_col(), syconv() and syconv_gather() are in @ref api_device_lowlevel.
+// From sytrf's factor in the logical lower form (lapack/sytrf.hh's reversal). sytrs_col is
+// ?sytrs on one right-hand side. The converted form (?sytrs2) first runs ?syconv (each step's interchange applied to the earlier
 // columns of L, the \f$2 \times 2\f$ off-diagonals moved out), after which \f$A = P L D L^{T} P^{T}\f$
 // with L unit lower and P one permutation; detail::sytrs_cols then solves one right-hand side per
 // sub-group with lane i owning logical rows i, i + 32, ... in a lane-cyclic Frag: the gather,
@@ -149,11 +158,20 @@ template <class Scalar, class ML> BATCHLAS_DEVICE_HELPER void syconv_col(const M
 
 }  // namespace detail
 
-// ?sytrs for one right-hand side, lower form, on the unconverted n x n factor S (any matrix
-// operand; Upper passes the reversed view and rev) and the vector b (likewise). `piv(phys_k)`
-// reads LAPACK's ipiv entry (a Vec<int>, or any callable). A list sytrf cannot have written
-// (|ipiv| outside [1, n], an unpaired \f$2 \times 2\f$ entry) would index b out of bounds: that
-// item's X is NaN instead. sum: the reduction scratch (detail::SumScratch).
+/// @ingroup api_device_lowlevel
+/// @brief ?SYTRS for one right-hand side, lower form, on the unconverted n x n factor `S`.
+///
+/// Not covered by the compatibility promise: this is the body of sytrs()'s `tier::Blocked<1>` and
+/// of the host `wg` route. A pivot list sytrf() cannot have written (an entry outside [1, n] in
+/// magnitude, an unpaired 2 x 2 entry) would index `b` out of bounds, so that item's X is NaN
+/// instead. Every item of `ex` calls it with the same arguments.
+/// @param[in]     ex    the executor
+/// @param[in]     S     sytrf()'s factor, any matrix operand; Upper passes the reversed view
+/// @param[in]     piv   `piv(phys_k)` reads LAPACK's ipiv entry (a `Vec<int>`, or any callable)
+/// @param[in,out] b     the right-hand side, overwritten with x; Upper passes the reversed view
+/// @param[in]     n     the order
+/// @param[in]     rev   true: `S` and `b` are index-reversed views of an Upper factor
+/// @param[in]     sum   the reduction scratch (a detail type)
 template <class Ex, class MS, class PV, class VB, class Scr>
 inline void sytrs_col(const Ex& ex, const MS& S, const PV& piv, const VB& b, int n, bool rev, Scr sum) {
     using D = typename MS::value_type;
@@ -226,10 +244,23 @@ inline void sytrs_col(const Ex& ex, const MS& S, const PV& piv, const VB& b, int
     }
 }
 
-// Validation, ?syconv and the permutation for one item on the work-group `ex`: L the staged
-// n x n lower factor (any matrix operand), ps its logical ipiv, perm / kind / e the outputs (Vec
-// views of n), flag one int every item reads. An invalid list leaves L as staged, perm the
-// identity and every kind 1 x 1; the caller writes NaN. Returns the list's validity.
+/// @ingroup api_device_lowlevel
+/// @brief ?SYCONV with validation and the composed permutation, for one matrix on the work-group
+/// `ex`: the staged factor `L` is converted in place.
+///
+/// Not covered by the compatibility promise: this is a step of sytrs()'s `tier::Cta`. An invalid
+/// list leaves `L` as staged, the permutation the identity and every block 1 x 1; the caller then
+/// writes NaN. Every item of `ex` calls it with the same arguments.
+/// @param[in]     ex      the work-group
+/// @param[in,out] L       the staged n x n lower factor (any matrix operand)
+/// @param[in]     ps_v    its logical ipiv
+/// @param[out]    perm_v  the composed permutation (a `Vec` view of n)
+/// @param[out]    kind_v  each row's block kind: 0 a 1 x 1 block, 1 or 2 the first or second row
+///                        of a 2 x 2 block (a `Vec` view of n)
+/// @param[out]    e_v     the off-diagonal of the 2 x 2 block starting at each row (a `Vec` view
+///                        of n)
+/// @param[out]    flag    one int every item reads
+/// @return true when the pivot list is one sytrf() can have written
 template <class Ex, class ML, class VP, class VI, class VK, class VE>
 inline bool syconv(const Ex& ex, const ML& L, const VP& ps_v, const VI& perm_v, const VK& kind_v, const VE& e_v, int* flag) {
     using D = typename VE::value_type;
@@ -254,11 +285,25 @@ inline bool syconv(const Ex& ex, const ML& L, const VP& ps_v, const VI& perm_v, 
     return ok;
 }
 
-// ?syconv as a gather, for a factor in global memory: column j of W is column j of G with its rows
-// permuted by \f$\sigma_j\f$, the interchanges after step j composed (\f$W(t, j) = G(\sigma_j(t), j)\f$, \f$t > j\f$).
-// Walking j down, \f$\sigma\f$ gains one interchange per block start, applied by lane 0 in \f$O(1)\f$ through
+/// @ingroup api_device_lowlevel
+/// @brief ?SYCONV as a gather, for a factor in global memory: column j of `W` is column j of `G`
+/// with its rows permuted by \f$\sigma_j\f$, the interchanges after step j composed
+/// (\f$W(t, j) = G(\sigma_j(t), j)\f$, \f$t > j\f$).
+///
+/// Not covered by the compatibility promise: this is a step of sytrs()'s `tier::Blocked<NB>` and
+/// of the host blocked route. `kind` must describe a valid pivot list. Every item of `ex` calls
+/// it with the same arguments.
+/// @tparam D  the scalar type
+/// @param[out] W     the converted lower factor
+/// @param[in]  G     sytrf()'s factor
+/// @param[in]  n     the order
+/// @param[in]  ps    the logical ipiv
+/// @param[in]  kind  each row's block kind (0, 1 or 2)
+/// @param[out] sig   n ints of scratch every item reads: the permutation
+/// @param[out] inv   n ints of scratch: its inverse
+/// @param[in]  ex    the work-group
+// Walking j down, sigma gains one interchange per block start, applied by lane 0 in O(1) through
 // its inverse; every read and write of a column is then one pass instead of one swap per step.
-// kind must be build_perm's for a valid list.
 template <class D, class Dst, class Src, class Ex>
 inline void syconv_gather(const Dst& W, const Src& G, int n, const int* ps, const int* kind, int* sig, int* inv,
                           const Ex& ex) {
@@ -348,9 +393,12 @@ inline void sytrs_cols(const sycl::sub_group& sg, int lane, int sgid, int nsg, c
 //                           buffer_size<routine::sytrs<UL>, Tier, T>(n, nrhs).
 
 namespace routine {
+/// @ingroup api_device_lapack_ldl
+/// @brief The routine tag of sytrs() for the triangle `UL`: names the routine to `with_tier`,
+/// `launch`, `tier_info`, `tiers_t` and `buffer_size`.
 template <Uplo UL> struct sytrs {
     static_assert(UL == Uplo::Lower || UL == Uplo::Upper, "sytrs: Uplo::Lower or Uplo::Upper");
-    static constexpr const char* name = "sytrs";
+    static constexpr const char* name = "sytrs";  ///< The routine's name, "sytrs".
 };
 }  // namespace routine
 
@@ -523,9 +571,18 @@ BATCHLAS_DEVICE_INLINE void sytrs_run(tier::Blocked<NB>, const Ex& ex, const MA&
 
 }  // namespace detail
 
+/// @ingroup api_device_lapack_ldl
+/// @brief sytrs()'s tiers for every `Scalar`, smallest first: `Cta<32>`, `Cta<64>`, `Cta<128>`,
+/// `Blocked<1>`. `Blocked<NB>` with NB > 1 is offered but not listed.
 template <Uplo UL, class Scalar> struct tiers<routine::sytrs<UL>, Scalar> {
     using type = tier::list<tier::Cta<32>, tier::Cta<64>, tier::Cta<128>, tier::Blocked<1>>;
 };
+/// @ingroup api_device_lapack_ldl
+/// @brief sytrs()'s local-memory tier `tier::Cta<N>`, N <= 128: the converted factor in local
+/// memory, one sub-group per right-hand side, x in registers.
+///
+/// The executor is `WorkGroup<32, 32>`. `admits(n)` is 0 <= n <= N. `buffer_size(n, nrhs)` is
+/// local memory only and does not depend on nrhs.
 template <Uplo UL, int N, class Scalar> struct tier_info<routine::sytrs<UL>, tier::Cta<N>, Scalar> {
     static_assert(N <= 128, "sytrs tier::Cta<N>: N <= 128 (at most four registers per lane)");
     static constexpr int wg_size = 32, sg_size = 32;
@@ -534,6 +591,13 @@ template <Uplo UL, int N, class Scalar> struct tier_info<routine::sytrs<UL>, tie
     static constexpr bool admits(int n) { return n >= 0 && n <= N; }
     static constexpr WorkspaceSize buffer_size(int n, int = 1) { return detail::sytrs_cta_plan<Scalar>(n).size; }
 };
+/// @ingroup api_device_lapack_ldl
+/// @brief sytrs()'s unblocked tier `tier::Blocked<1>`: any n, ?SYTRS on the factor in global
+/// memory, one column at a time.
+///
+/// The executor is `WorkGroup<256, 32>`; any executor of whole 32-wide sub-groups, at most 256
+/// items, also works. Its sums reduce in an order fixed by the executor's width. `admits(n)` is
+/// n >= 0. `buffer_size(n, nrhs)` is local memory only and depends on neither.
 template <Uplo UL, class Scalar> struct tier_info<routine::sytrs<UL>, tier::Blocked<1>, Scalar> {
     static constexpr int wg_size = detail::sytrf_wg_max, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
@@ -541,7 +605,14 @@ template <Uplo UL, class Scalar> struct tier_info<routine::sytrs<UL>, tier::Bloc
     static constexpr bool admits(int n) { return n >= 0; }
     static constexpr WorkspaceSize buffer_size(int, int = 1) { return detail::sytrs_wg_plan<real_t<Scalar>>().size; }
 };
-// Its local part does not depend on nrhs, so with_tier's buffer_size(n) filter is exact.
+/// @ingroup api_device_lapack_ldl
+/// @brief sytrs()'s blocked tier `tier::Blocked<NB>`, NB > 1: any n, ?SYTRS2 in one work-group on
+/// the in-group trsm.
+///
+/// ?SYCONV runs as a gather into the global workspace, \f$P^T B\f$ is gathered there too, the
+/// trsm runs twice around \f$D^{-1}\f$, then the result is scattered back. The executor is
+/// `WorkGroup<256, 32>`. `admits(n)` is n >= 0. `buffer_size(n, nrhs)`: the global part grows
+/// with nrhs; the local part does not, so `with_tier`'s `buffer_size(n)` filter is exact.
 template <Uplo UL, int NB, class Scalar> struct tier_info<routine::sytrs<UL>, tier::Blocked<NB>, Scalar> {
     static constexpr int wg_size = detail::sytrf_blocked_wg, sg_size = 32;
     using executor = WorkGroup<wg_size, sg_size>;
@@ -550,11 +621,39 @@ template <Uplo UL, int NB, class Scalar> struct tier_info<routine::sytrs<UL>, ti
     static constexpr WorkspaceSize buffer_size(int n, int nrhs = 1) { return detail::sytrs_blocked_plan<Scalar>(n, nrhs).size; }
 };
 
-// ?sytrs of one matrix inside a kernel: B := A^-1 B from sytrf's factor (A and ipiv as sytrf
-// left them for the same UL). Collective as sytrf; B visible to every item on return. A pivot
-// list sytrf cannot have written leaves that B all NaN (the host routes' contract). Returns 0, or
-// a negative LAPACK argument number (sytrs_check), the same on every item. ipiv: a Vec<int> of n.
-// ws: buffer_size<routine::sytrs<UL>, Tier, T>(n, nrhs) (only Blocked<NB>'s global part uses nrhs).
+/// @ingroup api_device_lapack_ldl
+/// @brief ?SYTRS in a kernel: \f$B := A^{-1} B\f$ for one matrix, from sytrf()'s factor.
+///
+/// `A` and `ipiv` are as sytrf() left them for the same `UL`; neither is written. The n x nrhs
+/// `B` is overwritten with the solution X. A pivot list sytrf() cannot have written leaves that
+/// `B` all NaN (the host routes' contract). The executor needs sub-group size 32 and must be
+/// whole 32-wide sub-groups.
+/// - `tier::Cta<N>`, N <= 128: `ex` a `WorkGroup<32, 32>`; n <= N.
+/// - `tier::Blocked<1>`: any n; `ex` at most 256 items.
+/// - `tier::Blocked<NB>`, NB > 1: any n; `ex` a `WorkGroup<256, 32>`. Not in `tiers_t`.
+/// - `tier::upto<N>`: the first tier of `tiers_t<routine::sytrs<UL>, T>` that admits N.
+///
+/// Workspace: `ws` holds `buffer_size<routine::sytrs<UL>, Tier, T>(n, nrhs)`; only
+/// `tier::Blocked<NB>`'s global part uses nrhs.
+///
+/// @pre Collective as sytrf(): every item of `ex` calls with the same arguments; `A`, `ipiv` and
+/// `B` visible to every item on entry. X is visible to every item on return.
+/// @tparam UL    `Uplo::Lower` or `Uplo::Upper`: the triangle that holds the factor
+/// @tparam Tier  `tier::Cta<N>`, `tier::Blocked<NB>` or `tier::upto<N>`
+/// @param[in]     ex    the executor that owns this matrix
+/// @param[in]     A     sytrf()'s factor of the n x n matrix
+/// @param[in]     ipiv  sytrf()'s n pivots (a `Vec<int>`)
+/// @param[in,out] B     the n x nrhs right-hand sides; overwritten with X
+/// @param[in]     ws    this matrix's workspace slice
+/// @return 0 or a negative LAPACK argument number, the same on every item of `ex`. The numbers
+/// are ?SYTRS's (N is 2, LDA 5, B 7, LDB 8), not positions in this call:
+/// @retval 0   success (an invalid pivot list gives an all-NaN X, not an error)
+/// @retval -1  `ex` has a run-time width that is not whole 32-wide sub-groups, or is wider than
+///             `tier::Blocked<1>`'s 256 items
+/// @retval -2  `A` is not square, or n is outside the tier
+/// @retval -5  `A`'s leading dimension is less than max(1, n)
+/// @retval -7  `B` does not have n rows
+/// @retval -8  `B`'s leading dimension is less than max(1, n)
 template <Uplo UL, class Tier, class Ex, class MA, class PV, class MB>
 BATCHLAS_DEVICE_INLINE int sytrs(const Ex& ex, const MA& A, const PV& ipiv, const MB& B, const Workspace& ws) {
     using D = std::remove_cv_t<typename MA::value_type>;

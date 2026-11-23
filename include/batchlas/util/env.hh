@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-#include <batchlas/export.hh>
+#include <batchlas/config.hh>
 #include <cstdlib>
 #include <string>
 

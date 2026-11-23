@@ -2,7 +2,8 @@ cmake_minimum_required(VERSION 3.17)
 
 include(cmake/BatchLASCompilerBootstrap.cmake)
 
-project(BatchLAS VERSION 0.1.0 LANGUAGES CXX)
+project(BatchLAS VERSION 1.0.0 LANGUAGES CXX)
+include(cmake/BatchLASVersion.cmake)
 
 include(cmake/BatchLASTmpdir.cmake)
 include(cmake/BatchLASCcache.cmake)

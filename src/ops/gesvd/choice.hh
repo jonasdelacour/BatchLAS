@@ -17,7 +17,7 @@ struct Cta : select::NoFields<"cta"> {};          ///< gesvd_cta: normal equatio
 struct Blocked : select::NoFields<"blocked"> {};  ///< gesvd_blocked: bidiagonalisation + bdsdc, or syev_blocked (Lower)
 struct Vendor : select::NoFields<"vendor"> {};    ///< backend::gesvd_vendor; needs the solver library
 
-using GesvdChoice = std::variant<Jacobi, Cta, Blocked, Vendor>;  ///< natives need a GPU; cta, blocked: complex only if Hermitian
+using GesvdChoice = std::variant<Jacobi, Cta, Blocked, Vendor>;  ///< jacobi, cta need a GPU; blocked any native device; cta, blocked: complex only if Hermitian
 
 template <typename Scalar>  /// Every compiled choice, in tie-break order (§6.3): native first, vendor last.
 constexpr auto candidates() { return select::all_of<GesvdChoice>(); }

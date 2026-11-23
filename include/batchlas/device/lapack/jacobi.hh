@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+/// @file
+/// @brief The pieces the host Jacobi eigensolver (syevj, two-sided) and SVD (gesvj, one-sided)
+/// kernels share. It declares no public device routine: there is no device Jacobi solver.
+///
+/// Everything here is in `batchlas::device::detail` and is not API; `lapack.hh` includes it for
+/// the host kernels.
+/// @ingroup api_device_lowlevel
 // Shared pieces of the Jacobi routines (syevj two-sided, gesvj one-sided): pivot schedule,
 // rotation threshold and record, the one-sided norm recurrence, the phased plane rotation
 // U = [c s; -d s  d c] and the rounds of disjoint rotations from the right (A U) or the left

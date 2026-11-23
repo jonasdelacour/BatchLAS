@@ -72,7 +72,7 @@ The package warns when `CMAKE_CXX_COMPILER` differs from the recorded one;
 cmake_minimum_required(VERSION 3.21)
 project(my_app CXX)
 set(CMAKE_CXX_STANDARD 20)
-find_package(BatchLAS CONFIG REQUIRED)        # no COMPONENTS
+find_package(BatchLAS 1.0 CONFIG REQUIRED)    # any 1.x; no COMPONENTS
 add_executable(my_app main.cc)
 target_link_libraries(my_app PRIVATE BatchLAS::batchlas)
 ```
@@ -106,6 +106,90 @@ neither variable.
   `<sycl/sycl.hpp>` or `<batchlas/sycl_interop.hh>`, or writes kernels, passes `-fsycl
   -fsycl-targets=...` itself, plus `"SHELL:${BatchLAS_SYCL_BACKEND_OPTIONS}"` when the package's
   targets are plain `nvptx64-nvidia-cuda` (otherwise your kernels build for sm_75).
+
+### The device API without building BatchLAS
+
+The in-kernel API (`<batchlas/device.hh>`, `<batchlas/device/...>`, @ref guide_device_api) is
+header-only. Point the compiler at a checkout and add your usual SYCL flags; nothing is
+configured, installed or linked:
+
+```bash
+git clone https://github.com/jonasdelacour/BatchLAS.git
+clang++ -fsycl -fsycl-targets=nvidia_gpu_sm_89 -std=c++20 -I BatchLAS/include my_kernel.cc  # DPC++
+acpp --acpp-targets=generic -std=c++20 -I BatchLAS/include my_kernel.cc                       # AdaptiveCpp
+```
+
+`<batchlas/config.hh>` uses a build's or install's generated configuration when one is on the
+include path, and otherwise derives it from the SYCL implementation's headers
+(`BATCHLAS_HEADER_ONLY` is then 1). Override any value with `-D`:
+
+| Macro | Header-only default | Set it when |
+| --- | --- | --- |
+| `BATCHLAS_DEVICE_NO_VECTOR_TYPES` | `0` | `1` for AdaptiveCpp's Metal target (Apple GPUs) |
+| `BATCHLAS_SYCL_IMPL_ACPP` | `1` under AdaptiveCpp, else `0` | never, normally |
+| `BATCHLAS_ACPP_SLM_OPTIN` | `0` | your AdaptiveCpp takes the local-memory opt-in (library builds probe it) |
+
+AdaptiveCpp kernels that multiply or divide `std::complex` also need
+`-include BatchLAS/src/sycl/annexg_complex.hh` (an install has it at
+`<prefix>/include/batchlas/acpp/annexg_complex.hh`). The host API (`<batchlas.hh>`, `Queue`,
+`Matrix`) still needs the built library. `device_header_only_tests` builds `examples/device/` and
+every public device header this way.
+
+## Versioning and compatibility
+
+BatchLAS follows [Semantic Versioning](https://semver.org): within one major version, code
+written against the covered surface below keeps compiling, and a program linked against an earlier
+1.x keeps running against a later 1.x built with the same compiler (the same-compiler rule above).
+A minor release only adds; a patch release only fixes. Nothing checks the ABI mechanically yet:
+the promise is kept by review.
+
+| Query | Gives |
+| --- | --- |
+| `<batchlas/version.hh>` (included by `<batchlas.hh>`, header-only) | `BATCHLAS_VERSION_MAJOR`, `_MINOR`, `_PATCH`, `BATCHLAS_VERSION_STRING` |
+| `find_package(BatchLAS 1.0 CONFIG)` | any installed 1.x at or above 1.0; refuses 0.x and 2.x. `BatchLAS_VERSION` is the full number |
+| `pkg-config --modversion batchlas` | the full number |
+| `batchlas.__version__` (Python) | the full number of the library the module was built with |
+| the SONAME | the major: `libbatchlas*.so.1`, `libbatchlas*.1.dylib` |
+
+**Covered** (every installed header is in one of these two lists):
+
+- `<batchlas.hh>` and the API it declares in `namespace batchlas`. That includes `Device`, `Event`,
+  `Queue`, `Span`, `UnifiedVector` and `WorkspaceLease`, which it reaches through
+  `<batchlas/util/sycl-device-queue.hh>`, `sycl-span.hh`, `sycl-vector.hh` and `workspace.hh`: the
+  names are covered, those four `util/` paths are not (include `<batchlas.hh>`).
+- The headers under `<batchlas/blas/>`.
+- `<batchlas/error.hh>` (the exception types and what they derive from) and
+  `<batchlas/no_route.hh>` (`NoRouteError`, `Op`, `ScalarKind`; a minor release may add an `Op`).
+- `<batchlas/settings.hh>`, `<batchlas/version.hh>`, and `<batchlas/sycl_interop.hh>` (the four
+  functions in [Interop](#interop-with-cuda-and-with-your-own-sycl) below).
+- `<batchlas/config.hh>`: including it, and the three override macros in
+  [the header-only table](#the-device-api-without-building-batchlas).
+- The device API, `<batchlas/device.hh>` and `<batchlas/device/...>`: the members of the child
+  groups of @ref api_device (launch, executors, operands, arithmetic, BLAS levels 1 to 3, the
+  LAPACK groups and sparse), except @ref api_device_lowlevel.
+- The names the Python module `batchlas` and `batchlas.linalg` export.
+
+**Not covered** (may change in any release, minor or patch):
+
+- `<batchlas/internal/...>`: installed because public headers include them, not API.
+- In the device headers: the members of @ref api_device_lowlevel, anything in `batchlas::device`
+  that is in no child group of @ref api_device, `<batchlas/device/detail/...>` and
+  `batchlas::device::detail`.
+- The other `<batchlas/util/...>` headers: `env.hh`, `mempool.hh` (`BumpAllocator`),
+  `group-collectives.hh`, `group-invoke.hh`, `kernel-heuristics.hh`, `miniacc.hh` and
+  `sycl-local-accessor-helpers.hh`, the library's and the benchmarks' own helpers.
+- The generated `<batchlas/backend_config.h>` and `<batchlas/export.hh>` (read them through
+  `<batchlas/config.hh>`) and AdaptiveCpp's `<batchlas/acpp/annexg_complex.hh>` (the package adds
+  its `-include` itself).
+- `<batchlas/tuning_params.hh>` and the contents of the tuned tables: which route runs, and with it
+  the speed and the last bits of a result, can change in any release.
+- The `BATCHLAS_*` tuning environment variables and the `BATCHLAS_<OP>_ROUTE` route spellings (a pin
+  that no longer names a route throws; @ref design_environment lists them).
+
+Not installed: `<batchlas/verify/...>`, `<batchlas/util/minibench*.hh>`,
+`<batchlas/util/bench_structured.hh>` and the rest of the benchmark tooling. Anything not listed as
+covered is outside the promise. The ROCm backend is unsupported (code paths only; never built or
+run).
 
 ## Devices and queues
 

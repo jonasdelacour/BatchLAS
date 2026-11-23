@@ -693,6 +693,12 @@ TYPED_TEST(SyrkCandidates, ClassWordsAndSpellings) {
               }),
               "gram");
     EXPECT_TRUE(correct(*this->ctx, p));
+    // The row is this test's own: a shipped table may rank another family first (apple_m5_max).
+    const std::string dtype(select::dtype_name<T>()), dev = select::device_of<TestFixture::B>(*this->ctx).key;
+    const std::string row = " trans=N n=96 k=20 batch=3 | gram 1 | " +
+                            std::string(TestFixture::kNative ? "triangular" : "vendor") + " 2\n";
+    const TableGuard restore;
+    use_syrk_table(dtype, dev, "form=sq" + row + "form=tall" + row + "form=wide" + row);
     auto q = make_prob<T>(Spec{96, 20, 3});
     EXPECT_EQ(traced_choice([&] {
                   const Pin pin("syrk", std::string_view("native"));
@@ -924,8 +930,9 @@ TYPED_TEST(SyrkCandidates, EmptyBatchIsANoOp) {
     for (std::size_t e = 0; e < c.size(); ++e) ASSERT_EQ(c[e], T(2)) << e;
 }
 
-// On a CPU queue no tile family can run: native pins throw and Auto is the vendor (netlib), or
-// no route without one.
+// On a CPU queue with netlib no tile family can run: native pins throw and Auto is the vendor; a
+// vendor-free host (select::kHostNative) runs every tile family and Auto picks one.
+// evidence: docs/design/vendor-independence.md#the-host-native-gate
 template <typename Config>
 class SyrkCandidatesCpu : public test_utils::BatchLASTest<Config> {};
 TYPED_TEST_SUITE(SyrkCandidatesCpu, Types);
@@ -937,6 +944,26 @@ TYPED_TEST(SyrkCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     if (this->ctx->device().type == DeviceType::GPU) GTEST_SKIP() << "a GPU queue";
     const ScopedEnvVar clear("BATCHLAS_SYRK_ROUTE", nullptr);
     const Spec s{24, 9, 2, Uplo::Upper, Transpose::Trans};
+    if constexpr (B == Backend::NETLIB && batchlas::select::kHostNative) {
+        for (const C& c : sk::candidates<T>()) {
+            if (std::holds_alternative<sk::Vendor>(c)) continue;
+            auto p = make_prob<T>(s);
+            const Pin pin("syrk", c);
+            ASSERT_NO_THROW(((void)syrk<B, T>(*this->ctx, p.A(), p.Cv(), p.alpha, p.beta, s.uplo, s.trans),
+                             this->ctx->wait()))
+                << select::to_string(c);
+            EXPECT_TRUE(correct(*this->ctx, p)) << select::to_string(c);
+        }
+        // The CPU borrows no GPU table (select.cc), so Auto walks syrk's last resort, triangular first.
+        auto p = make_prob<T>(s);
+        const std::string line = traced_line([&] {
+            (void)syrk<B, T>(*this->ctx, p.A(), p.Cv(), p.alpha, p.beta, s.uplo, s.trans);
+            this->ctx->wait();
+        });
+        EXPECT_NE(line.find(" -> triangular  [last resort]"), std::string::npos) << line;
+        EXPECT_TRUE(correct(*this->ctx, p));
+        return;
+    }
     for (const C& c : sk::candidates<T>()) {
         if (std::holds_alternative<sk::Vendor>(c)) continue;
         auto p = make_prob<T>(s);

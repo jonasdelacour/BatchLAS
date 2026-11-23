@@ -57,7 +57,10 @@ HIDE_UNDOC_MEMBERS     = NO
 HIDE_UNDOC_CLASSES     = NO
 HIDE_FRIEND_COMPOUNDS  = YES
 INTERNAL_DOCS          = NO
-CASE_SENSE_NAMES       = SYSTEM
+# YES, not SYSTEM: on macOS SYSTEM escapes capitals (.github/README.md becomes
+# md__8github_2_r_e_a_d_m_e), so @ref md__8github_2README breaks there. No two
+# output files differ only in case (checked on the Linux site), so YES is safe.
+CASE_SENSE_NAMES       = YES
 SHOW_INCLUDE_FILES     = YES
 SORT_MEMBER_DOCS       = NO
 SORT_BRIEF_DOCS        = NO
@@ -108,6 +111,9 @@ EXCLUDE_PATTERNS       = */minibench.hh \
                          */batchlas/device/detail/*
 EXCLUDE_SYMBOLS        = batchlas::sig \
                          batchlas::linalg::sig \
+                         batchlas::device::detail \
+                         batchlas::device::l3::detail \
+                         BATCHLAS_POTF2_* \
                          BATCHLAS_CHECK_ARGS \
                          BATCHLAS_ARG_NAMES_* \
                          MINI_ACC_* \
@@ -164,7 +170,9 @@ XML_PROGRAMLISTING     = NO
 # One documentation configuration: a CUDA + host build with every vendor
 # library. The generated backend_config.h is not in the source tree, so the
 # flags it would define are spelled out here. BATCHLAS_API is the generated
-# export macro; unexpanded it becomes the class name.
+# export macro; unexpanded it becomes the class name. The device inlining and
+# kernel-attribute macros expand to nothing, so device signatures read as plain
+# declarations.
 ENABLE_PREPROCESSING   = YES
 MACRO_EXPANSION        = YES
 EXPAND_ONLY_PREDEF     = YES
@@ -182,7 +190,14 @@ PREDEFINED             = BATCHLAS_DOXYGEN \
                          BATCHLAS_HAS_CUSOLVER=1 \
                          BATCHLAS_HAS_CUSPARSE=1 \
                          BATCHLAS_HAS_LAPACKE=1 \
-                         BATCHLAS_HAS_CBLAS=1
+                         BATCHLAS_HAS_CBLAS=1 \
+                         BATCHLAS_DEVICE_INLINE= \
+                         BATCHLAS_DEVICE_HELPER= \
+                         BATCHLAS_DEVICE_BODY= \
+                         BATCHLAS_UNROLL_FULL= \
+                         BATCHLAS_AMDGCN_FN= \
+                         "BATCHLAS_LAUNCH_BOUNDS(max_threads,min_blocks)=" \
+                         "BATCHLAS_REQD_SG_SIZE(n)="
 EXPAND_AS_DEFINED      = BATCHLAS_DENSE_VIEW
 SKIP_FUNCTION_MACROS   = YES
 

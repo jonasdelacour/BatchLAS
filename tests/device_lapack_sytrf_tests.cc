@@ -400,7 +400,9 @@ protected:
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
         if (::testing::Test::IsSkipped()) return;
-        if constexpr (Bk == Backend::NETLIB) GTEST_SKIP() << "the device API's host twins are the GPU routes";
+        // Beside netlib the host queue's sytrf is LAPACKE's; a vendor-free host runs the native twins.
+        if constexpr (Bk == Backend::NETLIB && !select::kHostNative)
+            GTEST_SKIP() << "the device API's host twins are the native routes, LAPACKE's here";
         if (!this->ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "the device API runs at sub-group size 32";
         if (test_utils::lacks_fp64<T>(sycl_queue(*this->ctx).get_device())) GTEST_SKIP() << "device has no fp64";
     }

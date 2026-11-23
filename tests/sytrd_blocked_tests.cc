@@ -21,20 +21,26 @@
 #include <type_traits>
 #include <vector>
 
+#include <batchlas/backend_config.h>
+#include <src/select/vendor.hh>
 #include <tests/test_utils.hh>
 #include <tests/eigen_verify.hh>
+#include <tests/test_support/coverage_rows.hh>
+#include <tests/test_support/storage.hh>
 
 using namespace batchlas;
 
 namespace {
 
 // The tridiagonalization's backward error seen through its spectrum: max |eig(T) - eig(A0)| / ||A0||_2
-// over `items` (default: first, middle, last), both from LAPACKE in double. T's spectrum comes from
-// (Re d, |e|): a unitary diagonal similarity makes a Hermitian tridiagonal's spectrum the real one's.
+// over `items` (default: first, middle, last), both from LAPACKE in double, or without it from the
+// host references of eigen_verify.hh. T's spectrum comes from (Re d, |e|): a unitary diagonal
+// similarity makes a Hermitian tridiagonal's spectrum the real one's.
 template <typename Scalar>
 double spectrum_error(const MatrixView<Scalar, MatrixFormat::Dense>& A0, Vector<Scalar>& d, Vector<Scalar>& e,
                       std::span<const int> items = {}) {
     using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+    using P = typename MV::promoted_type;
     const int n = A0.rows();
     const int batch = A0.batch_size();
     const std::vector<int> picked = items.empty() ? A0.default_items() : std::vector<int>(items.begin(), items.end());
@@ -45,8 +51,12 @@ double spectrum_error(const MatrixView<Scalar, MatrixFormat::Dense>& A0, Vector<
         std::vector<double> dd(n), ee(std::max(0, n - 1));
         for (int i = 0; i < n; ++i) dd[i] = std::real(MV::up(d(i, b)));
         for (int i = 0; i + 1 < n; ++i) ee[i] = std::abs(MV::up(e(i, b)));
-        if (!verify::eigenvalues(A0, b, ref[static_cast<std::size_t>(b)]) || !verify::tridiagonal_eigenvalues(dd, ee))
+        if constexpr (!verify::have_reference) {
+            ref[static_cast<std::size_t>(b)] = test_utils::host_hermitian_eigenvalues<P>(n, verify::detail::item_vector<P>(A0, b));
+            dd = test_utils::host_tridiagonal_eigenvalues(dd, ee);
+        } else if (!verify::eigenvalues(A0, b, ref[static_cast<std::size_t>(b)]) || !verify::tridiagonal_eigenvalues(dd, ee)) {
             return std::numeric_limits<double>::quiet_NaN();
+        }
         std::copy(dd.begin(), dd.end(), got.begin() + static_cast<std::ptrdiff_t>(b) * n);
         for (double l : ref[static_cast<std::size_t>(b)]) scale = verify::nanmax(scale, std::fabs(l));
     }
@@ -74,11 +84,10 @@ void expect_values_err(int n, double err, std::optional<verify::Slack> slack) {
     else EXPECT_VERIFY(Scalar, verify::Check::values, n, err);
 }
 
-// spectrum_error at Check::values (n = the order); skips without LAPACKE.
+// spectrum_error at Check::values (n = the order).
 template <typename Scalar>
 void expect_spectrum(const MatrixView<Scalar, MatrixFormat::Dense>& A0, Vector<Scalar>& d, Vector<Scalar>& e,
                      std::optional<verify::Slack> slack = std::nullopt, std::span<const int> items = {}) {
-    if (!BATCHLAS_VERIFY_HAVE_LAPACKE) GTEST_SKIP() << "no host LAPACKE reference in this build";
     expect_values_err<Scalar>(A0.rows(), spectrum_error(A0, d, e, items), slack);
 }
 
@@ -94,6 +103,10 @@ struct SytrdBlockedConfig {
 using SytrdBlockedTestTypes = ::testing::Types<SytrdBlockedConfig<float, Backend::CUDA>, SytrdBlockedConfig<double, Backend::CUDA>>;
 #elif BATCHLAS_HAS_ROCM_BACKEND
 using SytrdBlockedTestTypes = ::testing::Types<SytrdBlockedConfig<float, Backend::ROCM>, SytrdBlockedConfig<double, Backend::ROCM>>;
+#elif BATCHLAS_HAS_SYCL_BACKEND && BATCHLAS_HAS_DEVICE_FP64
+using SytrdBlockedTestTypes = ::testing::Types<SytrdBlockedConfig<float, Backend::SYCL>, SytrdBlockedConfig<double, Backend::SYCL>>;
+#elif BATCHLAS_HAS_SYCL_BACKEND  // Metal: no fp64 on the GPU
+using SytrdBlockedTestTypes = ::testing::Types<SytrdBlockedConfig<float, Backend::SYCL>>;
 #else
 using SytrdBlockedTestTypes = ::testing::Types<SytrdBlockedConfig<float, Backend::NETLIB>>;
 #endif
@@ -145,7 +158,6 @@ TYPED_TEST(SytrdBlockedTest, TrailingUpdateRoutesAgree) {
     Matrix<Real, MatrixFormat::Dense> A0 =
         Matrix<Real, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/20260806);
     const auto items = A0.all_items();
-    if (!BATCHLAS_VERIFY_HAVE_LAPACKE) GTEST_SKIP() << "no host LAPACKE reference in this build";
     const auto slack = float_slack<Real>({0.25, "old bound 4 n eps(2^-23) ||A|| = 8 n u ||A||"});
 
     // Runs one trailing-update route; returns its spectrum_error, checked at Check::values.
@@ -201,6 +213,78 @@ TYPED_TEST(SytrdBlockedTest, RandomSymmetricLower33) {
     expect_spectrum<Real>(A0, d, e, float_old_power<Real>(n));
 }
 #endif
+
+// The latrd panel's ||x|| when the squares of the entries leave the float range: the same
+// Hermitian matrix at 2^0 (control), 2^-70 and 2^-76 (squares near 2^-140 and 2^-152, subnormal
+// or zero), padded storage. Both latrd paths pinned: legacy (the panel body latrd_lower_run) and
+// grid (3 work-groups at n = 96 on CUDA; Metal and the host never take it and run legacy).
+// BREAK (2026-11-21, apple_m5_max, Backend::SYCL float): latrd_lower_run's unscaled sum of
+// squares gives spectrum error 0.82 relative at both 2^-70 and 2^-76 (Metal flushes the
+// subnormal squares); the power-of-two scaled norm passes all three. BREAK (2026-11-21, RTX 4090,
+// CUDA float): the grid kernel's unscaled sum gives 1.8e-4 at 2^-70 and 0.55 at 2^-76.
+TYPED_TEST(SytrdBlockedTest, LatrdPanelNormSurvivesSquaresBelowTheNormalRange) {
+    using Real = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    const int n = 96, batch = 4, nb = 32;
+    const Matrix<Real, MatrixFormat::Dense> R =
+        Matrix<Real, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/20261121);
+    for (const char* latrd : {"legacy", "grid"})
+    for (int scale_exp : {0, -70, -76}) {
+        ScopedEnvVar impl("BATCHLAS_LATRD_IMPL", latrd);
+        SCOPED_TRACE(::testing::Message() << "latrd " << latrd << ", entries scaled by 2^" << scale_exp);
+        Matrix<Real, MatrixFormat::Dense> A0 = test_support::padded<Real>(n, n, batch);
+        Matrix<Real, MatrixFormat::Dense> A = test_support::padded<Real>(n, n, batch);
+        for (int b = 0; b < batch; ++b)
+            for (int c = 0; c < n; ++c)
+                for (int r = 0; r < n; ++r) {
+                    const Real v = std::ldexp(R.data_ptr()[std::size_t(b) * R.stride() + std::size_t(c) * R.ld() + r], scale_exp);
+                    A0.data_ptr()[std::size_t(b) * A0.stride() + std::size_t(c) * A0.ld() + r] = v;
+                    A.data_ptr()[std::size_t(b) * A.stride() + std::size_t(c) * A.ld() + r] = v;
+                }
+        Vector<Real> d(n, batch);
+        Vector<Real> e(n - 1, batch);
+        Vector<Real> tau(n - 1, batch);
+        const size_t ws_bytes = sytrd_blocked_buffer_size<B, Real>(*this->ctx, A, d, e, tau, Uplo::Lower, nb);
+        UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
+        sytrd_blocked<B, Real>(*this->ctx, A, d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
+        expect_spectrum<Real>(A0, d, e, float_old_power<Real>(n), A0.all_items());
+    }
+}
+
+// A rank-one c * ones(n): past the first reflector every column is rounding noise, and each
+// panel shrinks it by about eps, so by n = 64 at nb = 8 the float columns are all subnormal.
+// A scaled ||x|| keeps their norm nonzero, and 1 / (alpha - beta) then overflowed: inf scale,
+// NaN tridiagonal (NormTest.SpectralOutOfOrder, d from i = 44 on). Both latrd paths pinned;
+// item b holds c = b + 1, padded storage. Every d and e finite, the spectrum {n c, 0, ...}.
+TYPED_TEST(SytrdBlockedTest, RankOneNoiseDecaysThroughSubnormals) {
+    using Real = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    const int n = 64, batch = 4, nb = 8;
+    for (const char* latrd : {"legacy", "grid"}) {
+        ScopedEnvVar impl("BATCHLAS_LATRD_IMPL", latrd);
+        SCOPED_TRACE(::testing::Message() << "latrd " << latrd);
+        Matrix<Real, MatrixFormat::Dense> A0 = test_support::padded<Real>(n, n, batch);
+        Matrix<Real, MatrixFormat::Dense> A = test_support::padded<Real>(n, n, batch);
+        for (int b = 0; b < batch; ++b)
+            for (int c = 0; c < n; ++c)
+                for (int r = 0; r < n; ++r) {
+                    const std::size_t at = std::size_t(b) * A0.stride() + std::size_t(c) * A0.ld() + r;
+                    A0.data_ptr()[at] = A.data_ptr()[at] = Real(b + 1);
+                }
+        Vector<Real> d(n, batch);
+        Vector<Real> e(n - 1, batch);
+        Vector<Real> tau(n - 1, batch);
+        const size_t ws_bytes = sytrd_blocked_buffer_size<B, Real>(*this->ctx, A, d, e, tau, Uplo::Lower, nb);
+        UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
+        sytrd_blocked<B, Real>(*this->ctx, A, d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
+        int nonfinite = 0;
+        for (int b = 0; b < batch; ++b)
+            for (int i = 0; i < n; ++i)
+                nonfinite += !std::isfinite(d(i, b)) + (i < n - 1 && !std::isfinite(e(i, b)));
+        EXPECT_EQ(nonfinite, 0) << "non-finite d or e";
+        expect_spectrum<Real>(A0, d, e, std::nullopt, A0.all_items());
+    }
+}
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 TEST(SytrdBlockedFloatCudaTest, Syr2kTrailingUpdateMatchesNetlibReference) {
@@ -453,5 +537,87 @@ TEST(SytrdBlockedLatrdGridCudaTest, ForcedGroupCountsAgree) {
             run_latrd_grid_case<double>(129, 1, 32, "grid");
         }
     }
+}
+#endif
+
+#if BATCHLAS_HAS_HOST_BACKEND && BATCHLAS_HAS_CPU_TARGET
+namespace {
+// sytrd_blocked on a vendor-free host at n = 200, nb = 32 (n2 > 128 on the first two panels, so
+// the blocked trailing update runs): the tridiagonal's spectrum is A0's (host reference), and each
+// level-3 child it reached on NETLIB is a native family. The update there is the gemm pair:
+// syr2k / her2k replace it only under select::level3_tile_substitution_enabled, a GPU backend's.
+template <typename Scalar>
+void expect_host_sytrd_native(Queue& ctx) {
+    SCOPED_TRACE(is_std_complex_v<Scalar> ? "complex<float>" : "float");
+    const int n = 200, batch = 3, nb = 32;
+    Matrix<Scalar, MatrixFormat::Dense> A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, true, batch, 2611);
+    Matrix<Scalar, MatrixFormat::Dense> A = A0;
+    Vector<Scalar> d(n, batch), e(n - 1, batch), tau(n - 1, batch);
+    UnifiedVector<std::byte> ws(sytrd_blocked_buffer_size<Backend::NETLIB, Scalar>(ctx, A, d, e, tau, Uplo::Lower, nb));
+    const auto rows = test_support::reached_rows([&] {
+        (void)sytrd_blocked<Backend::NETLIB, Scalar>(ctx, A, d, e, tau, Uplo::Lower, ws.to_span(), nb);
+        ctx.wait();
+    });
+    int wide_gemm = 0;
+    for (const auto& r : rows) {
+        if (r.op != "gemm" && r.op != "syr2k" && r.op != "her2k") continue;
+        EXPECT_EQ(r.backend, "NETLIB") << r.op;
+        EXPECT_NE(r.spelling, "vendor") << r.op << " m " << r.m;
+        wide_gemm += r.op == "gemm" && r.m > 128;
+    }
+    EXPECT_GT(wide_gemm, 0) << "the blocked trailing update (n2 > 128) was not reached";
+    expect_spectrum<Scalar>(A0, d, e, float_old_power<Scalar>(n));
+}
+
+// sytrd_lower_local_small_legacy at n = 48 (33..64) on the same Hermitian matrix at 2^0, 2^-70 and
+// 2^-76 (squares near 2^-140, subnormal, and 2^-152, zero), padded storage; float by default,
+// complex<float> under BATCHLAS_SYTRD_FORCE_LOCAL_SMALL. No level-3 child is reached: the legacy
+// kernel returns before the blocked path's trailing update.
+template <typename Scalar>
+void expect_local_small_scaled(Queue& ctx, bool force) {
+    SCOPED_TRACE(is_std_complex_v<Scalar> ? "complex<float>" : "float");
+    const int n = 48, batch = 3, nb = 32;
+    const Matrix<Scalar, MatrixFormat::Dense> R = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, true, batch, 20261122);
+    std::optional<ScopedEnvVar> pin;
+    if (force) pin.emplace("BATCHLAS_SYTRD_FORCE_LOCAL_SMALL", "1");
+    for (int scale_exp : {0, -70, -76}) {
+        SCOPED_TRACE(::testing::Message() << "entries scaled by 2^" << scale_exp);
+        Matrix<Scalar, MatrixFormat::Dense> A0 = test_support::padded<Scalar>(n, n, batch);
+        Matrix<Scalar, MatrixFormat::Dense> A = test_support::padded<Scalar>(n, n, batch);
+        for (int b = 0; b < batch; ++b)
+            for (int c = 0; c < n; ++c)
+                for (int r = 0; r < n; ++r) {
+                    const Scalar v = R.data_ptr()[std::size_t(b) * R.stride() + std::size_t(c) * R.ld() + r] *
+                                     std::ldexp(1.0f, scale_exp);
+                    A0.data_ptr()[std::size_t(b) * A0.stride() + std::size_t(c) * A0.ld() + r] = v;
+                    A.data_ptr()[std::size_t(b) * A.stride() + std::size_t(c) * A.ld() + r] = v;
+                }
+        Vector<Scalar> d(n, batch), e(n - 1, batch), tau(n - 1, batch);
+        UnifiedVector<std::byte> ws(sytrd_blocked_buffer_size<Backend::NETLIB, Scalar>(ctx, A, d, e, tau, Uplo::Lower, nb));
+        const auto rows = test_support::reached_rows([&] {
+            (void)sytrd_blocked<Backend::NETLIB, Scalar>(ctx, A, d, e, tau, Uplo::Lower, ws.to_span(), nb);
+            ctx.wait();
+        });
+        for (const auto& r : rows)
+            EXPECT_TRUE(r.op != "gemm" && r.op != "syr2k" && r.op != "her2k") << r.op << ": the blocked path ran, not the legacy kernel";
+        expect_spectrum<Scalar>(A0, d, e, float_old_power<Scalar>(n), A0.all_items());
+    }
+}
+}  // namespace
+
+// The legacy kernel's ||x|| when the squares of the entries leave the float range. It runs where
+// native_backend<B> is false: the host NETLIB backend of a build with a host BLAS, and ROCm.
+TEST(SytrdBlockedHostTest, LocalSmallNormSurvivesSquaresBelowTheNormalRange) {
+    if (batchlas::select::native_backend<Backend::NETLIB>) GTEST_SKIP() << "vendor-free host: no legacy local kernel (native_backend)";
+    Queue ctx(Device("cpu"), Backend::NETLIB, true);
+    expect_local_small_scaled<float>(ctx, false);
+    expect_local_small_scaled<std::complex<float>>(ctx, true);
+}
+
+TEST(SytrdBlockedHostTest, VendorFreeTrailingUpdateIsNative) {
+    if (!batchlas::select::kHostNative) GTEST_SKIP() << "netlib present: the host's level-3 children are its BLAS";
+    Queue ctx(Device("cpu"), Backend::NETLIB, true);
+    expect_host_sytrd_native<float>(ctx);
+    expect_host_sytrd_native<std::complex<float>>(ctx);
 }
 #endif

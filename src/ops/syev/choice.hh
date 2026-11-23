@@ -19,7 +19,7 @@ struct Blocked : select::NoFields<"blocked"> {};       ///< syev_blocked: sytrd_
 struct TwoStage : select::NoFields<"two_stage"> {};    ///< syev_two_stage: sy2sb + sb2st + stedc, any n
 struct Vendor : select::NoFields<"vendor"> {};         ///< backend::syev_vendor; needs the solver library
 
-using SyevChoice = std::variant<Cta, CtaFused, Jacobi, Blocked, TwoStage, Vendor>;  ///< GPU natives: square, no NETLIB
+using SyevChoice = std::variant<Cta, CtaFused, Jacobi, Blocked, TwoStage, Vendor>;  ///< natives: square; NETLIB vendor-free only
 
 template <typename Scalar>  /// Every compiled choice, once, in tie-break order (§6.3): native first, vendor last.
 constexpr auto candidates() { return select::all_of<SyevChoice>(); }

@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
-// The REGISTER-RESIDENT GETRF panel leaf, a DROP-IN for getrf_panel_factorize and not
-// a tier -- same ipiv contract, same read-modify-written `info`, same cabs1 pivot metric,
-// so the two must agree on ipiv EXACTLY. BATCHLAS_GETRF_LEAF picks the arm; the default is
-// this leaf (getrf_blocked.cc, evidence: docs/perf/lu.md#lu-the-register-leaf-ab). Same device-code cluster
-// as getrf_cta.cc (EXTENSIONS_CTA_SOURCES); both call the public ?GETF2 (lapack/getrf.hh).
+// The REGISTER-RESIDENT GETRF panel leaf, a DROP-IN for getrf_panel_factorize and not a tier -- same ipiv
+// contract, same read-modify-written `info`, same cabs1 pivot metric, so the two must agree on ipiv EXACTLY.
+// BATCHLAS_GETRF_LEAF picks the arm; the default is this leaf (getrf_blocked.cc,
+// evidence: docs/perf/lu.md#lu-the-register-leaf-ab). Same device-code cluster as getrf_cta.cc
+// (EXTENSIONS_CTA_SOURCES); both call the public ?GETF2 (lapack/getrf.hh).
 // evidence: docs/perf/lu.md#the-register-panel-leaf
 
+#include <batchlas/backend_config.h>
 #include <src/ops/getrf/getrf_native.hh>
 #include <batchlas/device/lapack/getrf.hh>
 #include <src/ops/getrf/kernels/getrf_panel_reg_device.hh>
@@ -31,9 +32,8 @@ template <typename Scalar, int NB> class GetrfPanelRegKernel;
 
 namespace {
 
-// A launch ABORT, not a slowdown, so every cap below is compile-time. The per-BLOCK file
-// is not what binds on sm_89: registers are owned per sub-partition, and the whole-block
-// spelling accepts launches the driver refuses.
+// A launch ABORT, not a slowdown, so every cap below is compile-time. The per-BLOCK file is not what binds
+// on sm_89: registers are owned per sub-partition, and the whole-block spelling accepts launches the driver refuses.
 // evidence: docs/perf/lu.md#the-register-cap-that-binds-is-per-sub-partition
 constexpr int kRegsPerBlock = 65536;
 constexpr int kRegsPerPartition = 16384;
@@ -206,7 +206,8 @@ Event getrf_panel_reg_factorize(Queue& ctx,
     if (m < 1 || n < 1 || batch < 1) {
         throw batchlas::invalid_argument("getrf_panel_reg: degenerate extents");
     }
-    if (dev.type != DeviceType::GPU) {
+    // The cta library has a CPU image only in a vendor-free build (src/CMakeLists.txt).
+    if (dev.type != DeviceType::GPU && !BATCHLAS_HAS_HOST_NATIVE) {
         throw batchlas::invalid_argument("getrf_panel_reg: GPU queues only");
     }
     if (!dev.supports_sub_group_size(32)) {

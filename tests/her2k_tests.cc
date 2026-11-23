@@ -252,22 +252,24 @@ TYPED_TEST(Her2kTest, OptionStructMatchesPositional) {
     }
 }
 
-// The GEMM-plus-fold: its gemm and accumulate_hermitian put the batch in grid z (65535 on CUDA)
-// and run a batch past it as slices, where expansion_fits used to refuse it. With the expansion
-// pinned, 65535, 65536 and 2 * 65535 + 1 distinct items take it (its public gemm is in the select
-// trace at the full batch; the per-item loop calls no gemm), at padded lds and strides, complex
-// alpha, beta != 0, both triangles and transposes, C's input diagonal with a nonzero imaginary part
-// (not read; the output's is exactly 0), and every item is right.
+// The GEMM-plus-fold: its gemm and fold_hermitian put the batch in grid z (65535 on CUDA) and run
+// a batch past it as slices (level3::for_each_chunk), where expansion_fits used to refuse it. With
+// fold pinned, 65535, 65536 and 2 * 65535 + 1 distinct items take it (her2k's trace line at the full
+// batch names fold, and its gemm runs at most 65535 items a slice), at padded lds and strides,
+// complex alpha, beta != 0, both triangles and transposes, C's input diagonal with a nonzero
+// imaginary part (not read; the output's is exactly 0), and every item is right. Its gemm is
+// cuBLAS's in a full build and the native one vendor-free.
+// BREAK: for_each_chunk stopping one slice short leaves items past 65535 unwritten (EXPECT_VERIFY).
 TYPED_TEST(Her2kTest, ExpandBatchPastTheGridRunsAsSlices) {
     using T = typename TestFixture::ScalarType;
     using real_t = typename base_type<T>::type;
     constexpr Backend Ba = TestFixture::BackendType;
-    if constexpr (Ba != Backend::CUDA || !BATCHLAS_HAS_CUBLAS) {
-        GTEST_SKIP() << "the expansion is cuBLAS's her2k (no route vendor-free)";
+    if constexpr (Ba != Backend::CUDA) {
+        GTEST_SKIP() << "the 65535 grid-z ceiling is CUDA's";
     } else {
         using MV = MatrixView<T, MatrixFormat::Dense>;
         Queue& q = *(this->ctx);
-        const ScopedEnvVar route("BATCHLAS_EXPAND_ROUTE", "expand");
+        const ScopedEnvVar route("BATCHLAS_HER2K_ROUTE", "fold");
         const int n = 8, k = 5;
         const T alpha = T(0.5, -1.25);
         const real_t beta = real_t(0.75);
@@ -287,8 +289,16 @@ TYPED_TEST(Her2kTest, ExpandBatchPastTheGridRunsAsSlices) {
             (void)her2k(q, A, B, C, {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = trans});
             q.wait();
             const std::string err = ::testing::internal::GetCapturedStderr();
-            EXPECT_NE(err.find("batch=" + std::to_string(batch) + " -> "), std::string::npos)
-                << "batch " << batch << ": no gemm at the full batch, so not the expansion: " << err;
+            EXPECT_NE(err.find("batch=" + std::to_string(batch) + " -> fold"), std::string::npos)
+                << "batch " << batch << ": her2k did not take fold at the full batch: " << err;
+            if (batch > 65535) {
+                EXPECT_NE(err.find("gemm"), std::string::npos) << "batch " << batch << ": fold ran no gemm: " << err;
+                EXPECT_NE(err.find("batch=65535 -> "), std::string::npos)
+                    << "batch " << batch << ": no gemm slice at the grid ceiling: " << err;
+                EXPECT_EQ(err.find("batch=" + std::to_string(batch) + " -> "),
+                          err.rfind("batch=" + std::to_string(batch) + " -> "))
+                    << "batch " << batch << ": a child ran the full batch past the grid: " << err;
+            }
             int imaginary = 0;
             for (int b = 0; b < batch; ++b)
                 for (int d = 0; d < n; ++d) imaginary += Cb(d, d, b).imag() != real_t(0);

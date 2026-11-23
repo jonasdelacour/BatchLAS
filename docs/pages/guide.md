@@ -9,6 +9,8 @@ Build BatchLAS, link it into a project and call it.
 | @subpage md__8github_2README "Project README" | Status, supported operations, install and tuning in one page. |
 | @subpage guide_build "Building, testing and benchmarking" | Requirements, tested platforms, presets, CMake options, macOS (Apple GPU), tests, benchmarks, Python bindings, install traps. |
 | @subpage guide_cpp_api "The C++ API" | Data-layout and memory contract, queues and backends, option structs, workspaces, kernel selection, configuration, the `linalg` layer. |
+| @subpage guide_device_api "In-kernel BLAS and LAPACK" | `batchlas::device` inside your own SYCL kernel: the launch frame, conventions, executors, tiers, workspace, info, device requirements, every family, compiled examples. |
 | @subpage consumer_example "Consuming BatchLAS from CMake" | An outside project that finds the installed package. |
 | @subpage python_examples "Python examples" | The pybind11 package by example. |
 | @subpage guide_ritz_values "Ritz values" | Rayleigh-quotient eigenvalue estimates for dense, CSR and batched operators. |
+| @subpage changelog "Changelog" | Every user-visible change per release, newest first. |

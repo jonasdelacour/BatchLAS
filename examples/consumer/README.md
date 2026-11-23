@@ -1,6 +1,6 @@
 # Consuming BatchLAS from an outside CMake project {#consumer_example}
 
-A standalone project that calls `find_package(BatchLAS CONFIG REQUIRED)`, runs a batched
+A standalone project that calls `find_package(BatchLAS 1.0 CONFIG REQUIRED)`, runs a batched
 `gemm` and checks the result against a hand-computed reference. It is never
 `add_subdirectory()`'d: everything it needs must come from the install prefix.
 
@@ -83,3 +83,15 @@ claim (`blas/enums.hh`, `util/workspace.hh`, `internal/ormqr_blocked.hh`). The c
 include directories are searched before the imported `-isystem` ones, so an unprefixed include in a
 BatchLAS header would pick one up. `consumer_test.sh` rebuilds with `-DBATCHLAS_CONSUMER_DECOY=ON`
 and also checks nothing is installed at `<prefix>/include/{blas,util,internal}`.
+
+## The version checks
+
+`consumer_test.sh` also requires the installed `<batchlas/version.hh>`, the package's
+`BatchLAS_VERSION`, the `batchlas version = ...` line the example prints and the libraries' SONAME
+major to agree. The example's own request, 1.0, must be accepted (ExactVersion would refuse it). It
+then configures the example again with `-DBATCHLAS_CONSUMER_REQUIRE_VERSION=0.99`, `=1.1` and `=2.0`
+and fails unless `find_package` refuses all three: 0.99 is what AnyNewerVersion would accept, and
+1.1 and 2.0 catch a hand-written version file that accepts too much. Before that it runs the same
+requests against CMake's own ExactVersion and AnyNewerVersion files, so a probe that no longer tells
+the modes apart fails the test
+([versioning and compatibility](../../docs/cpp-api.md#versioning-and-compatibility)).

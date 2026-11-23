@@ -17,6 +17,7 @@
 #include <type_traits>
 #include <vector>
 #include <tests/test_utils.hh>
+#include <src/select/vendor.hh>
 
 using namespace batchlas;
 
@@ -372,7 +373,8 @@ protected:
         const bool route_pinned = pin_text.find("native") != std::string_view::npos ||
                                   pin_text == "direct" || pin_text == "cta" ||
                                   pin_text == "blocked";
-        if (c.misalign != 0 && !route_pinned && BackendType != Backend::NETLIB) {
+        if (c.misalign != 0 && !route_pinned && BackendType != Backend::NETLIB &&
+            select::sparse_vendor_available<BackendType>) {  // vendor-free: Auto is native
             GTEST_SKIP() << "cuSPARSE rejects an operand off its natural alignment "
                             "(\"matB had an illegal value: NULL pointer\") and the "
                             "vendor arm does not check the status; pin the native route";

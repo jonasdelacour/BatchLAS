@@ -16,7 +16,9 @@
 #include <src/select/vendor.hh>
 #include <src/ops/syev/kernels/chunk_budget.hh>
 #include <src/select/select.hh>
+#include <src/ops/syev/choice.hh>
 #include <src/queue.hh>
+#include <tests/test_support/coverage_rows.hh>
 #include <batchlas/no_route.hh>
 #include <algorithm>
 #include <complex>
@@ -45,19 +47,14 @@ struct SyevConfig {
 #include <batchlas/verify/tolerance.hh>
 using SyevTestTypes = typename test_utils::backend_types<SyevConfig>::type;
 
+// A vendor-free build's NETLIB queue runs the native families on the CPU (select::kHostNative), so
+// every case runs there too, the pinned and chunked ones included (kNativesRun); two_stage stays
+// GPU-only there. evidence: docs/design/vendor-independence.md#the-host-native-gate
 template <typename Config>
-class SyevTest : public test_utils::BatchLASTest<Config> {
-protected:
-    // A vendor-free build has no syev on the CPU: every native family is a GPU kernel, so a NETLIB
-    // queue throws NoRouteError by design (docs/perf/syev.md#syev-vendor-free-double-band).
-    void SetUp() override {
-        test_utils::BatchLASTest<Config>::SetUp();
-        if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
-        const std::string name = ::testing::UnitTest::GetInstance()->current_test_info()->name();
-        if (Config::BackendVal == Backend::NETLIB && !batchlas::select::kHasNetlib && name != "VendorFreeCpuHasNoRoute")
-            GTEST_SKIP() << "vendor-free build: no syev route on the CPU";
-    }
-};
+class SyevTest : public test_utils::BatchLASTest<Config> {};
+
+template <Backend B>
+inline constexpr bool kNativesRun = B != Backend::NETLIB || batchlas::select::kHostNative;
 
 TYPED_TEST_SUITE(SyevTest, SyevTestTypes);
 
@@ -270,7 +267,7 @@ TYPED_TEST(SyevTest, InfoReportsItemsThatExhaustTheSweepBudget) {
     // syev_cta needs a sub-group width of 32; the host device generally has less
     // and the tier throws batchlas::unsupported there rather than running slowly.
     if constexpr (B == Backend::NETLIB) {
-        GTEST_SKIP() << "syev_cta requires sub-group 32; not available on the host backend";
+        GTEST_SKIP() << "syev_cta is a GPU kernel (its steqr_cta and ormqx_cta stay GPU-only vendor-free)";
     } else {
         const int n = 32;
         const int batch = 8;
@@ -455,7 +452,7 @@ TYPED_TEST(SyevTest, ChunksKeepEigenpairsPerItem) {
     using T = typename TestFixture::ScalarType;
     using Real = typename base_type<T>::type;
     using MV = MatrixView<T, MatrixFormat::Dense>;
-    if constexpr (TestFixture::BackendType == Backend::NETLIB) {
+    if constexpr (!kNativesRun<TestFixture::BackendType>) {
         GTEST_SKIP() << "cta and blocked are GPU drivers";
     } else {
         const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "7");
@@ -463,6 +460,7 @@ TYPED_TEST(SyevTest, ChunksKeepEigenpairsPerItem) {
         ASSERT_EQ(tuning::blocked_chunk_items(batch, 1, 1, 1), 7) << "the override did not reach the accessor";
         const T poison = vendor_syev_cast<T>({777.0, is_std_complex_v<T> ? 333.0 : 0.0});
         for (const auto& r : kChunkRoutes) {
+            if (TestFixture::BackendType == Backend::NETLIB && std::string(r.route) == "cta") continue;  // GPU-only
             const ScopedEnvVar pin("BATCHLAS_SYEV_ROUTE", r.route);
             const int n = r.n, ld = n + 5, stride = ld * n + 11;
             for (const Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
@@ -514,7 +512,7 @@ TYPED_TEST(SyevTest, ChunksKeepCtaInfoPerItem) {
     using Real = typename base_type<T>::type;
     constexpr Backend B = TestFixture::BackendType;
     if constexpr (B == Backend::NETLIB) {
-        GTEST_SKIP() << "syev_cta requires sub-group 32";
+        GTEST_SKIP() << "syev_cta is a GPU kernel (its steqr_cta and ormqx_cta stay GPU-only vendor-free)";
     } else {
         const int n = 32, batch = 23, ld = n + 3, stride = ld * n + 7;
         SteqrParams<T> params;
@@ -567,12 +565,13 @@ TYPED_TEST(SyevTest, ChunksAtSaturatingBatchAreBitIdentical) {
     using T = typename TestFixture::ScalarType;
     using Real = typename base_type<T>::type;
     using MV = MatrixView<T, MatrixFormat::Dense>;
-    if constexpr (TestFixture::BackendType == Backend::NETLIB) {
+    if constexpr (!kNativesRun<TestFixture::BackendType>) {
         GTEST_SKIP() << "cta and blocked are GPU drivers";
     } else {
         const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "256");
         const int batch = 1024;
         for (const auto& r : kChunkRoutes) {
+            if (TestFixture::BackendType == Backend::NETLIB && std::string(r.route) == "cta") continue;  // GPU-only
             const ScopedEnvVar pin("BATCHLAS_SYEV_ROUTE", r.route);
             const int n = r.n, ld = n + 3, stride = ld * n + 5;
             UnifiedVector<T> buf(size_t(stride) * batch, T(-11));
@@ -612,7 +611,7 @@ TYPED_TEST(SyevTest, ChunksOnAnOutOfOrderQueue) {
     using T = typename TestFixture::ScalarType;
     using Real = typename base_type<T>::type;
     using MV = MatrixView<T, MatrixFormat::Dense>;
-    if constexpr (TestFixture::BackendType == Backend::NETLIB) {
+    if constexpr (!kNativesRun<TestFixture::BackendType>) {
         GTEST_SKIP() << "cta and blocked are GPU drivers";
     } else {
         const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "7");
@@ -620,6 +619,7 @@ TYPED_TEST(SyevTest, ChunksOnAnOutOfOrderQueue) {
         Queue ooo(*this->ctx, /*in_order=*/false);
         ASSERT_FALSE(ooo.in_order());
         for (const auto& r : kChunkRoutes) {
+            if (TestFixture::BackendType == Backend::NETLIB && std::string(r.route) == "cta") continue;  // GPU-only
             const ScopedEnvVar pin("BATCHLAS_SYEV_ROUTE", r.route);
             const int n = r.n, ld = n + 2, stride = ld * n + 3;
             for (int rep = 0; rep < 8; ++rep) {
@@ -763,6 +763,8 @@ void expect_pinned_route_repeatable(Queue& ctx, std::initializer_list<RepeatCase
     GradedFills<T> fills;
     for (const RepeatCase& c : cases) {
         if (B == Backend::ROCM && std::string(c.route) == "cta") continue;
+        // GPU-only on the vendor-free host: two_stage (sy2sb's geqrf) and cta (steqr_cta, ormqx_cta).
+        if (B == Backend::NETLIB && (std::string(c.route) == "two_stage" || std::string(c.route) == "cta")) continue;
         const ScopedEnvVar pin("BATCHLAS_SYEV_ROUTE", c.route);
         for (const Uplo uplo : {Uplo::Lower, Uplo::Upper})
             for (const JobType jobz : {JobType::EigenVectors, JobType::NoEigenVectors}) {
@@ -811,7 +813,7 @@ void expect_graded_fill_deterministic(Queue& ctx, int n, int batch) {
 // Real types reach no reading route at n <= 40; their guards are the heavy
 // AutoReadsOnlyTheNamedTriangleAtLargeN (sy2sb) and SyevCandidates.OtherTriangleIsNeverRead.
 TYPED_TEST(SyevTest, AutoIgnoresUnreferencedTriangle) {
-    if (TestFixture::BackendType == Backend::NETLIB && !BATCHLAS_HAS_LAPACKE)
+    if (TestFixture::BackendType == Backend::NETLIB && !BATCHLAS_HAS_LAPACKE && !kNativesRun<TestFixture::BackendType>)
         GTEST_SKIP() << "no LAPACKE: NETLIB syev has no route in this build";
     expect_auto_ignores_other_triangle<typename TestFixture::ScalarType, TestFixture::BackendType>(*this->ctx,
                                                                                                    {5, 32, 40});
@@ -819,10 +821,11 @@ TYPED_TEST(SyevTest, AutoIgnoresUnreferencedTriangle) {
 
 // Heavy tier (*AutoReads*): two_stage is Auto's choice for jobz=N here and for float V at n = 1024.
 // NETLIB is skipped: its route is reference LAPACK, which reads only `uplo` and is never mirrored,
-// and its n = 1024 solves cost ~100 s per dtype.
+// or vendor-free blocked, whose mirror AutoIgnoresUnreferencedTriangle runs at n = 40; and its
+// n = 1024 solves cost ~100 s per dtype.
 TYPED_TEST(SyevTest, AutoReadsOnlyTheNamedTriangleAtLargeN) {
     if constexpr (TestFixture::BackendType == Backend::NETLIB) {
-        GTEST_SKIP() << "reference LAPACK reads only uplo; covered at small n by AutoIgnoresUnreferencedTriangle";
+        GTEST_SKIP() << "host route covered at small n by AutoIgnoresUnreferencedTriangle (n = 1024: ~100 s per dtype)";
     } else {
         expect_auto_ignores_other_triangle<typename TestFixture::ScalarType, TestFixture::BackendType>(*this->ctx,
                                                                                                        {400, 1024});
@@ -830,7 +833,7 @@ TYPED_TEST(SyevTest, AutoReadsOnlyTheNamedTriangleAtLargeN) {
 }
 
 TYPED_TEST(SyevTest, PinnedRouteIsBitwiseRepeatable) {
-    if constexpr (TestFixture::BackendType == Backend::NETLIB) {
+    if constexpr (!kNativesRun<TestFixture::BackendType>) {
         GTEST_SKIP() << "the pinned native families are GPU kernels";
     } else {
         expect_graded_fill_deterministic<typename TestFixture::ScalarType>(*this->ctx, 17, 64);
@@ -842,7 +845,7 @@ TYPED_TEST(SyevTest, PinnedRouteIsBitwiseRepeatable) {
 // Heavy tier (*Saturating*): cta's batch of 1024 fills the device with sub-group partitions, and
 // the n = 400 solves are the slow half of the cases.
 TYPED_TEST(SyevTest, PinnedRouteIsBitwiseRepeatableAtSaturatingBatch) {
-    if constexpr (TestFixture::BackendType == Backend::NETLIB) {
+    if constexpr (!kNativesRun<TestFixture::BackendType>) {
         GTEST_SKIP() << "the pinned native families are GPU kernels";
     } else {
         expect_pinned_route_repeatable<typename TestFixture::ScalarType, TestFixture::BackendType>(
@@ -951,7 +954,8 @@ void expect_band_auto(Queue& ctx, GradedFills<Scalar>& fills, const std::vector<
         const std::string where = band_where(c.n, c.uplo, c.jobz);
         const std::string route = solve_graded_band<B, Scalar>(ctx, fills, c.n, 2, c.uplo, c.jobz, where);
         if (B == Backend::NETLIB) {
-            EXPECT_EQ(route.rfind("vendor", 0), 0u) << where << ": " << route;
+            // The vendor-free host has no table: blocked, its last resort (VendorFreeCpuRunsNativeRoutes).
+            EXPECT_EQ(route.rfind(kVendor ? "vendor" : "blocked", 0), 0u) << where << ": " << route;
         } else {
             EXPECT_EQ(route.find("last resort"), std::string::npos) << where << ": " << route;
             if (!kVendor) EXPECT_TRUE(route == "blocked" || route == "two_stage") << where << ": " << route;
@@ -1213,27 +1217,71 @@ TYPED_TEST(SyevTest, NativeFamiliesFitTheScratchBudgetAtFullereneShapes) {
     }
 }
 
-// Vendor-free, the CPU has no syev family: the call and its size query throw NoRouteError, never a
-// silent answer (docs/perf/syev.md#syev-vendor-free-double-band). With netlib, LAPACKE serves it.
-TYPED_TEST(SyevTest, VendorFreeCpuHasNoRoute) {
+// Vendor-free, the CPU runs syev natively (select::kHostNative): Auto takes blocked (the CPU has no
+// table, so the last resort), and blocked, unpinned and pinned strictly at n = 5 .. 200 (sytrd's
+// small and panel tiers, the gemm-pair trailing update), returns the closed-form graded spectrum
+// and an eigendecomposition on a strided batch (ld = n + 3) with the unnamed triangle poisoned,
+// both uplo and both jobz. Refused there: two_stage (sy2sb runs the public geqrf, which has no host
+// route) and the sub-group solvers cta, cta_fused and jacobi (wrong or out of bounds on the OpenCL
+// CPU, syev.cc). With netlib, LAPACKE serves the CPU.
+// evidence: docs/design/vendor-independence.md#the-host-native-gate
+TYPED_TEST(SyevTest, VendorFreeCpuRunsNativeRoutes) {
     using T = typename TestFixture::ScalarType;
     using Real = typename base_type<T>::type;
+    using MV = MatrixView<T, MatrixFormat::Dense>;
     constexpr Backend B = TestFixture::BackendType;
     if constexpr (B != Backend::NETLIB) {
         GTEST_SKIP() << "a CPU-queue requirement";
     } else {
         if (batchlas::select::kHasNetlib) GTEST_SKIP() << "netlib present: LAPACKE serves the CPU";
-        const int n = 64, batch = 2;
-        Matrix<T, MatrixFormat::Dense> A(n, n, batch);
-        A.view().fill_graded_hermitian(*this->ctx, 6.0, 64u).wait();
-        UnifiedVector<Real> W(size_t(n) * batch, Real(-1));
-        for (const JobType jobz : {JobType::EigenVectors, JobType::NoEigenVectors}) {
-            EXPECT_THROW(((void)syev_buffer_size<B, T>(*this->ctx, A.view(), W.to_span(), jobz, Uplo::Lower)),
-                         batchlas::NoRouteError);
-            UnifiedVector<std::byte> ws(size_t(1) << 20);
-            EXPECT_THROW(((void)syev<B, T>(*this->ctx, A.view(), W.to_span(), jobz, Uplo::Lower, ws.to_span(),
-                                           Span<int32_t>{})),
-                         batchlas::NoRouteError);
+        Queue& ctx = *this->ctx;
+        const ScopedEnvVar clear("BATCHLAS_SYEV_ROUTE", nullptr);
+        GradedFills<T> fills;
+        struct Route {
+            const char* pin;  // nullptr: Auto
+            const char* want;
+            int n;
+        };
+        // n = 200: sytrd_blocked's panels and its gemm-pair trailing update (n2 > 128); 40 its local tier.
+        for (const Route r : {Route{nullptr, "blocked", 200}, Route{"blocked", "blocked", 40}, Route{nullptr, "blocked", 32},
+                              Route{"blocked", "blocked", 5}}) {
+            std::optional<select::ScopedPin<ops::syev::SyevChoice>> pin;
+            if (r.pin) pin.emplace("syev", r.pin, select::StrictPin{});
+            const int n = r.n, batch = 3, ld = n + 3, stride = ld * n + 5;
+            for (const Uplo uplo : {Uplo::Lower, Uplo::Upper})
+                for (const JobType jobz : {JobType::EigenVectors, JobType::NoEigenVectors}) {
+                    const std::string where = std::string(r.pin ? r.pin : "auto") + (uplo == Uplo::Lower ? " L" : " U") +
+                                              (jobz == JobType::EigenVectors ? " V" : " N");
+                    UnifiedVector<T> buf(size_t(stride) * batch, T(0));
+                    UnifiedVector<T*> ptrs(batch, nullptr);
+                    MV A(buf.data(), n, n, ld, stride, batch, ptrs.data());
+                    const auto [A0, lambda] = fill_poisoned<T>(ctx, fills, A, uplo);
+                    UnifiedVector<Real> W(size_t(n) * batch, Real(-1));
+                    UnifiedVector<std::byte> ws(syev_buffer_size<B, T>(ctx, A, W.to_span(), jobz, uplo));
+                    EXPECT_EQ(test_support::traced_choice("syev", [&] {
+                                  (void)syev<B, T>(ctx, A, W.to_span(), jobz, uplo, ws.to_span(), Span<int32_t>{});
+                                  ctx.wait();
+                              }),
+                              r.want)
+                        << where;
+                    const VectorView<Real> w(W.data(), n, batch);
+                    EXPECT_VERIFY(T, verify::Check::values, n, MV::values_error(w, lambda, 1.0, A0.all_items())) << where;
+                    if (jobz != JobType::EigenVectors) continue;
+                    EXPECT_VERIFY(T, verify::Check::eigen_residual, n, MV::eigen_residual(ctx, A0, A, w, A0.all_items()))
+                        << where;
+                    EXPECT_VERIFY(T, verify::Check::orthogonality_rotations, n, MV::orthogonality(ctx, A, A0.all_items()))
+                        << where;
+                }
+        }
+        // Refused at the pin, each at an n it would serve on a GPU.
+        for (const Route r : {Route{"two_stage", "", 64}, Route{"cta", "", 24}, Route{"cta_fused", "", 24},
+                              Route{"jacobi", "", 24}}) {
+            Matrix<T, MatrixFormat::Dense> A(r.n, r.n, 2);
+            UnifiedVector<Real> W(size_t(r.n) * 2, Real(-1));
+            const select::ScopedPin<ops::syev::SyevChoice> pin("syev", r.pin, select::StrictPin{});
+            EXPECT_THROW(((void)syev_buffer_size<B, T>(ctx, A.view(), W.to_span(), JobType::NoEigenVectors, Uplo::Lower)),
+                         std::invalid_argument)
+                << r.pin;
         }
     }
 }

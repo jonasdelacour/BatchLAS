@@ -190,6 +190,16 @@ protected:
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
         if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "mirror is a GPU kernel";
+        // Where mirror's two slabs exceed the device's local memory (complex<float> on Metal), the
+        // pin must refuse; nothing below can then run.
+        const std::int64_t budget = test_utils::slm_budget_for(this->ctx->device(), ops::mirror::kWg);
+        if (budget < ops::mirror::slm_bytes<T>()) {
+            for (bool herm : ops()) {
+                Prob<T> p(Spec{Side::Left, Uplo::Lower, 16, 16, 2, herm});
+                EXPECT_TRUE(test_utils::refused_by_can_run([&] { run(p); })) << "mirror";
+            }
+            GTEST_SKIP() << "mirror stages " << ops::mirror::slm_bytes<T>() << " B, over this device's " << budget;
+        }
     }
     // symm, and hemm for a complex scalar, pinned to mirror.
     std::vector<bool> ops() const { return kComplex<T> ? std::vector<bool>{false, true} : std::vector<bool>{false}; }

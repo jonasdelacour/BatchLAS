@@ -169,12 +169,18 @@ SyevxAlgorithm algorithm_from_env(SyevxAlgorithm fallback, bool& from_env) {
     return parse_syevx_algorithm(v);
 }
 
-// The host backend's DirectSubset refuses a mask (its gemm is the host BLAS): a masked call reaches it
-// there only by name (and throws before any write), while Auto walks on to Direct.
+// Beside a host BLAS the host backend's DirectSubset refuses a mask (its gemm is that BLAS): a masked
+// call reaches it there only by name (and throws before any write), while Auto walks on to Direct.
+// A vendor-free host runs it natively (sy2sb's geqrf and the Q1 back-transform's ormqr_blocked), mask too.
+// Every backend's sy2sb needs 32-wide sub-groups (its larft), which acpp's OpenMP host lacks: the same
+// split, a pin reaches DirectSubset and throws there, Auto and the environment walk on to Direct.
 template <Backend B, typename Scalar, MatrixFormat MFormat>
-bool syevx_subset_route_allowed(Span<const std::uint8_t> mask, const SyevxParams<Scalar>& params) {
-    return syevx_direct_subset_supported<Scalar, MFormat>() &&
-           (mask.empty() || B != Backend::NETLIB || params.method == SyevxAlgorithm::DirectSubset);
+bool syevx_subset_route_allowed(Queue& ctx, Span<const std::uint8_t> mask, const SyevxParams<Scalar>& params) {
+    constexpr bool kHostBlas = B == Backend::NETLIB && !select::kHostNative;
+    constexpr bool kWired = !kHostBlas || select::kHasNetlib;
+    const bool pinned = params.method == SyevxAlgorithm::DirectSubset;
+    return kWired && syevx_direct_subset_supported<Scalar, MFormat>() && (mask.empty() || !kHostBlas || pinned) &&
+           (pinned || ctx.device().supports_sub_group_size(32));
 }
 
 const char* syevx_select_name(SyevxSelect select) {
@@ -372,7 +378,7 @@ Event syevx(Queue& ctx,
     const auto chosen = syevx_select_algorithm(MFormat, A.rows(),
                                               static_cast<size_t>(std::max<int64_t>(rr.max_count, 0)),
                                               params.method,
-                                              syevx_subset_route_allowed<B, Scalar, MFormat>(mask, params), jobz,
+                                              syevx_subset_route_allowed<B, Scalar, MFormat>(ctx, mask, params), jobz,
                                               A.batch_size(), params.select);
     // `info` (converged?) is not `m` (how many); each arm clears and fills info.
     if (chosen == SyevxAlgorithm::Direct) {
@@ -441,7 +447,7 @@ size_t syevx_buffer_size(Queue& ctx,
     const auto chosen = syevx_select_algorithm(MFormat, A.rows(),
                                               static_cast<size_t>(std::max<int64_t>(rr.max_count, 0)),
                                               params.method,
-                                              syevx_subset_route_allowed<B, Scalar, MFormat>(mask, params), jobz,
+                                              syevx_subset_route_allowed<B, Scalar, MFormat>(ctx, mask, params), jobz,
                                               A.batch_size(), params.select);
     if (chosen == SyevxAlgorithm::Direct) {
         return syevx_direct_buffer_size<B, Scalar, MFormat>(ctx, A, W, neigs, jobz, V, params);

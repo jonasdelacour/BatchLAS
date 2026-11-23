@@ -28,7 +28,8 @@ struct Lpanel {
 struct Blocked : select::NoFields<"blocked"> {};  ///< potrf_blocked_dispatch + gemm/trsm, Lower; nb/W: PotrfBlockedConst + env
 struct Vendor : select::NoFields<"vendor"> {};    ///< backend::potrf_vendor; needs the solver library
 
-using PotrfChoice = std::variant<Tiny, Cta, Lpanel, Blocked, Vendor>;  ///< natives need a GPU, sub-group 32, \f$n \ge 1\f$
+/// natives need select::natives_run_on (a GPU, or a vendor-free host), sub-group 32, \f$n \ge 1\f$
+using PotrfChoice = std::variant<Tiny, Cta, Lpanel, Blocked, Vendor>;
 
 /// Every compiled choice, once, in tie-break order (§6.3): simpler first, vendor last.
 template <typename Scalar>
@@ -41,8 +42,7 @@ constexpr auto candidates() {
 
 inline constexpr select::OpSpec spec{Op::potrf, select::Lib::solver};  ///< default last resort: blocked, vendor
 
-/// Table keys: uplo exact (L|U); n log-distance, weight 3 (work \f$\sim n^3\f$); batch log, weight 1.
-/// evidence: docs/design/flat-kernel-selection.md (§5.4)
+/// Keys (evidence: docs/design/flat-kernel-selection.md §5.4): uplo exact; n log, weight 3 (\f$\sim n^3\f$); batch log.
 inline constexpr std::array<std::string_view, 3> key_names{"uplo:exact", "n:log:3", "batch:log"};
 
 /// The tuner's coarse grid (§6.2): today's sweep grid, so converted and tuned tables line up.

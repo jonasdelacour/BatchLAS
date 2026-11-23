@@ -1,22 +1,18 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// LAPACK xPOTRF / xPOTF2 inside a kernel. Public entry:
-//   int potrf<UL, Tier>(ex, A, ws)               A = L L^H (Lower) or U^H U (Upper) in place;
-//                                               returns LAPACK info, uniform over ex
-//   WorkspaceSize buffer_size<routine::potrf<UL>, Tier, T>(n)
-//   tier::Reg<N>  ex = Partition<N> (one matrix per N lanes of a 32-wide sub-group, lane r row r)
-//   tier::Cta<N>  ex = WorkGroup<WG, 32>, WG = tier_info<...>::wg_size or any multiple of 32;
-//                 the matrix in local memory (ws.local, buffer_size bytes)
-//   tier::Blocked<NB>  ex = WorkGroup<256, 32>, any n: A stays in global memory; per NB-wide
-//                 panel potf2 (SgSlm) on the local diagonal block, then the in-group L3 trsm and
-//                 herk (level3/group.hh); ws.local = L3 stages + the block, no global bytes
-//   tier::Blocked<NB, alg::LeftLooking>  Lower, one item per row of a work-group slot: each n x NB
-//                 panel is updated from its left in local memory, then potf2 on its rows (detail)
+/// @file
+/// @ingroup api_device_lapack_chol
+/// @brief ?POTRF in a kernel: the Cholesky factorization of one Hermitian positive definite
+/// matrix per executor, in place, in a register, local-memory or blocked tier.
+///
+/// The routine is potrf(); its routine tag is routine::potrf, which names it to `with_tier`,
+/// `launch` and `buffer_size`. The tiers, smallest first, are `tier::Reg<8>`, `tier::Reg<16>`,
+/// `tier::Reg<32>` (not for `std::complex<double>`), `tier::Cta<64>`, `tier::Cta<128>` and
+/// `tier::Blocked<32>` (`tier::Blocked<16>` for `std::complex<double>`). The unblocked panel
+/// kernels potf2(), potf2_sg_slm() and potf2_panel_rows() are in @ref api_device_lowlevel.
 // The host tiny, CTA and lpanel routes launch the SAME bodies (potrf_reg_run, potrf_cta_run,
-// potrf_blocked_run<alg::LeftLooking>) with a run-time uplo.
-// Collective: every item of ex calls with the same arguments; the op ends with a barrier (the
-// output is visible to every item). info = k > 0: the leading minor of order k is not positive
-// definite; -2: n > the tier's bound or A not square; -3: ws.local missing or misaligned.
+// potrf_blocked_run<alg::LeftLooking>) with a run-time uplo; tier::Blocked<NB, alg::LeftLooking>
+// (Lower, one item per row of a work-group slot) is reached only through that detail entry.
 //
 // int potf2<UL>(ex, dist, live) is ONE column loop owning LAPACK's control: the pivot test
 // `!(akk > 0)` (NaN fails), sticky, so the first failing column k records info = k + 1 and every
@@ -97,8 +93,17 @@ BATCHLAS_UNROLL_FULL
 }  // namespace detail
 #undef BATCHLAS_POTF2_COLUMN
 
-// ?POTF2 of the matrix the distribution `d` holds on the executor `ex` (every item calls with the
-// same arguments); returns info: the 1-based first failing column, 0 on success or live = false.
+/// @ingroup api_device_lowlevel
+/// @brief ?POTF2, the unblocked Cholesky column loop, on a matrix held by a distribution.
+///
+/// Not covered by the compatibility promise. Every item of `ex` calls it with the same
+/// arguments. The pivot test is `!(akk > 0)`, so a NaN pivot fails; the first failing column k
+/// records info k + 1 and every later column stops changing.
+/// @tparam UL    only `Uplo::Lower`; an Upper caller factors the conjugate transpose
+/// @param[in] ex    the executor
+/// @param[in] d     the distribution that holds the matrix (a detail type)
+/// @param[in] live  false: factor nothing and return 0
+/// @return 0, or the 1-based first failing column
 template <Uplo UL, class Ex, class Dist> BATCHLAS_DEVICE_INLINE int potf2(const Ex& ex, const Dist& d, bool live = true) {
     static_assert(UL == Uplo::Lower, "potf2: only Uplo::Lower (an Upper caller factors the conjugate transpose)");
     (void)ex;
@@ -400,9 +405,23 @@ template <class Rsqrt, class PM, class Bar> struct PanelRows {
 };
 }  // namespace detail
 
-// potf2 of the ib x ib local block `a` on one sub-group (SgSlm above). Real T: the body is a
-// by-value phase op the inliner takes after simplifying it alone (its column-0..3 reciprocal
-// shapes depend on it). Complex T: inlined at the call; out of line the by-value operands spill.
+/// @ingroup api_device_lowlevel
+/// @brief potf2() of the `ib` x `ib` block `a` in local memory, on one sub-group, lane r
+/// holding row r.
+///
+/// Not covered by the compatibility promise: this is the Blocked tier's diagonal-block kernel.
+/// Every lane calls it with the same arguments.
+/// @tparam NB     the compile-time bound on `ib`
+/// @tparam Rsqrt  the reciprocal square root policy (a detail type)
+/// @param[in]     ex         the sub-group
+/// @param[in,out] a          the block, overwritten with its lower Cholesky factor
+/// @param[in]     ib         the order of the block, `ib` <= NB
+/// @param[out]    diag       the factor's diagonal: `diag(k)` := L(k, k)
+/// @param[in,out] info       the info cell; the first failure writes `info_base` + its column + 1
+/// @param[in]     info_base  the global column of the block's first column
+// Real T: the body is a by-value phase op the inliner takes after simplifying it alone (its
+// column-0..3 reciprocal shapes depend on it). Complex T: inlined at the call; out of line the
+// by-value operands spill.
 template <int NB, class Rsqrt, int SG, class MA, class DV>
 BATCHLAS_DEVICE_INLINE void potf2_sg_slm(const SubGroup<SG>& ex, const MA& a, int ib, const DV& diag, int* info,
                                       int info_base) {
@@ -413,8 +432,23 @@ BATCHLAS_DEVICE_INLINE void potf2_sg_slm(const SubGroup<SG>& ex, const MA& a, in
     }
 }
 
-// potf2 of the panel P, one item per row (PanelRows above). `ok` is sticky: returns it, and the
-// first bad pivot sets *info := c0 + i + 1 (leader).
+/// @ingroup api_device_lowlevel
+/// @brief potf2() of the `n` x `kb` panel `p` in local memory whose diagonal block starts at row
+/// `c0`, one item per row.
+///
+/// Not covered by the compatibility promise: this is the left-looking Blocked kernel's panel step.
+/// Every item of `ex` calls it with the same arguments; item `ex.lid()` owns row `ex.lid()`, and
+/// rows outside (`c0`, `n`) idle. `bar` is the caller's barrier over every item that reads `p`.
+/// @tparam Rsqrt  the reciprocal square root policy (a detail type)
+/// @param[in]     ex    the executor, one item per row of the panel
+/// @param[in,out] p     the panel, overwritten with its factored columns
+/// @param[in]     c0    the row of the panel's diagonal block
+/// @param[in]     kb    the panel's column count
+/// @param[in]     n     the panel's row count
+/// @param[in]     ok    false: an earlier column already failed (sticky)
+/// @param[in,out] info  the info cell; the leader writes `c0` + i + 1 at the first bad pivot i
+/// @param[in]     bar   a callable that runs the caller's barrier
+/// @return `ok` after these columns: false once any pivot failed
 template <class Rsqrt, class Ex, class PM, class Bar>
 BATCHLAS_DEVICE_INLINE bool potf2_panel_rows(const Ex& ex, const PM& p, int c0, int kb, int n, bool ok, int* info,
                                           Bar&& bar) {
@@ -986,12 +1020,21 @@ BATCHLAS_DEVICE_HELPER int potrf_blocked_run(const sycl::nd_item<1>& it, int tid
 
 // ---- the public op -----------------------------------------------------------------------------
 namespace routine {
+/// @ingroup api_device_lapack_chol
+/// @brief The routine tag of potrf() for the triangle `UL`: names the routine to `with_tier`,
+/// `launch`, `tier_info`, `tiers_t` and `buffer_size`.
 template <Uplo UL> struct potrf {
-    static constexpr const char* name = "potrf";
-    static constexpr Uplo uplo = UL;
+    static constexpr const char* name = "potrf";  ///< The routine's name, "potrf".
+    static constexpr Uplo uplo = UL;              ///< The triangle that is read and factored.
 };
 }  // namespace routine
 
+/// @ingroup api_device_lapack_chol
+/// @brief potrf()'s register tier `tier::Reg<N>`: one matrix of order n <= N per `Partition<N>`.
+///
+/// The executor is `Partition<N>`, N lanes of a 32-wide sub-group, lane r holding row r; a
+/// 32-item work-group holds 32 / N matrices (`per_group`). `admits(n)` is 0 <= n <= N when
+/// N <= 32 (16 for `std::complex<double>`), false otherwise. No workspace: `buffer_size` is empty.
 template <Uplo UL, int N, bool Exact, class Scalar> struct tier_info<routine::potrf<UL>, tier::Reg<N, Exact>, Scalar> {
     static constexpr int wg_size = 32;  // one sub-group: 32 / N matrices
     static constexpr int sg_size = 32;
@@ -1000,6 +1043,14 @@ template <Uplo UL, int N, bool Exact, class Scalar> struct tier_info<routine::po
     static constexpr bool admits(int n) { return n >= 0 && n <= N && N <= detail::reg_max_n<Scalar>; }
     static constexpr WorkspaceSize buffer_size(int) { return {}; }
 };
+/// @ingroup api_device_lapack_chol
+/// @brief potrf()'s local-memory tier `tier::Cta<N>`: one matrix of order n <= N per work-group,
+/// copied into local memory, factored there and written back.
+///
+/// The executor is `WorkGroup<wg_size, 32>`; `wg_size` grows with N from 32 to 256 items (a
+/// work-group of any multiple of 32 items also works). `admits(n)` is 0 <= n <= N.
+/// `buffer_size(n)` is local memory only: the matrix at an odd leading dimension, the diagonal,
+/// the info cell and a tile table.
 template <Uplo UL, int N, class Alg, class Scalar> struct tier_info<routine::potrf<UL>, tier::Cta<N, Alg>, Scalar> {
     using D = detail::dev_scalar_t<Scalar>;
     static constexpr int wg_size = detail::cta_items(N, detail::CtaConst<D>::nb, detail::CtaConst<D>::ts);
@@ -1009,6 +1060,16 @@ template <Uplo UL, int N, class Alg, class Scalar> struct tier_info<routine::pot
     static constexpr bool admits(int n) { return n >= 0 && n <= N; }
     static constexpr WorkspaceSize buffer_size(int n) { return detail::PotrfCtaPlan<D>::make(n).size; }
 };
+/// @ingroup api_device_lapack_chol
+/// @brief potrf()'s blocked tier `tier::Blocked<NB>`: any n, one matrix per 256-item work-group,
+/// the matrix left in global memory.
+///
+/// Per NB-wide panel the diagonal block is factored in local memory by one sub-group, then the
+/// in-group level 3 trsm and herk update the rest. The executor is `WorkGroup<256, 32>`.
+/// `admits(n)` is n >= 0 when NB <= 32 (16 for `std::complex<double>`), false otherwise; a larger
+/// NB does not compile in potrf(). `buffer_size(n)` does
+/// not depend on n and is local memory only (the level 3 stages, the NB x NB block, the diagonal
+/// and the info cell); no global workspace.
 template <Uplo UL, int NB, class Alg, class Scalar> struct tier_info<routine::potrf<UL>, tier::Blocked<NB, Alg>, Scalar> {
     static constexpr int wg_size = detail::kBlockedWg;
     static constexpr int sg_size = 32;
@@ -1017,16 +1078,55 @@ template <Uplo UL, int NB, class Alg, class Scalar> struct tier_info<routine::po
     static constexpr bool admits(int n) { return n >= 0 && NB <= detail::reg_max_n<Scalar>; }
     static constexpr WorkspaceSize buffer_size(int) { return detail::PotrfBlockedPlan<Scalar, NB>::make().size; }
 };
+/// @ingroup api_device_lapack_chol
+/// @brief potrf()'s tiers for `Scalar`, smallest first: `Reg<8>`, `Reg<16>`, `Reg<32>`, `Cta<64>`,
+/// `Cta<128>`, `Blocked<32>`; for `std::complex<double>`, `Reg<8>`, `Reg<16>`, `Cta<64>`,
+/// `Cta<128>`, `Blocked<16>`.
 template <Uplo UL, class Scalar> struct tiers<routine::potrf<UL>, Scalar> {
     using type = std::conditional_t<(detail::reg_max_n<Scalar> >= 32),
                                     tier::list<tier::Reg<8>, tier::Reg<16>, tier::Reg<32>, tier::Cta<64>, tier::Cta<128>, tier::Blocked<32>>,
                                     tier::list<tier::Reg<8>, tier::Reg<16>, tier::Cta<64>, tier::Cta<128>, tier::Blocked<16>>>;
 };
 
-// A := L L^H (Lower) / U^H U (Upper) of the n x n Hermitian positive definite A (its UL triangle
-// read and overwritten, the other neither read nor written); returns info (see the file head).
-// live = false (a dead slot of a packed launch, launch<>::slot) reads and writes nothing and
-// returns 0; every item of the executor still makes the call.
+/// @ingroup api_device_lapack_chol
+/// @brief ?POTRF in a kernel: \f$A = L L^H\f$ (`Uplo::Lower`) or \f$A = U^H U\f$ (`Uplo::Upper`)
+/// of one n x n Hermitian positive definite matrix, in place.
+///
+/// The `UL` triangle of `A` is read and overwritten with the factor; the other triangle is
+/// neither read nor written. A kernel compiles one tier; choose it on the host with
+/// `with_tier<routine::potrf<UL>, T>` for a run-time n, never by a run-time branch in the kernel.
+/// - `tier::Reg<N>`: `ex` a `Partition<N>` (lane r holds row r); n <= N <= 32 (16 for
+///   `std::complex<double>`); `ws` unused.
+/// - `tier::Cta<N>`: `ex` a `WorkGroup<WG, 32>`, WG = `tier_info::wg_size` or any multiple of 32;
+///   n <= N; the matrix is factored in `ws.local`.
+/// - `tier::Blocked<NB>`: `ex` a `WorkGroup<256, 32>`; any n; `A` stays in global memory and
+///   `ws.local` holds the level 3 stages and the NB x NB diagonal block; NB <= 32 (16 for
+///   `std::complex<double>`).
+/// - `tier::upto<N>`: the first tier of `tiers_t<routine::potrf<UL>, T>` that admits N.
+///
+/// Workspace: `ws` is this matrix's slice of
+/// `buffer_size<routine::potrf<UL>, Tier, T>(n)` (local memory only, 16-byte aligned; none for
+/// `tier::Reg`). The launch frame (`launch<routine::potrf<UL>, Tier, T>`) sizes and carves it.
+///
+/// @pre Collective: every item of `ex` calls potrf() with the same arguments, and `A` is visible
+/// to every item on entry. The routine ends on a barrier, so the factor is visible to every item
+/// on return.
+/// @tparam UL    `Uplo::Lower` or `Uplo::Upper`: the triangle to factor
+/// @tparam Tier  `tier::Reg<N>`, `tier::Cta<N>`, `tier::Blocked<NB>` or `tier::upto<N>`
+/// @param[in]     ex    the executor that owns this matrix
+/// @param[in,out] A     the n x n matrix (a `Mat` operand); its `UL` triangle is overwritten with
+///                      the factor
+/// @param[in]     ws    this matrix's workspace slice (unused by `tier::Reg`)
+/// @param[in]     live  false: a dead slot of a packed launch (`launch::slot`); nothing is read or
+///                      written, but every item still makes the call. It returns 0, except
+///                      that `tier::Reg` checks the extents first and returns -2 for a
+///                      malformed `A` even in a dead slot
+/// @return LAPACK's info, the same on every item of `ex`:
+/// @retval 0   success
+/// @retval k   (k > 0) the leading minor of order k is not positive definite (a pivot that is
+///             not greater than zero, or NaN); the factorization stopped at column k
+/// @retval -2  `A` is not square, or n is larger than the tier's bound
+/// @retval -3  `ws.local` is null or not 16-byte aligned (`tier::Cta` and `tier::Blocked`)
 template <Uplo UL, class Tier, class Ex, class MA>
 BATCHLAS_DEVICE_INLINE int potrf(const Ex& ex, const MA& A, const Workspace& ws = {}, bool live = true) {
     using T = typename MA::value_type;

@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: MIT
 #pragma once
-// Level 3 register micro-kernels, moved from the tuned gemm kernels unchanged:
-//   outer_mac     acc += a b^T on a register tile
-//   mma_slab      one staged k slab of rank-1 updates
-//   gemv_t_frag   acc(j) += sum_l a(l) B(l, j), x and y in registers
+/// @file
+/// @brief Level 3 register micro-kernels of the tuned gemm (@ref api_device_lowlevel, not covered
+/// by the compatibility promise).
+///
+///   - `l3::outer_mac`: `acc += a b^T` on a register tile.
+///   - `l3::mma_slab`: one staged k slab of rank-1 updates.
+///   - `l3::gemv_t_frag`: `acc(j) += sum_l a(l) B(l, j)`, `x` and `y` in registers.
+/// @ingroup api_device_lowlevel
+// Moved from the tuned gemm kernels unchanged.
 
 #include <type_traits>
 #include <utility>
@@ -15,8 +20,13 @@
 
 namespace batchlas::device::l3 {
 
-// acc += a b^T on a TR x TC register tile. Full: the full-unroll pragmas; otherwise none (the
-// register-tiled kernel's own loops, unrolled as the compiler decides).
+/// @brief `acc += a b^T` on a `TR` x `TC` register tile.
+/// @ingroup api_device_lowlevel
+/// @tparam Full `true` (default): full-unroll pragmas; `false`: none (unrolled as the compiler decides).
+/// @tparam Ops the arithmetic policy (default `arith::Native`).
+/// @param[in,out] acc the register tile.
+/// @param a the `TR` column values.
+/// @param b the `TC` row values.
 template <bool Full = true, class Ops = arith::Native, class Scalar, int TR, int TC>
 BATCHLAS_DEVICE_INLINE void outer_mac(Tile<Scalar, TR, TC>& acc, const Scalar (&a)[TR], const Scalar (&b)[TC]) {
     using A = arith_t<Ops, Scalar>;
@@ -33,10 +43,20 @@ BATCHLAS_UNROLL_FULL
     }
 }
 
-// One staged k slab: for each t < TileK (and kk0 + t < k unless Exact) a(i) = a_at(t, i),
-// b(j) = b_at(t, j), acc += a b^T; UnrollK steps per outer iteration, no pragmas. k by
-// reference, like the tuned lambda's closure read: by value, SimplifyCFG merged the two exits
-// first and the TileK = 8 slab stayed rolled (32x32x8: 34 -> 6 FFMA).
+// k by reference, like the tuned lambda's closure read: by value, SimplifyCFG merged the two
+// exits first and the TileK = 8 slab stayed rolled (32x32x8: 34 -> 6 FFMA).
+/// @brief One staged k slab: for each `t < TileK` (and `kk0 + t < k` unless `Exact`), `acc += a b^T`
+/// with `a(i) = a_at(t, i)` and `b(j) = b_at(t, j)`.
+/// @ingroup api_device_lowlevel
+/// @tparam TileK the slab depth.
+/// @tparam UnrollK steps per outer iteration (no pragmas).
+/// @tparam Exact `true`: the slab is full, no `k` test.
+/// @tparam Ops the arithmetic policy (default `arith::Native`).
+/// @param[in,out] acc the register tile.
+/// @param kk0 the slab's k offset.
+/// @param k the total depth.
+/// @param a_at called as `a_at(int t, int i)`.
+/// @param b_at called as `b_at(int t, int j)`.
 template <int TileK, int UnrollK, bool Exact, class Ops = arith::Native, class Scalar, int TR, int TC, class FA, class FB>
 BATCHLAS_DEVICE_INLINE void mma_slab(Tile<Scalar, TR, TC>& acc, int kk0, const int& k, FA&& a_at, FB&& b_at) {
     auto step = [&](int t) BATCHLAS_DEVICE_BODY {
@@ -70,9 +90,16 @@ BATCHLAS_UNROLL_FULL
 }
 }  // namespace detail
 
-// acc(j) += sum_{l < k} a(l) B(l, j), l outermost: gemv^T with x and y in registers. Chunk = NA
-// is one unrolled loop; Chunk = NA / 4 is four sequential ones (one complex loop over 64 l passes
-// LLVM's unroll threshold and a[] spills; a lambda per chunk put 160-184 B on the stack).
+// Chunk = NA / 4: one complex loop over 64 l passes LLVM's unroll threshold and a[] spills; a
+// lambda per chunk put 160-184 B on the stack.
+/// @brief `acc(j) += sum_{l < k} a(l) B(l, j)`, `l` outermost: a transposed gemv with `x` and `y` in registers.
+/// @ingroup api_device_lowlevel
+/// @tparam Chunk `NA` (one unrolled loop) or `NA / 4` (four sequential unrolled loops).
+/// @tparam Ops the arithmetic policy.
+/// @param[in,out] acc the `NC` outputs.
+/// @param a the `NA` inputs.
+/// @param b_at called as `b_at(int l, int j)`.
+/// @param k the live depth, at most `NA`.
 template <int Chunk, class Ops, class Scalar, int NA, int NC, class FB>
 BATCHLAS_DEVICE_INLINE void gemv_t_frag(Frag<Scalar, NC>& acc, const Frag<Scalar, NA>& a, FB&& b_at, int k) {
     using Ar = arith_t<Ops, Scalar>;

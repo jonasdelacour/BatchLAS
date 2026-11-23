@@ -178,9 +178,23 @@ Event sytrd_lower_local_small_legacy(Queue& q,
                     const int alpha_row = k + 1;
                     const int x0 = k + 2;
 
+                    // ||x|| with each part scaled by 2^-e, e the exponent of max |x| (larfg_lanes'
+                    // scaling): unscaled, entries near 2^-76 square to 0 and form no reflector. A
+                    // power of two scales exactly: without under- or overflow the bits are the
+                    // unscaled sum's.
+                    const bool x_lane = lane >= x0 && lane < n;
+                    Real mag = Real(0);
+                    if (x_lane) {
+                        const Scalar xk = Al(lane, k);
+                        if constexpr (detail::is_complex<Scalar>::value) mag = sycl::fmax(sycl::fabs(xk.real()), sycl::fabs(xk.imag()));
+                        else mag = sycl::fabs(xk);
+                    }
+                    const Real xmax = ex.group_reduce(mag, sycl::maximum<Real>());
+                    const int xexp = (xmax > Real(0) && sycl::isfinite(xmax)) ? sycl::clamp(static_cast<int>(sycl::ilogb(xmax)), -120, 120) : 0;
+                    const Real xsc = sycl::ldexp(Real(1), -xexp);
                     Real sumsq = Real(0);
-                    if (lane >= x0 && lane < n) {
-                        sumsq = detail::abs2_if_complex(Al(lane, k));
+                    if (x_lane) {
+                        sumsq = detail::abs2_if_complex(Scalar(Al(lane, k) * xsc));
                     }
                     sumsq = ex.group_reduce(sumsq);
 
@@ -195,7 +209,7 @@ Event sytrd_lower_local_small_legacy(Queue& q,
                     Scalar scale = Scalar(0);
 
                     if (lane == alpha_row) {
-                        const Real xnorm = sycl::sqrt(sumsq);
+                        const Real xnorm = sycl::sqrt(sumsq) * sycl::ldexp(Real(1), xexp);
                         if constexpr (detail::is_complex<Scalar>::value) {
                             if (xnorm == Real(0) && alpha.imag() == Real(0)) {
                                 tau_k = Scalar(0);
@@ -425,8 +439,10 @@ Event sytrd_blocked_impl(Queue& ctx,
         throw batchlas::unsupported("sytrd_blocked: only Uplo::Lower is implemented");
     }
 
+    // GPU only: sytrd_cta has a CPU image only in a vendor-free build, and there its 32-wide tier
+    // returns NaN on the OpenCL CPU (syev n = 32); the CPU offers sub-group size 32 (steqr.cc alike).
     if (n <= 32) {
-        if (ctx.device().supports_sub_group_size(32)) {
+        if (ctx.device().type == DeviceType::GPU && ctx.device().supports_sub_group_size(32)) {
             return sytrd_cta<B, Scalar>(ctx, A, D, E, TAU, uplo, Span<std::byte>(), /*cta_wg_size_multiplier=*/1);
         }
     }
@@ -453,7 +469,9 @@ Event sytrd_blocked_impl(Queue& ctx,
             }
         }
 
-        constexpr bool allow_local_small = !select::native_gpu_backend<B>;
+        // Not on a vendor-free host either (native_backend): the legacy kernel reads A's upper
+        // triangle, which syev's Lower calls never wrote (poison there: values off by 9e4).
+        constexpr bool allow_local_small = !select::native_backend<B>;
         const bool auto_local = allow_local_small && std::is_same_v<Scalar, float>;
         if ((auto_local && props_ok) || (allow_local_small && force_local && props_ok)) {
             {

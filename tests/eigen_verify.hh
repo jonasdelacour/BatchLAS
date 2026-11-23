@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 // Eigen checks shared by the syev tests: orthonormal V and ||AV - V diag(w)|| (MatrixView statics)
-// (orthogonality_rotations, eigen_residual), and eigenvalues against LAPACKE (values). Also holds the
-// random upper-bidiagonal (d, e) inputs shared by the bdsqr and bdsdc tests.
+// (orthogonality_rotations, eigen_residual), and eigenvalues against LAPACKE (values), or without it
+// against host_eigen_reference.hh. Also holds the random upper-bidiagonal (d, e) inputs shared by
+// the bdsqr and bdsdc tests.
 
+#include <tests/host_eigen_reference.hh>
 #include <tests/test_utils.hh>
 
 #include <batchlas/blas/matrix.hh>
@@ -15,9 +17,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <complex>
+#include <functional>
+#include <limits>
 #include <optional>
 #include <random>
 #include <span>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -47,26 +53,30 @@ void expect_eigenpairs(batchlas::Queue& ctx, const batchlas::MatrixView<Scalar, 
 }
 
 /// W (n values per item, packed) against LAPACKE ?syevd / ?heevd of A0 (both triangles valid) in
-/// double: max |w - w_ref| / ||A0||_2 at Check::values, over @p items (default: first, middle, last).
-/// @p sorted_copy compares as a multiset, for a solver asked not to sort; @p slack scales the bound.
-/// Skips without LAPACKE.
+/// double, or host_hermitian_eigenvalues in a build without LAPACKE (a vendor-free build, where
+/// no BatchLAS route can be the oracle): max |w - w_ref| / ||A0||_2 at Check::values, over @p
+/// items (default: first, middle, last). @p sorted_copy compares as a multiset, for a solver asked
+/// not to sort; @p slack scales the bound.
 template <typename Scalar>
 void expect_eigenvalues_match_lapacke(const batchlas::MatrixView<Scalar, batchlas::MatrixFormat::Dense>& A0,
                                       const batchlas::UnifiedVector<typename batchlas::base_type<Scalar>::type>& W, int n,
                                       bool sorted_copy = false, std::span<const int> items = {},
                                       std::optional<batchlas::verify::Slack> slack = std::nullopt) {
-#if !BATCHLAS_VERIFY_HAVE_LAPACKE
-    (void)A0, (void)W, (void)n, (void)sorted_copy, (void)items, (void)slack;
-    GTEST_SKIP() << "no host LAPACKE reference in this build";
-#else
     using Real = typename batchlas::base_type<Scalar>::type;
+    using Promoted = typename batchlas::MatrixView<Scalar, batchlas::MatrixFormat::Dense>::promoted_type;
     const int batch = A0.batch_size();
     const std::vector<int> picked = items.empty() ? A0.default_items() : std::vector<int>(items.begin(), items.end());
     std::vector<Real> got(W.begin(), W.begin() + static_cast<std::ptrdiff_t>(n) * batch);
     std::vector<std::vector<double>> ref(static_cast<std::size_t>(batch));
     double scale = 0;
     for (int b : picked) {
-        ASSERT_TRUE(batchlas::verify::eigenvalues(A0, b, ref[static_cast<std::size_t>(b)])) << "LAPACKE reference failed, item " << b;
+        if constexpr (!batchlas::verify::have_reference) {
+            ref[static_cast<std::size_t>(b)] =
+                host_hermitian_eigenvalues<Promoted>(n, batchlas::verify::detail::item_vector<Promoted>(A0, b));
+        } else {
+            ASSERT_TRUE(batchlas::verify::eigenvalues(A0, b, ref[static_cast<std::size_t>(b)]))
+                << "LAPACKE reference failed, item " << b;
+        }
         for (double l : ref[static_cast<std::size_t>(b)]) scale = batchlas::verify::nanmax(scale, std::fabs(l));
         if (sorted_copy) std::sort(got.begin() + static_cast<std::ptrdiff_t>(b) * n, got.begin() + static_cast<std::ptrdiff_t>(b + 1) * n);
     }
@@ -74,33 +84,89 @@ void expect_eigenvalues_match_lapacke(const batchlas::MatrixView<Scalar, batchla
     const double err = batchlas::MatrixView<Scalar, batchlas::MatrixFormat::Dense>::values_error(w, ref, scale, picked);
     if (slack) EXPECT_VERIFY_SLACK(Scalar, batchlas::verify::Check::values, n, err, *slack);
     else EXPECT_VERIFY(Scalar, batchlas::verify::Check::values, n, err);
-#endif
 }
 
-/// s (min(m, n) values per item, packed) against LAPACKE singular values of A0 in double:
-/// max |s - s_ref| / max s_ref at Check::values over @p items (default: every item). Skips without
-/// LAPACKE.
+/// Descending singular values of the column-major r x c @p a (ld = r) by one-sided (Hestenes)
+/// Jacobi in double: the vendor-free oracle, plain host code that shares nothing with a BatchLAS
+/// route or with LAPACKE. A wide input is solved transposed; sweeps stop when every column pair is
+/// orthogonal to 4 eps, or after 64 sweeps (false).
+template <typename D>
+bool jacobi_singular_values(int r, int c, std::vector<D> a, std::vector<double>& s) {
+    if (r < c) {
+        std::vector<D> t(a.size());
+        for (int j = 0; j < c; ++j)
+            for (int i = 0; i < r; ++i) {
+                const D x = a[std::size_t(j) * r + i];
+                if constexpr (std::is_same_v<D, double>) t[std::size_t(i) * c + j] = x;
+                else t[std::size_t(i) * c + j] = std::conj(x);
+            }
+        a.swap(t);
+        std::swap(r, c);
+    }
+    auto col = [&](int j) { return a.data() + std::size_t(j) * r; };
+    bool converged = c <= 1;
+    for (int sweep = 0; sweep < 64 && !converged; ++sweep) {
+        converged = true;
+        for (int p = 0; p < c - 1; ++p)
+            for (int q = p + 1; q < c; ++q) {
+                double alpha = 0, beta = 0;
+                D gamma{};
+                for (int i = 0; i < r; ++i) {
+                    alpha += std::norm(col(p)[i]);
+                    beta += std::norm(col(q)[i]);
+                    if constexpr (std::is_same_v<D, double>) gamma += col(p)[i] * col(q)[i];
+                    else gamma += std::conj(col(p)[i]) * col(q)[i];
+                }
+                const double g = std::abs(gamma);
+                if (g == 0 || g <= 4 * std::numeric_limits<double>::epsilon() * std::sqrt(alpha * beta)) continue;
+                converged = false;
+                const D phase = gamma / g;  // h_q = g_q / phase makes g_p^H h_q = |gamma| real
+                const double zeta = (beta - alpha) / (2 * g);
+                const double t = (zeta >= 0 ? 1.0 : -1.0) / (std::fabs(zeta) + std::sqrt(1 + zeta * zeta));
+                const double cs = 1 / std::sqrt(1 + t * t), sn = cs * t;
+                for (int i = 0; i < r; ++i) {
+                    const D x = col(p)[i], y = col(q)[i] / phase;
+                    col(p)[i] = cs * x - sn * y;
+                    col(q)[i] = sn * x + cs * y;
+                }
+            }
+    }
+    s.assign(std::size_t(c), 0.0);
+    for (int j = 0; j < c; ++j) {
+        double nrm = 0;
+        for (int i = 0; i < r; ++i) nrm += std::norm(col(j)[i]);
+        s[std::size_t(j)] = std::sqrt(nrm);
+    }
+    std::sort(s.begin(), s.end(), std::greater<double>());
+    return converged;
+}
+
+/// s (min(m, n) values per item, packed) against the singular values of A0 in double: LAPACKE's,
+/// or jacobi_singular_values' in a build without LAPACKE. max |s - s_ref| / max s_ref at
+/// Check::values over @p items (default: every item).
 template <typename Scalar>
 void expect_singular_values_match_lapacke(const batchlas::MatrixView<Scalar, batchlas::MatrixFormat::Dense>& A0,
                                           const batchlas::UnifiedVector<typename batchlas::base_type<Scalar>::type>& s,
                                           std::span<const int> items = {}) {
-#if !BATCHLAS_VERIFY_HAVE_LAPACKE
-    (void)A0, (void)s, (void)items;
-    GTEST_SKIP() << "no host LAPACKE reference in this build";
-#else
     using Real = typename batchlas::base_type<Scalar>::type;
     const int k = std::min(A0.rows(), A0.cols()), batch = A0.batch_size();
     const std::vector<int> picked = items.empty() ? A0.all_items() : std::vector<int>(items.begin(), items.end());
     std::vector<std::vector<double>> ref(static_cast<std::size_t>(batch));
     double smax = 0;
     for (int b : picked) {
+#if BATCHLAS_VERIFY_HAVE_LAPACKE
         ASSERT_TRUE(batchlas::verify::singular_values(A0, b, ref[static_cast<std::size_t>(b)])) << "LAPACKE reference failed, item " << b;
+#else
+        using P = typename batchlas::MatrixView<Scalar, batchlas::MatrixFormat::Dense>::promoted_type;
+        ASSERT_TRUE(jacobi_singular_values<P>(A0.rows(), A0.cols(), batchlas::verify::detail::item_vector<P>(A0, b),
+                                              ref[static_cast<std::size_t>(b)]))
+            << "host Jacobi reference did not converge, item " << b;
+#endif
         if (k > 0) smax = batchlas::verify::nanmax(smax, ref[static_cast<std::size_t>(b)].front());
     }
     const batchlas::VectorView<Real> sv(const_cast<Real*>(s.data()), k, batch);
     const double err = batchlas::MatrixView<Scalar, batchlas::MatrixFormat::Dense>::values_error(sv, ref, smax, picked);
     EXPECT_VERIFY(Scalar, batchlas::verify::Check::values, k, err);
-#endif
 }
 
 /// W against @p W_ref, another result of the code under test (no LAPACKE): max |w - w_ref| / max |w_ref|

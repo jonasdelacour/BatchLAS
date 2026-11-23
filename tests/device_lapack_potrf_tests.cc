@@ -219,8 +219,19 @@ template <class Scalar, Uplo UL, int N, bool Cta> void above_case(Dev& dev) {
     const auto p = make_prob<Scalar>(n, UL);
     Scalar* d = dev.up(p.h);
     std::int32_t* info = dev.alloc<std::int32_t>(kBatch, -7);
-    if constexpr (Cta) run_cta<Scalar, UL, N>(dev, kview(d, p), N, info);
-    else run_reg<Scalar, UL, N>(dev, kview(d, p), info);
+    if constexpr (Cta) {
+        // The -2 return reads no workspace: where N's plan is over the device's local memory (Cta<64>
+        // complex<float>, 34416 B, on Metal's 32 KiB), the launch plans the largest order that fits.
+        using Tier = batchlas::device::tier::Cta<N>;
+        using Routine = batchlas::device::routine::potrf<UL>;
+        constexpr int kWg = batchlas::device::tier_info<Routine, Tier, Scalar>::wg_size;
+        const std::size_t local = batchlas::impl::local_mem_bytes(dev.q().get_device(), kWg);
+        int plan = N;
+        while (plan > 1 && batchlas::device::buffer_size<Routine, Tier, Scalar>(plan).local_bytes > local) --plan;
+        run_cta<Scalar, UL, N>(dev, kview(d, p), plan, info);
+    } else {
+        run_reg<Scalar, UL, N>(dev, kview(d, p), info);
+    }
     const auto got = dev.down(d, p.h.size());
     const auto gi = dev.down(info, kBatch);
     int bad = 0, changed = 0;

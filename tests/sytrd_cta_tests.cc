@@ -322,8 +322,10 @@ TYPED_TEST(SytrdCtaTest, RandomSymmetricUpper) {
 
 #if BATCHLAS_HAS_HOST_BACKEND
 TEST(SytrdCtaTest, HostBackendThrowsWithoutSubgroup32) {
-    // On typical CPU devices, subgroup size 32 is unsupported; sytrd_cta should
-    // throw a clear runtime_error rather than misbehaving.
+    // A CPU device throws rather than misbehaving: in a build with a host netlib the CTA kernels have
+    // no CPU image, and in a vendor-free one (which has it) the 32-wide tier returns NaN on the
+    // OpenCL CPU (syev n = 32, 2026-11-21), so the entry point stays GPU-only there too: the
+    // capability guard's unsupported, past the argument checks this valid call passes.
     Queue ctx("cpu");
 
     const int n = 8;
@@ -335,7 +337,7 @@ TEST(SytrdCtaTest, HostBackendThrowsWithoutSubgroup32) {
 
     EXPECT_THROW(
         ((void)sytrd_cta(ctx, A, d, e, tau, Uplo::Lower, ws.to_span(), 1), ctx.wait()),
-        std::exception);
+        batchlas::unsupported);
 }
 #endif
 
