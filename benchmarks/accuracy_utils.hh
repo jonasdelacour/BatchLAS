@@ -29,6 +29,15 @@ inline std::string to_lower(std::string value) {
     return value;
 }
 
+// Value of option argv[i]: the text after its '=', else argv[i + 1] (consumed by advancing i),
+// else "" when argv[i] is the last argument.
+inline std::string arg_value(const std::string& arg, int& i, int argc, char** argv) {
+    const auto pos = arg.find('=');
+    if (pos != std::string::npos) return arg.substr(pos + 1);
+    if (i + 1 < argc) return std::string(argv[++i]);
+    return "";
+}
+
 inline SteqrShiftStrategy parse_shift_strategy(const std::string& value) {
     const auto key = to_lower(value);
     if (key == "lapack") return SteqrShiftStrategy::Lapack;
