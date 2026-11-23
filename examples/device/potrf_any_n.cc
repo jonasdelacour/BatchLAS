@@ -46,8 +46,7 @@ int run(sycl::queue& q, int n, int batch) {
                  const auto s = L::slot(it, batch);  // {b, live}
                  const auto A = device::mat(a + s.b * stride, n, n, ld);
                  const auto ws = L::workspace(it, slm, gws, sz);
-                 const int info =
-                     device::potrf<Uplo::Lower, Tier>(ex, A, ws, s.live);
+                 const int info = L::run(ex, A, ws, s.live);  // device::potrf<Uplo::Lower, Tier>(...)
                  if (s.live && ex.leader()) info_out[s.b] = info;
              });
          }).wait_and_throw();

@@ -9,7 +9,8 @@
 /// @ref api_device_lapack_eig and @ref api_device_lapack_svd, together with the core
 /// (`<batchlas/device.hh>`) and the in-group level 3 that the blocked tiers use
 /// (`<batchlas/device/level3/group.hh>`). To compile less, include one routine's header
-/// instead, e.g. `<batchlas/device/lapack/potrf.hh>`; each one includes what it needs.
+/// instead, e.g. `<batchlas/device/lapack/potrf.hh>`; each one includes what it needs, but
+/// `launch<R, Tier, T>::run` needs this header (its `routine_call`s are in `lapack_run.hh`).
 /// `<batchlas/device/sparse.hh>` is not included.
 
 #include <batchlas/device.hh>
@@ -54,3 +55,5 @@
 #include <batchlas/device/lapack/sytrd.hh>
 #include <batchlas/device/lapack/sytrf.hh>
 #include <batchlas/device/lapack/sytrs.hh>
+
+#include <batchlas/device/lapack_run.hh>

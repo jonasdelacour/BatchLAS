@@ -38,7 +38,7 @@ int run(sycl::queue& q, int n, int batch) {
              h.parallel_for(L::nd_range(batch), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(L::sg_size) {
                  const auto ex = L::exec(it);
                  const auto s = L::slot(it, batch);
-                 const int info = device::syev<JobType::EigenVectors, Uplo::Lower, Tier>(
+                 const int info = L::run(  // device::syev<JobType::EigenVectors, Uplo::Lower, Tier>(...)
                      ex, device::mat(a + s.b * stride, n, n, ld), device::vec(w + s.b * n, n), L::workspace(it, slm, gws, sz),
                      device::SyevOptions<T>{}, s.live);
                  if (s.live && ex.leader()) info_out[s.b] = info;

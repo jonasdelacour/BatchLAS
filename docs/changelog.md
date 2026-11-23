@@ -14,7 +14,13 @@ short hexadecimal ids are commits of the 1.0 release branch.
 
 ## [Unreleased] {#changelog-unreleased}
 
-Nothing yet.
+### Added {#changelog-unreleased-added}
+
+- `device::launch<R, Tier, T>::run(args...)` calls the routine `R` names in its tier, with the
+  routine tag's modes, so one `launch` type describes the whole in-kernel call:
+  `L::run(ex, A, ws, s.live)` is `device::potrf<Uplo::Lower, Tier>(ex, A, ws, s.live)`. Every
+  LAPACK routine tag has a `device::routine_call` (`<batchlas/device/lapack_run.hh>`, included by
+  `<batchlas/device/lapack.hh>`); the sparse routines have none yet.
 
 ## [1.0.0] - 2026-11-22 {#changelog-1-0-0}
 

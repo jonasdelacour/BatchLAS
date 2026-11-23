@@ -57,13 +57,26 @@ struct alignas(16) local_slab {
 /// @ingroup api_device_launch
 using LocalWorkspace = sycl::local_accessor<detail::local_slab, 1>;
 
+/// @brief The device function a routine tag names, called in one tier: what launch::run calls.
+/// @ingroup api_device_launch
+///
+/// A specialization's `run<Tier>(args...)` calls the routine with the tag's modes and `Tier`:
+/// `routine_call<routine::potrf<Uplo::Lower>>::run<Tier>(ex, A, ws)` is
+/// `potrf<Uplo::Lower, Tier>(ex, A, ws)`. The LAPACK routines' specializations are in
+/// `<batchlas/device/lapack_run.hh>`, which `<batchlas/device/lapack.hh>` includes.
+/// @tparam Routine a routine tag from device::routine
+template <class Routine> struct routine_call {
+    static_assert(sizeof(Routine) == 0, "launch::run: no routine_call for this routine tag; include <batchlas/device/lapack.hh>");
+};
+
 /// @brief One tier of a routine as a kernel launch: sizes, nd-range, executor, slot and workspace.
 /// @ingroup api_device_launch
 ///
 /// Everything comes from `tier_info<Routine, tier_type, T>`. Host: buffer_size and nd_range size
 /// and shape the launch, local_workspace (a free function) allocates its local buffer. Kernel:
-/// exec, slot and workspace give the calling item its executor, matrix and slices. A tier with
-/// `per_group > 1` packs that many executors (and matrices) into one work-group.
+/// exec, slot and workspace give the calling item its executor, matrix and slices, and run calls
+/// the routine in this tier. A tier with `per_group > 1` packs that many executors (and matrices)
+/// into one work-group.
 /// @tparam Routine a routine tag from device::routine
 /// @tparam Tier a concrete tier, or a tier::upto that resolve_tier_t resolves
 /// @tparam T the scalar type
@@ -123,6 +136,14 @@ template <class Routine, class Tier, class T> struct launch {
         const std::size_t off = static_cast<std::size_t>(team(it)) * sz.local_bytes;
         return {sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(base + off),
                 global_slice(gws, sz, static_cast<int>(it.get_group_linear_id()) * per_group + team(it))};
+    }
+    /// @brief Calls the routine in this tier: its device function with the tag's modes and
+    /// tier_type, so `L::run(ex, A, ws, s.live)` is `potrf<Uplo::Lower, Tier>(ex, A, ws, s.live)`.
+    /// @tparam A the argument types
+    /// @param args the routine's runtime arguments, from the executor on (C3)
+    /// @return what the routine returns: `info` for a LAPACK-level routine
+    template <class... A> static BATCHLAS_DEVICE_INLINE decltype(auto) run(A&&... args) {
+        return routine_call<Routine>::template run<tier_type>(static_cast<A&&>(args)...);
     }
 };
 

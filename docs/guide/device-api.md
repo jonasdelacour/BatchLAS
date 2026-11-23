@@ -81,6 +81,12 @@ tier is its own kernel. `launch<R, Tier, T>` (`launch.hh`) then gives that tier'
 | `buffer_size(extents...)` | one matrix's `WorkspaceSize`; the same value as `device::buffer_size<R, Tier, T>(extents...)` |
 | `workspace(it, slm, gws, sz)` | this matrix's `Workspace`: its `local_bytes` slice of `slm` and `global_slice(gws, sz, b)` |
 | `local_workspace<L>(h, sz)` (host) | the work-group's `LocalWorkspace`: `per_group` slices, 16-byte aligned, one slab when the tier needs none |
+| `run(args...)` | the routine in this tier, with the tag's modes: `L::run(ex, A, ws, s.live)` is `potrf<Uplo::Lower, Tier>(ex, A, ws, s.live)` |
+
+`L` describes the whole call, as a cuSOLVERDx descriptor does: the frame above names the routine
+and its modes once, in `R`. `run` forwards to the routine's free function through
+`routine_call<R>` (`<batchlas/device/lapack_run.hh>`, which `<batchlas/device/lapack.hh>`
+includes; the sparse routines have none), so the two spellings compile to the same kernel.
 
 The routine tag `R` names the routine and its modes: `device::routine::<op><modes...>`, e.g.
 `routine::potrf<Uplo::Lower>`, `routine::ormqr<Side::Left, Transpose::ConjTrans>`,

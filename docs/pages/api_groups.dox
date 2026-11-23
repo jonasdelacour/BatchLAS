@@ -174,8 +174,9 @@ A LAPACK-level routine runs in one tier, fixed at compile time: `tier::Reg` (the
 registers), `tier::Cta` (in local memory) or `tier::Blocked` (any n, blocked through global
 workspace). On the host, `with_tier` visits the first tier the device admits for a run-time n, and
 `launch<Routine, Tier, T>` gives that tier's buffer size, nd-range, executor, batch slot and
-workspace slices, so the host sizes exactly what the kernel carves. Include
-`<batchlas/device.hh>` (`tier.hh`, `launch.hh`, `workspace.hh`). Guide: @ref guide_device_api.
+workspace slices, so the host sizes exactly what the kernel carves, and `run` calls the routine in
+that tier. Include `<batchlas/device.hh>` (`tier.hh`, `launch.hh`, `workspace.hh`); `run` needs
+`<batchlas/device/lapack.hh>` (`lapack_run.hh`). Guide: @ref guide_device_api.
 */
 
 /**
