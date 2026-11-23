@@ -28,6 +28,7 @@ using namespace batchlas;
 
 namespace {
 
+using accuracy::arg_value;
 using accuracy::extract_tridiagonal;
 using accuracy::orthogonality_residuals;
 using accuracy::parse_shift_strategy;
@@ -74,51 +75,46 @@ Options parse_args(int argc, char** argv) {
     Options opt;
     for (int i = 1; i < argc; ++i) {
         std::string arg(argv[i]);
-        auto get_value = [&](const std::string& a) -> std::string {
-            auto pos = a.find('=');
-            if (pos != std::string::npos) return a.substr(pos + 1);
-            if (i + 1 < argc) return std::string(argv[++i]);
-            return "";
-        };
 
         if (arg.starts_with("--inputs")) {
-            opt.inputs = get_value(arg);
+            opt.inputs = arg_value(arg, i, argc, argv);
         } else if (arg.starts_with("--impl")) {
-            opt.impl = to_lower(get_value(arg));
+            opt.impl = to_lower(arg_value(arg, i, argc, argv));
         } else if (arg.starts_with("--backend")) {
-            opt.backend = get_value(arg);
+            opt.backend = arg_value(arg, i, argc, argv);
         } else if (arg.starts_with("--type")) {
-            opt.dtype = get_value(arg);
+            opt.dtype = arg_value(arg, i, argc, argv);
         } else if (arg.starts_with("--n")) {
-            opt.n = std::stoi(get_value(arg));
+            opt.n = std::stoi(arg_value(arg, i, argc, argv));
         } else if (arg.starts_with("--batch")) {
-            opt.batch = std::stoi(get_value(arg));
+            opt.batch = std::stoi(arg_value(arg, i, argc, argv));
         } else if (arg.starts_with("--samples")) {
-            opt.samples = std::stoi(get_value(arg));
+            opt.samples = std::stoi(arg_value(arg, i, argc, argv));
         } else if (arg.starts_with("--log10-cond-min")) {
-            opt.log10_cond_min = std::stod(get_value(arg));
+            opt.log10_cond_min = std::stod(arg_value(arg, i, argc, argv));
         } else if (arg.starts_with("--log10-cond-max")) {
-            opt.log10_cond_max = std::stod(get_value(arg));
+            opt.log10_cond_max = std::stod(arg_value(arg, i, argc, argv));
         } else if (arg.starts_with("--seed")) {
-            opt.seed = static_cast<unsigned>(std::stoul(get_value(arg)));
+            opt.seed = static_cast<unsigned>(std::stoul(arg_value(arg, i, argc, argv)));
         } else if (arg.starts_with("--max-sweeps")) {
-            opt.max_sweeps = static_cast<size_t>(std::stoul(get_value(arg)));
+            opt.max_sweeps = static_cast<size_t>(std::stoul(arg_value(arg, i, argc, argv)));
         } else if (arg.starts_with("--cta-shift")) {
-            opt.cta_shift = get_value(arg);
+            opt.cta_shift = arg_value(arg, i, argc, argv);
         } else if (arg.starts_with("--sytrd-block-size")) {
-            opt.sytrd_block_size = std::stoi(get_value(arg));
+            opt.sytrd_block_size = std::stoi(arg_value(arg, i, argc, argv));
         } else if (arg.starts_with("--ormqr-block-size")) {
-            opt.ormqr_block_size = std::stoi(get_value(arg));
+            opt.ormqr_block_size = std::stoi(arg_value(arg, i, argc, argv));
         } else if (arg.starts_with("--syevx-iterations")) {
-            opt.syevx_iterations = std::stoi(get_value(arg));
+            opt.syevx_iterations = std::stoi(arg_value(arg, i, argc, argv));
         } else if (arg.starts_with("--syevx-extra-directions")) {
-            opt.syevx_extra_directions = std::stoi(get_value(arg));
+            opt.syevx_extra_directions = std::stoi(arg_value(arg, i, argc, argv));
         } else if (arg.starts_with("--syevx-neigs")) {
-            opt.syevx_neigs = std::stoi(get_value(arg));
+            opt.syevx_neigs = std::stoi(arg_value(arg, i, argc, argv));
         } else if (arg.starts_with("--syevx-find-largest")) {
-            opt.syevx_find_largest = (to_lower(get_value(arg)) == "1" || to_lower(get_value(arg)) == "true");
+            opt.syevx_find_largest = (to_lower(arg_value(arg, i, argc, argv)) == "1"
+                                      || to_lower(arg_value(arg, i, argc, argv)) == "true");
         } else if (arg.starts_with("--output")) {
-            opt.output = get_value(arg);
+            opt.output = arg_value(arg, i, argc, argv);
         } else if (arg == "--help" || arg == "-h") {
             std::cout
                 << "Eigensolver accuracy benchmark\n\n"

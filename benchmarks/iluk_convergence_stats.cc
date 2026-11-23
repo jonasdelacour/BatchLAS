@@ -2,6 +2,7 @@
 #include <batchlas/backend_config.h>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/error.hh>
+#include <benchmarks/accuracy_utils.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -21,6 +22,8 @@
 using namespace batchlas;
 
 namespace {
+
+using accuracy::arg_value;
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 constexpr Backend kGpuBackend = Backend::CUDA;
@@ -117,37 +120,31 @@ Options parse_args(int argc, char** argv) {
     Options opt;
     for (int i = 1; i < argc; ++i) {
         std::string arg(argv[i]);
-        auto get_value = [&](const std::string& token) -> std::string {
-            const auto pos = token.find('=');
-            if (pos != std::string::npos) return token.substr(pos + 1);
-            if (i + 1 < argc) return std::string(argv[++i]);
-            return "";
-        };
 
         if (arg.starts_with("--n")) {
-            opt.n = std::stoi(get_value(arg));
+            opt.n = std::stoi(arg_value(arg, i, argc, argv));
         } else if (arg.starts_with("--batch")) {
-            opt.batch = std::stoi(get_value(arg));
+            opt.batch = std::stoi(arg_value(arg, i, argc, argv));
         } else if (arg.starts_with("--neigs")) {
-            opt.neigs = std::stoi(get_value(arg));
+            opt.neigs = std::stoi(arg_value(arg, i, argc, argv));
         } else if (arg.starts_with("--extra-directions")) {
-            opt.extra_directions = std::stoi(get_value(arg));
+            opt.extra_directions = std::stoi(arg_value(arg, i, argc, argv));
         } else if (arg.starts_with("--iterations")) {
-            opt.iterations = std::stoi(get_value(arg));
+            opt.iterations = std::stoi(arg_value(arg, i, argc, argv));
         } else if (arg.starts_with("--samples-per-bucket")) {
-            opt.samples_per_bucket = std::stoi(get_value(arg));
+            opt.samples_per_bucket = std::stoi(arg_value(arg, i, argc, argv));
         } else if (arg.starts_with("--tolerance")) {
-            opt.tolerance = std::stof(get_value(arg));
+            opt.tolerance = std::stof(arg_value(arg, i, argc, argv));
         } else if (arg.starts_with("--seed")) {
-            opt.seed = static_cast<unsigned>(std::stoul(get_value(arg)));
+            opt.seed = static_cast<unsigned>(std::stoul(arg_value(arg, i, argc, argv)));
         } else if (arg.starts_with("--densities")) {
-            opt.densities = get_value(arg);
+            opt.densities = arg_value(arg, i, argc, argv);
         } else if (arg.starts_with("--diagonal-boosts")) {
-            opt.diagonal_boosts = get_value(arg);
+            opt.diagonal_boosts = arg_value(arg, i, argc, argv);
         } else if (arg.starts_with("--levels")) {
-            opt.levels = get_value(arg);
+            opt.levels = arg_value(arg, i, argc, argv);
         } else if (arg.starts_with("--output-prefix")) {
-            opt.output_prefix = get_value(arg);
+            opt.output_prefix = arg_value(arg, i, argc, argv);
         } else if (arg == "--help" || arg == "-h") {
             std::cout
                 << "ILU(k) convergence statistics benchmark\n\n"
