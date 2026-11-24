@@ -48,21 +48,21 @@ template <class T> int run(sycl::queue& q, const char* type, int m, int n, int b
 
     int nb = 0;
     //! [launch]
-    using R = device::routine::gesvd<SvdVectors::All, SvdVectors::All>;
-    device::with_tier<R, T>(q.get_device(), std::max(m, n), [&]<class Tier>(Tier) {
+    using GesvdRoutine = device::routine::gesvd<SvdVectors::All, SvdVectors::All>;
+    device::with_tier<GesvdRoutine, T>(q.get_device(), std::max(m, n), [&]<class Tier>(Tier) {
         nb = Tier::nb;
-        using L = device::launch<R, Tier, T>;
-        const auto sz = L::buffer_size(m, n);
+        using Gesvd = device::launch<GesvdRoutine, Tier, T>;
+        const auto sz = Gesvd::buffer_size(m, n);
         std::byte* gws = sz.global_bytes ? sycl::malloc_device<std::byte>(sz.global_bytes * batch, q) : nullptr;
         q.submit([&](sycl::handler& h) {
-             auto slm = device::local_workspace<L>(h, sz);
-             h.parallel_for(L::nd_range(batch), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(L::sg_size) {
-                 const auto ex = L::exec(it);
-                 const auto s = L::slot(it, batch);
+             auto slm = device::local_workspace<Gesvd>(h, sz);
+             h.parallel_for(Gesvd::nd_range(batch), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(Gesvd::sg_size) {
+                 const auto ex = Gesvd::exec(it);
+                 const auto s = Gesvd::slot(it, batch);
                  //! [call]
-                 const int info = device::gesvd<SvdVectors::All, SvdVectors::All, Tier>(
+                 const int info = Gesvd::run(  // device::gesvd<SvdVectors::All, SvdVectors::All, Tier>(...)
                      ex, device::mat(a + s.b * sa, m, n, lda), device::vec(s_out + s.b * k, k), device::mat(u + s.b * su, m, m, ldu),
-                     device::mat(vt + s.b * sv, n, n, ldv), L::workspace(it, slm, gws, sz));  // A is overwritten
+                     device::mat(vt + s.b * sv, n, n, ldv), Gesvd::workspace(it, slm, gws, sz));  // A is overwritten
                  //! [call]
                  if (s.live && ex.leader()) info_out[s.b] = info;
              });

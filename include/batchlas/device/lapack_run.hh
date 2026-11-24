@@ -2,14 +2,14 @@
 #pragma once
 /// @file
 /// @ingroup api_device_launch
-/// @brief routine_call for every LAPACK routine tag, so `launch<R, Tier, T>::run(args...)` calls
-/// the routine R names in tier Tier.
+/// @brief routine_call for every LAPACK routine tag, so `launch<Routine, Tier, T>::run(args...)`
+/// calls the routine Routine names in tier Tier.
 ///
 /// Each specialization forwards to the routine's free function with the tag's modes, then the
 /// tier, in the function's template order: `run<Tier>(ex, A, ws)` for `routine::potrf<UL>` is
 /// `potrf<UL, Tier>(ex, A, ws)`. A tag's parameters the function does not take (sy2sb's and
 /// sb2st's `KDMax`, which only size the workspace) are dropped. `<batchlas/device/lapack.hh>`
-/// includes this header; the sparse routines have no routine_call.
+/// includes this header; the sparse routines' are in `<batchlas/device/sparse_run.hh>`.
 
 #include <batchlas/device/lapack.hh>
 

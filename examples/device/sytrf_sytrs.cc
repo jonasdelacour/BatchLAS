@@ -43,24 +43,25 @@ template <class T> int run(sycl::queue& q, const char* type, int n, int nrhs, in
 
     const char* tier = "";
     //! [launch]
-    using R = device::routine::sytrf<Uplo::Lower>;
-    device::with_tier<R, T>(q.get_device(), n, [&]<class Tier>(Tier) {
+    using SytrfRoutine = device::routine::sytrf<Uplo::Lower>;
+    device::with_tier<SytrfRoutine, T>(q.get_device(), n, [&]<class Tier>(Tier) {
         tier = device::tier::is_cta_v<Tier> ? "Cta<32>" : "Blocked<1>";
-        using L = device::launch<R, Tier, T>;
-        const auto sz = larger(L::buffer_size(n), device::buffer_size<device::routine::sytrs<Uplo::Lower>, Tier, T>(n, nrhs));
+        using Sytrf = device::launch<SytrfRoutine, Tier, T>;
+        using Sytrs = device::launch<device::routine::sytrs<Uplo::Lower>, Tier, T>;
+        const auto sz = larger(Sytrf::buffer_size(n), Sytrs::buffer_size(n, nrhs));
         std::byte* gws = sz.global_bytes ? sycl::malloc_device<std::byte>(sz.global_bytes * batch, q) : nullptr;
         q.submit([&](sycl::handler& h) {
-             auto slm = device::local_workspace<L>(h, sz);
-             h.parallel_for(L::nd_range(batch), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(L::sg_size) {
-                 const auto ex = L::exec(it);
-                 const auto s = L::slot(it, batch);
-                 const auto ws = L::workspace(it, slm, gws, sz);
+             auto slm = device::local_workspace<Sytrf>(h, sz);
+             h.parallel_for(Sytrf::nd_range(batch), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(Sytrf::sg_size) {
+                 const auto ex = Sytrf::exec(it);
+                 const auto s = Sytrf::slot(it, batch);
+                 const auto ws = Sytrf::workspace(it, slm, gws, sz);
                  //! [call]
                  const auto A = device::mat(a + s.b * sa, n, n, lda);  // the lower triangle is read
                  const auto P = device::vec(ipiv + s.b * n, n);
                  const auto B = device::mat(x + s.b * sb, n, nrhs, ldb);
-                 int info = device::sytrf<Uplo::Lower, Tier>(ex, A, P, ws);
-                 if (info == 0) info = device::sytrs<Uplo::Lower, Tier>(ex, A, P, B, ws);  // info is uniform
+                 int info = Sytrf::run(ex, A, P, ws);
+                 if (info == 0) info = Sytrs::run(ex, A, P, B, ws);  // info is uniform
                  //! [call]
                  if (s.live && ex.leader()) info_out[s.b] = info;
              });

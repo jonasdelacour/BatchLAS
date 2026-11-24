@@ -27,19 +27,19 @@ int run(sycl::queue& q, int n, int batch) {
     q.copy(ha.data(), a, ha.size()).wait();
 
     const char* tier = "";
-    using R = device::routine::syev<JobType::EigenVectors, Uplo::Lower>;
-    device::with_tier<R, T>(q.get_device(), n, [&]<class Tier>(Tier) {
+    using SyevRoutine = device::routine::syev<JobType::EigenVectors, Uplo::Lower>;
+    device::with_tier<SyevRoutine, T>(q.get_device(), n, [&]<class Tier>(Tier) {
         tier = device::tier::is_cta_v<Tier> ? "Cta" : "Blocked";
-        using L = device::launch<R, Tier, T>;
-        const auto sz = L::buffer_size(n);
+        using Syev = device::launch<SyevRoutine, Tier, T>;
+        const auto sz = Syev::buffer_size(n);
         std::byte* gws = sz.global_bytes ? sycl::malloc_device<std::byte>(sz.global_bytes * batch, q) : nullptr;
         q.submit([&](sycl::handler& h) {
-             auto slm = device::local_workspace<L>(h, sz);
-             h.parallel_for(L::nd_range(batch), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(L::sg_size) {
-                 const auto ex = L::exec(it);
-                 const auto s = L::slot(it, batch);
-                 const int info = L::run(  // device::syev<JobType::EigenVectors, Uplo::Lower, Tier>(...)
-                     ex, device::mat(a + s.b * stride, n, n, ld), device::vec(w + s.b * n, n), L::workspace(it, slm, gws, sz),
+             auto slm = device::local_workspace<Syev>(h, sz);
+             h.parallel_for(Syev::nd_range(batch), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(Syev::sg_size) {
+                 const auto ex = Syev::exec(it);
+                 const auto s = Syev::slot(it, batch);
+                 const int info = Syev::run(  // device::syev<JobType::EigenVectors, Uplo::Lower, Tier>(...)
+                     ex, device::mat(a + s.b * stride, n, n, ld), device::vec(w + s.b * n, n), Syev::workspace(it, slm, gws, sz),
                      device::SyevOptions<T>{}, s.live);
                  if (s.live && ex.leader()) info_out[s.b] = info;
              });

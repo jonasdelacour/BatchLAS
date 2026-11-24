@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
-// device_lapack_launch-run_tests: launch<R, Tier, T>::run and the routine_call of every LAPACK
-// routine tag (lapack_run.hh).
-// Guards (agent-guide section 8): every routine_call is instantiated at compile time against its
-// routine's operands (a binding that names the wrong function, drops a mode or puts the tier in
-// the wrong place does not compile); at run time L::run is bit-identical to the direct call for
+// device_lapack_launch-run_tests: launch<Routine, Tier, T>::run and the routine_call of every
+// routine tag (lapack_run.hh, sparse_run.hh).
+// Guards (agent-guide section 8): every routine_call, and with it the routine's body, is
+// instantiated at compile time against the routine's operands (a binding that names the wrong
+// function, drops a mode or puts the tier in the wrong place does not compile); at run time
+// launch::run is bit-identical to the direct call for
 // potrf<Upper> on the packed Reg<16> tier (odd batch, dead tail slot, ld = n + 3), Cta<64> and
 // Blocked<32>, real and complex, and for getrs<Trans> on getrf's factors. Upper and Trans are the
 // non-default modes, so a binding that ignored its tag's mode would differ from the direct call.
@@ -12,6 +13,7 @@
 #include <tests/device_core_common.hh>
 
 #include <batchlas/device/lapack.hh>
+#include <batchlas/device/sparse_run.hh>
 
 #include <algorithm>
 #include <complex>
@@ -81,6 +83,9 @@ static_assert(runs_any<rt::steqr<JobType::EigenVectors>, C<V>, C<V>, C<M>, W>);
 static_assert(runs_any<rt::gesvd<SvdVectors::All, SvdVectors::None>, C<M>, C<V>, C<M>, C<M>, W>);
 static_assert(runs<rt::ortho<Transpose::NoTrans, L3<F>, OrthoAlgorithm::Chol2>, Cta<16>, C<M>, W>);
 static_assert(runs<rt::ritz_values<L3<F>>, Blocked<3>, C<M>, C<M>, C<V>, W>);
+static_assert(runs_any<rt::spmm<Transpose::Trans, Transpose::NoTrans>, F, C<dv::CsrItem<const F>>, C<M>, F, C<M>, W>);
+static_assert(runs_any<rt::iluk_factorize, C<dv::BasedVec<const F>>, C<dv::IlukPlan>, C<dv::BasedVec<F>>, C<dv::IlukOptions<F>>, W>);
+static_assert(runs_any<rt::iluk_apply, C<dv::IlukFactor<F>>, C<V>, C<V>, W>);
 
 // SPD matrices A = n I + a symmetric Hilbert-like perturbation, column-major at ld; the entries
 // outside A (ld padding) are a poison value both runs must leave alone.
@@ -98,23 +103,23 @@ template <class T> std::vector<T> spd(int n, int ld, int batch) {
 }
 
 template <bool ViaRun, class Tier, class T> std::vector<T> potrf_upper(Dev& d, const std::vector<T>& host, int n, int ld, int batch) {
-    using L = dv::launch<rt::potrf<Uplo::Upper>, Tier, T>;
+    using PotrfUpper = dv::launch<rt::potrf<Uplo::Upper>, Tier, T>;
     T* a = d.alloc<T>(host.size(), T(0));
     d.q().copy(host.data(), a, host.size()).wait();
-    const auto sz = L::buffer_size(n);
+    const auto sz = PotrfUpper::buffer_size(n);
     std::byte* gws = sz.global_bytes ? d.alloc<std::byte>(sz.global_bytes * batch, std::byte{0}) : nullptr;
     int* info = d.alloc<int>(batch, -1);
     const long stride = long(ld) * n;
     d.q().submit([&](sycl::handler& h) {
-         auto slm = dv::local_workspace<L>(h, sz);
-         h.parallel_for(L::nd_range(batch), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(L::sg_size) {
-             const auto ex = L::exec(it);
-             const auto s = L::slot(it, batch);
+         auto slm = dv::local_workspace<PotrfUpper>(h, sz);
+         h.parallel_for(PotrfUpper::nd_range(batch), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(PotrfUpper::sg_size) {
+             const auto ex = PotrfUpper::exec(it);
+             const auto s = PotrfUpper::slot(it, batch);
              const auto A = dv::mat(a + (s.live ? s.b : 0) * stride, n, n, ld);
-             const auto ws = L::workspace(it, slm, gws, sz);
+             const auto ws = PotrfUpper::workspace(it, slm, gws, sz);
              int r;
-             if constexpr (ViaRun) r = L::run(ex, A, ws, s.live);
-             else r = dv::potrf<Uplo::Upper, typename L::tier_type>(ex, A, ws, s.live);
+             if constexpr (ViaRun) r = PotrfUpper::run(ex, A, ws, s.live);
+             else r = dv::potrf<Uplo::Upper, typename PotrfUpper::tier_type>(ex, A, ws, s.live);
              if (s.live && ex.leader()) info[s.b] = r;
          });
      }).wait_and_throw();
@@ -130,7 +135,7 @@ template <class T> class LaunchRun : public ::testing::Test {};
 using Scalars = ::testing::Types<float, std::complex<float>>;
 TYPED_TEST_SUITE(LaunchRun, Scalars);
 
-// potrf<Upper> through L::run against the direct call, on each kind of tier. Reg<16> packs two
+// potrf<Upper> through launch::run against the direct call, on each kind of tier. Reg<16> packs two
 // matrices per work-group, so batch 1025 leaves one dead slot.
 TYPED_TEST(LaunchRun, PotrfUpperMatchesTheDirectCallBitForBit) {
     using T = TypeParam;
@@ -157,31 +162,31 @@ TYPED_TEST(LaunchRun, PotrfUpperMatchesTheDirectCallBitForBit) {
     }
 }
 
-// getrf then getrs<Trans> (A^T X = B) on one launch, the solve through L::run or the direct call.
+// getrf then getrs<Trans> (A^T X = B) on one launch, the solve through launch::run or the direct call.
 template <bool ViaRun, class T> std::vector<T> lu_solve_trans(Dev& d, const std::vector<T>& ha, const std::vector<T>& hb, int n, int nrhs, int ld, int batch) {
     using Tier = Blocked<32>;
-    using L = dv::launch<rt::getrs<Transpose::Trans>, Tier, T>;
+    using GetrsTrans = dv::launch<rt::getrs<Transpose::Trans>, Tier, T>;
     T* a = d.alloc<T>(ha.size(), T(0));
     T* b = d.alloc<T>(hb.size(), T(0));
     d.q().copy(ha.data(), a, ha.size()).wait();
     d.q().copy(hb.data(), b, hb.size()).wait();
     int* piv = d.alloc<int>(std::size_t(n) * batch, 0);
-    const auto sz = L::buffer_size(n, nrhs);
+    const auto sz = GetrsTrans::buffer_size(n, nrhs);
     const auto fz = dv::buffer_size<rt::getrf, Tier, T>(n);
     const dv::WorkspaceSize big{std::max(sz.local_bytes, fz.local_bytes), std::max(sz.global_bytes, fz.global_bytes), sz.align};
     std::byte* gws = big.global_bytes ? d.alloc<std::byte>(big.global_bytes * batch, std::byte{0}) : nullptr;
     const long sa = long(ld) * n, sb = long(ld) * nrhs;
     d.q().submit([&](sycl::handler& h) {
-         auto slm = dv::local_workspace<L>(h, big);
-         h.parallel_for(L::nd_range(batch), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(L::sg_size) {
-             const auto ex = L::exec(it);
-             const auto s = L::slot(it, batch);
+         auto slm = dv::local_workspace<GetrsTrans>(h, big);
+         h.parallel_for(GetrsTrans::nd_range(batch), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(GetrsTrans::sg_size) {
+             const auto ex = GetrsTrans::exec(it);
+             const auto s = GetrsTrans::slot(it, batch);
              const auto A = dv::mat(a + s.b * sa, n, n, ld);
              const auto B = dv::mat(b + s.b * sb, n, nrhs, ld);
              const auto Pv = dv::vec(piv + s.b * n, n);
-             const auto ws = L::workspace(it, slm, gws, big);
+             const auto ws = GetrsTrans::workspace(it, slm, gws, big);
              dv::getrf<Tier>(ex, A, Pv, ws, s.live);
-             if constexpr (ViaRun) L::run(ex, A, Pv, B, ws, s.live);
+             if constexpr (ViaRun) GetrsTrans::run(ex, A, Pv, B, ws, s.live);
              else dv::getrs<Transpose::Trans, Tier>(ex, A, Pv, B, ws, s.live);
          });
      }).wait_and_throw();
