@@ -40,26 +40,27 @@ template <class T> int run(sycl::queue& q, const char* type, int m, int n, int b
 
     int nb = 0;
     //! [launch]
-    using R = device::routine::geqrf;
-    device::with_tier<R, T>(q.get_device(), n, [&]<class Tier>(Tier) {
+    using GeqrfRoutine = device::routine::geqrf;
+    device::with_tier<GeqrfRoutine, T>(q.get_device(), n, [&]<class Tier>(Tier) {
         nb = Tier::nb;
-        using L = device::launch<R, Tier, T>;
-        const auto sz = larger(L::buffer_size(m, n), device::buffer_size<device::routine::orgqr, Tier, T>(m, n));
+        using Geqrf = device::launch<GeqrfRoutine, Tier, T>;
+        using Orgqr = device::launch<device::routine::orgqr, Tier, T>;
+        const auto sz = larger(Geqrf::buffer_size(m, n), Orgqr::buffer_size(m, n));
         std::byte* gws = sz.global_bytes ? sycl::malloc_device<std::byte>(sz.global_bytes * batch, q) : nullptr;
         q.submit([&](sycl::handler& h) {
-             auto slm = device::local_workspace<L>(h, sz);
-             h.parallel_for(L::nd_range(batch), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(L::sg_size) {
-                 const auto ex = L::exec(it);
-                 const auto s = L::slot(it, batch);
-                 const auto ws = L::workspace(it, slm, gws, sz);
+             auto slm = device::local_workspace<Geqrf>(h, sz);
+             h.parallel_for(Geqrf::nd_range(batch), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(Geqrf::sg_size) {
+                 const auto ex = Geqrf::exec(it);
+                 const auto s = Geqrf::slot(it, batch);
+                 const auto ws = Geqrf::workspace(it, slm, gws, sz);
                  //! [call]
                  const auto A = device::mat(a + s.b * sa, m, n, lda);
                  const auto Q = device::mat(qm + s.b * sq, m, n, ldq);
                  const auto t = device::vec(tau + s.b * n, n);
-                 int info = device::geqrf<Tier>(ex, A, t, ws);  // R above A's diagonal, the reflectors below
+                 int info = Geqrf::run(ex, A, t, ws);  // R above A's diagonal, the reflectors below
                  device::lacpy(ex, A, Q);
                  ex.barrier(device::Mem::Global);  // the copy complete before orgqr reads it
-                 if (info == 0) info = device::orgqr<Tier>(ex, Q, t, ws);  // info is uniform
+                 if (info == 0) info = Orgqr::run(ex, Q, t, ws);  // info is uniform
                  //! [call]
                  if (s.live && ex.leader()) info_out[s.b] = info;
              });

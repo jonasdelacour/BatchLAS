@@ -57,13 +57,28 @@ struct alignas(16) local_slab {
 /// @ingroup api_device_launch
 using LocalWorkspace = sycl::local_accessor<detail::local_slab, 1>;
 
+/// @brief The device function a routine tag names, called in one tier: what launch::run calls.
+/// @ingroup api_device_launch
+///
+/// A specialization's `run<Tier>(args...)` calls the routine with the tag's modes and `Tier`:
+/// `routine_call<routine::potrf<Uplo::Lower>>::run<Tier>(ex, A, ws)` is
+/// `potrf<Uplo::Lower, Tier>(ex, A, ws)`. The LAPACK routines' specializations are in
+/// `<batchlas/device/lapack_run.hh>`, which `<batchlas/device/lapack.hh>` includes; the sparse
+/// routines' are in `<batchlas/device/sparse_run.hh>`.
+/// @tparam Routine a routine tag from device::routine
+template <class Routine> struct routine_call {
+    static_assert(sizeof(Routine) == 0, "launch::run: no routine_call for this routine tag; include <batchlas/device/lapack.hh> "
+                                        "(LAPACK) or <batchlas/device/sparse_run.hh> (sparse)");
+};
+
 /// @brief One tier of a routine as a kernel launch: sizes, nd-range, executor, slot and workspace.
 /// @ingroup api_device_launch
 ///
 /// Everything comes from `tier_info<Routine, tier_type, T>`. Host: buffer_size and nd_range size
 /// and shape the launch, local_workspace (a free function) allocates its local buffer. Kernel:
-/// exec, slot and workspace give the calling item its executor, matrix and slices. A tier with
-/// `per_group > 1` packs that many executors (and matrices) into one work-group.
+/// exec, slot and workspace give the calling item its executor, matrix and slices, and run calls
+/// the routine in this tier. A tier with `per_group > 1` packs that many executors (and matrices)
+/// into one work-group.
 /// @tparam Routine a routine tag from device::routine
 /// @tparam Tier a concrete tier, or a tier::upto that resolve_tier_t resolves
 /// @tparam T the scalar type
@@ -124,22 +139,31 @@ template <class Routine, class Tier, class T> struct launch {
         return {sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::yes>(base + off),
                 global_slice(gws, sz, static_cast<int>(it.get_group_linear_id()) * per_group + team(it))};
     }
+    /// @brief Calls the routine in this tier: its device function with the tag's modes and
+    /// tier_type. With `using Potrf = launch<routine::potrf<Uplo::Lower>, Tier, T>`,
+    /// `Potrf::run(ex, A, ws, s.live)` is `potrf<Uplo::Lower, Tier>(ex, A, ws, s.live)`.
+    /// @tparam A the argument types
+    /// @param args the routine's runtime arguments, from the executor on (C3)
+    /// @return what the routine returns: `info` for a LAPACK-level routine
+    template <class... A> static BATCHLAS_DEVICE_INLINE decltype(auto) run(A&&... args) {
+        return routine_call<Routine>::template run<tier_type>(static_cast<A&&>(args)...);
+    }
 };
 
-/// @brief Host: the local buffer of one work-group of launch L.
+/// @brief Host: the local buffer of one work-group of a launch.
 /// @ingroup api_device_launch
 ///
 /// It holds per_group slices of `sz.local_bytes`; a tier that needs none still gets one slab, so
 /// the kernel's capture list does not depend on the tier.
-/// @tparam L a launch type
+/// @tparam Launch a launch type
 /// @param h the command group handler
-/// @param sz the workspace of one matrix (`L::buffer_size(...)`)
+/// @param sz the workspace of one matrix (`Launch::buffer_size(...)`)
 /// @return the local accessor to capture in the kernel
 /// @throws batchlas::invalid_argument when `sz.align` exceeds 16 bytes
-template <class L> LocalWorkspace local_workspace(sycl::handler& h, const WorkspaceSize& sz) {
+template <class Launch> LocalWorkspace local_workspace(sycl::handler& h, const WorkspaceSize& sz) {
     if (sz.align > alignof(detail::local_slab))
         throw batchlas::invalid_argument("local_workspace: alignment " + std::to_string(sz.align) + " exceeds 16 bytes");
-    const std::size_t bytes = sz.local_bytes * static_cast<std::size_t>(L::per_group);
+    const std::size_t bytes = sz.local_bytes * static_cast<std::size_t>(Launch::per_group);
     const std::size_t slabs = (bytes + sizeof(detail::local_slab) - 1) / sizeof(detail::local_slab);
     return LocalWorkspace(sycl::range<1>(slabs > 0 ? slabs : 1), h);
 }

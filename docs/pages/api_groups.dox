@@ -103,8 +103,8 @@ picks an *executor* (who cooperates on one matrix), wraps its memory in *operand
 views), and calls routines whose sizes, layouts and algorithms are template parameters, so a
 kernel compiles only the path it takes. LAPACK-level routines run in a *tier* (`tier::Reg`,
 `tier::Cta` or `tier::Blocked`) chosen on the host by `with_tier`. The host sizes one matrix's
-workspace for a routine tag `R` with `launch<R, Tier, T>::buffer_size(extents...)` or the
-equivalent `device::buffer_size<R, Tier, T>(extents...)`; there is no per-op sizer function. A
+workspace for a routine tag `Routine` with `launch<Routine, Tier, T>::buffer_size(extents...)` or the
+equivalent `device::buffer_size<Routine, Tier, T>(extents...)`; there is no per-op sizer function. A
 LAPACK-level routine returns `int info`, the same on every work-item of the executor: 0 on
 success and `k > 0` with the routine's LAPACK meaning. The negative values, where a routine
 checks its arguments at all, do not follow one numbering across the API: each LAPACK group below
@@ -174,8 +174,10 @@ A LAPACK-level routine runs in one tier, fixed at compile time: `tier::Reg` (the
 registers), `tier::Cta` (in local memory) or `tier::Blocked` (any n, blocked through global
 workspace). On the host, `with_tier` visits the first tier the device admits for a run-time n, and
 `launch<Routine, Tier, T>` gives that tier's buffer size, nd-range, executor, batch slot and
-workspace slices, so the host sizes exactly what the kernel carves. Include
-`<batchlas/device.hh>` (`tier.hh`, `launch.hh`, `workspace.hh`). Guide: @ref guide_device_api.
+workspace slices, so the host sizes exactly what the kernel carves, and `run` calls the routine in
+that tier. Include `<batchlas/device.hh>` (`tier.hh`, `launch.hh`, `workspace.hh`); `run` needs
+`<batchlas/device/lapack.hh>` (`lapack_run.hh`) for a LAPACK routine and
+`<batchlas/device/sparse_run.hh>` for a sparse one. Guide: @ref guide_device_api.
 */
 
 /**

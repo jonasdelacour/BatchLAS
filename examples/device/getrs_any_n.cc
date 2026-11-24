@@ -31,24 +31,25 @@ int run(sycl::queue& q, int n, int nrhs, int batch) {
     q.copy(hb.data(), x, hb.size()).wait();
 
     // [device-guide-getrs] begin: the frame docs/guide/device-api.md quotes
-    using R = device::routine::getrs<Transpose::NoTrans>;
-    device::with_tier<R, T>(q.get_device(), n, [&]<class Tier>(Tier) {
-        using L = device::launch<R, Tier, T>;
-        const auto sz = L::buffer_size(n);
+    using GetrsRoutine = device::routine::getrs<Transpose::NoTrans>;
+    device::with_tier<GetrsRoutine, T>(q.get_device(), n, [&]<class Tier>(Tier) {
+        using Getrs = device::launch<GetrsRoutine, Tier, T>;
+        using Getrf = device::launch<device::routine::getrf, Tier, T>;  // the same executor and plan
+        const auto sz = Getrs::buffer_size(n);
         const std::size_t gbytes = sz.global_bytes * batch;
         auto* gws = gbytes ? sycl::malloc_device<std::byte>(gbytes, q) : nullptr;
         q.submit([&](sycl::handler& h) {
-             auto slm = device::local_workspace<L>(h, sz);
-             h.parallel_for(L::nd_range(batch),
-                 [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(L::sg_size) {
-                 const auto ex = L::exec(it);
-                 const auto s = L::slot(it, batch);
-                 const auto ws = L::workspace(it, slm, gws, sz);
+             auto slm = device::local_workspace<Getrs>(h, sz);
+             h.parallel_for(Getrs::nd_range(batch),
+                 [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(Getrs::sg_size) {
+                 const auto ex = Getrs::exec(it);
+                 const auto s = Getrs::slot(it, batch);
+                 const auto ws = Getrs::workspace(it, slm, gws, sz);
                  const auto A = device::mat(a + s.b * sa, n, n, lda);
                  const auto P = device::vec(ipiv + s.b * n, n);
                  const auto B = device::mat(x + s.b * sb, n, nrhs, ldb);
-                 const int info = device::getrf<Tier>(ex, A, P, ws, s.live);
-                 device::getrs<Transpose::NoTrans, Tier>(ex, A, P, B, ws, s.live);
+                 const int info = Getrf::run(ex, A, P, ws, s.live);  // device::getrf<Tier>(...)
+                 Getrs::run(ex, A, P, B, ws, s.live);  // device::getrs<Transpose::NoTrans, Tier>(...)
                  if (s.live && ex.leader()) info_out[s.b] = info;
              });
          }).wait_and_throw();

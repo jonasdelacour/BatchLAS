@@ -51,6 +51,7 @@ set(TEST_TARGETS
     device_lapack_iluk-spmm_tests
     device_lapack_jacobi_tests
     device_lapack_l3_tests
+    device_lapack_launch-run_tests
     device_lapack_larft-orgqr-ormqr_tests
     device_lapack_lu_tests
     device_lapack_potrf_tests
@@ -298,6 +299,7 @@ set(BATCHLAS_TEST_LABELS_blas
     device_lapack_getrs-getri-gesv_tests
     device_lapack_iluk-spmm_tests
     device_lapack_jacobi_tests
+    device_lapack_launch-run_tests
     krylov-ortho-ritz_kernels_tests
     device_lapack_larft-orgqr-ormqr_tests
     device_lapack_potri_tests

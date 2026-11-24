@@ -14,7 +14,16 @@ short hexadecimal ids are commits of the 1.0 release branch.
 
 ## [Unreleased] {#changelog-unreleased}
 
-Nothing yet.
+### Added {#changelog-unreleased-added}
+
+- `device::launch<Routine, Tier, T>::run(args...)` calls the routine `Routine` names in its tier,
+  with the routine tag's modes, so one `launch` type describes the whole in-kernel call: with
+  `using Potrf = device::launch<device::routine::potrf<Uplo::Lower>, Tier, T>`,
+  `Potrf::run(ex, A, ws, s.live)` is `device::potrf<Uplo::Lower, Tier>(ex, A, ws, s.live)`. Every
+  routine tag has a `device::routine_call`: the LAPACK ones in `<batchlas/device/lapack_run.hh>`
+  (included by `<batchlas/device/lapack.hh>`), the sparse ones in
+  `<batchlas/device/sparse_run.hh>`. The device examples use `run`, with the routine tag named
+  `<Op>Routine` and its launch `<Op>`.
 
 ## [1.0.0] - 2026-11-22 {#changelog-1-0-0}
 

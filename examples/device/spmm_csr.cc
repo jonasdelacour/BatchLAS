@@ -8,7 +8,7 @@
 // float, and double where the device has fp64. Exit 0 when every
 // max |C - C_ref| / (|alpha| nnz_row max|A| max|B| + |beta| max|C0|) is small, else 1.
 #include <batchlas/device.hh>
-#include <batchlas/device/sparse.hh>
+#include <batchlas/device/sparse_run.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -62,19 +62,19 @@ template <class T> int run(sycl::queue& q, const char* type, int m, int k, int n
 
     int nc = 0;
     //! [launch]
-    using R = device::routine::spmm<Transpose::NoTrans, Transpose::NoTrans>;
-    device::with_tier<R, T>(q.get_device(), n, [&]<class Tier>(Tier) {
+    using SpmmRoutine = device::routine::spmm<Transpose::NoTrans, Transpose::NoTrans>;
+    device::with_tier<SpmmRoutine, T>(q.get_device(), n, [&]<class Tier>(Tier) {
         nc = Tier::nb;
-        using L = device::launch<R, Tier, T>;
-        static_assert(L::buffer_size(1) == device::WorkspaceSize{}, "spmm needs no workspace");
+        using Spmm = device::launch<SpmmRoutine, Tier, T>;
+        static_assert(Spmm::buffer_size(1) == device::WorkspaceSize{}, "spmm needs no workspace");
         q.submit([&](sycl::handler& h) {
-             h.parallel_for(L::nd_range(batch), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(L::sg_size) {
-                 const auto ex = L::exec(it);
-                 const auto s = L::slot(it, batch);
+             h.parallel_for(Spmm::nd_range(batch), [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(Spmm::sg_size) {
+                 const auto ex = Spmm::exec(it);
+                 const auto s = Spmm::slot(it, batch);
                  //! [call]
                  const device::CsrItem<const T> A{val, col, ro, std::int64_t(s.b) * std::int64_t(nz_stride),
                                                   std::int64_t(s.b) * ro_stride, m, k};
-                 (void)device::spmm<Transpose::NoTrans, Transpose::NoTrans, Tier>(
+                 (void)Spmm::run(  // device::spmm<Transpose::NoTrans, Transpose::NoTrans, Tier>(...)
                      ex, alpha, A, device::mat(bm + s.b * sb, k, n, ldb), beta, device::mat(cm + s.b * sc, m, n, ldc));
                  //! [call]
              });

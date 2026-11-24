@@ -2,9 +2,10 @@
 // The device API guide's worked example (docs/guide/device-api.md#device-guide-example-potrf):
 // a user kernel that factors a batch of n x n SPD matrices with device::potrf, for any n.
 // with_tier picks ONE tier on the host from n and the device's limits; each tier is a separate
-// kernel, so no kernel carries the registers of a path it never takes. launch<R, Tier, T> gives
-// the tier's launch: nd_range, executor (Reg<N>: a Partition<N>, 32 / N matrices per work-group;
-// Cta / Blocked: a WorkGroup per matrix), the matrix slot and its workspace slices.
+// kernel, so no kernel carries the registers of a path it never takes. Potrf, the
+// launch<PotrfRoutine, Tier, T> of that tier, gives the nd_range, the executor (Reg<N>: a
+// Partition<N>, 32 / N matrices per work-group; Cta / Blocked: a WorkGroup per matrix), the
+// matrix slot, its workspace slices and run, the call of potrf in that tier.
 // Exit 0 when every factor's residual max |L L^T - A| / (n max|A|) is small, else 1.
 #include <batchlas/device/lapack.hh>
 
@@ -29,25 +30,24 @@ int run(sycl::queue& q, int n, int batch) {
 
     const char* tier = "";
     // [device-guide-frame] begin: the launch frame docs/guide/device-api.md quotes
-    using R = device::routine::potrf<Uplo::Lower>;
-    device::with_tier<R, T>(q.get_device(), n, [&]<class Tier>(Tier) {
+    using PotrfRoutine = device::routine::potrf<Uplo::Lower>;
+    device::with_tier<PotrfRoutine, T>(q.get_device(), n, [&]<class Tier>(Tier) {
         tier = device::tier::is_reg_v<Tier>   ? "Reg"
                : device::tier::is_cta_v<Tier> ? "Cta"
                                               : "Blocked";
-        using L = device::launch<R, Tier, T>;
-        const auto sz = L::buffer_size(n);  // potrf: no global workspace
+        using Potrf = device::launch<PotrfRoutine, Tier, T>;
+        const auto sz = Potrf::buffer_size(n);  // potrf: no global workspace
         const std::size_t gbytes = sz.global_bytes * batch;
         auto* gws = gbytes ? sycl::malloc_device<std::byte>(gbytes, q) : nullptr;
         q.submit([&](sycl::handler& h) {
-             auto slm = device::local_workspace<L>(h, sz);
-             h.parallel_for(L::nd_range(batch),
-                 [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(L::sg_size) {
-                 const auto ex = L::exec(it);
-                 const auto s = L::slot(it, batch);  // {b, live}
+             auto slm = device::local_workspace<Potrf>(h, sz);
+             h.parallel_for(Potrf::nd_range(batch),
+                 [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(Potrf::sg_size) {
+                 const auto ex = Potrf::exec(it);
+                 const auto s = Potrf::slot(it, batch);  // {b, live}
                  const auto A = device::mat(a + s.b * stride, n, n, ld);
-                 const auto ws = L::workspace(it, slm, gws, sz);
-                 const int info =
-                     device::potrf<Uplo::Lower, Tier>(ex, A, ws, s.live);
+                 const auto ws = Potrf::workspace(it, slm, gws, sz);
+                 const int info = Potrf::run(ex, A, ws, s.live);  // device::potrf<Uplo::Lower, Tier>(...)
                  if (s.live && ex.leader()) info_out[s.b] = info;
              });
          }).wait_and_throw();

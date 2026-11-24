@@ -45,14 +45,15 @@ and building those views (`Matrix`, `Queue`) needs the built library.
 - `<batchlas/device/level3/group.hh>`: the in-group level 3 (gemm and friends, one matrix per
   work-group, any m, n, k). `device.hh` does not include it; `lapack.hh` does, through the LAPACK
   headers built on it.
-- `<batchlas/device/sparse.hh>`: CSR operands, `spmm` and ILU(k). Neither umbrella includes it.
+- `<batchlas/device/sparse.hh>`: CSR operands, `spmm` and ILU(k). Neither umbrella includes it;
+  `<batchlas/device/sparse_run.hh>` adds `launch<Routine, Tier, T>::run` for them.
 - `<batchlas/device/detail/...>` and `batchlas::device::detail` are private.
 
 ### Macros a kernel uses {#device-guide-macros}
 
 | Macro | Where | Use |
 | --- | --- | --- |
-| `BATCHLAS_REQD_SG_SIZE(n)` | after the kernel lambda's parameter list | the sub-group size the tier is compiled for, `L::sg_size`. DPC++: `[[sycl::reqd_sub_group_size(n)]]`; AdaptiveCpp: empty, kernels run at the native sub-group size |
+| `BATCHLAS_REQD_SG_SIZE(n)` | after the kernel lambda's parameter list | the sub-group size the tier is compiled for, `Potrf::sg_size`. DPC++: `[[sycl::reqd_sub_group_size(n)]]`; AdaptiveCpp: empty, kernels run at the native sub-group size |
 | `BATCHLAS_DEVICE_INLINE`, `BATCHLAS_DEVICE_HELPER` | on your own device functions, optional | always-inline and plain `inline`; every public routine carries one of them |
 | `BATCHLAS_DEVICE_BODY` | on a lambda passed to a loop routine (`for_each_owned` and friends) | always-inline |
 | `BATCHLAS_LAUNCH_BOUNDS(max, min)` | on a kernel, optional | DPC++ NVPTX device code: `intel::max_work_group_size` and `intel::min_work_groups_per_cu`; empty elsewhere |
@@ -69,20 +70,31 @@ under [Worked examples](#device-guide-worked-examples)):
 \snippet{trimleft} device/potrf_any_n.cc device-guide-frame
 
 On the host, `with_tier` picks one tier for this `n` and device and calls the lambda with it. Each
-tier is its own kernel. `launch<R, Tier, T>` (`launch.hh`) then gives that tier's launch:
+tier is its own kernel. `launch<Routine, Tier, T>` (`launch.hh`) then gives that tier's launch,
+here `Potrf`:
 
-| Member of `launch<R, Tier, T>` | Meaning |
+| Member of `launch<Routine, Tier, T>` | Meaning |
 | --- | --- |
-| `executor`, `exec(it)` | `tier_info<R, Tier, T>::executor`, built as `executor{it}` |
+| `executor`, `exec(it)` | `tier_info<Routine, Tier, T>::executor`, built as `executor{it}` |
 | `wg_size`, `sg_size` | the work-group and sub-group size the tier is compiled for |
 | `per_group`, `team(it)` | matrices per work-group (`32 / N` for a packed tier, else 1); this item's executor in its work-group |
 | `nd_range(batch)` | `ceil(batch / per_group)` work-groups of `wg_size` items |
 | `slot(it, batch)` | `MatrixSlot{b, live}`: this executor's matrix index and whether it is a real matrix |
-| `buffer_size(extents...)` | one matrix's `WorkspaceSize`; the same value as `device::buffer_size<R, Tier, T>(extents...)` |
+| `buffer_size(extents...)` | one matrix's `WorkspaceSize`; the same value as `device::buffer_size<Routine, Tier, T>(extents...)` |
 | `workspace(it, slm, gws, sz)` | this matrix's `Workspace`: its `local_bytes` slice of `slm` and `global_slice(gws, sz, b)` |
-| `local_workspace<L>(h, sz)` (host) | the work-group's `LocalWorkspace`: `per_group` slices, 16-byte aligned, one slab when the tier needs none |
+| `local_workspace<Potrf>(h, sz)` (host) | the work-group's `LocalWorkspace`: `per_group` slices, 16-byte aligned, one slab when the tier needs none |
+| `run(args...)` | the routine in this tier, with the tag's modes: `Potrf::run(ex, A, ws, s.live)` is `potrf<Uplo::Lower, Tier>(ex, A, ws, s.live)` |
 
-The routine tag `R` names the routine and its modes: `device::routine::<op><modes...>`, e.g.
+The launch type describes the whole call, as a cuSOLVERDx descriptor does: the frame names the
+routine and its modes once, in `PotrfRoutine`, and every member, the call included, comes from
+`Potrf`. The examples name the routine tag `<Op>Routine` and its launch `<Op>`; a kernel that
+chains routines declares one launch per routine on the same tier (`Getrf` and `Getrs` in
+[getrs](#device-guide-family-lu)). `run` forwards to the routine's free function through
+`routine_call<Routine>`, so the two spellings compile to the same kernel. The LAPACK routines'
+`routine_call`s are in `<batchlas/device/lapack_run.hh>`, which `<batchlas/device/lapack.hh>`
+includes; the sparse routines' are in `<batchlas/device/sparse_run.hh>`.
+
+The routine tag names the routine and its modes: `device::routine::<op><modes...>`, e.g.
 `routine::potrf<Uplo::Lower>`, `routine::ormqr<Side::Left, Transpose::ConjTrans>`,
 `routine::syev<JobType::EigenVectors, Uplo::Lower>`. The in-group level 3 has no routine tag and
 builds its frame by hand ([Level 3](#device-guide-family-blas3)).
@@ -100,7 +112,7 @@ each header states its routine's contract.
 | C4 Operands are views | `Mat`, `Vec`, `ItemMat`, `Frag`, `LaneVec`; `ipiv` and `tau` are `Vec`s. Build them from pointers with `device::mat(p, m, n, ld)` and `device::vec(p, n[, inc])` (`operand.hh`), or from host views with `device::mat(view)`, `device::vec(view)` and `device::item(view, b)` (`interop.hh`). |
 | C5 Executor | The tier's `tier_info<R, Tier, T>::executor`, built as `Ex ex{it}` (`launch<>::exec`); a partition of a sub-group is `device::make_partition<P>(sg)`. Indices and sizes are `int`. |
 | C6 Tier names residency | `Reg` registers, `Cta` local memory, `Blocked` global memory plus a local panel or diagonal block. |
-| C7 Workspace | `const Workspace& ws` in the C3 position (`= {}` where a routine may need none); `ws.global` is this matrix's slice. Size it with `launch<R, Tier, T>::buffer_size(extents...)` or `device::buffer_size<R, Tier, T>(extents...)`; there is no per-routine sizer. |
+| C7 Workspace | `const Workspace& ws` in the C3 position (`= {}` where a routine may need none); `ws.global` is this matrix's slice. Size it with `launch<Routine, Tier, T>::buffer_size(extents...)` or `device::buffer_size<Routine, Tier, T>(extents...)`; there is no per-routine sizer. |
 | C8 Return | A LAPACK-level routine returns `int info`, the same on every item. BLAS returns `void` or the reduced value. Options are `<Op>Options` structs with defaults (`SyevOptions<R>`, `StedcOptions<R>`, `BdsqrOptions<R>`, `SteqrOptions`, ...), `R` the real type, passed after `ws`. |
 | C9 Dead slots | A packed tier (`per_group > 1`) takes a trailing `bool live = true`. A dead slot passes `s.live == false` and still calls: it reads and writes nothing, reaches every collective and returns 0. |
 | C10 Modes, tags, scopes | Modes are enums (`Side`, `Uplo`, `Transpose`, `Diag`, `Direct`, `Refl`, `DiagFill`, `Vect`, `Itype`, `Axis`, `Storage`, `PackOrder`, and the host's `JobType`, `SvdVectors`, `NormType`, `OrthoAlgorithm`); one `Scope{Own, Sub, Group}`. Policy tags live only in `alg::` (algorithm, distribution, numerical convention), `arith::` (scalar arithmetic) and `epi::` (epilogue); reduction operators in `reduce_op::`. |
@@ -168,7 +180,7 @@ size, runs at a sub-group size the device has and, for a double `T`, finds fp64.
 
 - Size with `device::buffer_size<routine::<op><modes...>, Tier, T>(extents...)`. It is the plan
   the routine carves its pointers with, so the size and the use cannot drift apart.
-- Local bytes go into the 16-byte aligned `sycl::local_accessor` that `local_workspace<L>(h, sz)`
+- Local bytes go into the 16-byte aligned `sycl::local_accessor` that `local_workspace<Launch>(h, sz)`
   makes for the work-group. Global bytes are one device allocation of `global_bytes * batch`.
 - Reg tiers need none. A Blocked tier's global slice holds what its level 3 cannot keep in local
   memory (ormqr's V, T and the larfb work arrays; stedc's two n x n blocks).
@@ -253,7 +265,7 @@ Each family links its reference group, where every member has its contract. Tier
 
 @ref api_device_launch. `launch`, `with_tier`, `tier::Reg` / `Cta` / `Blocked` / `upto` / `list`,
 `tier_info`, `tiers_t`, `resolve_tier_t`, `DeviceLimits`, `local_mem_bytes` (`tier.hh`);
-`local_workspace<L>`, `LocalWorkspace`, `buffer_size<R, Tier, T>`, `MatrixSlot` / `matrix_slot`
+`local_workspace<Launch>`, `LocalWorkspace`, `buffer_size<Routine, Tier, T>`, `MatrixSlot` / `matrix_slot`
 (`launch.hh`); `WorkspaceSize`, `Workspace`, `Plan`, `carve_local`, `carve_global`,
 `sub_workspace`, `global_slice` (`workspace.hh`).
 
